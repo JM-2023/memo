@@ -1,0 +1,267 @@
+import { Check, ChevronDown, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sun, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import { useI18n } from "../lib/i18n";
+import { periodStats, totalStats, type PeriodKind } from "../lib/stats";
+import type { TagNode } from "../lib/tags";
+import type { Memo } from "../lib/types";
+import type { ThemeChoice } from "../lib/theme";
+import { Heatmap } from "./Heatmap";
+import { Menu } from "./Menu";
+import { TagTree } from "./TagTree";
+import { useTip } from "./Tip";
+
+interface SidebarProps {
+  memos: Memo[];
+  tagTree: TagNode[];
+  uniqueTagCount: number;
+  countsByDay: Map<string, number>;
+  activeTag: string | null;
+  activeDay: string | null;
+  filtersActive: boolean;
+  view: "memos" | "trash";
+  trashCount: number;
+  theme: ThemeChoice;
+  pinnedTags: Map<string, string>;
+  onPickTag: (path: string | null) => void;
+  onPinTag: (path: string, pinned: boolean) => void;
+  onRenameTag: (path: string) => void;
+  onRemoveTag: (path: string) => void;
+  onPickDay: (key: string | null) => void;
+  onShowAll: () => void;
+  onOpenTrash: () => void;
+  onOpenStats: () => void;
+  onCycleTheme: () => void;
+  onChangePasscode: () => void;
+  onLogout: () => void;
+}
+
+const PERIODS: { kind: PeriodKind; en: string; zh: string }[] = [
+  { kind: "week", en: "This week", zh: "本周" },
+  { kind: "month", en: "This month", zh: "本月" },
+  { kind: "year", en: "This year", zh: "今年" }
+];
+
+const THEME_LABELS: Record<ThemeChoice, readonly [en: string, zh: string]> = {
+  system: ["System theme", "跟随系统"],
+  light: ["Light theme", "浅色模式"],
+  dark: ["Dark theme", "深色模式"]
+};
+
+export function Sidebar(props: SidebarProps) {
+  const { memos, tagTree, uniqueTagCount, countsByDay, activeTag, activeDay, filtersActive, view, trashCount, theme } = props;
+  const { language, setLanguage, tr, formatNumber, count } = useI18n();
+  const tip = useTip();
+  const [period, setPeriod] = useState<PeriodKind>("week");
+
+  const totals = useMemo(() => totalStats(memos), [memos]);
+  const stats = useMemo(() => periodStats(memos, period), [memos, period]);
+  const minMonth = useMemo(() => {
+    if (memos.length === 0) return null;
+    let min = "9999-99";
+    for (const memo of memos) {
+      const key = memo.createdAt.slice(0, 7);
+      if (key < min) min = key;
+    }
+    return min;
+  }, [memos]);
+
+  const periodIndex = PERIODS.findIndex((option) => option.kind === period);
+  const ThemeIcon = theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
+  const [themeLabelEn, themeLabelZh] = THEME_LABELS[theme];
+
+  return (
+    <div className="sidebar-inner">
+      <header className="sidebar-head">
+        <Menu
+          align="left"
+          trigger={(open) => (
+            <button
+              type="button"
+              className={`user-button${open ? " is-open" : ""}`}
+              aria-haspopup="menu"
+              aria-expanded={open}
+            >
+              <span className="user-logo" aria-hidden="true">
+                <NotebookPen size={15} />
+              </span>
+              <span className="user-name">{tr("My MEMO", "我的 MEMO")}</span>
+              <ChevronDown size={15} className="user-chevron" aria-hidden="true" />
+            </button>
+          )}
+        >
+          {(close) => (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  props.onCycleTheme();
+                }}
+              >
+                <ThemeIcon size={16} aria-hidden="true" />
+                {tr(themeLabelEn, themeLabelZh)}
+              </button>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={language === "en"}
+                aria-label={tr("English interface", "英文界面")}
+                className={language === "en" ? "is-selected" : ""}
+                onClick={() => {
+                  setLanguage("en");
+                  close();
+                }}
+              >
+                <Languages size={16} aria-hidden="true" />
+                <span lang="en">English</span>
+                {language === "en" ? <Check size={15} className="menu-check" aria-hidden="true" /> : null}
+              </button>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={language === "zh-CN"}
+                aria-label={tr("Simplified Chinese interface", "简体中文界面")}
+                className={language === "zh-CN" ? "is-selected" : ""}
+                onClick={() => {
+                  setLanguage("zh-CN");
+                  close();
+                }}
+              >
+                <Languages size={16} aria-hidden="true" />
+                <span lang="zh-CN">简体中文</span>
+                {language === "zh-CN" ? <Check size={15} className="menu-check" aria-hidden="true" /> : null}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  close();
+                  props.onChangePasscode();
+                }}
+              >
+                <KeyRound size={16} aria-hidden="true" />
+                {tr("Change passcode", "修改密码")}
+              </button>
+              <span className="action-menu__sep" />
+              <button
+                type="button"
+                role="menuitem"
+                className="danger"
+                onClick={() => {
+                  close();
+                  props.onLogout();
+                }}
+              >
+                <LogOut size={16} aria-hidden="true" />
+                {tr("Log out", "退出登录")}
+              </button>
+            </>
+          )}
+        </Menu>
+      </header>
+
+      <section className="stat-panel" aria-label={tr("Statistics", "统计")}>
+        <div className="stat-row">
+          <button
+            type="button"
+            className="stat-cell"
+            onClick={props.onOpenStats}
+            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("View detailed statistics", "查看详细统计") })}
+            onMouseLeave={tip.hide}
+          >
+            <span key={totals.memoCount} className="stat-number">
+              {formatNumber(totals.memoCount)}
+            </span>
+            <span className="stat-label">{tr("Memos", "笔记")}</span>
+          </button>
+          <button
+            type="button"
+            className="stat-cell"
+            onClick={props.onOpenStats}
+            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("View detailed statistics", "查看详细统计") })}
+            onMouseLeave={tip.hide}
+          >
+            <span key={uniqueTagCount} className="stat-number">
+              {formatNumber(uniqueTagCount)}
+            </span>
+            <span className="stat-label">{tr("Tags", "标签")}</span>
+          </button>
+          <button
+            type="button"
+            className="stat-cell"
+            onClick={props.onOpenStats}
+            onMouseEnter={(event) =>
+              tip.show(event.currentTarget, {
+                strong: tr(
+                  `${formatNumber(totals.activeDays)} active ${totals.activeDays === 1 ? "day" : "days"}`,
+                  `${count(totals.activeDays, "day")}活跃`
+                ),
+                text: tr(`Recorded across ${count(totals.daySpan, "day")}`, `记录跨度 ${count(totals.daySpan, "day")}`)
+              })
+            }
+            onMouseLeave={tip.hide}
+          >
+            <span key={totals.daySpan} className="stat-number">
+              {formatNumber(totals.daySpan)}
+            </span>
+            <span className="stat-label">{tr("Days", "天")}</span>
+          </button>
+        </div>
+
+        <div className="period-panel">
+          <div className="period-seg" role="tablist" aria-label={tr("Statistics period", "统计范围")}>
+            <span className="period-seg-thumb" style={{ transform: `translateX(${periodIndex * 100}%)` }} aria-hidden="true" />
+            {PERIODS.map((option) => (
+              <button
+                key={option.kind}
+                type="button"
+                role="tab"
+                aria-selected={period === option.kind}
+                className={period === option.kind ? "is-active" : ""}
+                onClick={() => setPeriod(option.kind)}
+              >
+                {tr(option.en, option.zh)}
+              </button>
+            ))}
+          </div>
+          <div key={period} className="period-figures">
+            <span>
+              <strong>{formatNumber(stats.memoCount)}</strong>{" "}
+              {tr(stats.memoCount === 1 ? "memo" : "memos", "条笔记")}
+            </span>
+            <span className="period-sep" aria-hidden="true" />
+            <span>
+              <strong>{formatNumber(stats.wordSum)}</strong>{" "}
+              {tr(stats.wordSum === 1 ? "character" : "characters", "字")}
+            </span>
+          </div>
+        </div>
+
+        <Heatmap countsByDay={countsByDay} minMonth={minMonth} activeDay={activeDay} onPickDay={props.onPickDay} />
+      </section>
+
+      <nav className="sidebar-nav">
+        <button type="button" className={`nav-item${view === "memos" && !filtersActive ? " is-active" : ""}`} onClick={props.onShowAll}>
+          <Inbox size={16} aria-hidden="true" />
+          {tr("All memos", "全部笔记")}
+          <span className="nav-count">{formatNumber(totals.memoCount)}</span>
+        </button>
+        <button type="button" className={`nav-item${view === "trash" ? " is-active" : ""}`} onClick={props.onOpenTrash}>
+          <Trash2 size={16} aria-hidden="true" />
+          {tr("Trash", "回收站")}
+          <span className="nav-count">{formatNumber(trashCount)}</span>
+        </button>
+      </nav>
+
+      <TagTree
+        tree={tagTree}
+        activeTag={activeTag}
+        pinnedTags={props.pinnedTags}
+        onPickTag={props.onPickTag}
+        onPinTag={props.onPinTag}
+        onRenameTag={props.onRenameTag}
+        onRemoveTag={props.onRemoveTag}
+      />
+    </div>
+  );
+}

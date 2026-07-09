@@ -1,0 +1,32 @@
+{
+  "name": "memo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "pages:dev": "vite build && wrangler pages dev dist --compatibility-date=2026-06-22",
+    "db:migrate:local": "wrangler d1 migrations apply flomo --local",
+    "db:migrate:remote": "wrangler d1 migrations apply flomo --remote",
+    "hash-password": "node scripts/hash-password.mjs",
+    "deploy": "npm run build && wrangler pages deploy dist"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260708.1",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2",
+    "wrangler": "^4.110.0"
+  }
+}

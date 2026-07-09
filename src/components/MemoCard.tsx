@@ -1,0 +1,287 @@
+import { Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Trash2 } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { externalImagesOf, tokenizeLine } from "../lib/content";
+import { formatTime } from "../lib/dates";
+import { useI18n } from "../lib/i18n";
+import type { LightboxItem, Memo, NewImagePayload } from "../lib/types";
+import { Editor } from "./Editor";
+import { Menu } from "./Menu";
+
+function renderLine(line: string, key: number, interactive: boolean, onPickTag: (path: string) => void): ReactNode {
+  if (!line) return <p key={key} className="memo-blank" />;
+  const tokens = tokenizeLine(line);
+  // Image tokens leave the text flow (they render in the media grid); a line
+  // that was only an image link collapses entirely.
+  const visible = tokens.filter((token) => token.kind !== "image");
+  if (visible.every((token) => token.kind === "text" && token.text.trim() === "")) {
+    return tokens.length === visible.length ? <p key={key} className="memo-blank" /> : null;
+  }
+  return (
+    <p key={key}>
+      {visible.map((token, index) => {
+        if (token.kind === "tag") {
+          return interactive ? (
+            <button key={index} type="button" className="memo-tag" onClick={() => onPickTag(token.path)}>
+              {token.raw}
+            </button>
+          ) : (
+            <span key={index} className="memo-tag is-static">
+              {token.raw}
+            </span>
+          );
+        }
+        if (token.kind === "link") {
+          return (
+            <a key={index} href={token.url} target="_blank" rel="noreferrer noopener">
+              {token.url}
+            </a>
+          );
+        }
+        return <Fragment key={index}>{token.kind === "text" ? token.text : null}</Fragment>;
+      })}
+    </p>
+  );
+}
+
+interface MemoCardProps {
+  memo: Memo;
+  variant: "normal" | "trash";
+  knownTags: string[];
+  editing: boolean;
+  savingEdit: boolean;
+  isRemoving: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSaveEdit: (data: { content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
+  onTogglePin: () => void;
+  onCopy: () => void;
+  onRequestDelete: () => void;
+  onRestore: () => void;
+  onRequestPurge: () => void;
+  onPickTag: (path: string) => void;
+  onOpenImage: (items: LightboxItem[], index: number) => void;
+  onRemoveComplete: () => void;
+}
+
+export function MemoCard(props: MemoCardProps) {
+  const { locale, tr } = useI18n();
+  const { memo, variant, editing, isRemoving } = props;
+  const rootRef = useRef<HTMLElement>(null);
+  const removeCompleteRef = useRef(props.onRemoveComplete);
+  removeCompleteRef.current = props.onRemoveComplete;
+  // External links that failed to load render as a compact fallback chip.
+  const [brokenUrls, setBrokenUrls] = useState<Set<string>>(new Set());
+
+  // Removal (trash / restore / purge): collapse height + fade, then hand
+  // control back to the store.
+  useEffect(() => {
+    if (!isRemoving) return;
+    const element = rootRef.current;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!element || reduced) {
+      removeCompleteRef.current();
+      return;
+    }
+    element.style.height = `${element.getBoundingClientRect().height}px`;
+    void element.offsetHeight;
+    element.classList.add("is-removing");
+    element.style.height = "0px";
+    const timer = window.setTimeout(() => removeCompleteRef.current(), 360);
+    return () => window.clearTimeout(timer);
+  }, [isRemoving]);
+
+  const externalUrls = useMemo(() => externalImagesOf(memo.content), [memo.content]);
+  const lightboxItems = useMemo<LightboxItem[]>(
+    () => [
+      ...memo.images.map((image) => ({ src: `/api/images/${image.id}` })),
+      ...externalUrls.filter((url) => !brokenUrls.has(url)).map((url) => ({ src: url, external: true }))
+    ],
+    [memo.images, externalUrls, brokenUrls]
+  );
+
+  const pinned = Boolean(memo.pinnedAt);
+  const inTrash = variant === "trash";
+  const mediaCount = memo.images.length + externalUrls.length;
+
+  function markBroken(url: string) {
+    setBrokenUrls((value) => {
+      const next = new Set(value);
+      next.add(url);
+      return next;
+    });
+  }
+
+  return (
+    <article ref={rootRef} className={`memo-card${pinned && !inTrash ? " is-pinned" : ""}${inTrash ? " is-trash" : ""}`}>
+      {editing ? (
+        <Editor
+          mode="edit"
+          initialContent={memo.content}
+          existingImages={memo.images}
+          knownTags={props.knownTags}
+          busy={props.savingEdit}
+          onSubmit={props.onSaveEdit}
+          onCancel={props.onCancelEdit}
+          autoFocus
+        />
+      ) : (
+        <>
+          <header className="memo-head">
+            <time className="memo-time" dateTime={inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt}>
+              {inTrash
+                ? tr(
+                    `Deleted ${formatTime(memo.deletedAt ?? memo.createdAt, locale)}`,
+                    `删除于 ${formatTime(memo.deletedAt ?? memo.createdAt, locale)}`
+                  )
+                : formatTime(memo.createdAt, locale)}
+            </time>
+            <div className="memo-head-right">
+              {pinned && !inTrash ? <Pin size={13} className="memo-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}
+              <Menu
+                trigger={(open) => (
+                  <button
+                    type="button"
+                    className={`icon-button memo-menu-trigger${open ? " is-open" : ""}`}
+                    aria-label={tr("Memo actions", "操作菜单")}
+                  >
+                    <MoreHorizontal size={17} aria-hidden="true" />
+                  </button>
+                )}
+              >
+                {(close) =>
+                  inTrash ? (
+                    <>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          close();
+                          props.onRestore();
+                        }}
+                      >
+                        <RotateCcw size={16} aria-hidden="true" />
+                        {tr("Restore", "恢复")}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          close();
+                          props.onCopy();
+                        }}
+                      >
+                        <Copy size={16} aria-hidden="true" />
+                        {tr("Copy content", "复制内容")}
+                      </button>
+                      <span className="action-menu__sep" />
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="danger"
+                        onClick={() => {
+                          close();
+                          props.onRequestPurge();
+                        }}
+                      >
+                        <Trash2 size={16} aria-hidden="true" />
+                        {tr("Delete permanently", "彻底删除")}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          close();
+                          props.onTogglePin();
+                        }}
+                      >
+                        {pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}
+                        {pinned ? tr("Unpin", "取消置顶") : tr("Pin", "置顶")}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          close();
+                          props.onStartEdit();
+                        }}
+                      >
+                        <Pencil size={16} aria-hidden="true" />
+                        {tr("Edit", "编辑")}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          close();
+                          props.onCopy();
+                        }}
+                      >
+                        <Copy size={16} aria-hidden="true" />
+                        {tr("Copy content", "复制内容")}
+                      </button>
+                      <span className="action-menu__sep" />
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="danger"
+                        onClick={() => {
+                          close();
+                          props.onRequestDelete();
+                        }}
+                      >
+                        <Trash2 size={16} aria-hidden="true" />
+                        {tr("Delete", "删除")}
+                      </button>
+                    </>
+                  )
+                }
+              </Menu>
+            </div>
+          </header>
+
+          <div className="memo-content">{memo.content.split("\n").map((line, index) => renderLine(line, index, !inTrash, props.onPickTag))}</div>
+
+          {mediaCount > 0 ? (
+            <div className={`memo-images count-${Math.min(mediaCount, 3)}`}>
+              {memo.images.map((image, index) => (
+                <button
+                  key={image.id}
+                  type="button"
+                  className="memo-image"
+                  onClick={() => props.onOpenImage(lightboxItems, index)}
+                  aria-label={tr("View image", "查看图片")}
+                >
+                  <img src={`/api/images/${image.id}`} alt="" loading="lazy" width={image.width || undefined} height={image.height || undefined} />
+                </button>
+              ))}
+              {externalUrls.map((url) =>
+                brokenUrls.has(url) ? (
+                  <a key={url} className="memo-image-broken" href={url} target="_blank" rel="noreferrer noopener" title={url}>
+                    <ImageOff size={16} aria-hidden="true" />
+                    <span>{tr("Image link is unavailable", "图片链接已失效")}</span>
+                  </a>
+                ) : (
+                  <button
+                    key={url}
+                    type="button"
+                    className="memo-image is-external"
+                    onClick={() => props.onOpenImage(lightboxItems, Math.max(0, lightboxItems.findIndex((item) => item.src === url)))}
+                    aria-label={tr("View external image", "查看外链图片")}
+                  >
+                    <img src={url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => markBroken(url)} />
+                    <span className="ext-badge" aria-hidden="true">
+                      <Link2 size={11} />
+                    </span>
+                  </button>
+                )
+              )}
+            </div>
+          ) : null}
+        </>
+      )}
+    </article>
+  );
+}

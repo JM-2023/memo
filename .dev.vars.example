@@ -1,0 +1,6 @@
+# Copy to .dev.vars for local development (wrangler pages dev).
+# SESSION_SECRET is required — any long random string.
+SESSION_SECRET=replace-with-a-long-random-secret
+# Optional: pre-seed the login passcode (npm run hash-password -- "1234").
+# Without it, the first visit shows a create-passcode screen.
+# APP_PASSWORD_HASH=pbkdf2_sha256$100000$...

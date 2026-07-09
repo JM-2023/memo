@@ -1,0 +1,471 @@
+import { Hash, Image as ImageIcon, ImagePlus, Link2, Loader2, Send, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
+import { compressImage } from "../lib/images";
+import { useI18n } from "../lib/i18n";
+import type { MemoImage, NewImagePayload } from "../lib/types";
+import { useTip } from "./Tip";
+
+const MAX_IMAGES = 9;
+
+interface EditorProps {
+  mode: "create" | "edit";
+  initialContent?: string;
+  /** Edit mode: attachments already on the memo. */
+  existingImages?: MemoImage[];
+  knownTags: string[];
+  busy: boolean;
+  onSubmit: (data: { content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
+  onCancel?: () => void;
+  autoFocus?: boolean;
+}
+
+interface Suggestion {
+  tokenStart: number;
+  query: string;
+  items: string[];
+  index: number;
+}
+
+/**
+ * The composer used both for new memos and in-place editing. Plain text with
+ * #tag affordances: a toolbar "#" button, live tag autocomplete under the
+ * caret token. Images arrive four ways: file picker, paste, drag-and-drop
+ * (all compressed client-side and stored), or as an external link that
+ * renders as a preview without touching the database.
+ */
+export function Editor({ mode, initialContent = "", existingImages = [], knownTags, busy, onSubmit, onCancel, autoFocus }: EditorProps) {
+  const { errorMessage, tr } = useI18n();
+  const tip = useTip();
+  const [content, setContent] = useState(initialContent);
+  const [newImages, setNewImages] = useState<NewImagePayload[]>([]);
+  const [removedIds, setRemovedIds] = useState<string[]>([]);
+  const [compressing, setCompressing] = useState(0);
+  const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Counter, not boolean: dragenter/leave fire per child element.
+  const [dragDepth, setDragDepth] = useState(0);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkValue, setLinkValue] = useState("");
+  const areaRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const linkRef = useRef<HTMLInputElement>(null);
+
+  const keptExisting = useMemo(() => existingImages.filter((image) => !removedIds.includes(image.id)), [existingImages, removedIds]);
+  const totalImages = keptExisting.length + newImages.length;
+  const canSubmit = !busy && compressing === 0 && (content.trim().length > 0 || totalImages > 0);
+
+  useEffect(() => {
+    autoGrow();
+    if (autoFocus) {
+      const area = areaRef.current;
+      if (area) {
+        area.focus();
+        area.setSelectionRange(area.value.length, area.value.length);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (linkOpen) linkRef.current?.focus();
+  }, [linkOpen]);
+
+  // Object URLs for pending attachments leak unless revoked; only revoke on
+  // unmount (successful submit unmounts or clears the list).
+  const previewUrls = useRef<string[]>([]);
+  useEffect(() => {
+    previewUrls.current = newImages.map((image) => image.previewUrl);
+  }, [newImages]);
+  useEffect(
+    () => () => {
+      for (const url of previewUrls.current) URL.revokeObjectURL(url);
+    },
+    []
+  );
+
+  function autoGrow() {
+    const area = areaRef.current;
+    if (!area) return;
+    area.style.height = "auto";
+    area.style.height = `${Math.min(360, Math.max(mode === "create" ? 68 : 96, area.scrollHeight))}px`;
+  }
+
+  function refreshSuggestion(value: string, caret: number) {
+    let start = caret;
+    while (start > 0 && !/[\s#]/.test(value[start - 1])) start -= 1;
+    const hashStart = start > 0 && value[start - 1] === "#" ? start - 1 : -1;
+    if (hashStart < 0 || knownTags.length === 0) {
+      setSuggestion(null);
+      return;
+    }
+    const query = value.slice(hashStart + 1, caret);
+    if (/\s/.test(query)) {
+      setSuggestion(null);
+      return;
+    }
+    const lowered = query.toLowerCase();
+    const items = knownTags.filter((tag) => tag.toLowerCase().includes(lowered) && tag !== query).slice(0, 6);
+    setSuggestion(items.length > 0 ? { tokenStart: hashStart, query, items, index: 0 } : null);
+  }
+
+  function applySuggestion(tag: string) {
+    const area = areaRef.current;
+    if (!area || !suggestion) return;
+    const caret = area.selectionStart;
+    const next = `${content.slice(0, suggestion.tokenStart)}#${tag} ${content.slice(caret)}`;
+    setContent(next);
+    setSuggestion(null);
+    requestAnimationFrame(() => {
+      const position = suggestion.tokenStart + tag.length + 2;
+      area.focus();
+      area.setSelectionRange(position, position);
+      autoGrow();
+    });
+  }
+
+  /** Insert text at the caret (textareas keep their selection while blurred). */
+  function insertAtCaret(text: string, padded = false) {
+    const area = areaRef.current;
+    if (!area) return;
+    const start = area.selectionStart;
+    const end = area.selectionEnd;
+    const before = padded && start > 0 && !/\s/.test(content[start - 1]) ? " " : "";
+    const after = padded && (end >= content.length || !/\s/.test(content[end])) ? " " : "";
+    const inserted = `${before}${text}${after}`;
+    const next = `${content.slice(0, start)}${inserted}${content.slice(end)}`;
+    setContent(next);
+    requestAnimationFrame(() => {
+      const position = start + inserted.length;
+      area.focus();
+      area.setSelectionRange(position, position);
+      refreshSuggestion(next, position);
+      autoGrow();
+    });
+  }
+
+  function insertHash() {
+    const area = areaRef.current;
+    if (!area) return;
+    const start = area.selectionStart;
+    const needsSpace = start > 0 && !/\s/.test(content[start - 1]);
+    insertAtCaret(`${needsSpace ? " " : ""}#`);
+  }
+
+  function confirmLink() {
+    const url = linkValue.trim();
+    if (!/^https?:\/\/\S+$/i.test(url)) {
+      setError(tr("Enter an image URL beginning with http(s)://", "请输入以 http(s):// 开头的图片链接"));
+      return;
+    }
+    setError(null);
+    // ![](url) forces image rendering for any URL; the image itself stays
+    // external and is never uploaded.
+    insertAtCaret(`![](${url})`, true);
+    setLinkValue("");
+    setLinkOpen(false);
+  }
+
+  async function addFiles(files: File[]) {
+    const images = files.filter((file) => file.type.startsWith("image/"));
+    if (images.length === 0) return;
+    const room = MAX_IMAGES - totalImages;
+    if (room <= 0) {
+      setError(tr(`You can add up to ${MAX_IMAGES} images`, `最多 ${MAX_IMAGES} 张图片`));
+      return;
+    }
+    setError(null);
+    setCompressing((value) => value + Math.min(room, images.length));
+    for (const file of images.slice(0, room)) {
+      try {
+        const payload = await compressImage(file);
+        setNewImages((value) => [...value, payload]);
+      } catch (cause) {
+        setError(errorMessage(cause, "Couldn’t process the image", "图片处理失败"));
+      } finally {
+        setCompressing((value) => value - 1);
+      }
+    }
+  }
+
+  function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = [...event.clipboardData.items]
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (files.length > 0) {
+      event.preventDefault();
+      void addFiles(files);
+    }
+  }
+
+  function hasFiles(event: DragEvent) {
+    return [...(event.dataTransfer?.types ?? [])].some((type) => type === "Files" || type === "text/uri-list");
+  }
+
+  function onDragEnter(event: DragEvent<HTMLDivElement>) {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    setDragDepth((value) => value + 1);
+  }
+
+  function onDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+  }
+
+  function onDragLeave(event: DragEvent<HTMLDivElement>) {
+    if (!hasFiles(event)) return;
+    setDragDepth((value) => Math.max(0, value - 1));
+  }
+
+  function onDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragDepth(0);
+    const files = [...(event.dataTransfer?.files ?? [])].filter((file) => file.type.startsWith("image/"));
+    if (files.length > 0) {
+      void addFiles(files);
+      return;
+    }
+    // Dragged link (e.g. an image from another page): keep it as an external
+    // image reference instead of uploading.
+    const uri = (event.dataTransfer?.getData("text/uri-list") || event.dataTransfer?.getData("text/plain") || "").split("\n")[0]?.trim();
+    if (uri && /^https?:\/\/\S+$/i.test(uri)) {
+      insertAtCaret(`![](${uri})`, true);
+    }
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (suggestion) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        setSuggestion({ ...suggestion, index: (suggestion.index + delta + suggestion.items.length) % suggestion.items.length });
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        applySuggestion(suggestion.items[suggestion.index]);
+        return;
+      }
+      if (event.key === "Escape") {
+        setSuggestion(null);
+        return;
+      }
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      void submit();
+    }
+    if (event.key === "Escape" && mode === "edit" && onCancel) {
+      onCancel();
+    }
+  }
+
+  async function submit() {
+    if (!canSubmit) return;
+    setError(null);
+    try {
+      const ok = await onSubmit({ content: content.trim(), newImages, removeImageIds: removedIds });
+      if (ok && mode === "create") {
+        setContent("");
+        setNewImages([]);
+        previewUrls.current = [];
+        setSuggestion(null);
+        setLinkOpen(false);
+        setLinkValue("");
+        requestAnimationFrame(autoGrow);
+      }
+    } catch (cause) {
+      setError(errorMessage(cause, "Couldn’t save the memo", "保存失败"));
+    }
+  }
+
+  return (
+    <div
+      className={`editor ${mode === "create" ? "editor-create" : "editor-edit"}${dragDepth > 0 ? " is-dropping" : ""}`}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      <textarea
+        ref={areaRef}
+        value={content}
+        placeholder={tr("What’s on your mind…", "现在的想法是……")}
+        rows={mode === "create" ? 2 : 3}
+        maxLength={20000}
+        onChange={(event) => {
+          setContent(event.target.value);
+          refreshSuggestion(event.target.value, event.target.selectionStart);
+          autoGrow();
+        }}
+        onClick={(event) => refreshSuggestion(content, event.currentTarget.selectionStart)}
+        onKeyDown={onKeyDown}
+        onPaste={onPaste}
+        onBlur={() => window.setTimeout(() => setSuggestion(null), 120)}
+      />
+
+      {suggestion ? (
+        <div className="tag-suggest" role="listbox" aria-label={tr("Tag suggestions", "标签建议")}>
+          {suggestion.items.map((tag, index) => (
+            <button
+              key={tag}
+              type="button"
+              role="option"
+              aria-selected={index === suggestion.index}
+              className={index === suggestion.index ? "is-active" : ""}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                applySuggestion(tag);
+              }}
+            >
+              #{tag}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {totalImages > 0 || compressing > 0 ? (
+        <div className="editor-attachments">
+          {keptExisting.map((image) => (
+            <div key={image.id} className="attachment">
+              <img src={`/api/images/${image.id}`} alt="" />
+              <button
+                type="button"
+                className="attachment-remove"
+                aria-label={tr("Remove image", "移除图片")}
+                onClick={() => setRemovedIds((value) => [...value, image.id])}
+              >
+                <X size={12} aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+          {newImages.map((image, index) => (
+            <div key={image.previewUrl} className="attachment">
+              <img src={image.previewUrl} alt="" />
+              <button
+                type="button"
+                className="attachment-remove"
+                aria-label={tr("Remove image", "移除图片")}
+                onClick={() => {
+                  URL.revokeObjectURL(image.previewUrl);
+                  setNewImages((value) => value.filter((_, i) => i !== index));
+                }}
+              >
+                <X size={12} aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+          {Array.from({ length: compressing }).map((_, index) => (
+            <div key={`busy-${index}`} className="attachment is-busy" aria-label={tr("Compressing image", "压缩图片中")}>
+              <Loader2 size={18} className="spin" aria-hidden="true" />
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className={`link-pop${linkOpen ? " is-open" : ""}`} aria-hidden={!linkOpen}>
+        <div className="link-pop-inner">
+          <Link2 size={14} aria-hidden="true" />
+          <input
+            ref={linkRef}
+            value={linkValue}
+            placeholder={tr(
+              "Paste an image URL https://… (external preview; uses no storage)",
+              "粘贴图片链接 https://…（外链预览，不占用存储）"
+            )}
+            tabIndex={linkOpen ? 0 : -1}
+            onChange={(event) => setLinkValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                confirmLink();
+              }
+              if (event.key === "Escape") {
+                setLinkOpen(false);
+                areaRef.current?.focus();
+              }
+            }}
+          />
+          <button type="button" className="ghost-button link-pop-add" tabIndex={linkOpen ? 0 : -1} onClick={confirmLink}>
+            {tr("Insert", "插入")}
+          </button>
+        </div>
+      </div>
+
+      {error ? <p className="editor-error">{error}</p> : null}
+
+      <div className="editor-bar">
+        <div className="editor-tools">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={insertHash}
+            aria-label={tr("Insert tag", "插入标签")}
+            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Insert tag", "插入标签") })}
+            onMouseLeave={tip.hide}
+          >
+            <Hash size={17} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => fileRef.current?.click()}
+            disabled={totalImages >= MAX_IMAGES}
+            aria-label={tr("Add image", "添加图片")}
+            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Add image (or drag and paste)", "添加图片（可拖拽/粘贴）") })}
+            onMouseLeave={tip.hide}
+          >
+            <ImageIcon size={17} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className={`icon-button${linkOpen ? " is-active-tool" : ""}`}
+            onClick={() => {
+              setLinkOpen((value) => !value);
+              setError(null);
+            }}
+            aria-label={tr("Insert image link", "插入图片链接")}
+            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Insert image link", "插入图片链接") })}
+            onMouseLeave={tip.hide}
+          >
+            <Link2 size={16} aria-hidden="true" />
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={(event) => {
+              void addFiles([...(event.target.files ?? [])]);
+              event.target.value = "";
+            }}
+          />
+        </div>
+        <div className="editor-actions">
+          {mode === "edit" && onCancel ? (
+            <button type="button" className="ghost-button" onClick={onCancel} disabled={busy}>
+              {tr("Cancel", "取消")}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="send-button"
+            onClick={() => void submit()}
+            disabled={!canSubmit}
+            aria-label={mode === "create" ? tr("Send", "发送") : tr("Save", "保存")}
+          >
+            {busy ? <Loader2 size={17} className="spin" aria-hidden="true" /> : <Send size={17} aria-hidden="true" />}
+            <span>{mode === "create" ? tr("Send", "发送") : tr("Save", "保存")}</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="editor-drop" aria-hidden="true">
+        <ImagePlus size={22} aria-hidden="true" />
+        <span>{tr("Release to add images", "松开以添加图片")}</span>
+      </div>
+    </div>
+  );
+}
