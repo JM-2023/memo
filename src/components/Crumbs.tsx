@@ -50,41 +50,51 @@ export function Crumbs({ path, onHome, onPick }: CrumbsProps) {
   const enterDelay = (index: number, offset: number) => `${Math.max(0, index - enterFrom) * 0.06 + offset}s`;
 
   return (
-    <nav className="crumbs" aria-label={tr("Tag path", "标签路径")}>
-      <button type="button" className="crumb crumb-home" onClick={onHome} aria-label={tr("All memos", "全部笔记")} style={{ animationDelay: "0s" }}>
-        <Home size={15} aria-hidden="true" />
-      </button>
-      {parts.map((part, index) => {
-        const prefix = parts.slice(0, index + 1).join("/");
-        const isLast = index === parts.length - 1;
-        return (
-          <Fragment key={prefix}>
-            <ChevronRight size={13} className="crumb-sep" aria-hidden="true" style={{ animationDelay: enterDelay(index, 0.03) }} />
-            <button
-              type="button"
-              className={`crumb${isLast ? " is-current" : ""}`}
-              aria-current={isLast ? "page" : undefined}
-              onClick={() => onPick(prefix)}
-              style={{ animationDelay: enterDelay(index, 0.07) }}
-            >
-              {part}
-            </button>
-          </Fragment>
-        );
-      })}
-      {ghosts.map((part, ghostIndex) => {
-        const prefix = [...parts, ...ghosts.slice(0, ghostIndex + 1)].join("/");
-        // Deepest ghost leaves first — the trail folds back into its parent.
-        const delay = `${(ghosts.length - 1 - ghostIndex) * 0.05}s`;
-        return (
-          <Fragment key={prefix}>
-            <ChevronRight size={13} className="crumb-sep is-leaving" aria-hidden="true" style={{ animationDelay: delay }} />
-            <span className="crumb is-leaving" aria-hidden="true" style={{ animationDelay: delay }}>
-              {part}
-            </span>
-          </Fragment>
-        );
-      })}
-    </nav>
+    <>
+      <nav className="crumbs" aria-label={tr("Tag path", "标签路径")}>
+        <button type="button" className="crumb crumb-home" onClick={onHome} aria-label={tr("All memos", "全部笔记")} style={{ animationDelay: "0s" }}>
+          <Home size={15} aria-hidden="true" />
+        </button>
+        {parts.map((part, index) => {
+          const prefix = parts.slice(0, index + 1).join("/");
+          const isLast = index === parts.length - 1;
+          return (
+            <Fragment key={prefix}>
+              <ChevronRight size={13} className="crumb-sep" aria-hidden="true" style={{ animationDelay: enterDelay(index, 0.03) }} />
+              <button
+                type="button"
+                className={`crumb${isLast ? " is-current" : ""}`}
+                aria-current={isLast ? "page" : undefined}
+                onClick={() => onPick(prefix)}
+                style={{ animationDelay: enterDelay(index, 0.07) }}
+              >
+                {part}
+              </button>
+            </Fragment>
+          );
+        })}
+      </nav>
+      {ghosts.length > 0 ? (
+        // Zero-width overlay sibling: the fold-back plays where the segments
+        // were, but the row's layout settles instantly — so anything after
+        // the crumbs (the sort trigger) FLIPs straight to its final spot
+        // instead of snapping when the ghosts unmount.
+        <span className="crumb-ghosts" aria-hidden="true">
+          {ghosts.map((part, ghostIndex) => {
+            const prefix = [...parts, ...ghosts.slice(0, ghostIndex + 1)].join("/");
+            // Deepest ghost leaves first — the trail folds back into its parent.
+            const delay = `${(ghosts.length - 1 - ghostIndex) * 0.05}s`;
+            return (
+              <Fragment key={prefix}>
+                <ChevronRight size={13} className="crumb-sep is-leaving" aria-hidden="true" style={{ animationDelay: delay }} />
+                <span className="crumb is-leaving" style={{ animationDelay: delay }}>
+                  {part}
+                </span>
+              </Fragment>
+            );
+          })}
+        </span>
+      ) : null}
+    </>
   );
 }

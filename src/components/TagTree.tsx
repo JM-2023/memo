@@ -1,8 +1,85 @@
-import { ChevronRight, Hash, MoreHorizontal, Pencil, Pin, PinOff, Tag, Trash2 } from "lucide-react";
+import { ChevronRight, Hash, MoreHorizontal, Pencil, Pin, PinOff, Tag, Trash2, X } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useI18n } from "../lib/i18n";
 import type { TagNode } from "../lib/tags";
 import { Menu } from "./Menu";
+
+interface TagMenuBodyProps {
+  close: () => void;
+  node: TagNode;
+  pinned: boolean;
+  onPinTag: (path: string, pinned: boolean) => void;
+  onRenameTag: (path: string) => void;
+  onRemoveTag: (path: string) => void;
+}
+
+/**
+ * Tag menu rows with a two-step removal: "Remove tag" swaps the menu body for
+ * a prompt naming the blast radius plus confirm/cancel — no modal. State
+ * resets with the panel (it unmounts on close).
+ */
+function TagMenuBody({ close, node, pinned, onPinTag, onRenameTag, onRemoveTag }: TagMenuBodyProps) {
+  const { count, tr } = useI18n();
+  const [confirming, setConfirming] = useState(false);
+
+  if (confirming) {
+    return (
+      <>
+        <span className="action-menu__prompt" role="presentation">
+          {tr(`Remove #${node.path} from ${count(node.count, "memo")}? The memos stay.`, `从 ${count(node.count, "memo")}中移除 #${node.path}？笔记本身保留`)}
+        </span>
+        <button
+          type="button"
+          role="menuitem"
+          className="danger"
+          onClick={() => {
+            close();
+            onRemoveTag(node.path);
+          }}
+        >
+          <Trash2 size={16} aria-hidden="true" />
+          {tr("Remove tag", "移除标签")}
+        </button>
+        <button type="button" role="menuitem" onClick={() => setConfirming(false)}>
+          <X size={16} aria-hidden="true" />
+          {tr("Cancel", "取消")}
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          close();
+          onPinTag(node.path, !pinned);
+        }}
+      >
+        {pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}
+        {pinned ? tr("Unpin", "取消置顶") : tr("Pin tag", "置顶标签")}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          close();
+          onRenameTag(node.path);
+        }}
+      >
+        <Pencil size={16} aria-hidden="true" />
+        {tr("Rename", "重命名")}
+      </button>
+      <span className="action-menu__sep" />
+      <button type="button" role="menuitem" className="danger" onClick={() => setConfirming(true)}>
+        <Trash2 size={16} aria-hidden="true" />
+        {tr("Remove tag", "移除标签")}
+      </button>
+    </>
+  );
+}
 
 interface TagCallbacks {
   onPickTag: (path: string | null) => void;
@@ -68,43 +145,14 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
           )}
         >
           {(close) => (
-            <>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  close();
-                  onPinTag(node.path, !pinned);
-                }}
-              >
-                {pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}
-                {pinned ? tr("Unpin", "取消置顶") : tr("Pin tag", "置顶标签")}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  close();
-                  onRenameTag(node.path);
-                }}
-              >
-                <Pencil size={16} aria-hidden="true" />
-                {tr("Rename", "重命名")}
-              </button>
-              <span className="action-menu__sep" />
-              <button
-                type="button"
-                role="menuitem"
-                className="danger"
-                onClick={() => {
-                  close();
-                  onRemoveTag(node.path);
-                }}
-              >
-                <Trash2 size={16} aria-hidden="true" />
-                {tr("Remove tag", "移除标签")}
-              </button>
-            </>
+            <TagMenuBody
+              close={close}
+              node={node}
+              pinned={pinned}
+              onPinTag={onPinTag}
+              onRenameTag={onRenameTag}
+              onRemoveTag={onRemoveTag}
+            />
           )}
         </Menu>
       </div>

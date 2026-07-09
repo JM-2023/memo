@@ -56,8 +56,10 @@ function weekRangeLabel(start: Date, end: Date, locale: string): string {
  * horizontal in every mode:
  *   - week  — one row of seven day cells under a Mon–Sun header,
  *   - month — a wall-calendar: weekday columns, week rows,
- *   - year  — a GitHub-style band: week columns × weekday rows with month
- *     marks on top.
+ *   - year  — two stacked GitHub-style half-year bands (Jan–Jun / Jul–Dec),
+ *     each with month marks on top. One 52-column band would leave ~4px
+ *     cells in the sidebar; splitting doubles the cell size so the year
+ *     view grows in height just like the month calendar does.
  * ‹ › page by one period; clicking the title returns to the current one.
  * Clicking a day toggles the feed's day filter. Day details ride the shared
  * portal tooltip so neighbouring cells can never cover them.
@@ -96,12 +98,20 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
     return Array.from({ length: 7 }, (_, index) => formatter.format(new Date(2026, 0, monday.getDate() + index)));
   }, [locale]);
 
-  /** Which week column each month starts in (year band's top marks). */
-  const monthMarks = useMemo(() => {
-    if (period !== "year") return [];
+  /** Year mode: the two half-year bands, split at the week holding July 1. */
+  const yearBands = useMemo(() => {
+    if (period !== "year") return null;
+    const julyFirst = `${start.getFullYear()}-07-01`;
+    let split = weeks.findIndex((week) => week.some((cell) => cell.inRange && cell.key === julyFirst));
+    if (split <= 0) split = Math.ceil(weeks.length / 2);
+    return [weeks.slice(0, split), weeks.slice(split)] as const;
+  }, [weeks, period, start]);
+
+  /** Which week column each month starts in (a band's top marks). */
+  function monthMarksOf(band: HeatCell[][]): { week: number; label: string }[] {
     const formatter = new Intl.DateTimeFormat(locale, { month: "short" });
     const marks: { week: number; label: string }[] = [];
-    weeks.forEach((week, index) => {
+    band.forEach((week, index) => {
       const firstOfMonth = week.find((cell) => cell.inRange && cell.key.endsWith("-01"));
       if (firstOfMonth) {
         const [year, month] = firstOfMonth.key.split("-").map(Number);
@@ -109,7 +119,7 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
       }
     });
     return marks;
-  }, [weeks, period, locale]);
+  }
 
   function shift(delta: number) {
     tip.hide();
@@ -183,18 +193,26 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
         </button>
       </div>
 
-      {period === "year" ? (
+      {period === "year" && yearBands ? (
         <div key={nav.serial} className={`heat-year${slideClass}`}>
-          <div className="heat-months" style={{ gridTemplateColumns: `repeat(${weeks.length}, 1fr)` }} aria-hidden="true">
-            {monthMarks.map((mark) => (
-              <span key={mark.week} style={{ gridColumnStart: mark.week + 1 }}>
-                {mark.label}
-              </span>
-            ))}
-          </div>
-          <div className="heatmap-grid is-year" style={{ gridTemplateColumns: `repeat(${weeks.length}, 1fr)` }}>
-            {weeks.map((week) => week.map(cellNode))}
-          </div>
+          {yearBands.map((band, bandIndex) => {
+            // Both bands share one column count so their cells match in size.
+            const cols = Math.max(yearBands[0].length, yearBands[1].length);
+            return (
+              <div key={bandIndex} className="heat-band">
+                <div className="heat-months" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }} aria-hidden="true">
+                  {monthMarksOf(band).map((mark) => (
+                    <span key={mark.week} style={{ gridColumnStart: mark.week + 1 }}>
+                      {mark.label}
+                    </span>
+                  ))}
+                </div>
+                <div className="heatmap-grid is-year" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
+                  {band.map((week) => week.map(cellNode))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div key={nav.serial} className={`heatmap-grid is-cal${slideClass}`}>

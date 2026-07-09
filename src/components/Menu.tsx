@@ -18,7 +18,11 @@ interface MenuProps {
 }
 
 interface PortalPos {
-  top: number;
+  /** Downward panels pin `top`; upward ones pin `bottom` so the panel stays
+      glued to the trigger even when its content (e.g. a delete-confirm swap)
+      changes height. */
+  top?: number;
+  bottom?: number;
   left: number;
   up: boolean;
 }
@@ -64,7 +68,8 @@ export function Menu({ trigger, children, align = "right", className, portal = f
     const up = rect.bottom + 6 + panelHeight > window.innerHeight - 8 && rect.top - panelHeight - 6 > 8;
     const rawLeft = align === "right" ? rect.right - panelWidth : rect.left;
     setPos({
-      top: up ? rect.top - 6 - panelHeight : rect.bottom + 6,
+      top: up ? undefined : rect.bottom + 6,
+      bottom: up ? window.innerHeight - rect.top + 6 : undefined,
       left: Math.min(Math.max(rawLeft, 8), window.innerWidth - 8 - panelWidth),
       up
     });
@@ -90,7 +95,14 @@ export function Menu({ trigger, children, align = "right", className, portal = f
   // the panel and stretch it to a viewport-spanning width.
   const panelStyle: CSSProperties | undefined = portal
     ? pos
-      ? { position: "fixed", top: pos.top, left: pos.left, right: "auto", transformOrigin: `${pos.up ? "bottom" : "top"} ${align === "right" ? "right" : "left"}` }
+      ? {
+          position: "fixed",
+          top: pos.up ? "auto" : pos.top,
+          bottom: pos.up ? pos.bottom : "auto",
+          left: pos.left,
+          right: "auto",
+          transformOrigin: `${pos.up ? "bottom" : "top"} ${align === "right" ? "right" : "left"}`
+        }
       : { position: "fixed", top: -9999, left: -9999, right: "auto", visibility: "hidden" }
     : undefined;
 

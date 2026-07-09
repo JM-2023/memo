@@ -129,6 +129,21 @@
     0 4px 10px rgba(20, 27, 45, 0.1),
     0 24px 46px -12px rgba(20, 27, 45, 0.36);
 
+  /* Send-button glass (ported from project-manager's Liquid Glass download
+     button). Light = clear glass: specular highlight + translucent white
+     tint + real frost (saturate(200%) blur(20px)) + the reference shadows. */
+  --dl-rim: rgba(10, 16, 28, 0.12);
+  --dl-fill:
+    radial-gradient(180px 260px at 50% 0%, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0) 60%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.28));
+  --dl-sampling: saturate(200%) blur(20px);
+  --dl-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 12px 35px rgba(0, 0, 0, 0.25),
+    0 2px 8px rgba(0, 0, 0, 0.15);
+  --dl-hover-shadow: 0 12px 35px rgba(0, 0, 0, 0.22);
+  --dl-active-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+
   /* Tier C wash (hover for transparent controls) */
   --wash: rgba(20, 27, 45, 0.05);
   --wash-strong: rgba(20, 27, 45, 0.08);
@@ -238,6 +253,18 @@
       0 4px 8px rgba(0, 0, 0, 0.45),
       0 18px 34px -8px rgba(79, 70, 229, 0.5);
 
+    /* Send-button glass, dark: the reference's final render — transparent
+       body, white rim, no frost pass. */
+    --dl-rim: rgba(255, 255, 255, 0.35);
+    --dl-fill: none;
+    --dl-sampling: none;
+    --dl-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 12px 35px rgba(0, 0, 0, 0.25),
+      0 2px 8px rgba(0, 0, 0, 0.15);
+    --dl-hover-shadow: 0 12px 35px rgba(0, 0, 0, 0.22);
+    --dl-active-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+
     --wash: rgba(255, 255, 255, 0.06);
     --wash-strong: rgba(255, 255, 255, 0.1);
 
@@ -333,6 +360,18 @@
     0 4px 8px rgba(0, 0, 0, 0.45),
     0 18px 34px -8px rgba(79, 70, 229, 0.5);
 
+  /* Send-button glass, dark: the reference's final render — transparent
+     body, white rim, no frost pass. */
+  --dl-rim: rgba(255, 255, 255, 0.35);
+  --dl-fill: none;
+  --dl-sampling: none;
+  --dl-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 12px 35px rgba(0, 0, 0, 0.25),
+    0 2px 8px rgba(0, 0, 0, 0.15);
+  --dl-hover-shadow: 0 12px 35px rgba(0, 0, 0, 0.22);
+  --dl-active-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+
   --wash: rgba(255, 255, 255, 0.06);
   --wash-strong: rgba(255, 255, 255, 0.1);
 
@@ -396,7 +435,6 @@ a:hover { text-decoration: underline; }
 .pin-logo,
 .keypad button:not(.keypad-action),
 .action-menu,
-.send-button,
 .topbar,
 .period-seg,
 .toast,
@@ -411,6 +449,8 @@ a:hover { text-decoration: underline; }
 @keyframes fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
+/* Removal exit for view-transition snapshots: recede + fade, no bounce. */
+@keyframes card-depart { to { opacity: 0; transform: scale(0.965); } }
 @keyframes scale-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
 @keyframes pop-in { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
 /* Content entrance: rises with a long damped settle. Pair with --ease-out. */
@@ -447,22 +487,6 @@ a:hover { text-decoration: underline; }
 @keyframes crumb-out { to { opacity: 0; transform: translateX(-10px); filter: blur(3px); } }
 
 .spin { animation: spin 1s linear infinite; }
-
-/* Collapse-and-fade for memo deletion: JS locks the height then drops it to 0. */
-.is-removing {
-  overflow: hidden !important;
-  pointer-events: none;
-  opacity: 0;
-  transform: scale(0.98);
-  margin-top: 0 !important;
-  margin-bottom: 0 !important;
-  animation: none !important;
-  transition:
-    height var(--t-slow) var(--ease),
-    opacity var(--t-slow) var(--ease),
-    transform var(--t-slow) var(--ease),
-    margin var(--t-slow) var(--ease) !important;
-}
 
 /* Floating tooltip — one per app, portaled to <body> (see Tip.tsx), so it
    always paints above heat cells, cards and modals. The outer element carries
@@ -596,6 +620,16 @@ a:hover { text-decoration: underline; }
 .action-menu > button.is-selected { color: var(--primary-dark); }
 .action-menu .menu-check { margin-left: auto; color: var(--primary-dark); }
 .action-menu__sep { display: block; height: 1px; margin: 5px 8px; background: var(--glass-rim); }
+/* Two-step delete: the question row above the confirm/cancel pair. */
+.action-menu__prompt {
+  display: block;
+  max-width: 236px;
+  padding: 6px 11px 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.45;
+}
 
 /* Non-interactive menu row hosting an inline control (language switch). */
 .action-menu__row {
@@ -906,8 +940,8 @@ a:hover { text-decoration: underline; }
 .heatmap-grid { display: grid; align-items: stretch; }
 /* Week + month: weekday header on top, weeks flowing as rows. */
 .heatmap-grid.is-cal { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
-/* Year: 7 weekday rows, one column per week — a thin horizontal band. */
-.heatmap-grid.is-year { grid-auto-flow: column; grid-template-rows: repeat(7, auto); gap: 1px; }
+/* Year band: 7 weekday rows, one column per week of the half-year. */
+.heatmap-grid.is-year { grid-auto-flow: column; grid-template-rows: repeat(7, auto); gap: 2px; }
 .heatmap .slide-left { animation: heat-slide-left 0.45s var(--ease-out) both; }
 .heatmap .slide-right { animation: heat-slide-right 0.45s var(--ease-out) both; }
 .heat-colhead {
@@ -919,8 +953,12 @@ a:hover { text-decoration: underline; }
   font-weight: 600;
   user-select: none;
 }
-.heat-year { display: grid; gap: 3px; }
-.heat-months { display: grid; gap: 1px; }
+/* Year = two stacked half-year bands; the split doubles the cell size a
+   single 52-week strip would allow, so the year view gains height the same
+   way the month calendar does. */
+.heat-year { display: grid; gap: 12px; }
+.heat-band { display: grid; gap: 4px; }
+.heat-months { display: grid; gap: 2px; }
 .heat-months span {
   color: var(--muted);
   font-size: 0.58rem;
@@ -930,8 +968,8 @@ a:hover { text-decoration: underline; }
   overflow: visible;
   user-select: none;
 }
-/* Tiny year cells: crisper corners, thinner rings, subtler hover halo. */
-.heatmap-grid.is-year .heat-cell { border-radius: 1.5px; outline-width: 2px; outline-offset: 0.5px; }
+/* Small year cells: crisper corners, thinner rings, subtler hover halo. */
+.heatmap-grid.is-year .heat-cell { border-radius: 2.5px; outline-width: 2px; outline-offset: 0.5px; }
 .heatmap-grid.is-year .heat-cell.is-today { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--heat-4) 85%, var(--ink)); }
 .heatmap-grid.is-year .heat-cell.is-active {
   box-shadow:
@@ -1124,6 +1162,20 @@ button.crumb:active { background: var(--wash-strong); }
 .crumb-sep { flex: none; color: var(--line-strong); animation: crumb-in 0.55s var(--ease-out) both; }
 /* Going up a level: the dropped segments fold back toward their parent. */
 .crumb.is-leaving, .crumb-sep.is-leaving { animation: crumb-out 0.26s var(--ease) both; pointer-events: none; }
+/* Leaving segments paint from the settled breadcrumb edge without taking up
+   flex space. The sort control can move directly to its final position while
+   the old path folds away above it. */
+.crumb-ghosts {
+  display: inline-flex;
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+  align-items: center;
+  gap: 1px;
+  overflow: visible;
+  white-space: nowrap;
+  pointer-events: none;
+}
 /* Sort picker sits beside "全部笔记". */
 .sort-trigger {
   display: inline-flex;
@@ -1231,6 +1283,14 @@ button.crumb:active { background: var(--wash-strong); }
 }
 @media (hover: hover) { .trash-empty-button:hover { background: var(--danger-tint); box-shadow: var(--shadow-xs); } }
 .trash-empty-button:active { transform: scale(0.96); }
+/* Armed state (first click): filled red, asking for the second click. */
+.trash-empty-button.is-confirm {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+  box-shadow: var(--shadow-sm);
+}
+@media (hover: hover) { .trash-empty-button.is-confirm:hover { background: color-mix(in srgb, var(--danger) 88%, black); } }
 
 /* =========================================================================
    Editor (composer + in-card edit)
@@ -1405,26 +1465,63 @@ button.crumb:active { background: var(--wash-strong); }
 .editor-tools { display: flex; align-items: center; gap: 2px; }
 .editor-actions { display: flex; align-items: center; gap: 8px; }
 
-/* Tier A — the one primary action: liquid glass + signature swell. */
+/* Tier A — the one primary action, ported from project-manager's Liquid
+   Glass "download button". The hover swell is physical: padding and radius
+   REALLY grow on the signature spring while the icon eases down to 0.95, so
+   the chip inflates in flow. The negative hover margin lets the right edge
+   (this button is right-anchored) swell outwards too, keeping the growth
+   symmetric. Press tightens the shadow only — no transforms, like the
+   reference. */
 .send-button {
+  --py: 10px;
+  --px: 20px;
+  --py-h: 12px;
+  --px-h: 23px;
+  --rad: 18px;
+  --rad-h: 22px;
+  position: relative;
+  isolation: isolate;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 18px;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: var(--py) var(--px);
   color: var(--ink);
+  font-size: 0.98rem;
   font-weight: 700;
-  background: var(--primary-fill);
-  border: 1px solid var(--primary-rim);
-  border-radius: var(--r-pill);
-  box-shadow: var(--primary-shadow);
-  transition: transform 0.34s var(--spring), box-shadow 0.3s var(--ease), background var(--t) var(--ease);
+  letter-spacing: 0.01em;
+  background: var(--dl-fill);
+  -webkit-backdrop-filter: var(--dl-sampling);
+  backdrop-filter: var(--dl-sampling);
+  border: 1.5px solid var(--dl-rim);
+  border-radius: var(--rad);
+  box-shadow: var(--dl-shadow);
+  overflow: hidden;
+  transition:
+    box-shadow 0.18s ease,
+    background 0.18s ease,
+    color 0.18s ease,
+    margin-right 0.4s var(--spring),
+    padding 0.4s var(--spring),
+    border-radius 0.4s var(--spring);
 }
-.send-button svg { color: var(--primary-dark); }
-/* Hover blooms the glass (fill + shadow), the button itself stays put. */
+.send-button svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  stroke-width: 2.2;
+  color: var(--primary-dark);
+  transition: transform 0.4s var(--spring);
+}
 @media (hover: hover) {
-  .send-button:hover:not(:disabled) { background: var(--primary-hover-fill); box-shadow: var(--primary-hover-shadow); }
+  .send-button:hover:not(:disabled) {
+    margin-right: -3px;
+    padding: var(--py-h) var(--px-h);
+    border-radius: var(--rad-h);
+    box-shadow: var(--dl-hover-shadow);
+  }
+  .send-button:hover:not(:disabled) svg { transform: scale(0.95); }
 }
-.send-button:active:not(:disabled) { transform: scale(0.955); transition-duration: 0.12s; }
+.send-button:active:not(:disabled) { box-shadow: var(--dl-active-shadow); }
 .send-button:disabled { box-shadow: var(--shadow-xs); }
 
 /* =========================================================================
@@ -1836,7 +1933,9 @@ button.memo-tag:active {
    ========================================================================= */
 ::view-transition-group(*) { animation-duration: 0.45s; animation-timing-function: var(--ease-out); }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.25s; }
-::view-transition-old(*):only-child { animation: fade-out 0.2s var(--ease) both; }
+/* Departing cards (deletion, filtered out) sink slightly as they fade, so a
+   removal reads as the card receding while its neighbours glide up. */
+::view-transition-old(*):only-child { animation: card-depart 0.26s var(--ease) both; }
 ::view-transition-new(*):only-child { animation: fade-in 0.3s var(--ease) 0.08s both; }
 
 /* =========================================================================

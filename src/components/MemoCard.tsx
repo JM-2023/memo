@@ -1,5 +1,5 @@
-import { Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Trash2 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Trash2, X } from "lucide-react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { externalImagesOf, tokenizeLine } from "../lib/content";
 import { formatTime } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
@@ -49,46 +49,150 @@ interface MemoCardProps {
   knownTags: string[];
   editing: boolean;
   savingEdit: boolean;
-  isRemoving: boolean;
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onSaveEdit: (data: { content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
   onTogglePin: () => void;
   onCopy: () => void;
-  onRequestDelete: () => void;
+  onDelete: () => void;
   onRestore: () => void;
-  onRequestPurge: () => void;
+  onPurge: () => void;
   onPickTag: (path: string) => void;
   onOpenImage: (items: LightboxItem[], index: number) => void;
-  onRemoveComplete: () => void;
+}
+
+interface MemoMenuBodyProps {
+  close: () => void;
+  inTrash: boolean;
+  pinned: boolean;
+  onTogglePin: () => void;
+  onStartEdit: () => void;
+  onCopy: () => void;
+  onDelete: () => void;
+  onRestore: () => void;
+  onPurge: () => void;
+}
+
+/**
+ * Menu rows with a two-step delete: the destructive item swaps the menu body
+ * for a prompt + confirm/cancel pair instead of raising a modal. The state
+ * lives here (the panel unmounts on close), so a reopened menu always starts
+ * back at the action list.
+ */
+function MemoMenuBody({ close, inTrash, pinned, onTogglePin, onStartEdit, onCopy, onDelete, onRestore, onPurge }: MemoMenuBodyProps) {
+  const { tr } = useI18n();
+  const [confirming, setConfirming] = useState(false);
+
+  if (confirming) {
+    return (
+      <>
+        <span className="action-menu__prompt" role="presentation">
+          {inTrash ? tr("Delete forever? This can’t be undone.", "彻底删除？此操作无法撤销") : tr("Delete this memo?", "删除这条笔记？")}
+        </span>
+        <button
+          type="button"
+          role="menuitem"
+          className="danger"
+          onClick={() => {
+            close();
+            if (inTrash) onPurge();
+            else onDelete();
+          }}
+        >
+          <Trash2 size={16} aria-hidden="true" />
+          {inTrash ? tr("Delete forever", "彻底删除") : tr("Move to Trash", "移入回收站")}
+        </button>
+        <button type="button" role="menuitem" onClick={() => setConfirming(false)}>
+          <X size={16} aria-hidden="true" />
+          {tr("Cancel", "取消")}
+        </button>
+      </>
+    );
+  }
+
+  if (inTrash) {
+    return (
+      <>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            close();
+            onRestore();
+          }}
+        >
+          <RotateCcw size={16} aria-hidden="true" />
+          {tr("Restore", "恢复")}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            close();
+            onCopy();
+          }}
+        >
+          <Copy size={16} aria-hidden="true" />
+          {tr("Copy content", "复制内容")}
+        </button>
+        <span className="action-menu__sep" />
+        <button type="button" role="menuitem" className="danger" onClick={() => setConfirming(true)}>
+          <Trash2 size={16} aria-hidden="true" />
+          {tr("Delete permanently", "彻底删除")}
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          close();
+          onTogglePin();
+        }}
+      >
+        {pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}
+        {pinned ? tr("Unpin", "取消置顶") : tr("Pin", "置顶")}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          close();
+          onStartEdit();
+        }}
+      >
+        <Pencil size={16} aria-hidden="true" />
+        {tr("Edit", "编辑")}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          close();
+          onCopy();
+        }}
+      >
+        <Copy size={16} aria-hidden="true" />
+        {tr("Copy content", "复制内容")}
+      </button>
+      <span className="action-menu__sep" />
+      <button type="button" role="menuitem" className="danger" onClick={() => setConfirming(true)}>
+        <Trash2 size={16} aria-hidden="true" />
+        {tr("Delete", "删除")}
+      </button>
+    </>
+  );
 }
 
 export function MemoCard(props: MemoCardProps) {
   const { locale, tr } = useI18n();
-  const { memo, variant, editing, isRemoving } = props;
-  const rootRef = useRef<HTMLElement>(null);
-  const removeCompleteRef = useRef(props.onRemoveComplete);
-  removeCompleteRef.current = props.onRemoveComplete;
+  const { memo, variant, editing } = props;
   // External links that failed to load render as a compact fallback chip.
   const [brokenUrls, setBrokenUrls] = useState<Set<string>>(new Set());
-
-  // Removal (trash / restore / purge): collapse height + fade, then hand
-  // control back to the store.
-  useEffect(() => {
-    if (!isRemoving) return;
-    const element = rootRef.current;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!element || reduced) {
-      removeCompleteRef.current();
-      return;
-    }
-    element.style.height = `${element.getBoundingClientRect().height}px`;
-    void element.offsetHeight;
-    element.classList.add("is-removing");
-    element.style.height = "0px";
-    const timer = window.setTimeout(() => removeCompleteRef.current(), 360);
-    return () => window.clearTimeout(timer);
-  }, [isRemoving]);
 
   const externalUrls = useMemo(() => externalImagesOf(memo.content), [memo.content]);
   const lightboxItems = useMemo<LightboxItem[]>(
@@ -112,7 +216,7 @@ export function MemoCard(props: MemoCardProps) {
   }
 
   return (
-    <article ref={rootRef} className={`memo-card${pinned && !inTrash ? " is-pinned" : ""}${inTrash ? " is-trash" : ""}`}>
+    <article className={`memo-card${pinned && !inTrash ? " is-pinned" : ""}${inTrash ? " is-trash" : ""}`}>
       {editing ? (
         <Editor
           mode="edit"
@@ -148,96 +252,19 @@ export function MemoCard(props: MemoCardProps) {
                   </button>
                 )}
               >
-                {(close) =>
-                  inTrash ? (
-                    <>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          close();
-                          props.onRestore();
-                        }}
-                      >
-                        <RotateCcw size={16} aria-hidden="true" />
-                        {tr("Restore", "恢复")}
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          close();
-                          props.onCopy();
-                        }}
-                      >
-                        <Copy size={16} aria-hidden="true" />
-                        {tr("Copy content", "复制内容")}
-                      </button>
-                      <span className="action-menu__sep" />
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="danger"
-                        onClick={() => {
-                          close();
-                          props.onRequestPurge();
-                        }}
-                      >
-                        <Trash2 size={16} aria-hidden="true" />
-                        {tr("Delete permanently", "彻底删除")}
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          close();
-                          props.onTogglePin();
-                        }}
-                      >
-                        {pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}
-                        {pinned ? tr("Unpin", "取消置顶") : tr("Pin", "置顶")}
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          close();
-                          props.onStartEdit();
-                        }}
-                      >
-                        <Pencil size={16} aria-hidden="true" />
-                        {tr("Edit", "编辑")}
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          close();
-                          props.onCopy();
-                        }}
-                      >
-                        <Copy size={16} aria-hidden="true" />
-                        {tr("Copy content", "复制内容")}
-                      </button>
-                      <span className="action-menu__sep" />
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="danger"
-                        onClick={() => {
-                          close();
-                          props.onRequestDelete();
-                        }}
-                      >
-                        <Trash2 size={16} aria-hidden="true" />
-                        {tr("Delete", "删除")}
-                      </button>
-                    </>
-                  )
-                }
+                {(close) => (
+                  <MemoMenuBody
+                    close={close}
+                    inTrash={inTrash}
+                    pinned={pinned}
+                    onTogglePin={props.onTogglePin}
+                    onStartEdit={props.onStartEdit}
+                    onCopy={props.onCopy}
+                    onDelete={props.onDelete}
+                    onRestore={props.onRestore}
+                    onPurge={props.onPurge}
+                  />
+                )}
               </Menu>
             </div>
           </header>

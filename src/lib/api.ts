@@ -146,3 +146,46 @@ export function renameTag(from: string, to: string): Promise<{ memos: Memo[]; ta
 export function removeTag(path: string): Promise<{ memos: Memo[]; tags: TagMeta[]; updated: number }> {
   return request("/api/tags/remove", { method: "POST", body: JSON.stringify({ path }) });
 }
+
+// ---- Backup (export / import) ----
+
+export interface BackupImage {
+  id: string;
+  mime: string;
+  width: number;
+  height: number;
+  dataBase64: string;
+}
+
+export interface BackupMemo {
+  id: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+  pinnedAt: string | null;
+  deletedAt: string | null;
+  images: BackupImage[];
+}
+
+export interface BackupPayload {
+  format: "memo-backup";
+  version: number;
+  exportedAt: string;
+  memos: BackupMemo[];
+  tags: { path: string; pinnedAt: string | null }[];
+}
+
+/** The whole notebook (plaintext content + inline image data) as one file. */
+export async function exportData(): Promise<Blob> {
+  const response = await fetch("/api/export", { credentials: "same-origin" });
+  if (!response.ok) {
+    if (response.status === 401) throw new AuthRequiredError();
+    throw new ApiError("REQUEST_FAILED", response.status, `Export failed (${response.status})`);
+  }
+  return response.blob();
+}
+
+/** Merge a backup into the notebook; existing ids are left untouched. */
+export function importData(payload: BackupPayload): Promise<{ imported: number; skipped: number; images: number }> {
+  return request("/api/import", { method: "POST", body: JSON.stringify(payload) });
+}

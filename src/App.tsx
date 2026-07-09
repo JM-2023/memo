@@ -18,7 +18,9 @@ import {
   bootstrap,
   createMemo,
   emptyTrash,
+  exportData,
   getAuthStatus,
+  importData,
   login,
   logout,
   pinTag,
@@ -29,10 +31,11 @@ import {
   setupPassword,
   syncSince,
   trashMemo,
-  updateMemo
+  updateMemo,
+  type BackupPayload
 } from "./lib/api";
 import { adoptCacheKey, clearSnapshot, mergeMemoDelta, mergeTagDelta, openSnapshot, peekSnapshotCursor, saveSnapshot } from "./lib/cache";
-import { formatDayLabel } from "./lib/dates";
+import { dateKey, formatDayLabel } from "./lib/dates";
 import { useI18n } from "./lib/i18n";
 import { countsByDay, dayKeyOf } from "./lib/stats";
 import { buildTagTree, isValidTagPath, tagMatches, tagsOf } from "./lib/tags";
@@ -101,12 +104,11 @@ interface FeedHandlers {
   saveEdit: (memo: Memo, data: { content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
   togglePin: (memo: Memo) => void;
   copy: (memo: Memo) => void;
-  requestDelete: (memo: Memo) => void;
+  trash: (memo: Memo) => void;
   restore: (memo: Memo) => void;
-  requestPurge: (memo: Memo) => void;
+  purge: (memo: Memo) => void;
   pickTag: (path: string) => void;
   openImage: (items: LightboxItem[], index: number) => void;
-  removeComplete: (id: string) => void;
 }
 
 interface FeedItemProps {
@@ -115,7 +117,6 @@ interface FeedItemProps {
   knownTags: string[];
   editing: boolean;
   savingEdit: boolean;
-  isRemoving: boolean;
   vtName: string | undefined;
   /** Read once at mount; a stable getter keeps the memo comparison clean. */
   getEntering: () => boolean;
@@ -131,7 +132,7 @@ interface FeedItemProps {
  * deliberately left out of the equality check.
  */
 const FeedItem = reactMemo(
-  function FeedItem({ memo, variant, knownTags, editing, savingEdit, isRemoving, vtName, getEntering, delay, handlers }: FeedItemProps) {
+  function FeedItem({ memo, variant, knownTags, editing, savingEdit, vtName, getEntering, delay, handlers }: FeedItemProps) {
     return (
       <MemoSlot vtName={vtName} entering={getEntering()} delay={delay}>
         <MemoCard
@@ -140,18 +141,16 @@ const FeedItem = reactMemo(
           knownTags={knownTags}
           editing={editing}
           savingEdit={savingEdit}
-          isRemoving={isRemoving}
           onStartEdit={() => handlers.startEdit(memo.id)}
           onCancelEdit={handlers.cancelEdit}
           onSaveEdit={(data) => handlers.saveEdit(memo, data)}
           onTogglePin={() => handlers.togglePin(memo)}
           onCopy={() => handlers.copy(memo)}
-          onRequestDelete={() => handlers.requestDelete(memo)}
+          onDelete={() => handlers.trash(memo)}
           onRestore={() => handlers.restore(memo)}
-          onRequestPurge={() => handlers.requestPurge(memo)}
+          onPurge={() => handlers.purge(memo)}
           onPickTag={handlers.pickTag}
           onOpenImage={handlers.openImage}
-          onRemoveComplete={() => handlers.removeComplete(memo.id)}
         />
       </MemoSlot>
     );
@@ -162,7 +161,6 @@ const FeedItem = reactMemo(
     prev.knownTags === next.knownTags &&
     prev.editing === next.editing &&
     prev.savingEdit === next.savingEdit &&
-    prev.isRemoving === next.isRemoving &&
     prev.vtName === next.vtName &&
     prev.handlers === next.handlers
 );
@@ -197,16 +195,13 @@ export default function App() {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
-  const [trashTarget, setTrashTarget] = useState<Memo | null>(null);
-  const [purgeTarget, setPurgeTarget] = useState<Memo | null>(null);
-  const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
   const [renameTagTarget, setRenameTagTarget] = useState<string | null>(null);
-  const [removeTagTarget, setRemoveTagTarget] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
-  const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
-  // id → what to do once the collapse animation ends: a Memo means "apply
-  // this server state", null means "drop the memo entirely" (hard delete).
-  const removalRef = useRef(new Map<string, Memo | null>());
+  // Two-step Empty Trash: first click arms the button, second click fires.
+  const [confirmEmptyTrash, setConfirmEmptyTrash] = useState(false);
+  // Parsed backup file waiting for the user's go-ahead.
+  const [importTarget, setImportTarget] = useState<{ payload: BackupPayload; memoCount: number; imageCount: number } | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   const [lightbox, setLightbox] = useState<{ items: LightboxItem[]; index: number } | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
@@ -260,26 +255,9 @@ export default function App() {
     });
   }, []);
 
-  /** Sync payloads must not yank cards that are mid-collapse — reroute those. */
   const applySyncChanges = useCallback(
     (changed: Memo[], purged: string[], tags: TagMeta[]) => {
-      const direct: Memo[] = [];
-      const drop: string[] = [];
-      for (const memo of changed) {
-        if (removalRef.current.has(memo.id)) {
-          removalRef.current.set(memo.id, memo);
-        } else {
-          direct.push(memo);
-        }
-      }
-      for (const id of purged) {
-        if (removalRef.current.has(id)) {
-          removalRef.current.set(id, null);
-        } else {
-          drop.push(id);
-        }
-      }
-      if (direct.length > 0 || drop.length > 0) upsertMemos(direct, drop);
+      if (changed.length > 0 || purged.length > 0) upsertMemos(changed, purged);
       applyTagMeta(tags);
     },
     [upsertMemos, applyTagMeta]
@@ -288,8 +266,6 @@ export default function App() {
   const dropToLogin = useCallback(() => {
     setPhase("login");
     setMemos([]);
-    removalRef.current.clear();
-    setRemovingIds(new Set());
     showToast(tr("Your session expired. Enter your passcode again.", "登录已过期，请重新输入密码"), "error");
   }, [showToast, tr]);
 
@@ -346,17 +322,15 @@ export default function App() {
     [setCursor]
   );
 
-  // Persist the working set (sealed) once changes settle. Skipped while a
-  // removal animation still holds back server state — a snapshot taken then
-  // would pair a fresh cursor with stale rows, and sync could never heal it.
+  // Persist the working set (sealed) once changes settle.
   useEffect(() => {
-    if (phase !== "ready" || removingIds.size > 0) return;
+    if (phase !== "ready") return;
     const timer = window.setTimeout(() => {
       const tags: TagMeta[] = [...pinnedTags].map(([path, pinnedAt]) => ({ path, pinnedAt, seq: 0 }));
       void saveSnapshot({ cursor: getCursor(), memos, tags });
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [phase, memos, pinnedTags, removingIds, getCursor]);
+  }, [phase, memos, pinnedTags, getCursor]);
 
   useEffect(() => {
     let cancelled = false;
@@ -588,8 +562,6 @@ export default function App() {
     // session expiry keeps the snapshot — it is sealed without a session.)
     void clearSnapshot();
     setMemos([]);
-    removalRef.current.clear();
-    setRemovingIds(new Set());
     setActiveTag(null);
     setActiveDay(null);
     setQuery("");
@@ -649,35 +621,86 @@ export default function App() {
     }
   }
 
-  /** Kick off the collapse animation; `after` runs once it finishes. */
-  const beginRemoval = useCallback((id: string, after: Memo | null) => {
-    removalRef.current.set(id, after);
-    setRemovingIds((value) => new Set(value).add(id));
-  }, []);
-
-  const finishRemove = useCallback(
-    (id: string) => {
-      const after = removalRef.current.get(id);
-      removalRef.current.delete(id);
-      setRemovingIds((value) => {
-        const next = new Set(value);
-        next.delete(id);
-        return next;
-      });
-      if (after) {
-        upsertMemos([after], []);
-      } else {
-        upsertMemos([], [id]);
-      }
+  /**
+   * Removals ride the same view-transition system as filter swaps and
+   * pinning: the departing card cross-fades away while the surviving cards
+   * (and the feed gap) glide to their final positions on the compositor.
+   * No height-collapse hand-off, so there is nothing to snap at the end.
+   */
+  const applyRemoval = useCallback(
+    (changed: Memo[], purged: string[]) => {
+      withViewTransition(() => flushSync(() => upsertMemos(changed, purged)));
+      void runSync();
+      notifyPeers();
     },
-    [upsertMemos]
+    [upsertMemos, runSync, notifyPeers]
   );
+
+  async function handleTrash(memo: Memo) {
+    try {
+      const result = await guard(() => trashMemo(memo.id));
+      if (!result) return;
+      applyRemoval([result.memo], []);
+      showToast(tr("Moved to Trash", "已移入回收站"));
+    } catch (cause) {
+      showToast(errorMessage(cause, "Couldn’t delete the memo", "删除失败"), "error");
+    }
+  }
+
+  async function handleRestore(memo: Memo) {
+    try {
+      const result = await guard(() => restoreMemo(memo.id));
+      if (!result) return;
+      applyRemoval([result.memo], []);
+      showToast(tr("Restored", "已恢复"));
+    } catch (cause) {
+      showToast(errorMessage(cause, "Couldn’t restore the memo", "恢复失败"), "error");
+    }
+  }
+
+  async function handlePurge(memo: Memo) {
+    try {
+      const result = await guard(() => purgeMemo(memo.id));
+      if (!result) return;
+      applyRemoval([], [memo.id]);
+      showToast(tr("Permanently deleted", "已彻底删除"));
+    } catch (cause) {
+      showToast(errorMessage(cause, "Couldn’t delete the memo", "删除失败"), "error");
+    }
+  }
+
+  async function handleEmptyTrash() {
+    try {
+      const result = await guard(() => emptyTrash());
+      if (!result) return;
+      applyRemoval([], result.purgedIds);
+      showToast(tr("Trash emptied", "回收站已清空"));
+    } catch (cause) {
+      showToast(errorMessage(cause, "Couldn’t empty Trash", "清空失败"), "error");
+    }
+  }
 
   // Latest closures behind one stable identity — FeedItem's memoization
   // survives every App re-render. (The handle* function declarations below
   // are hoisted, so assigning here each render is safe.)
-  const feedActionsRef = useRef({ saveEdit: handleSaveEdit, togglePin: handleTogglePin, copy: handleCopy, restore: handleRestore, pickTag });
-  feedActionsRef.current = { saveEdit: handleSaveEdit, togglePin: handleTogglePin, copy: handleCopy, restore: handleRestore, pickTag };
+  const feedActionsRef = useRef({
+    saveEdit: handleSaveEdit,
+    togglePin: handleTogglePin,
+    copy: handleCopy,
+    trash: handleTrash,
+    restore: handleRestore,
+    purge: handlePurge,
+    pickTag
+  });
+  feedActionsRef.current = {
+    saveEdit: handleSaveEdit,
+    togglePin: handleTogglePin,
+    copy: handleCopy,
+    trash: handleTrash,
+    restore: handleRestore,
+    purge: handlePurge,
+    pickTag
+  };
   const getEntering = useCallback(() => !enterSuppressRef.current, []);
   const feedHandlers = useMemo<FeedHandlers>(
     () => ({
@@ -686,83 +709,25 @@ export default function App() {
       saveEdit: (memo, data) => feedActionsRef.current.saveEdit(memo, data),
       togglePin: (memo) => void feedActionsRef.current.togglePin(memo),
       copy: (memo) => void feedActionsRef.current.copy(memo),
-      requestDelete: (memo) => setTrashTarget(memo),
+      trash: (memo) => void feedActionsRef.current.trash(memo),
       restore: (memo) => void feedActionsRef.current.restore(memo),
-      requestPurge: (memo) => setPurgeTarget(memo),
+      purge: (memo) => void feedActionsRef.current.purge(memo),
       pickTag: (path) => feedActionsRef.current.pickTag(path),
-      openImage: (items, index) => setLightbox({ items, index }),
-      removeComplete: finishRemove
+      openImage: (items, index) => setLightbox({ items, index })
     }),
-    [finishRemove]
+    []
   );
 
-  async function handleTrashConfirmed() {
-    if (!trashTarget) return;
-    const target = trashTarget;
-    setDialogBusy(true);
-    try {
-      const result = await guard(() => trashMemo(target.id));
-      if (!result) return;
-      setTrashTarget(null);
-      beginRemoval(target.id, result.memo);
-      void runSync();
-      notifyPeers();
-      showToast(tr("Moved to Trash", "已移入回收站"));
-    } catch (cause) {
-      showToast(errorMessage(cause, "Couldn’t delete the memo", "删除失败"), "error");
-    } finally {
-      setDialogBusy(false);
-    }
-  }
-
-  async function handleRestore(memo: Memo) {
-    try {
-      const result = await guard(() => restoreMemo(memo.id));
-      if (!result) return;
-      beginRemoval(memo.id, result.memo);
-      void runSync();
-      notifyPeers();
-      showToast(tr("Restored", "已恢复"));
-    } catch (cause) {
-      showToast(errorMessage(cause, "Couldn’t restore the memo", "恢复失败"), "error");
-    }
-  }
-
-  async function handlePurgeConfirmed() {
-    if (!purgeTarget) return;
-    const target = purgeTarget;
-    setDialogBusy(true);
-    try {
-      const result = await guard(() => purgeMemo(target.id));
-      if (!result) return;
-      setPurgeTarget(null);
-      beginRemoval(target.id, null);
-      void runSync();
-      notifyPeers();
-      showToast(tr("Permanently deleted", "已彻底删除"));
-    } catch (cause) {
-      showToast(errorMessage(cause, "Couldn’t delete the memo", "删除失败"), "error");
-    } finally {
-      setDialogBusy(false);
-    }
-  }
-
-  async function handleEmptyTrashConfirmed() {
-    setDialogBusy(true);
-    try {
-      const result = await guard(() => emptyTrash());
-      if (!result) return;
-      setEmptyTrashOpen(false);
-      for (const id of result.purgedIds) beginRemoval(id, null);
-      void runSync();
-      notifyPeers();
-      showToast(tr("Trash emptied", "回收站已清空"));
-    } catch (cause) {
-      showToast(errorMessage(cause, "Couldn’t empty Trash", "清空失败"), "error");
-    } finally {
-      setDialogBusy(false);
-    }
-  }
+  // A primed Empty Trash button disarms on its own if the second click
+  // never lands.
+  useEffect(() => {
+    if (!confirmEmptyTrash) return;
+    const timer = window.setTimeout(() => setConfirmEmptyTrash(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [confirmEmptyTrash]);
+  useEffect(() => {
+    if (view !== "trash") setConfirmEmptyTrash(false);
+  }, [view]);
 
   async function handlePinTag(path: string, pinned: boolean) {
     try {
@@ -799,23 +764,80 @@ export default function App() {
     }
   }
 
-  async function handleRemoveTagConfirmed() {
-    if (!removeTagTarget) return;
-    const path = removeTagTarget;
-    setDialogBusy(true);
+  async function handleRemoveTag(path: string) {
     try {
       const result = await guard(() => removeTag(path));
       if (!result) return;
-      setRemoveTagTarget(null);
-      applySyncChanges(result.memos, [], result.tags);
-      if (activeTag && tagMatches(activeTag, path)) {
-        setActiveTag(null);
-      }
+      // One view transition covers the whole blast radius: the tag row leaves
+      // the sidebar (its siblings FLIP up), memo bodies cross-fade to their
+      // tagless text, and a matching feed filter resets.
+      withViewTransition(() =>
+        flushSync(() => {
+          applySyncChanges(result.memos, [], result.tags);
+          if (activeTag && tagMatches(activeTag, path)) {
+            setActiveTag(null);
+          }
+        })
+      );
       void runSync();
       notifyPeers();
       showToast(tr(`Tag removed; updated ${count(result.updated, "memo")}`, `已移除标签，更新了 ${count(result.updated, "memo")}`));
     } catch (cause) {
       showToast(errorMessage(cause, "Couldn’t remove the tag", "移除失败"), "error");
+    }
+  }
+
+  async function handleExport() {
+    try {
+      const blob = await guard(() => exportData());
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `memo-backup-${dateKey(new Date())}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+      showToast(tr("Backup exported", "备份已导出"));
+    } catch (cause) {
+      showToast(errorMessage(cause, "Couldn’t export your data", "导出失败"), "error");
+    }
+  }
+
+  async function handleImportFile(file: File) {
+    try {
+      const payload = JSON.parse(await file.text()) as BackupPayload;
+      if (!payload || payload.format !== "memo-backup" || payload.version !== 1 || !Array.isArray(payload.memos)) {
+        showToast(tr("This isn’t a memo backup file", "这不是有效的备份文件"), "error");
+        return;
+      }
+      const imageCount = payload.memos.reduce((sum, memo) => sum + (Array.isArray(memo.images) ? memo.images.length : 0), 0);
+      setImportTarget({ payload, memoCount: payload.memos.length, imageCount });
+    } catch {
+      showToast(tr("Couldn’t read the backup file", "无法读取备份文件"), "error");
+    }
+  }
+
+  async function handleImportConfirmed() {
+    if (!importTarget) return;
+    const { payload } = importTarget;
+    setDialogBusy(true);
+    try {
+      const result = await guard(() => importData(payload));
+      if (!result) return;
+      setImportTarget(null);
+      // The imported rows carry fresh seqs, so one incremental sync pulls
+      // them in (and sibling tabs hear about it too).
+      await runSync();
+      notifyPeers();
+      showToast(
+        result.imported > 0
+          ? tr(`Imported ${count(result.imported, "memo")}`, `已导入 ${count(result.imported, "memo")}`)
+          : tr("Nothing new — every memo already exists", "没有新内容，笔记都已存在")
+      );
+    } catch (cause) {
+      showToast(errorMessage(cause, "Couldn’t import the backup", "导入失败"), "error");
     } finally {
       setDialogBusy(false);
     }
@@ -842,9 +864,6 @@ export default function App() {
   }
 
   const sortLabel = sortOptions.find((option) => option.key === sortKey)?.label ?? "";
-  const removeTagCount = removeTagTarget
-    ? memos.filter((memo) => tagsOf(memo).some((tag) => tagMatches(tag, removeTagTarget))).length
-    : 0;
 
   return (
     <div className={`app-shell${reveal ? " first-reveal" : ""}`}>
@@ -863,7 +882,7 @@ export default function App() {
           pinnedTags={pinnedTags}
           onPinTag={(path, pinned) => void handlePinTag(path, pinned)}
           onRenameTag={(path) => setRenameTagTarget(path)}
-          onRemoveTag={(path) => setRemoveTagTarget(path)}
+          onRemoveTag={(path) => void handleRemoveTag(path)}
           onPickTag={(path) => {
             pickTag(path);
             closeDrawer();
@@ -886,6 +905,8 @@ export default function App() {
           }}
           onCycleTheme={() => setTheme((value) => nextTheme(value))}
           onChangePasscode={() => setChangingPasscode(true)}
+          onExportData={() => void handleExport()}
+          onImportData={() => importFileRef.current?.click()}
           onLogout={() => void handleLogout()}
         />
       </aside>
@@ -968,9 +989,23 @@ export default function App() {
           </div>
           {view === "trash" ? (
             trashedMemos.length > 0 ? (
-              <button type="button" className="trash-empty-button" onClick={() => setEmptyTrashOpen(true)}>
+              <button
+                type="button"
+                className={`trash-empty-button${confirmEmptyTrash ? " is-confirm" : ""}`}
+                onClick={() => {
+                  if (!confirmEmptyTrash) {
+                    setConfirmEmptyTrash(true);
+                    return;
+                  }
+                  setConfirmEmptyTrash(false);
+                  void handleEmptyTrash();
+                }}
+                onBlur={() => setConfirmEmptyTrash(false)}
+              >
                 <Trash2 size={14} aria-hidden="true" />
-                {tr("Empty Trash", "清空回收站")}
+                {confirmEmptyTrash
+                  ? tr(`Delete ${count(trashedMemos.length, "memo")} forever?`, `彻底删除 ${count(trashedMemos.length, "memo")}？`)
+                  : tr("Empty Trash", "清空回收站")}
               </button>
             ) : null
           ) : (
@@ -1037,7 +1072,6 @@ export default function App() {
                 knownTags={knownTags}
                 editing={editingId === memo.id}
                 savingEdit={editingId === memo.id && savingEdit}
-                isRemoving={removingIds.has(memo.id)}
                 vtName={index < 32 ? `memo-${memo.id}` : undefined}
                 getEntering={getEntering}
                 delay={Math.min(index, 12) * 0.045}
@@ -1051,46 +1085,29 @@ export default function App() {
 
       {lightbox ? <Lightbox items={lightbox.items} index={lightbox.index} onClose={() => setLightbox(null)} /> : null}
       {statsOpen ? <StatsModal memos={activeMemos} uniqueTagCount={uniqueTagCount} onClose={() => setStatsOpen(false)} /> : null}
-      {trashTarget ? (
+      <input
+        ref={importFileRef}
+        type="file"
+        accept="application/json,.json"
+        hidden
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) void handleImportFile(file);
+        }}
+      />
+      {importTarget ? (
         <ConfirmDialog
-          title={tr("Delete this memo?", "删除这条笔记？")}
+          title={tr("Import this backup?", "导入这份备份？")}
           body={tr(
-            "It will move to Trash, where you can restore it. It disappears permanently only after permanent deletion.",
-            "它会先移入回收站，可以随时恢复；在回收站中彻底删除后才会真正消失。"
+            `It contains ${count(importTarget.memoCount, "memo")} and ${importTarget.imageCount} image${importTarget.imageCount === 1 ? "" : "s"}. Memos that already exist are skipped; nothing is overwritten.`,
+            `备份包含 ${count(importTarget.memoCount, "memo")}、${importTarget.imageCount} 张图片。已存在的笔记会自动跳过，不会覆盖任何内容。`
           )}
-          confirmLabel={tr("Move to Trash", "移入回收站")}
-          busyLabel={tr("Deleting…", "删除中…")}
+          confirmLabel={tr("Import", "导入")}
+          busyLabel={tr("Importing…", "导入中…")}
           busy={dialogBusy}
-          onCancel={() => setTrashTarget(null)}
-          onConfirm={() => void handleTrashConfirmed()}
-        />
-      ) : null}
-      {purgeTarget ? (
-        <ConfirmDialog
-          title={tr("Permanently delete this memo?", "彻底删除这条笔记？")}
-          body={tr(
-            "The memo and its images will be permanently deleted and cannot be recovered.",
-            "笔记和它的图片将被永久删除，无法恢复。"
-          )}
-          confirmLabel={tr("Delete permanently", "彻底删除")}
-          busyLabel={tr("Deleting…", "删除中…")}
-          busy={dialogBusy}
-          onCancel={() => setPurgeTarget(null)}
-          onConfirm={() => void handlePurgeConfirmed()}
-        />
-      ) : null}
-      {emptyTrashOpen ? (
-        <ConfirmDialog
-          title={tr("Empty Trash?", "清空回收站？")}
-          body={tr(
-            `This will permanently delete ${count(trashedMemos.length, "memo")} and their images. This cannot be undone.`,
-            `将永久删除 ${count(trashedMemos.length, "memo")}及其图片，无法恢复。`
-          )}
-          confirmLabel={tr("Delete all", "全部删除")}
-          busyLabel={tr("Emptying…", "清空中…")}
-          busy={dialogBusy}
-          onCancel={() => setEmptyTrashOpen(false)}
-          onConfirm={() => void handleEmptyTrashConfirmed()}
+          onCancel={() => setImportTarget(null)}
+          onConfirm={() => void handleImportConfirmed()}
         />
       ) : null}
       {renameTagTarget ? (
@@ -1117,20 +1134,6 @@ export default function App() {
           }
           onCancel={() => setRenameTagTarget(null)}
           onConfirm={(value) => void handleRenameTagConfirmed(value)}
-        />
-      ) : null}
-      {removeTagTarget ? (
-        <ConfirmDialog
-          title={tr(`Remove tag #${removeTagTarget}?`, `移除标签 #${removeTagTarget}？`)}
-          body={tr(
-            `This tag and its child tags will be removed from ${count(removeTagCount, "memo")}. ${removeTagCount === 1 ? "The memo will remain." : "The memos will remain."}`,
-            `将从 ${count(removeTagCount, "memo")}的正文中删掉这个标签（含子标签），笔记本身保留。`
-          )}
-          confirmLabel={tr("Remove tag", "移除标签")}
-          busyLabel={tr("Removing…", "移除中…")}
-          busy={dialogBusy}
-          onCancel={() => setRemoveTagTarget(null)}
-          onConfirm={() => void handleRemoveTagConfirmed()}
         />
       ) : null}
       {changingPasscode ? (

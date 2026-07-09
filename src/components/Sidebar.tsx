@@ -1,4 +1,4 @@
-import { ChevronDown, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sun, Trash2 } from "lucide-react";
+import { ChevronDown, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sun, Trash2, Upload } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useI18n } from "../lib/i18n";
 import { dayKeyOf, periodStats, totalStats, type PeriodKind } from "../lib/stats";
@@ -32,13 +32,15 @@ interface SidebarProps {
   onOpenStats: () => void;
   onCycleTheme: () => void;
   onChangePasscode: () => void;
+  onExportData: () => void;
+  onImportData: () => void;
   onLogout: () => void;
 }
 
 const PERIODS: { kind: PeriodKind; en: string; zh: string }[] = [
-  { kind: "week", en: "This week", zh: "本周" },
-  { kind: "month", en: "This month", zh: "本月" },
-  { kind: "year", en: "This year", zh: "今年" }
+  { kind: "week", en: "Week", zh: "周" },
+  { kind: "month", en: "Month", zh: "月" },
+  { kind: "year", en: "Year", zh: "年" }
 ];
 
 const THEME_LABELS: Record<ThemeChoice, readonly [en: string, zh: string]> = {
@@ -141,6 +143,29 @@ export function Sidebar(props: SidebarProps) {
               >
                 <KeyRound size={16} aria-hidden="true" />
                 {tr("Change passcode", "修改密码")}
+              </button>
+              <span className="action-menu__sep" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  close();
+                  props.onExportData();
+                }}
+              >
+                <Download size={16} aria-hidden="true" />
+                {tr("Export data", "导出数据")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  close();
+                  props.onImportData();
+                }}
+              >
+                <Upload size={16} aria-hidden="true" />
+                {tr("Import data", "导入数据")}
               </button>
               <span className="action-menu__sep" />
               <button
