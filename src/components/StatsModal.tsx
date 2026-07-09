@@ -142,7 +142,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
   function requestClose() {
     if (closing) return;
     setClosing(true);
-    window.setTimeout(() => closeRef.current(), 180);
+    window.setTimeout(() => closeRef.current(), 240);
   }
 
   useEffect(() => {

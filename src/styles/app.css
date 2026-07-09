@@ -66,6 +66,11 @@
   --ease-spring: cubic-bezier(0.34, 1.3, 0.5, 1);
   /* Signature liquid swell — overshoots then settles. Tier A only. */
   --spring: cubic-bezier(0.175, 0.885, 0.32, 2.2);
+  /* Micro overshoot for small pops — the curve provides the bounce, so the
+     motion stays continuous (no keyframed mid-flight jumps). */
+  --ease-pop: cubic-bezier(0.3, 1.42, 0.52, 1);
+  /* Accelerating exit for content leaving the stage. */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 
   /* ----- Liquid glass material ----- */
   --lx: 26%;
@@ -397,8 +402,14 @@ a:hover { text-decoration: underline; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
 @keyframes scale-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
-@keyframes pop-in { 0% { opacity: 0; transform: scale(0.85); } 60% { transform: scale(1.03); } 100% { opacity: 1; transform: scale(1); } }
-@keyframes toast-in { from { opacity: 0; transform: translate(-50%, -8px) scale(0.97); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+@keyframes pop-in { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+/* Content entrance: rises with a long damped settle. Pair with --ease-out. */
+@keyframes rise-in { from { opacity: 0; transform: translateY(18px) scale(0.995); } to { opacity: 1; transform: none; } }
+/* Dialogs: a damped swell — no overshoot, the long tail does the settling. */
+@keyframes modal-in { from { opacity: 0; transform: scale(0.96) translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes modal-out { to { opacity: 0; transform: scale(0.977) translateY(6px); } }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, -14px) scale(0.97); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+@keyframes toast-out { to { opacity: 0; transform: translate(-50%, -12px) scale(0.98); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
@@ -414,14 +425,14 @@ a:hover { text-decoration: underline; }
 }
 @keyframes menu-morph { from { opacity: 0; transform: translateY(-4px) scale(0.92); } to { opacity: 1; transform: none; } }
 @keyframes menu-item { from { opacity: 0; } to { opacity: 1; } }
-@keyframes heat-slide-left { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
-@keyframes heat-slide-right { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: none; } }
+@keyframes heat-slide-left { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
+@keyframes heat-slide-right { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: none; } }
 @keyframes lightbox-zoom { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
 @keyframes drawer-in { from { transform: translateX(-102%); } to { transform: none; } }
 /* Chart bars grow out of the baseline (the column clips the overflow). */
 @keyframes bar-rise { from { transform: translateY(101%); } to { transform: none; } }
-/* Breadcrumb segments cascade in from the left. */
-@keyframes crumb-in { from { opacity: 0; transform: translateX(-7px); } to { opacity: 1; transform: none; } }
+/* Breadcrumb segments cascade in from the left, resolving out of a soft blur. */
+@keyframes crumb-in { from { opacity: 0; transform: translateX(-12px); filter: blur(4px); } to { opacity: 1; transform: none; filter: blur(0); } }
 
 .spin { animation: spin 1s linear infinite; }
 
@@ -532,14 +543,14 @@ a:hover { text-decoration: underline; }
   border-radius: var(--r-lg);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
   transform-origin: top right;
-  animation: menu-morph 0.22s var(--ease-spring) both;
+  animation: menu-morph 0.26s var(--ease-spring) both;
 }
 .action-menu.align-right { right: 0; }
 .action-menu.align-left { left: 0; transform-origin: top left; }
 /* Body-portaled panels (tag menus): fixed coords set inline; must clear the
    mobile drawer (z 150). */
 .action-menu.is-portal { z-index: 170; }
-.action-menu button {
+.action-menu > button {
   display: flex;
   width: 100%;
   min-height: 36px;
@@ -553,23 +564,80 @@ a:hover { text-decoration: underline; }
   white-space: nowrap;
   border-radius: var(--r-sm);
   transition: background 0.16s ease, color 0.16s ease, transform var(--t-fast) var(--ease);
-  animation: menu-item 0.2s var(--ease) both;
 }
-.action-menu button:nth-of-type(1) { animation-delay: 0.04s; }
-.action-menu button:nth-of-type(2) { animation-delay: 0.07s; }
-.action-menu button:nth-of-type(3) { animation-delay: 0.1s; }
-.action-menu button:nth-of-type(4) { animation-delay: 0.13s; }
-.action-menu button svg { flex: none; color: var(--muted); stroke-width: 1.75; transition: color 0.16s ease; }
+/* Every row (buttons, group rows, separators) joins the entrance cascade. */
+.action-menu > * { animation: menu-item 0.24s var(--ease) both; }
+.action-menu > :nth-child(1) { animation-delay: 0.035s; }
+.action-menu > :nth-child(2) { animation-delay: 0.065s; }
+.action-menu > :nth-child(3) { animation-delay: 0.095s; }
+.action-menu > :nth-child(4) { animation-delay: 0.125s; }
+.action-menu > :nth-child(5) { animation-delay: 0.155s; }
+.action-menu > :nth-child(6) { animation-delay: 0.185s; }
+.action-menu > button svg { flex: none; color: var(--muted); stroke-width: 1.75; transition: color 0.16s ease; }
 @media (hover: hover) {
-  .action-menu button:hover { background: var(--wash-strong); color: var(--ink); }
-  .action-menu button:hover svg { color: var(--ink); }
+  .action-menu > button:hover { background: var(--wash-strong); color: var(--ink); }
+  .action-menu > button:hover svg { color: var(--ink); }
 }
-.action-menu button:active { transform: scale(0.985); }
-.action-menu button.danger, .action-menu button.danger svg { color: var(--danger); }
-@media (hover: hover) { .action-menu button.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); } }
-.action-menu button.is-selected { color: var(--primary-dark); }
+.action-menu > button:active { transform: scale(0.985); }
+.action-menu > button.danger, .action-menu > button.danger svg { color: var(--danger); }
+@media (hover: hover) { .action-menu > button.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); } }
+.action-menu > button.is-selected { color: var(--primary-dark); }
 .action-menu .menu-check { margin-left: auto; color: var(--primary-dark); }
 .action-menu__sep { display: block; height: 1px; margin: 5px 8px; background: var(--glass-rim); }
+
+/* Non-interactive menu row hosting an inline control (language switch). */
+.action-menu__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 8px 6px 11px;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.action-menu__row > svg { flex: none; color: var(--muted); stroke-width: 1.75; }
+
+/* Mini segmented language switch — a sliding glass thumb picks the locale;
+   the menu stays open so the relabelling is part of the feedback. */
+.lang-seg {
+  position: relative;
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(2, 1fr);
+  margin-left: auto;
+  padding: 2px;
+  background: var(--surface-3);
+  border-radius: var(--r-pill);
+}
+.lang-seg-thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc((100% - 4px) / 2);
+  background: var(--chip-fill);
+  border: 1px solid var(--chip-rim);
+  border-radius: var(--r-pill);
+  box-shadow: var(--chip-shadow);
+  transition: transform 0.38s var(--ease-spring);
+}
+.lang-seg[data-lang="zh-CN"] .lang-seg-thumb { transform: translateX(100%); }
+.lang-seg button {
+  position: relative;
+  z-index: 1;
+  min-width: 46px;
+  padding: 3px 10px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+  border-radius: var(--r-pill);
+  transition: color var(--t) var(--ease);
+}
+@media (hover: hover) { .lang-seg button:hover:not(.is-active) { color: var(--ink-soft); } }
+.lang-seg button.is-active { color: var(--ink); }
 
 /* =========================================================================
    Splash + login gate
@@ -591,7 +659,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--primary-rim);
   border-radius: var(--r-lg);
   box-shadow: var(--primary-shadow);
-  animation: pop-in var(--t-slow) var(--ease-spring) both;
+  animation: pop-in 0.5s var(--ease-pop) both;
 }
 .splash-spinner { color: var(--muted); }
 
@@ -611,7 +679,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--glass-rim);
   border-radius: var(--r-xl);
   box-shadow: var(--glass-highlight), var(--shadow-lg);
-  animation: scale-in var(--t-slow) var(--ease-spring) both;
+  animation: scale-in 0.5s var(--ease-out) both;
 }
 .pin-pad.shake { animation: shake 0.42s var(--ease); }
 .pin-brand { display: grid; justify-items: center; gap: 5px; text-align: center; }
@@ -626,7 +694,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--primary-rim);
   border-radius: var(--r-lg);
   box-shadow: var(--primary-shadow);
-  animation: pop-in var(--t-slow) var(--ease-spring) both;
+  animation: pop-in 0.5s var(--ease-pop) both;
 }
 .pin-brand h1 { margin: 0; font-size: 1.42rem; font-weight: 800; letter-spacing: -0.02em; }
 .pin-brand p { margin: 0; color: var(--muted); font-size: 0.88rem; font-weight: 500; transition: color var(--t) var(--ease); }
@@ -640,7 +708,7 @@ a:hover { text-decoration: underline; }
   background: transparent;
   transition: transform var(--t) var(--ease-spring), background var(--t) var(--ease), border-color var(--t) var(--ease);
 }
-.pin-dots span.filled { background: var(--primary); border-color: var(--primary); animation: pop-in var(--t) var(--ease-spring); }
+.pin-dots span.filled { background: var(--primary); border-color: var(--primary); animation: pop-in 0.3s var(--ease-pop); }
 .pin-dots.error span { border-color: var(--danger); }
 .pin-dots.error span.filled { background: var(--danger); border-color: var(--danger); }
 
@@ -775,7 +843,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--chip-rim);
   border-radius: var(--r-pill);
   box-shadow: var(--chip-shadow);
-  transition: transform 0.26s var(--ease-spring);
+  transition: transform 0.34s var(--ease-spring);
 }
 .period-seg button {
   position: relative;
@@ -831,8 +899,8 @@ a:hover { text-decoration: underline; }
   gap: 5px;
   align-items: stretch;
 }
-.heatmap-grid.slide-left { animation: heat-slide-left 0.28s var(--ease-out) both; }
-.heatmap-grid.slide-right { animation: heat-slide-right 0.28s var(--ease-out) both; }
+.heatmap-grid.slide-left { animation: heat-slide-left 0.45s var(--ease-out) both; }
+.heatmap-grid.slide-right { animation: heat-slide-right 0.45s var(--ease-out) both; }
 .heat-weekday {
   display: grid;
   place-items: center;
@@ -943,7 +1011,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 }
 @media (hover: hover) { .tag-label:hover { color: var(--ink); } }
 .tag-label:active { transform: scale(0.98); }
-.tag-pin-mark { flex: none; margin-right: 3px; color: var(--primary); animation: pop-in 0.24s var(--ease-spring) both; }
+.tag-pin-mark { flex: none; margin-right: 3px; color: var(--primary); animation: pop-in 0.34s var(--ease-pop) both; }
 .tag-count { color: var(--muted); font-size: 0.76rem; font-weight: 700; }
 /* Row action menu trigger — surfaces on row hover / focus / touch. */
 .tag-more {
@@ -994,6 +1062,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   color: var(--muted);
   font-weight: 700;
   border-radius: var(--r-sm);
+  animation: crumb-in 0.5s var(--ease-out) both;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 .breadcrumb-root.is-current { color: var(--ink); font-size: 1.02rem; }
@@ -1014,7 +1083,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   overflow: hidden;
   text-overflow: ellipsis;
   border-radius: var(--r-sm);
-  animation: crumb-in 0.3s var(--ease-out) both;
+  animation: crumb-in 0.55s var(--ease-out) both;
   transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
 .crumb.is-current { color: var(--ink); }
@@ -1023,7 +1092,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   button.crumb:hover { background: var(--wash); color: var(--ink); }
 }
 button.crumb:active { background: var(--wash-strong); }
-.crumb-sep { flex: none; color: var(--line-strong); animation: crumb-in 0.3s var(--ease-out) both; }
+.crumb-sep { flex: none; color: var(--line-strong); animation: crumb-in 0.55s var(--ease-out) both; }
 /* Sort picker sits beside "全部笔记". */
 .sort-trigger {
   display: inline-flex;
@@ -1055,7 +1124,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
-  animation: pop-in 0.24s var(--ease-spring) both;
+  animation: pop-in 0.34s var(--ease-pop) both;
 }
 .filter-chip.is-trash {
   color: var(--danger);
@@ -1127,7 +1196,7 @@ button.crumb:active { background: var(--wash-strong); }
   border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
   border-radius: var(--r-pill);
   transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease), transform var(--t-fast) var(--ease);
-  animation: pop-in 0.24s var(--ease-spring) both;
+  animation: pop-in 0.34s var(--ease-pop) both;
 }
 @media (hover: hover) { .trash-empty-button:hover { background: var(--danger-tint); box-shadow: var(--shadow-xs); } }
 .trash-empty-button:active { transform: scale(0.96); }
@@ -1140,7 +1209,7 @@ button.crumb:active { background: var(--wash-strong); }
    is position:relative + z-index because its entrance animation leaves a
    stacking context behind — without the bump, the tag-suggest popover would
    paint underneath the first memo card. */
-.composer { position: relative; z-index: 30; width: min(880px, calc(100% - clamp(32px, 6vw, 80px))); margin: 20px 0 6px; animation: fade-up 0.4s var(--ease) both; }
+.composer { position: relative; z-index: 30; width: min(880px, calc(100% - clamp(32px, 6vw, 80px))); margin: 20px 0 6px; animation: rise-in 0.6s var(--ease-out) both; }
 
 .editor {
   position: relative;
@@ -1216,7 +1285,7 @@ button.crumb:active { background: var(--wash-strong); }
   overflow: hidden;
   border: 1px solid var(--line);
   box-shadow: var(--shadow-xs);
-  animation: pop-in 0.26s var(--ease-spring) both;
+  animation: pop-in 0.4s var(--ease-pop) both;
 }
 .attachment img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .attachment.is-busy { display: grid; place-items: center; color: var(--muted); background: var(--surface-2); }
@@ -1330,12 +1399,12 @@ button.crumb:active { background: var(--wash-strong); }
 /* =========================================================================
    Memo feed
    ========================================================================= */
-.memo-feed { display: grid; width: min(880px, calc(100% - clamp(32px, 6vw, 80px))); gap: 14px; margin-top: 16px; }
+.memo-feed { display: grid; width: min(880px, calc(100% - clamp(32px, 6vw, 80px))); gap: 14px; margin-top: 16px; view-transition-name: memo-feed; }
 /* Each slot's entrance animation leaves a stacking context (fill-mode both
    keeps the animated opacity applied), which is what used to trap an open
    card menu underneath the next card. Raising the open slot fixes stacking
    for good. */
-.memo-slot { position: relative; animation: fade-up 0.38s var(--ease) both; }
+.memo-slot { position: relative; animation: rise-in 0.6s var(--ease-out) both; }
 .memo-slot:has(.menu-root.is-open) { z-index: 66; }
 
 .memo-card {
@@ -1355,7 +1424,7 @@ button.crumb:active { background: var(--wash-strong); }
 .memo-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; }
 .memo-time { color: var(--muted); font-size: 0.8rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 .memo-head-right { display: flex; align-items: center; gap: 4px; }
-.memo-pin-mark { color: var(--primary); animation: pop-in 0.24s var(--ease-spring) both; }
+.memo-pin-mark { color: var(--primary); animation: pop-in 0.34s var(--ease-pop) both; }
 .memo-menu-trigger { width: 26px; height: 26px; opacity: 0; }
 .memo-menu-trigger.is-open { opacity: 1; background: var(--wash); color: var(--ink); }
 .memo-card:hover .memo-menu-trigger, .memo-menu-trigger:focus-visible { opacity: 1; }
@@ -1473,7 +1542,7 @@ button.memo-tag:active {
 .memo-card.is-trash .memo-content { color: var(--ink-soft); }
 .memo-card.is-trash .memo-time { color: var(--danger); opacity: 0.75; }
 
-.feed-empty { display: grid; justify-items: center; gap: 6px; padding: 56px 20px; color: var(--muted); text-align: center; animation: fade-up 0.4s var(--ease) both; }
+.feed-empty { display: grid; justify-items: center; gap: 6px; padding: 56px 20px; color: var(--muted); text-align: center; animation: rise-in 0.6s var(--ease-out) both; }
 .feed-empty p { margin: 0; }
 .feed-empty-title { color: var(--ink-soft); font-size: 1.05rem; font-weight: 700; }
 
@@ -1490,9 +1559,9 @@ button.memo-tag:active {
   background: rgba(10, 12, 18, 0.44);
   -webkit-backdrop-filter: blur(7px);
   backdrop-filter: blur(7px);
-  animation: fade-in 0.22s var(--ease) both;
+  animation: fade-in 0.3s var(--ease) both;
 }
-.overlay.is-closing { animation: fade-out 0.18s var(--ease) both; }
+.overlay.is-closing { animation: fade-out 0.26s var(--ease) both; }
 
 .confirm-card {
   display: grid;
@@ -1503,9 +1572,9 @@ button.memo-tag:active {
   border: 1px solid var(--glass-rim-strong);
   border-radius: var(--r-lg);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
-  animation: pop-in 0.26s var(--ease-spring) both;
+  animation: modal-in 0.5s var(--ease-out) both;
 }
-.overlay.is-closing .confirm-card { animation: fade-out 0.16s var(--ease) both; }
+.overlay.is-closing .confirm-card { animation: modal-out 0.24s var(--ease) both; }
 .confirm-card h2 { margin: 0; font-size: 1.05rem; font-weight: 800; overflow-wrap: anywhere; }
 .confirm-card p { margin: 0 0 10px; color: var(--muted); font-size: 0.9rem; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
@@ -1544,7 +1613,7 @@ button.memo-tag:active {
   max-height: calc(100vh - 120px);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-lg);
-  animation: lightbox-zoom 0.28s var(--ease-out) both;
+  animation: lightbox-zoom 0.5s var(--ease-out) both;
 }
 .lightbox-close { position: absolute; top: 18px; right: 18px; width: 38px; height: 38px; color: #fff; background: rgba(255, 255, 255, 0.12); border-radius: 50%; }
 .lightbox-nav { position: absolute; top: 50%; width: 40px; height: 40px; color: #fff; background: rgba(255, 255, 255, 0.12); border-radius: 50%; transform: translateY(-50%); }
@@ -1598,9 +1667,9 @@ button.memo-tag:active {
   border-radius: var(--r-xl);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
   overflow: hidden;
-  animation: pop-in 0.3s var(--ease-spring) both;
+  animation: modal-in 0.55s var(--ease-out) both;
 }
-.overlay.is-closing .stats-modal { animation: fade-out 0.16s var(--ease) both; }
+.overlay.is-closing .stats-modal { animation: modal-out 0.24s var(--ease) both; }
 .stats-head {
   display: flex;
   align-items: center;
@@ -1610,7 +1679,7 @@ button.memo-tag:active {
 }
 .stats-head h2 { margin: 0; font-size: 1.08rem; font-weight: 800; letter-spacing: -0.01em; }
 .stats-year-nav { display: flex; align-items: center; gap: 4px; margin-inline: auto; }
-.stats-year { min-width: 76px; text-align: center; font-size: 0.98rem; font-weight: 800; font-variant-numeric: tabular-nums; animation: fade-up 0.24s var(--ease) both; }
+.stats-year { min-width: 76px; text-align: center; font-size: 0.98rem; font-weight: 800; font-variant-numeric: tabular-nums; animation: fade-up 0.3s var(--ease) both; }
 .stats-body {
   display: grid;
   gap: 14px;
@@ -1630,7 +1699,7 @@ button.memo-tag:active {
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-xs);
-  animation: fade-up 0.34s var(--ease) both;
+  animation: rise-in 0.5s var(--ease-out) both;
 }
 .stat-tile-value { font-size: 1.32rem; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .stat-tile-label { color: var(--muted); font-size: 0.76rem; font-weight: 600; }
@@ -1645,7 +1714,7 @@ button.memo-tag:active {
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-xs);
-  animation: fade-up 0.34s var(--ease) both;
+  animation: rise-in 0.5s var(--ease-out) both;
 }
 .mini-month-head { display: flex; align-items: baseline; justify-content: space-between; font-size: 0.76rem; font-weight: 700; }
 .mini-month-name { color: var(--ink-soft); }
@@ -1679,7 +1748,7 @@ button.memo-tag:active {
   width: min(100%, 30px);
   background: linear-gradient(180deg, var(--heat-2), var(--heat-3));
   border-radius: 5px 5px 2px 2px;
-  animation: bar-rise 0.55s var(--ease-out) both;
+  animation: bar-rise 0.7s var(--ease-out) both;
   transition: filter var(--t) var(--ease);
 }
 @media (hover: hover) { .stats-bar-col:hover .stats-bar:not(.is-zero) { filter: saturate(1.15) brightness(1.08); } }
@@ -1716,9 +1785,21 @@ button.memo-tag:active {
   font-size: 0.9rem;
   font-weight: 700;
   transform: translateX(-50%);
-  animation: toast-in 0.3s var(--ease-spring) both;
+  animation: toast-in 0.45s var(--ease-pop) both;
 }
+.toast.is-leaving { animation: toast-out 0.3s var(--ease) both; }
 .toast.is-error { color: var(--danger); }
+
+/* =========================================================================
+   View transitions — switching feed filters (tag / day / trash / all) runs
+   inside document.startViewTransition (lib/viewTransition.ts): the old list
+   dissolves upward while the new one settles in underneath; the rest of the
+   page soft cross-fades. Browsers without the API keep the instant swap.
+   ========================================================================= */
+@keyframes vt-depart { to { opacity: 0; transform: translateY(-16px); } }
+::view-transition-old(memo-feed) { animation: vt-depart 0.3s var(--ease-exit) both; }
+::view-transition-new(memo-feed) { animation: fade-in 0.4s var(--ease) 0.05s both; }
+::view-transition-group(memo-feed) { animation-duration: 0.4s; animation-timing-function: var(--ease-out); }
 
 /* =========================================================================
    Responsive — sidebar becomes an animated drawer
@@ -1778,4 +1859,8 @@ button.memo-tag:active {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+  /* Belt and braces: the JS helper already skips startViewTransition. */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) { animation: none !important; }
 }

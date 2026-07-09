@@ -30,13 +30,13 @@ export function Crumbs({ path, onHome, onPick }: CrumbsProps) {
         const isLast = index === parts.length - 1;
         return (
           <Fragment key={prefix}>
-            <ChevronRight size={13} className="crumb-sep" aria-hidden="true" style={{ animationDelay: `${index * 0.05 + 0.03}s` }} />
+            <ChevronRight size={13} className="crumb-sep" aria-hidden="true" style={{ animationDelay: `${index * 0.06 + 0.04}s` }} />
             {isLast ? (
-              <span className="crumb is-current" aria-current="page" style={{ animationDelay: `${index * 0.05 + 0.06}s` }}>
+              <span className="crumb is-current" aria-current="page" style={{ animationDelay: `${index * 0.06 + 0.08}s` }}>
                 {part}
               </span>
             ) : (
-              <button type="button" className="crumb" onClick={() => onPick(prefix)} style={{ animationDelay: `${index * 0.05 + 0.06}s` }}>
+              <button type="button" className="crumb" onClick={() => onPick(prefix)} style={{ animationDelay: `${index * 0.06 + 0.08}s` }}>
                 {part}
               </button>
             )}

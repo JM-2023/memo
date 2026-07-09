@@ -21,7 +21,7 @@ export function ConfirmDialog({ title, body, confirmLabel, busyLabel, busy, onCa
   function requestClose() {
     if (closing) return;
     setClosing(true);
-    window.setTimeout(() => cancelRef.current(), 160);
+    window.setTimeout(() => cancelRef.current(), 240);
   }
 
   useEffect(() => {

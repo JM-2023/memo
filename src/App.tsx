@@ -36,6 +36,7 @@ import { buildTagTree, extractTags, isValidTagPath, tagMatches } from "./lib/tag
 import { applyTheme, loadTheme, nextTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, NewImagePayload, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
+import { withViewTransition } from "./lib/viewTransition";
 
 type Phase = "checking" | "login" | "ready";
 type View = "memos" | "trash";
@@ -44,6 +45,8 @@ interface ToastState {
   id: number;
   text: string;
   tone: "info" | "error";
+  /** Plays the exit animation before the node unmounts. */
+  leaving?: boolean;
 }
 
 const SORT_KEYS: SortKey[] = ["created-desc", "created-asc", "updated-desc", "updated-asc"];
@@ -117,7 +120,10 @@ export default function App() {
   const showToast = useCallback((text: string, tone: "info" | "error" = "info") => {
     window.clearTimeout(toastTimer.current);
     setToast({ id: Date.now(), text, tone });
-    toastTimer.current = window.setTimeout(() => setToast(null), 2400);
+    toastTimer.current = window.setTimeout(() => {
+      setToast((current) => (current ? { ...current, leaving: true } : current));
+      toastTimer.current = window.setTimeout(() => setToast(null), 280);
+    }, 2400);
   }, []);
 
   useEffect(() => {
@@ -314,30 +320,75 @@ export default function App() {
     }, 240);
   }
 
-  const pickTag = useCallback((path: string | null) => {
-    setActiveTag(path);
-    setView("memos");
-    setEditingId(null);
-  }, []);
+  /**
+   * Feed filter changes run inside a view transition (old list dissolves,
+   * new list settles in) and reset the scroll — the jump is masked by the
+   * cross-fade. Skipped while the mobile drawer is open: its own closing
+   * animation would get double-captured.
+   */
+  const changeFeed = useCallback(
+    (apply: () => void) => {
+      const update = () => {
+        apply();
+        window.scrollTo(0, 0);
+      };
+      if (drawerOpen) update();
+      else withViewTransition(update);
+    },
+    [drawerOpen]
+  );
 
-  const pickDay = useCallback((key: string | null) => {
-    setActiveDay(key);
-    setView("memos");
-    setEditingId(null);
-  }, []);
+  const pickTag = useCallback(
+    (path: string | null) => {
+      if (view === "memos" && activeTag === path) {
+        setEditingId(null);
+        return;
+      }
+      changeFeed(() => {
+        setActiveTag(path);
+        setView("memos");
+        setEditingId(null);
+      });
+    },
+    [view, activeTag, changeFeed]
+  );
+
+  const pickDay = useCallback(
+    (key: string | null) => {
+      if (view === "memos" && activeDay === key) {
+        setEditingId(null);
+        return;
+      }
+      changeFeed(() => {
+        setActiveDay(key);
+        setView("memos");
+        setEditingId(null);
+      });
+    },
+    [view, activeDay, changeFeed]
+  );
 
   const showAll = useCallback(() => {
-    setActiveTag(null);
-    setActiveDay(null);
-    setQuery("");
-    setView("memos");
-    setEditingId(null);
-  }, []);
+    if (view === "memos" && activeTag === null && activeDay === null && query.length === 0) {
+      setEditingId(null);
+      return;
+    }
+    changeFeed(() => {
+      setActiveTag(null);
+      setActiveDay(null);
+      setQuery("");
+      setView("memos");
+      setEditingId(null);
+    });
+  }, [view, activeTag, activeDay, query, changeFeed]);
 
   const openTrash = useCallback(() => {
-    setView("trash");
-    setEditingId(null);
-  }, []);
+    if (view === "trash") return;
+    changeFeed(() => {
+      setView("trash");
+      setEditingId(null);
+    });
+  }, [view, changeFeed]);
 
   async function handleLogin(pin: string) {
     await login(pin);
@@ -777,7 +828,7 @@ export default function App() {
             </div>
           ) : (
             feedMemos.map((memo, index) => (
-              <div key={memo.id} className="memo-slot" style={{ animationDelay: `${Math.min(index, 12) * 0.03}s` }}>
+              <div key={memo.id} className="memo-slot" style={{ animationDelay: `${Math.min(index, 12) * 0.045}s` }}>
                 <MemoCard
                   memo={memo}
                   variant={view === "trash" ? "trash" : "normal"}
@@ -897,7 +948,7 @@ export default function App() {
         />
       ) : null}
       {toast ? (
-        <div key={toast.id} className={`toast${toast.tone === "error" ? " is-error" : ""}`} role="status">
+        <div key={toast.id} className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`} role="status">
           {toast.text}
         </div>
       ) : null}

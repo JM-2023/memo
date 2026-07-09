@@ -19,7 +19,7 @@ export function Lightbox({ items, index, onClose }: LightboxProps) {
 
   function requestClose() {
     setClosing(true);
-    window.setTimeout(() => closeRef.current(), 180);
+    window.setTimeout(() => closeRef.current(), 240);
   }
 
   useEffect(() => {

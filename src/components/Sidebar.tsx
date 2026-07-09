@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sun, Trash2 } from "lucide-react";
+import { ChevronDown, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sun, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useI18n } from "../lib/i18n";
 import { periodStats, totalStats, type PeriodKind } from "../lib/stats";
@@ -101,36 +101,35 @@ export function Sidebar(props: SidebarProps) {
                 <ThemeIcon size={16} aria-hidden="true" />
                 {tr(themeLabelEn, themeLabelZh)}
               </button>
-              <button
-                type="button"
-                role="menuitemradio"
-                aria-checked={language === "en"}
-                aria-label={tr("English interface", "英文界面")}
-                className={language === "en" ? "is-selected" : ""}
-                onClick={() => {
-                  setLanguage("en");
-                  close();
-                }}
-              >
+              <div className="action-menu__row" role="group" aria-label={tr("Language", "语言")}>
                 <Languages size={16} aria-hidden="true" />
-                <span lang="en">English</span>
-                {language === "en" ? <Check size={15} className="menu-check" aria-hidden="true" /> : null}
-              </button>
-              <button
-                type="button"
-                role="menuitemradio"
-                aria-checked={language === "zh-CN"}
-                aria-label={tr("Simplified Chinese interface", "简体中文界面")}
-                className={language === "zh-CN" ? "is-selected" : ""}
-                onClick={() => {
-                  setLanguage("zh-CN");
-                  close();
-                }}
-              >
-                <Languages size={16} aria-hidden="true" />
-                <span lang="zh-CN">简体中文</span>
-                {language === "zh-CN" ? <Check size={15} className="menu-check" aria-hidden="true" /> : null}
-              </button>
+                <span>{tr("Language", "语言")}</span>
+                <span className="lang-seg" data-lang={language}>
+                  <span className="lang-seg-thumb" aria-hidden="true" />
+                  <button
+                    type="button"
+                    lang="en"
+                    role="menuitemradio"
+                    className={language === "en" ? "is-active" : ""}
+                    aria-checked={language === "en"}
+                    aria-label={tr("English interface", "英文界面")}
+                    onClick={() => setLanguage("en")}
+                  >
+                    EN
+                  </button>
+                  <button
+                    type="button"
+                    lang="zh-CN"
+                    role="menuitemradio"
+                    className={language === "zh-CN" ? "is-active" : ""}
+                    aria-checked={language === "zh-CN"}
+                    aria-label={tr("Simplified Chinese interface", "简体中文界面")}
+                    onClick={() => setLanguage("zh-CN")}
+                  >
+                    中文
+                  </button>
+                </span>
+              </div>
               <button
                 type="button"
                 role="menuitem"
