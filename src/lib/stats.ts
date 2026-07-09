@@ -10,6 +10,30 @@ export function wordCount(content: string): number {
   return stripLinks(content).replace(/\s/g, "").length;
 }
 
+// Per-memo derived-value caches. Memo objects are immutable snapshots, so a
+// WeakMap keyed on the object invalidates itself on edit and never leaks.
+const memoWordCache = new WeakMap<Memo, number>();
+const memoDayCache = new WeakMap<Memo, string>();
+
+export function wordCountOf(memo: Memo): number {
+  let count = memoWordCache.get(memo);
+  if (count === undefined) {
+    count = wordCount(memo.content);
+    memoWordCache.set(memo, count);
+  }
+  return count;
+}
+
+/** Local-day key of a memo's creation time (cached). */
+export function dayKeyOf(memo: Memo): string {
+  let key = memoDayCache.get(memo);
+  if (!key) {
+    key = dateKeyOf(memo.createdAt);
+    memoDayCache.set(memo, key);
+  }
+  return key;
+}
+
 export interface PeriodStats {
   memoCount: number;
   wordSum: number;
@@ -33,7 +57,7 @@ export function periodStats(memos: Memo[], kind: PeriodKind, now = new Date()): 
     const created = new Date(memo.createdAt).getTime();
     if (created >= startMs) {
       memoCount += 1;
-      wordSum += wordCount(memo.content);
+      wordSum += wordCountOf(memo);
     }
   }
   return { memoCount, wordSum };
@@ -68,7 +92,7 @@ export function totalStats(memos: Memo[], now = new Date()): TotalStats {
 export function countsByDay(memos: Memo[]): Map<string, number> {
   const map = new Map<string, number>();
   for (const memo of memos) {
-    const key = dateKeyOf(memo.createdAt);
+    const key = dayKeyOf(memo);
     map.set(key, (map.get(key) ?? 0) + 1);
   }
   return map;
@@ -76,7 +100,8 @@ export function countsByDay(memos: Memo[]): Map<string, number> {
 
 export interface HeatCell {
   key: string; // "2026-07-09"
-  inMonth: boolean;
+  /** Inside the requested range (month, week, year…); padding cells are not. */
+  inRange: boolean;
   count: number;
   /** 0..4 intensity bucket. */
   level: number;
@@ -87,7 +112,7 @@ export interface HeatCell {
 export interface HeatMonth {
   year: number;
   month: number; // 0-based
-  /** Columns of 7 cells, Monday first — GitHub-style week columns. */
+  /** Weeks of 7 cells, Monday first. */
   weeks: HeatCell[][];
 }
 
@@ -128,31 +153,41 @@ export function computeStreaks(byDay: Map<string, number>, now = new Date()): St
   return { longest, current };
 }
 
-export function buildHeatMonth(year: number, month: number, byDay: Map<string, number>, now = new Date()): HeatMonth {
-  const first = new Date(year, month, 1);
-  const last = new Date(year, month + 1, 0);
-  const gridStart = startOfWeek(first);
+/**
+ * Monday-first weeks of day cells covering [start, end] plus the leading /
+ * trailing padding needed to complete the first and last weeks. The shared
+ * shape behind the sidebar heatmap's week / month / year views and the
+ * stats modal's mini calendars.
+ */
+export function buildHeatWeeks(start: Date, end: Date, byDay: Map<string, number>, now = new Date()): HeatCell[][] {
+  const startMs = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
+  const endMs = new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime();
   const todayKey = dateKey(now);
   const nowMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 
   const weeks: HeatCell[][] = [];
-  let cursor = gridStart;
-  while (cursor.getTime() <= last.getTime()) {
+  let cursor = startOfWeek(start);
+  while (cursor.getTime() <= endMs) {
     const week: HeatCell[] = [];
     for (let i = 0; i < 7; i += 1) {
       const key = dateKey(cursor);
       const count = byDay.get(key) ?? 0;
+      const ms = cursor.getTime();
       week.push({
         key,
-        inMonth: cursor.getMonth() === month && cursor.getFullYear() === year,
+        inRange: ms >= startMs && ms <= endMs,
         count,
         level: levelFor(count),
         isToday: key === todayKey,
-        isFuture: cursor.getTime() > nowMs
+        isFuture: ms > nowMs
       });
       cursor = addDays(cursor, 1);
     }
     weeks.push(week);
   }
-  return { year, month, weeks };
+  return weeks;
+}
+
+export function buildHeatMonth(year: number, month: number, byDay: Map<string, number>, now = new Date()): HeatMonth {
+  return { year, month, weeks: buildHeatWeeks(new Date(year, month, 1), new Date(year, month + 1, 0), byDay, now) };
 }

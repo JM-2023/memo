@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { AuthRequiredError, syncSince } from "./api";
+import { adoptCacheKey } from "./cache";
 import type { Memo, TagMeta } from "./types";
 
 interface UseSyncOptions {
@@ -24,6 +25,10 @@ interface UseSyncOptions {
 export function useSync({ enabled, applyChanges, onAuthLost }: UseSyncOptions) {
   const cursorRef = useRef(0);
   const busyRef = useRef(false);
+  // A pull requested while one is in flight must not be dropped — the running
+  // pull's snapshot predates whatever prompted the request. Remember it and
+  // go around once more.
+  const againRef = useRef(false);
   const channelRef = useRef<BroadcastChannel | null>(null);
 
   const applyRef = useRef(applyChanges);
@@ -37,20 +42,33 @@ export function useSync({ enabled, applyChanges, onAuthLost }: UseSyncOptions) {
     cursorRef.current = cursor;
   }, []);
 
+  const getCursor = useCallback(() => cursorRef.current, []);
+
   const runSync = useCallback(async () => {
-    if (!enabledRef.current || busyRef.current) return;
+    if (!enabledRef.current) return;
+    if (busyRef.current) {
+      againRef.current = true;
+      return;
+    }
     busyRef.current = true;
     try {
-      const data = await syncSince(cursorRef.current);
-      if (data.memos.length > 0 || data.purged.length > 0 || data.tags.length > 0) {
-        applyRef.current(data.memos, data.purged, data.tags);
-      }
-      cursorRef.current = Math.max(cursorRef.current, data.cursor);
-    } catch (cause) {
-      if (cause instanceof AuthRequiredError) {
-        authLostRef.current();
-      }
-      // Anything else (offline, server hiccup) — silently retry on the next tick.
+      do {
+        againRef.current = false;
+        try {
+          const data = await syncSince(cursorRef.current);
+          adoptCacheKey(data.cacheKey);
+          if (data.memos.length > 0 || data.purged.length > 0 || data.tags.length > 0) {
+            applyRef.current(data.memos, data.purged, data.tags);
+          }
+          cursorRef.current = Math.max(cursorRef.current, data.cursor);
+        } catch (cause) {
+          if (cause instanceof AuthRequiredError) {
+            authLostRef.current();
+          }
+          // Anything else (offline, server hiccup) — silently retry on the next tick.
+          return;
+        }
+      } while (againRef.current && enabledRef.current);
     } finally {
       busyRef.current = false;
     }
@@ -95,5 +113,5 @@ export function useSync({ enabled, applyChanges, onAuthLost }: UseSyncOptions) {
     };
   }, [enabled, runSync]);
 
-  return { setCursor, runSync, notifyPeers };
+  return { setCursor, getCursor, runSync, notifyPeers };
 }

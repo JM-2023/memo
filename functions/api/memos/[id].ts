@@ -1,4 +1,5 @@
 import { requireAuth } from "../_utils/auth";
+import { contentKeyOf, openContent, sealContent } from "../_utils/crypto";
 import { MEMO_COLUMNS, nextSeq, shapeMemo, type ImageMetaRow, type MemoRow } from "../_utils/memos";
 import { apiError, json, nowIso, readJson, requireSameOrigin } from "../_utils/response";
 import type { AppContext } from "../_utils/types";
@@ -16,8 +17,13 @@ interface UpdateBody {
   restore?: boolean;
 }
 
+/** Loads the row with content already opened — every consumer wants plaintext. */
 async function loadMemo(context: AppContext, id: string): Promise<MemoRow | null> {
-  return await context.env.DB.prepare(`SELECT ${MEMO_COLUMNS} FROM memos WHERE id = ?`).bind(id).first<MemoRow>();
+  const row = await context.env.DB.prepare(`SELECT ${MEMO_COLUMNS} FROM memos WHERE id = ?`).bind(id).first<MemoRow>();
+  if (row) {
+    row.content = await openContent(await contentKeyOf(context.env), row.content);
+  }
+  return row;
 }
 
 async function loadImageMeta(context: AppContext, id: string): Promise<ImageMetaRow[]> {
@@ -105,11 +111,13 @@ export async function onRequestPut(context: AppContext): Promise<Response> {
   const imagesChanged = removeIds.length > 0 || addImages.length > 0;
   const updatedAt = contentChanged || imagesChanged ? now : memo.updated_at;
   const pinnedAt = body.pinned === undefined ? memo.pinned_at : body.pinned ? now : null;
+  const contentKey = await contentKeyOf(context.env);
+  const storedContent = contentKey ? await sealContent(contentKey, nextContent) : nextContent;
   const seq = await nextSeq(context.env.DB);
   statements.push(
     context.env.DB
       .prepare("UPDATE memos SET content = ?, updated_at = ?, pinned_at = ?, seq = ? WHERE id = ?")
-      .bind(nextContent, updatedAt, pinnedAt, seq, id)
+      .bind(storedContent, updatedAt, pinnedAt, seq, id)
   );
   await context.env.DB.batch(statements);
 

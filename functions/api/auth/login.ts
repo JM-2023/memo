@@ -1,4 +1,5 @@
 import { createSessionCookie, verifyLocalPassword } from "../_utils/auth";
+import { scheduleEncryptionBackfill } from "../_utils/crypto";
 import { apiError, json, readJson, requireSameOrigin } from "../_utils/response";
 import type { AppContext } from "../_utils/types";
 
@@ -26,6 +27,8 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
     if (!ok) {
       return apiError(401, "INVALID_LOGIN", "Invalid login");
     }
+    // A fresh login is a natural moment to seal pre-encryption rows.
+    scheduleEncryptionBackfill(context);
     return json({ ok: true }, { headers: { "Set-Cookie": await createSessionCookie(context.env) } });
   } catch {
     return apiError(500, "INTERNAL_ERROR", "The login request could not be completed.");

@@ -1,4 +1,5 @@
 import { requireAuth } from "./_utils/auth";
+import { getOrCreateCacheKey, openContentRows, scheduleEncryptionBackfill } from "./_utils/crypto";
 import { groupImages, MEMO_COLUMNS, shapeMemo, shapeTagMeta, type ImageMetaRow, type MemoRow, type TagMetaRow } from "./_utils/memos";
 import { json, nowIso } from "./_utils/response";
 import type { AppContext } from "./_utils/types";
@@ -32,9 +33,15 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
 
   const cursor = ((counterResult.results?.[0] as { n?: number } | undefined)?.n ?? 0) as number;
   const imagesByMemo = groupImages((imageResult.results ?? []) as unknown as ImageMetaRow[]);
-  const memos = ((memoResult.results ?? []) as unknown as MemoRow[]).map((memo) => shapeMemo(memo, imagesByMemo.get(memo.id) ?? []));
+  const memoRows = (memoResult.results ?? []) as unknown as MemoRow[];
+  await openContentRows(context.env, memoRows);
+  const memos = memoRows.map((memo) => shapeMemo(memo, imagesByMemo.get(memo.id) ?? []));
   const purged = ((tombstoneResult.results ?? []) as unknown as { id: string }[]).map((row) => row.id);
   const tags = ((tagResult.results ?? []) as unknown as TagMetaRow[]).map(shapeTagMeta);
 
-  return json({ memos, purged, tags, cursor, serverTime: nowIso() });
+  // Cache-warm devices may never hit /api/bootstrap again — keep the legacy
+  // plaintext backfill converging from here too (one pass per isolate).
+  scheduleEncryptionBackfill(context);
+
+  return json({ memos, purged, tags, cursor, cacheKey: await getOrCreateCacheKey(context.env), serverTime: nowIso() });
 }

@@ -1,4 +1,5 @@
 import { requireAuth } from "./_utils/auth";
+import { getOrCreateCacheKey, openContentRows, scheduleEncryptionBackfill } from "./_utils/crypto";
 import { groupImages, MEMO_COLUMNS, shapeMemo, shapeTagMeta, type ImageMetaRow, type MemoRow, type TagMetaRow } from "./_utils/memos";
 import { json, nowIso } from "./_utils/response";
 import type { AppContext } from "./_utils/types";
@@ -21,8 +22,13 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
 
   const cursor = ((counterResult.results?.[0] as { n?: number } | undefined)?.n ?? 0) as number;
   const imagesByMemo = groupImages((imageResult.results ?? []) as unknown as ImageMetaRow[]);
-  const memos = ((memoResult.results ?? []) as unknown as MemoRow[]).map((memo) => shapeMemo(memo, imagesByMemo.get(memo.id) ?? []));
+  const memoRows = (memoResult.results ?? []) as unknown as MemoRow[];
+  await openContentRows(context.env, memoRows);
+  const memos = memoRows.map((memo) => shapeMemo(memo, imagesByMemo.get(memo.id) ?? []));
   const tags = ((tagResult.results ?? []) as unknown as TagMetaRow[]).map(shapeTagMeta);
 
-  return json({ memos, tags, cursor, serverTime: nowIso() });
+  // Seal any pre-encryption rows in the background while we're here.
+  scheduleEncryptionBackfill(context);
+
+  return json({ memos, tags, cursor, cacheKey: await getOrCreateCacheKey(context.env), serverTime: nowIso() });
 }

@@ -21,6 +21,21 @@ export function extractTags(content: string): string[] {
   return [...tags];
 }
 
+// Memo objects are immutable snapshots — every edit or sync delivers a fresh
+// object — so a WeakMap keyed on the object is a leak-free extraction cache.
+// This keeps filtering/tree-building O(memos) instead of O(memos × content)
+// on every keystroke or feed change.
+const memoTagsCache = new WeakMap<Memo, string[]>();
+
+export function tagsOf(memo: Memo): string[] {
+  let tags = memoTagsCache.get(memo);
+  if (!tags) {
+    tags = extractTags(memo.content);
+    memoTagsCache.set(memo, tags);
+  }
+  return tags;
+}
+
 /**
  * Rewrite every `#from` (and descendant `#from/…`) tag token in `content` to
  * `to`; `to === null` removes the token instead (eating one adjacent space so
@@ -95,7 +110,7 @@ export function buildTagTree(memos: Memo[], pinnedAtOf?: Map<string, string>, lo
   };
 
   for (const memo of memos) {
-    const tags = extractTags(memo.content);
+    const tags = tagsOf(memo);
     for (const tag of tags) unique.add(tag);
     // Count each memo once per node it touches (self or ancestor).
     const touched = new Set<string>();

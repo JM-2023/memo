@@ -4,3 +4,9 @@ SESSION_SECRET=replace-with-a-long-random-secret
 # Optional: pre-seed the login passcode (npm run hash-password -- "1234").
 # Without it, the first visit shows a create-passcode screen.
 # APP_PASSWORD_HASH=pbkdf2_sha256$100000$...
+
+# Optional: encrypt memo content at rest (AES-256-GCM). 64 hex chars = 32 bytes.
+# Generate with: openssl rand -hex 32
+# Set in production with: wrangler pages secret put MEMO_ENC_KEY
+# IMPORTANT: never change this once set - sealed rows only open with the same key.
+# MEMO_ENC_KEY=

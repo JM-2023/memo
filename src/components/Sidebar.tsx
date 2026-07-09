@@ -1,7 +1,7 @@
 import { ChevronDown, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sun, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useI18n } from "../lib/i18n";
-import { periodStats, totalStats, type PeriodKind } from "../lib/stats";
+import { dayKeyOf, periodStats, totalStats, type PeriodKind } from "../lib/stats";
 import type { TagNode } from "../lib/tags";
 import type { Memo } from "../lib/types";
 import type { ThemeChoice } from "../lib/theme";
@@ -55,12 +55,13 @@ export function Sidebar(props: SidebarProps) {
 
   const totals = useMemo(() => totalStats(memos), [memos]);
   const stats = useMemo(() => periodStats(memos, period), [memos, period]);
-  const minMonth = useMemo(() => {
-    if (memos.length === 0) return null;
-    let min = "9999-99";
+  // Local-day key of the earliest memo (dayKeyOf, not an ISO slice — the
+  // stored strings are UTC and would drift near month edges).
+  const minDay = useMemo(() => {
+    let min: string | null = null;
     for (const memo of memos) {
-      const key = memo.createdAt.slice(0, 7);
-      if (key < min) min = key;
+      const key = dayKeyOf(memo);
+      if (min === null || key < min) min = key;
     }
     return min;
   }, [memos]);
@@ -236,7 +237,7 @@ export function Sidebar(props: SidebarProps) {
           </div>
         </div>
 
-        <Heatmap countsByDay={countsByDay} minMonth={minMonth} activeDay={activeDay} onPickDay={props.onPickDay} />
+        <Heatmap countsByDay={countsByDay} minDay={minDay} activeDay={activeDay} period={period} onPickDay={props.onPickDay} />
       </section>
 
       <nav className="sidebar-nav">

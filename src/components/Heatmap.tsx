@@ -1,64 +1,152 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
-import { formatDayLabel, weekdayLabel } from "../lib/dates";
+import { addDays, dateKey, formatDayLabel, startOfWeek, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
-import { buildHeatMonth } from "../lib/stats";
+import { buildHeatWeeks, type HeatCell, type PeriodKind } from "../lib/stats";
 import { useTip } from "./Tip";
 
 interface HeatmapProps {
   countsByDay: Map<string, number>;
-  /** "YYYY-MM" of the earliest memo; navigation stops there. */
-  minMonth: string | null;
+  /** Earliest local day holding a memo; navigation stops at its period. */
+  minDay: string | null;
   activeDay: string | null;
+  /** The sidebar's This week / This month / This year selection. */
+  period: PeriodKind;
   onPickDay: (key: string | null) => void;
 }
 
-function monthKey(year: number, month: number): string {
-  return `${year}-${String(month + 1).padStart(2, "0")}`;
+const PREV_LABEL: Record<PeriodKind, readonly [en: string, zh: string]> = {
+  week: ["Previous week", "上一周"],
+  month: ["Previous month", "上一月"],
+  year: ["Previous year", "上一年"]
+};
+const NEXT_LABEL: Record<PeriodKind, readonly [en: string, zh: string]> = {
+  week: ["Next week", "下一周"],
+  month: ["Next month", "下一月"],
+  year: ["Next year", "下一年"]
+};
+const HOME_LABEL: Record<PeriodKind, readonly [en: string, zh: string]> = {
+  week: ["Return to this week", "回到本周"],
+  month: ["Return to this month", "回到本月"],
+  year: ["Return to this year", "回到今年"]
+};
+
+function rangeOf(period: PeriodKind, offset: number, now: Date): { start: Date; end: Date } {
+  if (period === "week") {
+    const start = addDays(startOfWeek(now), offset * 7);
+    return { start, end: addDays(start, 6) };
+  }
+  if (period === "month") {
+    return {
+      start: new Date(now.getFullYear(), now.getMonth() + offset, 1),
+      end: new Date(now.getFullYear(), now.getMonth() + offset + 1, 0)
+    };
+  }
+  return { start: new Date(now.getFullYear() + offset, 0, 1), end: new Date(now.getFullYear() + offset, 11, 31) };
+}
+
+function weekRangeLabel(start: Date, end: Date, locale: string): string {
+  const formatter = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" });
+  const withRange = formatter as Intl.DateTimeFormat & { formatRange?: (a: Date, b: Date) => string };
+  return withRange.formatRange ? withRange.formatRange(start, end) : `${formatter.format(start)} – ${formatter.format(end)}`;
 }
 
 /**
- * GitHub-style per-month heat grid — week columns × Mon–Sun rows — scaled to
- * fill the sidebar. Cells stay square via aspect-ratio; the weekday labels
- * live in the grid's first column so they always align with the rows.
- * Clicking a day toggles a day filter on the memo feed; ‹ › pages months.
- * Day details ride the shared portal tooltip, so they can never be covered
- * by neighbouring cells.
+ * The sidebar heat graph. It follows the period selector above it and lies
+ * horizontal in every mode:
+ *   - week  — one row of seven day cells under a Mon–Sun header,
+ *   - month — a wall-calendar: weekday columns, week rows,
+ *   - year  — a GitHub-style band: week columns × weekday rows with month
+ *     marks on top.
+ * ‹ › page by one period; clicking the title returns to the current one.
+ * Clicking a day toggles the feed's day filter. Day details ride the shared
+ * portal tooltip so neighbouring cells can never cover them.
  */
-export function Heatmap({ countsByDay, minMonth, activeDay, onPickDay }: HeatmapProps) {
+export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: HeatmapProps) {
   const { count, locale, tr } = useI18n();
   const tip = useTip();
   const now = new Date();
-  const [view, setView] = useState({ year: now.getFullYear(), month: now.getMonth() });
-  // Drives the slide-in animation; the key encodes direction so re-renders
-  // replay the correct one.
-  const [transition, setTransition] = useState({ serial: 0, direction: 0 });
+  // Paging within the selected period. Switching periods derives back to
+  // offset 0 (no effect needed — `nav.period` going stale resets it).
+  const [nav, setNav] = useState({ period, offset: 0, serial: 0, direction: 0 });
+  const offset = nav.period === period ? nav.offset : 0;
+  const direction = nav.period === period ? nav.direction : 0;
 
-  const currentKey = monthKey(now.getFullYear(), now.getMonth());
-  const viewKey = monthKey(view.year, view.month);
-  const canForward = viewKey < currentKey;
-  const canBack = minMonth !== null ? viewKey > minMonth : false;
+  const { start, end } = rangeOf(period, offset, now);
+  const weeks = useMemo(() => buildHeatWeeks(start, end, countsByDay, now), [period, offset, countsByDay]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const heat = useMemo(() => buildHeatMonth(view.year, view.month, countsByDay, now), [view, countsByDay]); // eslint-disable-line react-hooks/exhaustive-deps
-  const monthTotal = useMemo(() => heat.weeks.flat().reduce((sum, cell) => sum + (cell.inMonth ? cell.count : 0), 0), [heat]);
-  const monthLabel = useMemo(
-    () => new Intl.DateTimeFormat(locale, { year: "numeric", month: "long" }).format(new Date(view.year, view.month, 1)),
-    [locale, view.year, view.month]
-  );
+  const rangeTotal = useMemo(() => {
+    let sum = 0;
+    for (const week of weeks) for (const cell of week) if (cell.inRange) sum += cell.count;
+    return sum;
+  }, [weeks]);
+
+  const canForward = offset < 0;
+  const canBack = minDay !== null && dateKey(addDays(start, -1)) >= minDay;
+
+  const title = useMemo(() => {
+    if (period === "week") return weekRangeLabel(start, end, locale);
+    if (period === "month") return new Intl.DateTimeFormat(locale, { year: "numeric", month: "long" }).format(start);
+    return new Intl.DateTimeFormat(locale, { year: "numeric" }).format(start);
+  }, [locale, period, offset]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const weekdayLabels = useMemo(() => {
     const formatter = new Intl.DateTimeFormat(locale, { weekday: "narrow" });
     const monday = new Date(2026, 0, 5);
     return Array.from({ length: 7 }, (_, index) => formatter.format(new Date(2026, 0, monday.getDate() + index)));
   }, [locale]);
 
+  /** Which week column each month starts in (year band's top marks). */
+  const monthMarks = useMemo(() => {
+    if (period !== "year") return [];
+    const formatter = new Intl.DateTimeFormat(locale, { month: "short" });
+    const marks: { week: number; label: string }[] = [];
+    weeks.forEach((week, index) => {
+      const firstOfMonth = week.find((cell) => cell.inRange && cell.key.endsWith("-01"));
+      if (firstOfMonth) {
+        const [year, month] = firstOfMonth.key.split("-").map(Number);
+        marks.push({ week: index, label: formatter.format(new Date(year, month - 1, 1)) });
+      }
+    });
+    return marks;
+  }, [weeks, period, locale]);
+
   function shift(delta: number) {
     tip.hide();
-    setView((value) => {
-      const date = new Date(value.year, value.month + delta, 1);
-      return { year: date.getFullYear(), month: date.getMonth() };
-    });
-    setTransition((value) => ({ serial: value.serial + 1, direction: delta }));
+    setNav((value) => ({ period, offset: offset + delta, serial: value.serial + 1, direction: delta }));
   }
+
+  function goHome() {
+    if (offset === 0) return;
+    tip.hide();
+    setNav((value) => ({ period, offset: 0, serial: value.serial + 1, direction: offset < 0 ? 1 : -1 }));
+  }
+
+  const slideClass = direction > 0 ? " slide-left" : direction < 0 ? " slide-right" : "";
+  const [homeEn, homeZh] = HOME_LABEL[period];
+
+  const cellNode = (cell: HeatCell) =>
+    cell.inRange && !cell.isFuture ? (
+      <button
+        key={cell.key}
+        type="button"
+        className={`heat-cell level-${cell.level}${cell.isToday ? " is-today" : ""}${activeDay === cell.key ? " is-active" : ""}`}
+        aria-label={tr(
+          `${formatDayLabel(cell.key, locale)}, ${count(cell.count, "memo")}`,
+          `${formatDayLabel(cell.key, locale)}，${count(cell.count, "memo")}`
+        )}
+        onMouseEnter={(event) =>
+          tip.show(event.currentTarget, {
+            strong: count(cell.count, "memo"),
+            text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
+          })
+        }
+        onMouseLeave={tip.hide}
+        onClick={() => onPickDay(activeDay === cell.key ? null : cell.key)}
+      />
+    ) : (
+      <span key={cell.key} className={`heat-cell placeholder${cell.inRange ? " future" : ""}`} aria-hidden="true" />
+    );
 
   return (
     <div className="heatmap">
@@ -68,74 +156,56 @@ export function Heatmap({ countsByDay, minMonth, activeDay, onPickDay }: Heatmap
           className="icon-button heatmap-nav"
           onClick={() => shift(-1)}
           disabled={!canBack}
-          aria-label={tr("Previous month", "上一月")}
+          aria-label={tr(...PREV_LABEL[period])}
         >
           <ChevronLeft size={15} aria-hidden="true" />
         </button>
         <button
           type="button"
           className="heatmap-title"
-          onClick={() => {
-            if (viewKey === currentKey) return;
-            tip.hide();
-            setView({ year: now.getFullYear(), month: now.getMonth() });
-            setTransition((value) => ({ serial: value.serial + 1, direction: viewKey < currentKey ? 1 : -1 }));
-          }}
+          onClick={goHome}
           onMouseEnter={(event) => {
-            if (viewKey !== currentKey) tip.show(event.currentTarget, { text: tr("Return to this month", "回到本月") });
+            if (offset !== 0) tip.show(event.currentTarget, { text: tr(homeEn, homeZh) });
           }}
           onMouseLeave={tip.hide}
         >
-          {monthLabel}
-          <span className="heatmap-total">{count(monthTotal, "memo")}</span>
+          {title}
+          <span className="heatmap-total">{count(rangeTotal, "memo")}</span>
         </button>
         <button
           type="button"
           className="icon-button heatmap-nav"
           onClick={() => shift(1)}
           disabled={!canForward}
-          aria-label={tr("Next month", "下一月")}
+          aria-label={tr(...NEXT_LABEL[period])}
         >
           <ChevronRight size={15} aria-hidden="true" />
         </button>
       </div>
 
-      <div
-        key={transition.serial}
-        className={`heatmap-grid${transition.direction > 0 ? " slide-left" : transition.direction < 0 ? " slide-right" : ""}`}
-        style={{ gridTemplateColumns: `14px repeat(${heat.weeks.length}, 1fr)` }}
-      >
-        {weekdayLabels.map((label, index) => (
-          <span key={`${label}-${index}`} className="heat-weekday" aria-hidden="true">
-            {label}
-          </span>
-        ))}
-        {heat.weeks.map((week) =>
-          week.map((cell) =>
-            cell.inMonth && !cell.isFuture ? (
-              <button
-                key={cell.key}
-                type="button"
-                className={`heat-cell level-${cell.level}${cell.isToday ? " is-today" : ""}${activeDay === cell.key ? " is-active" : ""}`}
-                aria-label={tr(
-                  `${formatDayLabel(cell.key, locale)}, ${count(cell.count, "memo")}`,
-                  `${formatDayLabel(cell.key, locale)}，${count(cell.count, "memo")}`
-                )}
-                onMouseEnter={(event) =>
-                  tip.show(event.currentTarget, {
-                    strong: count(cell.count, "memo"),
-                    text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
-                  })
-                }
-                onMouseLeave={tip.hide}
-                onClick={() => onPickDay(activeDay === cell.key ? null : cell.key)}
-              />
-            ) : (
-              <span key={cell.key} className={`heat-cell placeholder${cell.inMonth ? " future" : ""}`} aria-hidden="true" />
-            )
-          )
-        )}
-      </div>
+      {period === "year" ? (
+        <div key={nav.serial} className={`heat-year${slideClass}`}>
+          <div className="heat-months" style={{ gridTemplateColumns: `repeat(${weeks.length}, 1fr)` }} aria-hidden="true">
+            {monthMarks.map((mark) => (
+              <span key={mark.week} style={{ gridColumnStart: mark.week + 1 }}>
+                {mark.label}
+              </span>
+            ))}
+          </div>
+          <div className="heatmap-grid is-year" style={{ gridTemplateColumns: `repeat(${weeks.length}, 1fr)` }}>
+            {weeks.map((week) => week.map(cellNode))}
+          </div>
+        </div>
+      ) : (
+        <div key={nav.serial} className={`heatmap-grid is-cal${slideClass}`}>
+          {weekdayLabels.map((label, index) => (
+            <span key={`${label}-${index}`} className="heat-colhead" aria-hidden="true">
+              {label}
+            </span>
+          ))}
+          {weeks.map((week) => week.map(cellNode))}
+        </div>
+      )}
     </div>
   );
 }

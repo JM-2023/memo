@@ -1,4 +1,5 @@
 import { requireAuth } from "../_utils/auth";
+import { contentKeyOf, sealContent } from "../_utils/crypto";
 import { nextSeq } from "../_utils/memos";
 import { apiError, json, nowIso, readJson, requireSameOrigin } from "../_utils/response";
 import type { AppContext } from "../_utils/types";
@@ -85,11 +86,14 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
 
   const now = nowIso();
   const memoId = crypto.randomUUID();
+  // Sealed at rest, plaintext in the response — the client never sees ciphertext.
+  const contentKey = await contentKeyOf(context.env);
+  const storedContent = contentKey ? await sealContent(contentKey, content) : content;
   const seq = await nextSeq(context.env.DB);
   const statements = [
     context.env.DB
       .prepare("INSERT INTO memos (id, content, created_at, updated_at, seq) VALUES (?, ?, ?, ?, ?)")
-      .bind(memoId, content, now, now, seq)
+      .bind(memoId, storedContent, now, now, seq)
   ];
   const imageMeta: { id: string; mime: string; width: number; height: number; bytes: number }[] = [];
   images.forEach((image, index) => {

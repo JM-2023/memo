@@ -3,6 +3,7 @@
 // source of truth) and migrate any pin state in tag_meta along with them.
 
 import { renameTagInContent } from "../../../src/lib/tags";
+import { contentKeyOf, sealContent, openContent } from "./crypto";
 import { groupImages, MEMO_COLUMNS, nextSeq, shapeMemo, shapeTagMeta, type ImageMetaRow, type MemoJson, type MemoRow, type TagMetaJson } from "./memos";
 import { nowIso } from "./response";
 import type { AppContext } from "./types";
@@ -31,10 +32,14 @@ export async function rewriteTag(context: AppContext, from: string, to: string |
   const metaRows = (metaResult.results ?? []) as unknown as { path: string; pinned_at: string | null }[];
 
   const now = nowIso();
+  const contentKey = await contentKeyOf(context.env);
   const changed: MemoRow[] = [];
   for (const row of rows) {
-    const next = renameTagInContent(row.content, from, to);
-    if (next !== row.content) changed.push({ ...row, content: next, updated_at: now });
+    // Rewrites happen on plaintext; `changed` keeps plaintext for the response
+    // and gets re-sealed only in the UPDATE binding below.
+    const plain = await openContent(contentKey, row.content);
+    const next = renameTagInContent(plain, from, to);
+    if (next !== plain) changed.push({ ...row, content: next, updated_at: now });
   }
   if (changed.length === 0 && metaRows.every((row) => row.pinned_at === null)) {
     return null;
@@ -64,9 +69,11 @@ export async function rewriteTag(context: AppContext, from: string, to: string |
   }
 
   const seq = await nextSeq(db);
-  const statements = changed.map((row) =>
-    db.prepare("UPDATE memos SET content = ?, updated_at = ?, seq = ? WHERE id = ?").bind(row.content, row.updated_at, seq, row.id)
-  );
+  const statements: D1PreparedStatement[] = [];
+  for (const row of changed) {
+    const stored = contentKey ? await sealContent(contentKey, row.content) : row.content;
+    statements.push(db.prepare("UPDATE memos SET content = ?, updated_at = ?, seq = ? WHERE id = ?").bind(stored, row.updated_at, seq, row.id));
+  }
   const tags: TagMetaJson[] = [];
   for (const [path, pinnedAt] of finalStates) {
     tags.push(shapeTagMeta({ path, pinned_at: pinnedAt, seq }));

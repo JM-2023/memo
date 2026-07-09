@@ -2,7 +2,7 @@ import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { dateKey, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
-import { buildHeatMonth, computeStreaks, countsByDay, totalStats, wordCount, type HeatMonth } from "../lib/stats";
+import { buildHeatMonth, computeStreaks, countsByDay, totalStats, wordCountOf, type HeatMonth } from "../lib/stats";
 import type { Memo } from "../lib/types";
 import { useTip } from "./Tip";
 
@@ -94,7 +94,7 @@ function buildYearData(memos: Memo[], byDay: Map<string, number>, year: number, 
     const created = new Date(memo.createdAt);
     if (created.getFullYear() !== year) continue;
     memoCount += 1;
-    words += wordCount(memo.content);
+    words += wordCountOf(memo);
     imageCount += memo.images.length;
     monthCounts[created.getMonth()] += 1;
     weekdayCounts[(created.getDay() + 6) % 7] += 1;
@@ -158,7 +158,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
   const yearData = useMemo(() => buildYearData(memos, byDay, year, now), [memos, byDay, year, now]);
   const totals = useMemo(() => totalStats(memos, now), [memos, now]);
   const streaks = useMemo(() => computeStreaks(byDay, now), [byDay, now]);
-  const allWords = useMemo(() => memos.reduce((sum, memo) => sum + wordCount(memo.content), 0), [memos]);
+  const allWords = useMemo(() => memos.reduce((sum, memo) => sum + wordCountOf(memo), 0), [memos]);
   const allImages = useMemo(() => memos.reduce((sum, memo) => sum + memo.images.length, 0), [memos]);
   const weekdaysFull = useMemo(() => weekdayNames(locale, "long"), [locale]);
   const weekdaysNarrow = useMemo(() => weekdayNames(locale, "narrow"), [locale]);
@@ -241,7 +241,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                 <div className="mini-grid" style={{ gridTemplateColumns: `repeat(${heat.weeks.length}, 1fr)` }}>
                   {heat.weeks.map((week) =>
                     week.map((cell) =>
-                      cell.inMonth && !cell.isFuture ? (
+                      cell.inRange && !cell.isFuture ? (
                         <span
                           key={cell.key}
                           className={`mini-cell level-${cell.level}${cell.isToday ? " is-today" : ""}`}
@@ -267,7 +267,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                           onBlur={tip.hide}
                         />
                       ) : (
-                        <span key={cell.key} className={`mini-cell placeholder${cell.inMonth ? " future" : ""}`} aria-hidden="true" />
+                        <span key={cell.key} className={`mini-cell placeholder${cell.inRange ? " future" : ""}`} aria-hidden="true" />
                       )
                     )
                   )}

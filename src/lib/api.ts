@@ -75,12 +75,14 @@ export function logout(): Promise<{ ok: boolean }> {
   return request("/api/auth/logout", { method: "POST", body: JSON.stringify({}) });
 }
 
-export function bootstrap(): Promise<{ memos: Memo[]; tags: TagMeta[]; cursor: number; serverTime: string }> {
+export function bootstrap(): Promise<{ memos: Memo[]; tags: TagMeta[]; cursor: number; cacheKey?: string; serverTime: string }> {
   return request("/api/bootstrap");
 }
 
 /** Everything changed after `cursor`: memos, hard-deleted ids, tag meta. */
-export function syncSince(cursor: number): Promise<{ memos: Memo[]; purged: string[]; tags: TagMeta[]; cursor: number; serverTime: string }> {
+export function syncSince(
+  cursor: number
+): Promise<{ memos: Memo[]; purged: string[]; tags: TagMeta[]; cursor: number; cacheKey?: string; serverTime: string }> {
   return request(`/api/sync?since=${encodeURIComponent(cursor)}`);
 }
 

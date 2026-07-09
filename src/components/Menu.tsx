@@ -85,10 +85,13 @@ export function Menu({ trigger, children, align = "right", className, portal = f
     if (!open) setPos(null);
   }, [open]);
 
+  // right: "auto" neutralises the class-based `.align-right { right: 0 }` —
+  // combined with the inline fixed `left` it would otherwise double-constrain
+  // the panel and stretch it to a viewport-spanning width.
   const panelStyle: CSSProperties | undefined = portal
     ? pos
-      ? { position: "fixed", top: pos.top, left: pos.left, transformOrigin: `${pos.up ? "bottom" : "top"} ${align === "right" ? "right" : "left"}` }
-      : { position: "fixed", top: -9999, left: -9999 }
+      ? { position: "fixed", top: pos.top, left: pos.left, right: "auto", transformOrigin: `${pos.up ? "bottom" : "top"} ${align === "right" ? "right" : "left"}` }
+      : { position: "fixed", top: -9999, left: -9999, right: "auto", visibility: "hidden" }
     : undefined;
 
   const panel = open ? (

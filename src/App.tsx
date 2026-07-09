@@ -1,5 +1,6 @@
 import { ArrowDownWideNarrow, Check, Loader2, Menu as MenuIcon, NotebookPen, Search, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo as reactMemo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { ChangePasscode } from "./components/ChangePasscode";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Crumbs } from "./components/Crumbs";
@@ -26,13 +27,15 @@ import {
   renameTag,
   restoreMemo,
   setupPassword,
+  syncSince,
   trashMemo,
   updateMemo
 } from "./lib/api";
-import { dateKeyOf, formatDayLabel } from "./lib/dates";
+import { adoptCacheKey, clearSnapshot, mergeMemoDelta, mergeTagDelta, openSnapshot, peekSnapshotCursor, saveSnapshot } from "./lib/cache";
+import { formatDayLabel } from "./lib/dates";
 import { useI18n } from "./lib/i18n";
-import { countsByDay } from "./lib/stats";
-import { buildTagTree, extractTags, isValidTagPath, tagMatches } from "./lib/tags";
+import { countsByDay, dayKeyOf } from "./lib/stats";
+import { buildTagTree, isValidTagPath, tagMatches, tagsOf } from "./lib/tags";
 import { applyTheme, loadTheme, nextTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, NewImagePayload, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
@@ -62,6 +65,107 @@ function loadSortKey(): SortKey {
   const stored = localStorage.getItem("memo-sort");
   return SORT_KEYS.includes(stored as SortKey) ? (stored as SortKey) : "created-desc";
 }
+
+interface MemoSlotProps {
+  /** Per-memo view-transition-name; undefined past the morph budget. */
+  vtName: string | undefined;
+  entering: boolean;
+  delay: number;
+  children: ReactNode;
+}
+
+/**
+ * Feed slot that locks its entrance decision at mount: slots mounted by a
+ * filter swap skip the rise-in (the view transition owns that motion), while
+ * organic mounts — initial load, a freshly created memo — cascade in. The
+ * per-memo view-transition-name is what lets a filter change glide shared
+ * cards to their new positions instead of replaying an entrance; identical
+ * result lists therefore produce no motion at all.
+ */
+function MemoSlot({ vtName, entering, delay, children }: MemoSlotProps) {
+  const [intro] = useState(() => (entering ? { animationDelay: `${delay}s` } : null));
+  return (
+    <div className={`memo-slot${intro ? "" : " no-enter"}`} style={{ ...intro, viewTransitionName: vtName }}>
+      {children}
+    </div>
+  );
+}
+
+/** How many feed rows render before the scroll sentinel asks for more. */
+const FEED_PAGE = 80;
+
+/** Stable per-App action surface — what keeps FeedItem memoization honest. */
+interface FeedHandlers {
+  startEdit: (id: string) => void;
+  cancelEdit: () => void;
+  saveEdit: (memo: Memo, data: { content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
+  togglePin: (memo: Memo) => void;
+  copy: (memo: Memo) => void;
+  requestDelete: (memo: Memo) => void;
+  restore: (memo: Memo) => void;
+  requestPurge: (memo: Memo) => void;
+  pickTag: (path: string) => void;
+  openImage: (items: LightboxItem[], index: number) => void;
+  removeComplete: (id: string) => void;
+}
+
+interface FeedItemProps {
+  memo: Memo;
+  variant: "normal" | "trash";
+  knownTags: string[];
+  editing: boolean;
+  savingEdit: boolean;
+  isRemoving: boolean;
+  vtName: string | undefined;
+  /** Read once at mount; a stable getter keeps the memo comparison clean. */
+  getEntering: () => boolean;
+  delay: number;
+  handlers: FeedHandlers;
+}
+
+/**
+ * One memoized feed row. With `handlers` and `knownTags` held stable by App,
+ * unrelated state changes (search keystrokes, toasts, dialogs, heartbeat
+ * syncs) skip the entire feed — only rows whose memo or flags changed
+ * re-render. `delay`/`getEntering` are mount-time-only inputs and are
+ * deliberately left out of the equality check.
+ */
+const FeedItem = reactMemo(
+  function FeedItem({ memo, variant, knownTags, editing, savingEdit, isRemoving, vtName, getEntering, delay, handlers }: FeedItemProps) {
+    return (
+      <MemoSlot vtName={vtName} entering={getEntering()} delay={delay}>
+        <MemoCard
+          memo={memo}
+          variant={variant}
+          knownTags={knownTags}
+          editing={editing}
+          savingEdit={savingEdit}
+          isRemoving={isRemoving}
+          onStartEdit={() => handlers.startEdit(memo.id)}
+          onCancelEdit={handlers.cancelEdit}
+          onSaveEdit={(data) => handlers.saveEdit(memo, data)}
+          onTogglePin={() => handlers.togglePin(memo)}
+          onCopy={() => handlers.copy(memo)}
+          onRequestDelete={() => handlers.requestDelete(memo)}
+          onRestore={() => handlers.restore(memo)}
+          onRequestPurge={() => handlers.requestPurge(memo)}
+          onPickTag={handlers.pickTag}
+          onOpenImage={handlers.openImage}
+          onRemoveComplete={() => handlers.removeComplete(memo.id)}
+        />
+      </MemoSlot>
+    );
+  },
+  (prev, next) =>
+    prev.memo === next.memo &&
+    prev.variant === next.variant &&
+    prev.knownTags === next.knownTags &&
+    prev.editing === next.editing &&
+    prev.savingEdit === next.savingEdit &&
+    prev.isRemoving === next.isRemoving &&
+    prev.vtName === next.vtName &&
+    prev.handlers === next.handlers
+);
 
 export default function App() {
   const { count, errorMessage, locale, tr } = useI18n();
@@ -189,7 +293,7 @@ export default function App() {
     showToast(tr("Your session expired. Enter your passcode again.", "登录已过期，请重新输入密码"), "error");
   }, [showToast, tr]);
 
-  const { setCursor, runSync, notifyPeers } = useSync({
+  const { setCursor, getCursor, runSync, notifyPeers } = useSync({
     enabled: phase === "ready",
     applyChanges: applySyncChanges,
     onAuthLost: dropToLogin
@@ -207,10 +311,32 @@ export default function App() {
 
   const enterApp = useCallback(
     async (withReveal: boolean) => {
-      const data = await bootstrap();
-      setMemos(data.memos);
-      setPinnedTags(new Map(data.tags.filter((tag) => tag.pinnedAt).map((tag) => [tag.path, tag.pinnedAt as string])));
-      setCursor(data.cursor);
+      // Warm start: with a sealed local snapshot, one incremental sync
+      // replaces the full-notebook bootstrap — startup traffic stays
+      // constant-size no matter how large the notebook grows. Auth errors
+      // propagate to the caller exactly like the bootstrap path's.
+      let entered = false;
+      const cachedCursor = await peekSnapshotCursor();
+      if (cachedCursor !== null) {
+        const delta = await syncSince(cachedCursor);
+        adoptCacheKey(delta.cacheKey);
+        const snapshot = await openSnapshot();
+        if (snapshot) {
+          setMemos(mergeMemoDelta(snapshot.memos, delta.memos, delta.purged));
+          const tags = mergeTagDelta(snapshot.tags, delta.tags);
+          setPinnedTags(new Map(tags.filter((tag) => tag.pinnedAt).map((tag) => [tag.path, tag.pinnedAt as string])));
+          setCursor(delta.cursor);
+          entered = true;
+        }
+        // Unreadable snapshot (rotated key, stale format) → cold path below.
+      }
+      if (!entered) {
+        const data = await bootstrap();
+        adoptCacheKey(data.cacheKey);
+        setMemos(data.memos);
+        setPinnedTags(new Map(data.tags.filter((tag) => tag.pinnedAt).map((tag) => [tag.path, tag.pinnedAt as string])));
+        setCursor(data.cursor);
+      }
       setPhase("ready");
       if (withReveal) {
         setReveal(true);
@@ -219,6 +345,18 @@ export default function App() {
     },
     [setCursor]
   );
+
+  // Persist the working set (sealed) once changes settle. Skipped while a
+  // removal animation still holds back server state — a snapshot taken then
+  // would pair a fresh cursor with stale rows, and sync could never heal it.
+  useEffect(() => {
+    if (phase !== "ready" || removingIds.size > 0) return;
+    const timer = window.setTimeout(() => {
+      const tags: TagMeta[] = [...pinnedTags].map(([path, pinnedAt]) => ({ path, pinnedAt, seq: 0 }));
+      void saveSnapshot({ cursor: getCursor(), memos, tags });
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [phase, memos, pinnedTags, removingIds, getCursor]);
 
   useEffect(() => {
     let cancelled = false;
@@ -281,35 +419,62 @@ export default function App() {
   );
   const knownTags = useMemo(() => {
     const set = new Set<string>();
-    for (const memo of activeMemos) for (const tag of extractTags(memo.content)) set.add(tag);
+    for (const memo of activeMemos) for (const tag of tagsOf(memo)) set.add(tag);
     return [...set].sort((a, b) => a.localeCompare(b, locale));
   }, [activeMemos, locale]);
   const byDay = useMemo(() => countsByDay(activeMemos), [activeMemos]);
 
   const trimmedQuery = query.trim().toLowerCase();
+  // Filtering follows the keystroke at deferred priority: the input never
+  // waits for a big feed to re-render.
+  const deferredQuery = useDeferredValue(trimmedQuery);
   const filtersActive = activeTag !== null || activeDay !== null || trimmedQuery.length > 0;
 
   const visibleMemos = useMemo(() => {
     let list = activeMemos;
     if (activeTag) {
-      list = list.filter((memo) => extractTags(memo.content).some((tag) => tagMatches(tag, activeTag)));
+      list = list.filter((memo) => tagsOf(memo).some((tag) => tagMatches(tag, activeTag)));
     }
     if (activeDay) {
-      list = list.filter((memo) => dateKeyOf(memo.createdAt) === activeDay);
+      list = list.filter((memo) => dayKeyOf(memo) === activeDay);
     }
-    if (trimmedQuery) {
-      list = list.filter((memo) => memo.content.toLowerCase().includes(trimmedQuery));
+    if (deferredQuery) {
+      list = list.filter((memo) => memo.content.toLowerCase().includes(deferredQuery));
     }
     const compare = SORT_COMPARATORS[sortKey];
     return [...list].sort((a, b) => {
       if (Boolean(a.pinnedAt) !== Boolean(b.pinnedAt)) return a.pinnedAt ? -1 : 1;
       return compare(a, b);
     });
-  }, [activeMemos, activeTag, activeDay, trimmedQuery, sortKey]);
+  }, [activeMemos, activeTag, activeDay, deferredQuery, sortKey]);
 
   const feedMemos = view === "trash" ? trashedMemos : visibleMemos;
-  // Re-keying the feed on view/filter/sort changes replays the stagger entrance.
-  const listKey = `${view}|${sortKey}|${activeTag ?? ""}|${activeDay ?? ""}|${trimmedQuery}`;
+
+  // The feed renders in pages: the first FEED_PAGE rows immediately, more as
+  // the sentinel scrolls near. Keeps first paint and filter swaps flat no
+  // matter how many memos exist.
+  const [renderCap, setRenderCap] = useState(FEED_PAGE);
+  useEffect(() => {
+    setRenderCap(FEED_PAGE);
+  }, [deferredQuery]);
+  const hasMoreFeed = feedMemos.length > renderCap;
+  const feedSentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!hasMoreFeed) return;
+    const node = feedSentinelRef.current;
+    if (!node) return;
+    // Re-created after every cap bump so a still-visible sentinel re-fires.
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setRenderCap((cap) => cap + FEED_PAGE);
+        }
+      },
+      { rootMargin: "1200px 0px" }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMoreFeed, renderCap]);
 
   function closeDrawer() {
     if (!drawerOpen) return;
@@ -320,16 +485,28 @@ export default function App() {
     }, 240);
   }
 
+  // While true, slots mounting in the current (flushed) render skip their
+  // entrance animation — the view transition owns the motion instead.
+  const enterSuppressRef = useRef(false);
+
   /**
-   * Feed filter changes run inside a view transition (old list dissolves,
-   * new list settles in) and reset the scroll — the jump is masked by the
-   * cross-fade. Skipped while the mobile drawer is open: its own closing
-   * animation would get double-captured.
+   * Feed filter changes run inside a view transition: shared cards glide to
+   * their new positions, departures/arrivals fade, and the scroll reset is
+   * masked by the transition. Skipped while the mobile drawer is open (its
+   * own closing animation would get double-captured).
    */
   const changeFeed = useCallback(
     (apply: () => void) => {
       const update = () => {
-        apply();
+        enterSuppressRef.current = true;
+        try {
+          flushSync(() => {
+            setRenderCap(FEED_PAGE);
+            apply();
+          });
+        } finally {
+          enterSuppressRef.current = false;
+        }
         window.scrollTo(0, 0);
       };
       if (drawerOpen) update();
@@ -407,6 +584,9 @@ export default function App() {
     } catch {
       // Even a failed call clears the local session view.
     }
+    // Explicit logout means "leave nothing behind on this device". (A mere
+    // session expiry keeps the snapshot — it is sealed without a session.)
+    void clearSnapshot();
     setMemos([]);
     removalRef.current.clear();
     setRemovingIds(new Set());
@@ -450,7 +630,10 @@ export default function App() {
     try {
       const result = await guard(() => updateMemo(memo.id, { pinned: !memo.pinnedAt }));
       if (!result) return;
-      commitMutation(result.memo);
+      // Pinning reorders the feed — let the card glide to its new slot.
+      withViewTransition(() => flushSync(() => upsertMemos([result.memo], [])));
+      void runSync();
+      notifyPeers();
       showToast(result.memo.pinnedAt ? tr("Pinned", "已置顶") : tr("Unpinned", "已取消置顶"));
     } catch (cause) {
       showToast(errorMessage(cause, "Couldn’t update the memo", "更新失败"), "error");
@@ -488,6 +671,29 @@ export default function App() {
       }
     },
     [upsertMemos]
+  );
+
+  // Latest closures behind one stable identity — FeedItem's memoization
+  // survives every App re-render. (The handle* function declarations below
+  // are hoisted, so assigning here each render is safe.)
+  const feedActionsRef = useRef({ saveEdit: handleSaveEdit, togglePin: handleTogglePin, copy: handleCopy, restore: handleRestore, pickTag });
+  feedActionsRef.current = { saveEdit: handleSaveEdit, togglePin: handleTogglePin, copy: handleCopy, restore: handleRestore, pickTag };
+  const getEntering = useCallback(() => !enterSuppressRef.current, []);
+  const feedHandlers = useMemo<FeedHandlers>(
+    () => ({
+      startEdit: (id) => setEditingId(id),
+      cancelEdit: () => setEditingId(null),
+      saveEdit: (memo, data) => feedActionsRef.current.saveEdit(memo, data),
+      togglePin: (memo) => void feedActionsRef.current.togglePin(memo),
+      copy: (memo) => void feedActionsRef.current.copy(memo),
+      requestDelete: (memo) => setTrashTarget(memo),
+      restore: (memo) => void feedActionsRef.current.restore(memo),
+      requestPurge: (memo) => setPurgeTarget(memo),
+      pickTag: (path) => feedActionsRef.current.pickTag(path),
+      openImage: (items, index) => setLightbox({ items, index }),
+      removeComplete: finishRemove
+    }),
+    [finishRemove]
   );
 
   async function handleTrashConfirmed() {
@@ -637,7 +843,7 @@ export default function App() {
 
   const sortLabel = sortOptions.find((option) => option.key === sortKey)?.label ?? "";
   const removeTagCount = removeTagTarget
-    ? memos.filter((memo) => extractTags(memo.content).some((tag) => tagMatches(tag, removeTagTarget))).length
+    ? memos.filter((memo) => tagsOf(memo).some((tag) => tagMatches(tag, removeTagTarget))).length
     : 0;
 
   return (
@@ -697,7 +903,7 @@ export default function App() {
           </button>
           <div className="breadcrumb">
             {view === "memos" && activeTag ? (
-              <Crumbs key={activeTag} path={activeTag} onHome={showAll} onPick={(path) => pickTag(path)} />
+              <Crumbs path={activeTag} onHome={showAll} onPick={(path) => pickTag(path)} />
             ) : (
               <button type="button" className={`breadcrumb-root${filtersActive || view === "trash" ? "" : " is-current"}`} onClick={showAll}>
                 {tr("All memos", "全部笔记")}
@@ -730,8 +936,8 @@ export default function App() {
                         aria-checked={option.key === sortKey}
                         className={option.key === sortKey ? "is-selected" : ""}
                         onClick={() => {
-                          setSortKey(option.key);
                           close();
+                          if (option.key !== sortKey) changeFeed(() => setSortKey(option.key));
                         }}
                       >
                         {option.label}
@@ -802,11 +1008,7 @@ export default function App() {
           </div>
         ) : null}
 
-        <section
-          key={listKey}
-          className="memo-feed"
-          aria-label={view === "trash" ? tr("Trash", "回收站") : tr("Memo list", "笔记列表")}
-        >
+        <section className="memo-feed" aria-label={view === "trash" ? tr("Trash", "回收站") : tr("Memo list", "笔记列表")}>
           {feedMemos.length === 0 ? (
             <div className="feed-empty">
               {view === "trash" ? (
@@ -827,30 +1029,23 @@ export default function App() {
               )}
             </div>
           ) : (
-            feedMemos.map((memo, index) => (
-              <div key={memo.id} className="memo-slot" style={{ animationDelay: `${Math.min(index, 12) * 0.045}s` }}>
-                <MemoCard
-                  memo={memo}
-                  variant={view === "trash" ? "trash" : "normal"}
-                  knownTags={knownTags}
-                  editing={editingId === memo.id}
-                  savingEdit={savingEdit}
-                  isRemoving={removingIds.has(memo.id)}
-                  onStartEdit={() => setEditingId(memo.id)}
-                  onCancelEdit={() => setEditingId(null)}
-                  onSaveEdit={(data) => handleSaveEdit(memo, data)}
-                  onTogglePin={() => void handleTogglePin(memo)}
-                  onCopy={() => void handleCopy(memo)}
-                  onRequestDelete={() => setTrashTarget(memo)}
-                  onRestore={() => void handleRestore(memo)}
-                  onRequestPurge={() => setPurgeTarget(memo)}
-                  onPickTag={(path) => pickTag(path)}
-                  onOpenImage={(items, index2) => setLightbox({ items, index: index2 })}
-                  onRemoveComplete={() => finishRemove(memo.id)}
-                />
-              </div>
+            feedMemos.slice(0, renderCap).map((memo, index) => (
+              <FeedItem
+                key={memo.id}
+                memo={memo}
+                variant={view === "trash" ? "trash" : "normal"}
+                knownTags={knownTags}
+                editing={editingId === memo.id}
+                savingEdit={editingId === memo.id && savingEdit}
+                isRemoving={removingIds.has(memo.id)}
+                vtName={index < 32 ? `memo-${memo.id}` : undefined}
+                getEntering={getEntering}
+                delay={Math.min(index, 12) * 0.045}
+                handlers={feedHandlers}
+              />
             ))
           )}
+          {hasMoreFeed ? <div ref={feedSentinelRef} className="feed-sentinel" aria-hidden="true" /> : null}
         </section>
       </main>
 
