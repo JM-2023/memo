@@ -43,7 +43,7 @@ const KNOWN_ERRORS: Record<string, ErrorTranslation> = {
   "Authentication required": { en: "Authentication required", zh: "需要重新登录" },
   "Invalid login": { en: "Incorrect passcode. Please try again.", zh: "密码错误，请重试" },
   "Wrong current passcode": { en: "The current passcode is incorrect. Please try again.", zh: "当前密码不正确，请重试" },
-  "Passcode must be 4 digits": { en: "The passcode must contain 4 digits.", zh: "密码必须是 4 位数字" },
+  "Passcode must be 4-18 digits": { en: "The passcode must contain 4 to 18 digits.", zh: "密码必须是 4-18 位数字" },
   "Passcode already configured": { en: "A passcode has already been configured.", zh: "访问密码已经设置" },
   "Invalid origin": { en: "This request came from an invalid origin.", zh: "请求来源无效" },
   "Invalid request body": { en: "The request data is invalid.", zh: "请求数据无效" },
@@ -146,7 +146,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
         case "WRONG_CURRENT_PASSCODE":
           return localized("The current passcode is incorrect. Please try again.", "当前密码不正确，请重试");
         case "PASSCODE_INVALID":
-          return localized("The passcode must contain 4 digits.", "密码必须是 4 位数字");
+          return localized("The passcode must contain 4 to 18 digits.", "密码必须是 4-18 位数字");
         case "PASSCODE_ALREADY_CONFIGURED":
           return localized("A passcode has already been configured.", "访问密码已经设置");
         case "INVALID_REQUEST_BODY":

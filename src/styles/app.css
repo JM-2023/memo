@@ -510,6 +510,11 @@ a:hover { text-decoration: underline; }
    blur; dropped segments retreat the same way they came. */
 @keyframes crumb-in { from { opacity: 0; transform: translateX(-12px); filter: blur(4px); } to { opacity: 1; transform: none; filter: blur(0); } }
 @keyframes crumb-out { to { opacity: 0; transform: translateX(-10px); filter: blur(3px); } }
+/* Drilling one level in: the ancestor crumb the pill leaves behind resolves
+   in place (no slide — the pill's own glide already owns the motion there). */
+@keyframes crumb-settle { from { opacity: 0; filter: blur(3px); } to { opacity: 1; filter: blur(0); } }
+/* Select-mode checkbox entrance; exit is the base transition back to 0. */
+@keyframes select-box-in { from { opacity: 0; transform: scale(0.4); } }
 
 .spin { animation: spin 1s linear infinite; }
 
@@ -638,6 +643,8 @@ a:hover { text-decoration: underline; }
 .action-menu > :nth-child(4) { animation-delay: 0.125s; }
 .action-menu > :nth-child(5) { animation-delay: 0.155s; }
 .action-menu > :nth-child(6) { animation-delay: 0.185s; }
+.action-menu > :nth-child(7) { animation-delay: 0.215s; }
+.action-menu > :nth-child(8) { animation-delay: 0.245s; }
 .action-menu > button svg { flex: none; color: var(--muted); stroke-width: 1.75; transition: color 0.16s ease; }
 @media (hover: hover) {
   .action-menu > button:hover { background: var(--wash-strong); color: var(--ink); }
@@ -649,6 +656,17 @@ a:hover { text-decoration: underline; }
 .action-menu > button.is-selected { color: var(--primary-dark); }
 .action-menu .menu-check { margin-left: auto; color: var(--primary-dark); }
 .action-menu__sep { display: block; height: 1px; margin: 5px 8px; background: var(--glass-rim); }
+/* Small section caption inside a menu (e.g. "排序方式" above the radios). */
+.action-menu__title {
+  display: block;
+  padding: 5px 11px 1px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
 /* Two-step delete: the question row above the confirm/cancel pair. */
 .action-menu__prompt {
   display: block;
@@ -774,18 +792,20 @@ a:hover { text-decoration: underline; }
 .pin-brand h1 { margin: 0; font-size: 1.42rem; font-weight: 800; letter-spacing: -0.02em; }
 .pin-brand p { margin: 0; color: var(--muted); font-size: 0.88rem; font-weight: 500; transition: color var(--t) var(--ease); }
 .pin-pad.shake .pin-brand p { color: var(--danger); }
-.pin-dots { display: flex; justify-content: center; gap: 16px; min-height: 16px; }
+/* One dot per typed digit — no fixed slots, so the row never betrays how long
+   the passcode is. Long entries compress the dots instead of wrapping. */
+/* min-width: 0 defeats the grid item's auto minimum, which would otherwise
+   widen the whole card column to fit 18 full-size dots. */
+.pin-dots { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 16px; }
 .pin-dots span {
   width: 14px;
-  height: 14px;
-  border: 1.5px solid var(--line-strong);
+  min-width: 6px;
+  aspect-ratio: 1;
   border-radius: 50%;
-  background: transparent;
-  transition: transform var(--t) var(--ease-spring), background var(--t) var(--ease), border-color var(--t) var(--ease);
+  background: var(--primary);
+  animation: pop-in 0.3s var(--ease-pop);
 }
-.pin-dots span.filled { background: var(--primary); border-color: var(--primary); animation: pop-in 0.3s var(--ease-pop); }
-.pin-dots.error span { border-color: var(--danger); }
-.pin-dots.error span.filled { background: var(--danger); border-color: var(--danger); }
+.pin-dots.error span { background: var(--danger); }
 
 .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .keypad button {
@@ -806,6 +826,7 @@ a:hover { text-decoration: underline; }
 .keypad button:active:not(:disabled) { transform: scale(0.94); }
 .keypad button.keypad-action { color: var(--muted); font-size: 1.15rem; background: transparent; border-color: transparent; box-shadow: none; }
 @media (hover: hover) { .keypad button.keypad-action:hover:not(:disabled) { background: var(--wash); box-shadow: none; } }
+.keypad button.keypad-action.confirm:not(:disabled) { color: var(--primary); }
 .keypad button:disabled { opacity: 0.4; }
 
 .passcode-overlay {
@@ -1217,19 +1238,10 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 .drawer-toggle { display: none; }
 
 .breadcrumb { --breadcrumb-gap: 8px; display: flex; flex: 1; min-width: 0; align-items: center; gap: var(--breadcrumb-gap); }
-.breadcrumb-root {
-  padding: 5px 10px;
-  color: var(--muted);
-  font-weight: 700;
-  border-radius: var(--r-sm);
-  animation: crumb-in 0.5s var(--ease-out) both;
-  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
-}
-.breadcrumb-root.is-current { color: var(--ink); font-size: 1.02rem; }
-@media (hover: hover) { .breadcrumb-root:not(.is-current):hover { background: var(--wash); color: var(--ink); } }
-.breadcrumb-root:not(.is-current):active { transform: scale(0.97); }
 
-/* Tag drilldown breadcrumb: ⌂ / 欢迎 / 简介 — every ancestor clickable. */
+/* Tag drilldown breadcrumb: ⌂ / 欢迎 / [简介 ⌄] — every ancestor clickable,
+   the current segment fused with the view-options dropdown (see
+   .loc-trigger). */
 .crumbs { display: flex; align-items: center; gap: 1px; min-width: 0; overflow: hidden; }
 .crumb {
   display: inline-flex;
@@ -1258,6 +1270,12 @@ button.crumb:active { background: var(--wash-strong); }
 .crumb-sep { flex: none; color: var(--line-strong); animation: crumb-in 0.55s var(--ease-out) both; }
 /* Going up a level: the dropped segments fold back toward their parent. */
 .crumb.is-leaving, .crumb-sep.is-leaving { animation: crumb-out 0.26s var(--ease) both; pointer-events: none; }
+/* Drilled one level in: the crumb the pill just vacated resolves in place,
+   a beat late so the pill visibly slides off it first. */
+.crumb.is-settling, .crumb-sep.is-settling { animation: crumb-settle 0.42s var(--ease) 0.06s both; }
+/* The current segment's separator glides between layouts alongside the pill
+   instead of snapping when the ancestor list changes width. */
+.loc-sep { view-transition-name: loc-sep; }
 /* Leaving segments paint from the settled breadcrumb edge without taking up
    flex space. The sort control can move directly to its final position while
    the old path folds away above it. Zero width alone is not enough: as a flex
@@ -1277,28 +1295,100 @@ button.crumb:active { background: var(--wash-strong); }
   white-space: nowrap;
   pointer-events: none;
 }
-/* Sort picker sits beside "全部笔记". Its view-transition-name is what keeps
-   it steady while the breadcrumb changes: named, it FLIP-glides to its new
-   offset inside the same transition that moves the cards, instead of
-   double-imaging in the root cross-fade. The name is shared with the Empty
-   Trash pill — the two occupy the same "contextual action" slot and never
-   render together, so swapping views morphs one pill into the other. */
-.sort-trigger {
+/* The fused location pill — the breadcrumb's current segment ("全部笔记" at
+   the root, the deepest tag inside one) and the view-options dropdown
+   trigger are one control: label + caret. Its view-transition-name is what
+   choreographs every layout change around it: picking a tag FLIP-glides the
+   pill to its new offset (label cross-fading en route) inside the same
+   transition that moves the cards, instead of double-imaging in the root
+   cross-fade. The name is shared with the Empty Trash pill and the select
+   counter — the three occupy the same "contextual action" slot and never
+   render together, so swapping states morphs one pill into the next. */
+.loc-menu { min-width: 0; }
+.loc-menu .menu-trigger-slot { display: flex; min-width: 0; }
+.loc-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 5px 7px 5px 10px;
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 700;
+  border-radius: var(--r-sm);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+  view-transition-name: topbar-action;
+}
+/* At the root the pill doubles as the view title, so it sits a size up. */
+.loc-trigger.is-root { font-size: 1.02rem; }
+@media (hover: hover) {
+  .loc-trigger:hover { background: var(--wash); }
+  .loc-trigger:hover .loc-caret { color: var(--ink-soft); }
+}
+.loc-trigger:active { transform: scale(0.97); }
+.loc-trigger.is-open { background: var(--wash-strong); }
+.loc-label { min-width: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loc-caret { flex: none; margin-top: 1px; color: var(--muted); transition: transform 0.3s var(--ease-pop), color var(--t) var(--ease); }
+.loc-trigger.is-open .loc-caret { transform: rotate(180deg); color: var(--ink-soft); }
+.loc-panel { min-width: 214px; }
+
+/* ---- Multi-select toolbar (replaces the breadcrumb while selecting) ---- */
+.select-bar { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; }
+/* Live counter. Carries topbar-action, so entering select mode morphs the
+   location pill into it; the digits themselves roll on the split-flap. */
+.select-count {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  padding: 5px 12px;
+  color: var(--primary-dark);
+  background: var(--primary-tint);
+  border: 1px solid var(--primary-tint-strong);
+  border-radius: var(--r-pill);
+  font-size: 0.86rem;
+  font-weight: 700;
+  white-space: nowrap;
+  view-transition-name: topbar-action;
+}
+.select-count-num { font-weight: 800; }
+.select-pill {
+  flex: none;
   padding: 5px 11px;
   color: var(--muted);
   font-size: 0.84rem;
   font-weight: 700;
+  white-space: nowrap;
   border-radius: var(--r-pill);
+  animation: crumb-in 0.5s var(--ease-out) both;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
-  view-transition-name: topbar-action;
 }
-@media (hover: hover) { .sort-trigger:hover { background: var(--wash); color: var(--ink); } }
-.sort-trigger:active { transform: scale(0.95); }
-.sort-trigger.is-open { background: var(--wash-strong); color: var(--ink); }
-.sort-menu .action-menu { min-width: 196px; }
+@media (hover: hover) { .select-pill:hover:not(:disabled) { background: var(--wash); color: var(--ink); } }
+.select-pill:active:not(:disabled) { transform: scale(0.95); }
+/* Batch delete — the select-mode twin of Empty Trash: same ghost pill, same
+   two-step arm, its own view-transition-name so arming morphs the width. */
+.select-delete {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  color: var(--danger);
+  font-size: 0.84rem;
+  font-weight: 700;
+  white-space: nowrap;
+  border-radius: var(--r-pill);
+  animation: crumb-in 0.5s var(--ease-out) both;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
+  view-transition-name: select-delete;
+}
+@media (hover: hover) { .select-delete:hover:not(:disabled) { background: var(--danger-tint); } }
+.select-delete:active:not(:disabled) { transform: scale(0.95); }
+.select-delete.is-confirm { color: #fff; background: var(--danger); box-shadow: var(--shadow-sm); }
+@media (hover: hover) { .select-delete.is-confirm:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 88%, black); } }
+/* The pills trail in behind the morphing counter, breadcrumb-style. */
+.select-bar > :nth-child(2) { animation-delay: 0.05s; }
+.select-bar > :nth-child(3) { animation-delay: 0.09s; }
+.select-bar > :nth-child(4) { animation-delay: 0.13s; }
 
 /* Day filter chip. At most one renders at a time, so the view-transition-name
    stays unique: it glides along when the breadcrumb before it changes width
@@ -1370,11 +1460,11 @@ button.crumb:active { background: var(--wash-strong); }
 @media (hover: hover) { .searchbox-clear:hover { background: var(--wash-strong); color: var(--ink); } }
 .searchbox-clear:active { transform: scale(0.85); }
 
-/* Empty Trash — the trash view's counterpart of the sort pill: identical
+/* Empty Trash — the trash view's counterpart of the location pill: identical
    ghost geometry, danger-tinted. It carries the shared topbar-action
-   view-transition-name (see .sort-trigger), so it arrives by morphing out of
-   the sort pill rather than popping in; arming (label/width change) rides a
-   view transition too, so the pill stretches smoothly. */
+   view-transition-name (see .loc-trigger), so it arrives by morphing out of
+   the location pill rather than popping in; arming (label/width change)
+   rides a view transition too, so the pill stretches smoothly. */
 .trash-empty-button {
   display: inline-flex;
   align-items: center;
@@ -1658,10 +1748,74 @@ button.crumb:active { background: var(--wash-strong); }
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-xs);
-  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
+  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), background var(--t-slow) var(--ease);
 }
 .memo-card:hover { box-shadow: var(--shadow-sm); }
 .memo-card.is-pinned { border-color: color-mix(in srgb, var(--primary) 32%, var(--line)); }
+
+/* ---- Multi-select ---- */
+@media (hover: hover) { .memo-card.is-selecting:hover { border-color: color-mix(in srgb, var(--primary) 30%, var(--line)); } }
+.memo-card.is-selected {
+  border-color: color-mix(in srgb, var(--primary) 52%, var(--line));
+  background: color-mix(in srgb, var(--primary) 3.5%, var(--surface));
+  box-shadow: 0 0 0 3px var(--ring);
+}
+/* One transparent surface above everything in the card: any tap toggles. */
+.memo-select-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border-radius: inherit;
+  animation: fade-in 0.2s var(--ease) both;
+  -webkit-tap-highlight-color: transparent;
+}
+.memo-select-overlay:focus-visible { background: var(--wash); }
+/* The ⋯ trigger and the check ring live stacked in one 26px cell — swapping
+   them never shifts layout. */
+.memo-tool-slot { display: grid; width: 26px; height: 26px; place-items: center; }
+.memo-tool-slot > * { grid-area: 1 / 1; }
+.memo-select-box {
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  color: var(--primary-ink);
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  opacity: 0;
+  transform: scale(0.4);
+  pointer-events: none;
+  transition:
+    opacity 0.15s var(--ease), transform 0.15s var(--ease),
+    background var(--t) var(--ease), border-color var(--t) var(--ease);
+}
+/* Enter: pop on the overshoot curve (delayed per row, see stagger below);
+   the fill/tick react instantly through the base transition. */
+.memo-card.is-selecting .memo-select-box {
+  opacity: 1;
+  transform: none;
+  animation: select-box-in 0.38s var(--ease-pop) backwards;
+  animation-delay: var(--sbd, 0s);
+}
+.memo-card.is-selected .memo-select-box { background: var(--primary); border-color: var(--primary); }
+.memo-select-box svg { transform: scale(0); transition: transform 0.24s var(--ease-pop); }
+.memo-card.is-selected .memo-select-box svg { transform: none; }
+/* The ⋯ menu retires while selecting; visibility waits for the fade so the
+   swap reads as a cross-morph, and focus can never land on the hidden button. */
+.memo-card.is-selecting .memo-menu-trigger {
+  opacity: 0 !important;
+  transform: scale(0.5);
+  visibility: hidden;
+  transition: opacity 0.15s var(--ease), transform 0.15s var(--ease), visibility 0s 0.15s;
+}
+/* Checkbox entrance ripples down the first screenful of cards. */
+.memo-feed.is-select .memo-slot:nth-child(2) { --sbd: 0.035s; }
+.memo-feed.is-select .memo-slot:nth-child(3) { --sbd: 0.07s; }
+.memo-feed.is-select .memo-slot:nth-child(4) { --sbd: 0.105s; }
+.memo-feed.is-select .memo-slot:nth-child(5) { --sbd: 0.14s; }
+.memo-feed.is-select .memo-slot:nth-child(6) { --sbd: 0.175s; }
+.memo-feed.is-select .memo-slot:nth-child(7) { --sbd: 0.21s; }
+.memo-feed.is-select .memo-slot:nth-child(n + 8) { --sbd: 0.245s; }
 
 .memo-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; }
 .memo-time { color: var(--muted); font-size: 0.8rem; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -2078,8 +2232,6 @@ button.memo-tag:active {
   }
   .drawer-backdrop.is-closing { animation: fade-out 0.24s var(--ease) both; }
   .drawer-toggle { display: inline-grid; }
-  .breadcrumb-root { display: none; }
-  .breadcrumb-root.is-current { display: inline-block; }
 }
 
 @media (max-width: 720px) {
@@ -2095,11 +2247,15 @@ button.memo-tag:active {
   .memo-images { grid-template-columns: repeat(2, 1fr); }
   .memo-images.count-1 { grid-template-columns: minmax(0, 1fr); }
   .lightbox { padding: 16px; }
-  /* Both action pills go icon-only; the armed question still shows its text. */
+  /* The action pill goes icon-only; the armed question still shows its text. */
   .trash-empty-button span { display: none; }
   .trash-empty-button.is-confirm span { display: inline; }
-  .sort-trigger span { display: none; }
   .crumb { max-width: 6.5em; padding: 5px 7px; }
+  .loc-label { max-width: 6.5em; }
+  /* Selection mode needs the row for its pills — search yields the corner. */
+  .topbar:has(.select-bar) .searchbox { display: none; }
+  .select-delete span { display: none; }
+  .select-delete.is-confirm span { display: inline; }
 }
 
 /* =========================================================================

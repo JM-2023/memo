@@ -19,8 +19,8 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   }
   const current = String(body.current ?? "");
   const next = String(body.next ?? "");
-  if (!/^\d{4}$/.test(next)) {
-    return apiError(400, "PASSCODE_INVALID", "Passcode must be 4 digits");
+  if (!/^\d{4,18}$/.test(next)) {
+    return apiError(400, "PASSCODE_INVALID", "Passcode must be 4-18 digits");
   }
 
   try {

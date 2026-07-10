@@ -4,7 +4,7 @@ MEMO is a personal, single-owner note app built with Cloudflare Pages, Pages Fun
 
 ## Features
 
-- **Passcode gate:** protect the notebook with a 4-digit passcode. The salted PBKDF2 hash is stored in D1, and authenticated sessions use an HMAC-signed cookie. Data and stored-image APIs return `401` until the session is authenticated.
+- **Passcode gate:** protect the notebook with a numeric passcode (4–18 digits). The salted PBKDF2 hash is stored in D1, and authenticated sessions use an HMAC-signed cookie. Data and stored-image APIs return `401` until the session is authenticated.
 - **Dashboard and statistics:** browse memo, tag, and day totals; weekly, monthly, and yearly memo and character counts; a horizontal heatmap that follows the This week / This month / This year selector (week strip, wall-calendar month, GitHub-style year band) and pages backwards period by period; and a detailed yearly statistics view with monthly activity, weekday and time-of-day distributions, and streaks. All timestamps are stored in UTC and rendered in the viewer's local time zone.
 - **Hierarchical tags:** organize notes with paths such as `#parent/child`, navigate through breadcrumb segments, and pin, rename, or remove tags. Tag changes are rewritten in the affected memos on the server and then synchronized to other devices.
 - **Writing and media:** search and sort by created or edited time, use tag autocomplete, and add images by selecting, pasting, or dragging files. External image links in Markdown or direct image URLs are previewed without using D1 storage.
@@ -34,7 +34,7 @@ Set a long, random `SESSION_SECRET` in `.dev.vars` before starting the local Pag
 
 To enable content encryption at rest locally, also set `MEMO_ENC_KEY` in `.dev.vars` (64 hex characters, e.g. from `openssl rand -hex 32`). In production, set it once with `wrangler pages secret put MEMO_ENC_KEY`. **Never change the key after data exists** — sealed rows only open with the key that sealed them; a lost or rotated key makes existing memo text unreadable.
 
-On the first visit, the app asks you to create a 4-digit passcode. The passcode hash is stored in the local D1 database and is not reset when the development server restarts.
+On the first visit, the app asks you to create a passcode of 4–18 digits. The passcode hash is stored in the local D1 database and is not reset when the development server restarts.
 
 ## First deployment to Cloudflare
 
@@ -74,7 +74,7 @@ The Pages project must exist before Pages secrets can be added. For a new Cloudf
    npx wrangler pages secret put SESSION_SECRET --project-name your-pages-project
    ```
 
-6. Optionally pre-seed the 4-digit passcode. Without this secret, the first production visit shows the create-passcode screen:
+6. Optionally pre-seed the passcode. Without this secret, the first production visit shows the create-passcode screen:
 
    ```bash
    npm run hash-password -- "1234"
@@ -101,7 +101,7 @@ Subsequent releases only need the migrations step when new migration files exist
 - With `MEMO_ENC_KEY` set, memo content is encrypted at rest with AES-256-GCM (`enc1:` prefix in the `content` column) and decrypted only at the API boundary. The key lives in the deployment environment, so this protects the database layer (dumps, backups, the D1 console), not against someone who controls the Cloudflare account itself. Without the secret, the app runs in plaintext mode.
 - The per-device IndexedDB snapshot is sealed with a random server-held key delivered only on authenticated responses; only the numeric sync cursor is stored in the clear. An expired session leaves the local cache unreadable, and an explicit logout deletes it.
 - `.dev.vars` contains secrets and is ignored by Git. Never commit it, session secrets, passcode hashes, or exported notebook data.
-- A 4-digit passcode is intended as a lightweight gate for a personal notebook. For a publicly discoverable or higher-risk deployment, add stronger edge access control such as Cloudflare Access or an equivalent authentication layer.
+- A numeric passcode is intended as a lightweight gate for a personal notebook. For a publicly discoverable or higher-risk deployment, add stronger edge access control such as Cloudflare Access or an equivalent authentication layer.
 
 ## Images and Cloudflare Free plan limits
 

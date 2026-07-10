@@ -8,6 +8,9 @@ interface MenuProps {
   children: (close: () => void) => ReactNode;
   align?: "left" | "right";
   className?: string;
+  /** Extra class on the floating panel itself — the only way to style a
+      portaled panel, which renders outside `.menu-root`. */
+  panelClassName?: string;
   /**
    * Render the panel in a body portal with fixed positioning — needed when
    * the trigger lives inside an overflow container (the sidebar tag list)
@@ -33,7 +36,7 @@ interface PortalPos {
  * Closing holds the panel one beat in a "closing" phase so it can play the
  * reverse morph before unmounting.
  */
-export function Menu({ trigger, children, align = "right", className, portal = false }: MenuProps) {
+export function Menu({ trigger, children, align = "right", className, panelClassName, portal = false }: MenuProps) {
   const [phase, setPhase] = useState<"closed" | "open" | "closing">("closed");
   const [pos, setPos] = useState<PortalPos | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -123,7 +126,7 @@ export function Menu({ trigger, children, align = "right", className, portal = f
     phase !== "closed" ? (
       <div
         ref={panelRef}
-        className={`action-menu align-${align}${portal ? " is-portal" : ""}${phase === "closing" ? " is-closing" : ""}`}
+        className={`action-menu align-${align}${portal ? " is-portal" : ""}${phase === "closing" ? " is-closing" : ""}${panelClassName ? ` ${panelClassName}` : ""}`}
         style={panelStyle}
         role="menu"
       >

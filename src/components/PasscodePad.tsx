@@ -1,11 +1,12 @@
-import { Delete } from "lucide-react";
+import { Check, Delete } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../lib/i18n";
 
-const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "clear", "0", "delete"] as const;
-type PadKey = (typeof keys)[number];
+const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "delete", "0", "submit"] as const;
+type PadKey = (typeof keys)[number] | "clear";
 
-export const PIN_LENGTH = 4;
+export const MIN_PIN_LENGTH = 4;
+export const MAX_PIN_LENGTH = 18;
 
 interface PasscodePadProps {
   icon: ReactNode;
@@ -21,7 +22,9 @@ interface PasscodePadProps {
 }
 
 /**
- * The 4-digit pad shared by login, first-run setup, and change-passcode. It
+ * The digit pad shared by login, first-run setup, and change-passcode. It
+ * accepts 4–18 digits and submits through ✓/Enter, so the entry never reveals
+ * the expected length; the dots row only mirrors how much was typed. The pad
  * owns only the digit buffer; the owner drives titles, error shakes, and when
  * the entry resets. Callbacks are read through refs so the window keydown
  * listener never acts through a stale step closure.
@@ -52,6 +55,12 @@ export function PasscodePad({ icon, title, subtitle, error, busy, entryKey = 0, 
 
   function press(key: PadKey) {
     if (busyRef.current) return;
+    if (key === "submit") {
+      if (valueRef.current.length < MIN_PIN_LENGTH) return;
+      onInputRef.current?.();
+      onCompleteRef.current(valueRef.current);
+      return;
+    }
     onInputRef.current?.();
     if (key === "clear") {
       update("");
@@ -61,12 +70,8 @@ export function PasscodePad({ icon, title, subtitle, error, busy, entryKey = 0, 
       update(valueRef.current.slice(0, -1));
       return;
     }
-    if (valueRef.current.length >= PIN_LENGTH) return;
-    const next = `${valueRef.current}${key}`;
-    update(next);
-    if (next.length === PIN_LENGTH) {
-      onCompleteRef.current(next);
-    }
+    if (valueRef.current.length >= MAX_PIN_LENGTH) return;
+    update(`${valueRef.current}${key}`);
   }
 
   const pressRef = useRef(press);
@@ -78,6 +83,8 @@ export function PasscodePad({ icon, title, subtitle, error, busy, entryKey = 0, 
         pressRef.current(event.key as PadKey);
       } else if (event.key === "Backspace") {
         pressRef.current("delete");
+      } else if (event.key === "Enter") {
+        pressRef.current("submit");
       } else if (event.key === "Escape") {
         pressRef.current("clear");
       }
@@ -95,27 +102,13 @@ export function PasscodePad({ icon, title, subtitle, error, busy, entryKey = 0, 
       </div>
 
       <div className={`pin-dots${error ? " error" : ""}`} aria-hidden="true">
-        {Array.from({ length: PIN_LENGTH }).map((_, index) => (
-          <span key={index} className={index < value.length ? "filled" : ""} />
+        {Array.from({ length: value.length }).map((_, index) => (
+          <span key={index} />
         ))}
       </div>
 
       <div className="keypad">
         {keys.map((key) => {
-          if (key === "clear") {
-            return (
-              <button
-                key={key}
-                type="button"
-                className="keypad-action"
-                onClick={() => press(key)}
-                disabled={busy || !value}
-                aria-label={tr("Clear", "清空")}
-              >
-                C
-              </button>
-            );
-          }
           if (key === "delete") {
             return (
               <button
@@ -127,6 +120,20 @@ export function PasscodePad({ icon, title, subtitle, error, busy, entryKey = 0, 
                 aria-label={tr("Delete", "删除")}
               >
                 <Delete size={22} aria-hidden="true" />
+              </button>
+            );
+          }
+          if (key === "submit") {
+            return (
+              <button
+                key={key}
+                type="button"
+                className="keypad-action confirm"
+                onClick={() => press(key)}
+                disabled={busy || value.length < MIN_PIN_LENGTH}
+                aria-label={tr("Confirm", "确认")}
+              >
+                <Check size={24} aria-hidden="true" />
               </button>
             );
           }

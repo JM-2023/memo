@@ -7,7 +7,7 @@ interface SetupBody {
 }
 
 function validPin(value: string): boolean {
-  return /^\d{4}$/.test(value);
+  return /^\d{4,18}$/.test(value);
 }
 
 export async function onRequestPost(context: AppContext): Promise<Response> {
@@ -34,7 +34,7 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   }
   const password = String(body.password ?? "");
   if (!validPin(password)) {
-    return apiError(400, "PASSCODE_INVALID", "Passcode must be 4 digits");
+    return apiError(400, "PASSCODE_INVALID", "Passcode must be 4-18 digits");
   }
 
   try {

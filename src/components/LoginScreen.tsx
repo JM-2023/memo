@@ -72,9 +72,9 @@ export function LoginScreen({ needsSetup, onLogin, onSetup }: LoginScreenProps) 
     subtitleOverride ??
     (needsSetup
       ? step === "enter"
-        ? tr("First time here? Create a 4-digit passcode.", "首次使用，请设置 4 位数字密码")
+        ? tr("First time here? Create a passcode of 4 to 18 digits.", "首次使用，请设置 4-18 位数字密码")
         : tr("Enter the passcode one more time.", "请再输入一次刚才的密码")
-      : tr("Enter your 4-digit passcode to unlock your memos.", "输入 4 位密码解锁你的笔记"));
+      : tr("Enter your passcode to unlock your memos.", "输入密码解锁你的笔记"));
 
   return (
     <div className="login-screen">

@@ -1,4 +1,4 @@
-import { ArrowDownWideNarrow, Check, ChevronRight, Home, Loader2, Menu as MenuIcon, NotebookPen, Search, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Home, ListChecks, Loader2, Menu as MenuIcon, NotebookPen, Search, Trash2, X } from "lucide-react";
 import { memo as reactMemo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { ChangePasscode } from "./components/ChangePasscode";
@@ -10,9 +10,10 @@ import { LoginScreen } from "./components/LoginScreen";
 import { MemoCard } from "./components/MemoCard";
 import { Menu } from "./components/Menu";
 import { PromptDialog } from "./components/PromptDialog";
+import { RollingText } from "./components/RollingText";
 import { Sidebar } from "./components/Sidebar";
 import { StatsModal } from "./components/StatsModal";
-import { useTip } from "./components/Tip";
+import { SwapText } from "./components/SwapText";
 import {
   AuthRequiredError,
   bootstrap,
@@ -109,6 +110,7 @@ interface FeedHandlers {
   purge: (memo: Memo) => void;
   pickTag: (path: string) => void;
   openImage: (items: LightboxItem[], index: number) => void;
+  toggleSelect: (memo: Memo) => void;
 }
 
 interface FeedItemProps {
@@ -117,6 +119,8 @@ interface FeedItemProps {
   knownTags: string[];
   editing: boolean;
   savingEdit: boolean;
+  selecting: boolean;
+  selected: boolean;
   vtName: string | undefined;
   /** Read once at mount; a stable getter keeps the memo comparison clean. */
   getEntering: () => boolean;
@@ -132,7 +136,7 @@ interface FeedItemProps {
  * deliberately left out of the equality check.
  */
 const FeedItem = reactMemo(
-  function FeedItem({ memo, variant, knownTags, editing, savingEdit, vtName, getEntering, delay, handlers }: FeedItemProps) {
+  function FeedItem({ memo, variant, knownTags, editing, savingEdit, selecting, selected, vtName, getEntering, delay, handlers }: FeedItemProps) {
     return (
       <MemoSlot vtName={vtName} entering={getEntering()} delay={delay}>
         <MemoCard
@@ -141,6 +145,9 @@ const FeedItem = reactMemo(
           knownTags={knownTags}
           editing={editing}
           savingEdit={savingEdit}
+          selecting={selecting}
+          selected={selected}
+          onToggleSelect={() => handlers.toggleSelect(memo)}
           onStartEdit={() => handlers.startEdit(memo.id)}
           onCancelEdit={handlers.cancelEdit}
           onSaveEdit={(data) => handlers.saveEdit(memo, data)}
@@ -161,13 +168,14 @@ const FeedItem = reactMemo(
     prev.knownTags === next.knownTags &&
     prev.editing === next.editing &&
     prev.savingEdit === next.savingEdit &&
+    prev.selecting === next.selecting &&
+    prev.selected === next.selected &&
     prev.vtName === next.vtName &&
     prev.handlers === next.handlers
 );
 
 export default function App() {
-  const { count, errorMessage, locale, tr } = useI18n();
-  const tip = useTip();
+  const { count, errorMessage, language, locale, tr } = useI18n();
   const sortOptions: { key: SortKey; label: string }[] = useMemo(
     () => [
       { key: "created-desc", label: tr("Created · Newest first", "创建时间 · 从新到旧") },
@@ -195,6 +203,15 @@ export default function App() {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  // Multi-select mode: entered from the location dropdown, exits via 取消 /
+  // Escape / view switches / a fully successful batch delete.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  // Two-step batch delete, mirroring Empty Trash: arm, then fire.
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
+  const confirmBatchDeleteRef = useRef(false);
+  confirmBatchDeleteRef.current = confirmBatchDelete;
+  const [batchBusy, setBatchBusy] = useState(false);
   const [renameTagTarget, setRenameTagTarget] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   // Two-step Empty Trash: first click arms the button, second click fires.
@@ -382,6 +399,7 @@ export default function App() {
   );
 
   const activeMemos = useMemo(() => memos.filter((memo) => !memo.deletedAt), [memos]);
+  const activeMemoIds = useMemo(() => new Set(activeMemos.map((memo) => memo.id)), [activeMemos]);
   const trashedMemos = useMemo(
     () => memos.filter((memo) => memo.deletedAt).sort((a, b) => (b.deletedAt ?? "").localeCompare(a.deletedAt ?? "")),
     [memos]
@@ -538,8 +556,73 @@ export default function App() {
     changeFeed(() => {
       setView("trash");
       setEditingId(null);
+      // Same flush: the "已选 N 条" pill hands topbar-action to the Empty
+      // Trash pill inside one morph instead of two competing transitions.
+      setSelectMode(false);
+      setSelected(new Set());
+      setConfirmBatchDelete(false);
     });
   }, [view, changeFeed]);
+
+  /**
+   * Select mode swaps the whole breadcrumb row for the selection toolbar; a
+   * view transition carries the swap — the fused location pill morphs into
+   * the "已选 N 条" counter (they share view-transition-name: topbar-action)
+   * while the card checkboxes pop in via their own CSS transitions.
+   */
+  const enterSelectMode = useCallback(() => {
+    withViewTransition(() =>
+      flushSync(() => {
+        setSelectMode(true);
+        setSelected(new Set());
+        setConfirmBatchDelete(false);
+        setEditingId(null);
+      })
+    );
+  }, []);
+
+  const exitSelectMode = useCallback(() => {
+    withViewTransition(() =>
+      flushSync(() => {
+        setSelectMode(false);
+        setSelected(new Set());
+        setConfirmBatchDelete(false);
+      })
+    );
+  }, []);
+
+  /**
+   * Selection changes are instant setState — a view transition per card tap
+   * would throttle rapid toggling. The one exception: while the delete pill
+   * is armed, any selection change disarms it, and THAT label/width change
+   * deserves the same morph arming got.
+   */
+  const mutateSelection = useCallback((apply: () => void) => {
+    if (confirmBatchDeleteRef.current) {
+      withViewTransition(() =>
+        flushSync(() => {
+          setConfirmBatchDelete(false);
+          apply();
+        })
+      );
+    } else {
+      apply();
+    }
+  }, []);
+
+  const toggleSelect = useCallback(
+    (memo: Memo) => {
+      mutateSelection(() =>
+        setSelected((current) => {
+          const next = new Set(current);
+          if (next.has(memo.id)) next.delete(memo.id);
+          else next.add(memo.id);
+          return next;
+        })
+      );
+    },
+    [mutateSelection]
+  );
 
   async function handleLogin(pin: string) {
     await login(pin);
@@ -566,6 +649,8 @@ export default function App() {
     setActiveDay(null);
     setQuery("");
     setView("memos");
+    setSelectMode(false);
+    setSelected(new Set());
     setPhase("login");
   }
 
@@ -680,6 +765,58 @@ export default function App() {
     }
   }
 
+  /**
+   * Batch delete rides the same removal choreography as a single delete: one
+   * view transition in which every selected card recedes while the survivors
+   * (and the selection toolbar collapsing back into the breadcrumb) glide.
+   */
+  async function handleBatchTrash() {
+    const ids = [...selected].filter((id) => activeMemoIds.has(id));
+    if (ids.length === 0 || batchBusy) return;
+    setBatchBusy(true);
+    try {
+      const results = await Promise.allSettled(ids.map((id) => trashMemo(id)));
+      const changed: Memo[] = [];
+      const failedIds: string[] = [];
+      let authLost = false;
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") changed.push(result.value.memo);
+        else {
+          failedIds.push(ids[index]);
+          if (result.reason instanceof AuthRequiredError) authLost = true;
+        }
+      });
+      if (changed.length > 0) {
+        withViewTransition(() =>
+          flushSync(() => {
+            upsertMemos(changed, []);
+            if (failedIds.length === 0) {
+              // Job done — leave select mode in the same breath.
+              setSelectMode(false);
+              setSelected(new Set());
+            } else {
+              // Keep only the failures selected so a retry is one tap away.
+              setSelected(new Set(failedIds));
+            }
+          })
+        );
+        void runSync();
+        notifyPeers();
+      }
+      if (authLost) {
+        dropToLogin();
+        return;
+      }
+      if (failedIds.length > 0) {
+        showToast(tr(`Couldn’t delete ${count(failedIds.length, "memo")}`, `有 ${count(failedIds.length, "memo")} 删除失败`), "error");
+      } else {
+        showToast(tr(`Moved ${count(changed.length, "memo")} to Trash`, `已将 ${count(changed.length, "memo")} 移入回收站`));
+      }
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
   // Latest closures behind one stable identity — FeedItem's memoization
   // survives every App re-render. (The handle* function declarations below
   // are hoisted, so assigning here each render is safe.)
@@ -690,7 +827,8 @@ export default function App() {
     trash: handleTrash,
     restore: handleRestore,
     purge: handlePurge,
-    pickTag
+    pickTag,
+    toggleSelect
   });
   feedActionsRef.current = {
     saveEdit: handleSaveEdit,
@@ -699,7 +837,8 @@ export default function App() {
     trash: handleTrash,
     restore: handleRestore,
     purge: handlePurge,
-    pickTag
+    pickTag,
+    toggleSelect
   };
   const getEntering = useCallback(() => !enterSuppressRef.current, []);
   const feedHandlers = useMemo<FeedHandlers>(
@@ -713,7 +852,8 @@ export default function App() {
       restore: (memo) => void feedActionsRef.current.restore(memo),
       purge: (memo) => void feedActionsRef.current.purge(memo),
       pickTag: (path) => feedActionsRef.current.pickTag(path),
-      openImage: (items, index) => setLightbox({ items, index })
+      openImage: (items, index) => setLightbox({ items, index }),
+      toggleSelect: (memo) => feedActionsRef.current.toggleSelect(memo)
     }),
     []
   );
@@ -736,6 +876,43 @@ export default function App() {
   useEffect(() => {
     if (view !== "trash") setConfirmEmptyTrash(false);
   }, [view]);
+
+  /** Batch-delete arming: same pill-morph language as Empty Trash. */
+  const setBatchDeleteArm = useCallback((value: boolean) => {
+    withViewTransition(() => flushSync(() => setConfirmBatchDelete(value)));
+  }, []);
+  useEffect(() => {
+    if (!confirmBatchDelete) return;
+    const timer = window.setTimeout(() => setBatchDeleteArm(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [confirmBatchDelete, setBatchDeleteArm]);
+
+  // Escape backs out of select mode (view switches already clear it inside
+  // their own transitions; this is the keyboard path).
+  useEffect(() => {
+    if (!selectMode) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") exitSelectMode();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectMode, exitSelectMode]);
+
+  // Keep the selection honest when memos vanish underneath it (a sibling tab
+  // deleting synced memos, an import purge): drop ids that no longer exist.
+  useEffect(() => {
+    if (!selectMode) return;
+    setSelected((current) => {
+      let pruned: Set<string> | null = null;
+      for (const id of current) {
+        if (!activeMemoIds.has(id)) {
+          pruned ??= new Set(current);
+          pruned.delete(id);
+        }
+      }
+      return pruned ?? current;
+    });
+  }, [selectMode, activeMemoIds]);
 
   async function handlePinTag(path: string, pinned: boolean) {
     try {
@@ -871,7 +1048,24 @@ export default function App() {
     );
   }
 
-  const sortLabel = sortOptions.find((option) => option.key === sortKey)?.label ?? "";
+  const allVisibleSelected = feedMemos.length > 0 && feedMemos.every((memo) => selected.has(memo.id));
+
+  function toggleSelectAll() {
+    mutateSelection(() => {
+      if (allVisibleSelected) setSelected(new Set());
+      else setSelected((current) => new Set([...current, ...feedMemos.map((memo) => memo.id)]));
+    });
+  }
+
+  function handleBatchDeleteClick() {
+    if (batchBusy) return;
+    if (!confirmBatchDelete) {
+      if (selected.size > 0) setBatchDeleteArm(true);
+      return;
+    }
+    setConfirmBatchDelete(false);
+    void handleBatchTrash();
+  }
 
   return (
     <div className={`app-shell${reveal ? " first-reveal" : ""}`}>
@@ -944,52 +1138,115 @@ export default function App() {
                   {tr("Trash", "回收站")}
                 </span>
               </nav>
-            ) : activeTag ? (
-              <Crumbs path={activeTag} onHome={showAll} onPick={(path) => pickTag(path)} />
+            ) : selectMode ? (
+              // Multi-select toolbar. The count pill inherits the fused
+              // pill's view-transition-name, so entering the mode morphs the
+              // location label into the live counter; the sibling pills
+              // cascade in with the breadcrumb language.
+              <div className="select-bar">
+                <span className="select-count" aria-live="polite">
+                  {language === "zh-CN" ? (
+                    <>
+                      已选 <RollingText value={selected.size} className="select-count-num" /> 条
+                    </>
+                  ) : (
+                    <>
+                      <RollingText value={selected.size} className="select-count-num" /> selected
+                    </>
+                  )}
+                </span>
+                <button type="button" className="select-pill" disabled={feedMemos.length === 0} onClick={toggleSelectAll}>
+                  <SwapText id={allVisibleSelected ? "clear" : "all"}>
+                    {allVisibleSelected ? tr("Clear", "清除") : tr("Select all", "全选")}
+                  </SwapText>
+                </button>
+                <button
+                  type="button"
+                  className={`select-delete${confirmBatchDelete ? " is-confirm" : ""}`}
+                  disabled={selected.size === 0 || batchBusy}
+                  aria-label={
+                    confirmBatchDelete
+                      ? tr(`Delete ${count(selected.size, "memo")}?`, `删除 ${count(selected.size, "memo")}？`)
+                      : tr("Delete selected memos", "删除所选笔记")
+                  }
+                  onClick={handleBatchDeleteClick}
+                  onBlur={() => setConfirmBatchDelete(false)}
+                >
+                  {batchBusy ? <Loader2 size={14} className="spin" aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
+                  <span>
+                    {batchBusy
+                      ? tr("Deleting…", "删除中…")
+                      : confirmBatchDelete
+                        ? tr(`Delete ${count(selected.size, "memo")}?`, `删除 ${count(selected.size, "memo")}？`)
+                        : tr("Delete", "删除")}
+                  </span>
+                </button>
+                <button type="button" className="select-pill select-exit" onClick={exitSelectMode}>
+                  {tr("Cancel", "取消")}
+                </button>
+              </div>
             ) : (
-              <button type="button" className={`breadcrumb-root${filtersActive ? "" : " is-current"}`} onClick={showAll}>
-                {tr("All memos", "全部笔记")}
-              </button>
-            )}
-            {view === "memos" ? (
-              <Menu
-                align="left"
-                className="sort-menu"
-                trigger={(open) => (
-                  <button
-                    type="button"
-                    className={`sort-trigger${open ? " is-open" : ""}`}
-                    aria-label={tr("Sort options", "排序方式")}
-                    onMouseEnter={(event) => tip.show(event.currentTarget, { text: sortLabel })}
-                    onMouseLeave={tip.hide}
-                  >
-                    <ArrowDownWideNarrow size={14} aria-hidden="true" />
-                    <span>{tr("Sort", "排序")}</span>
-                  </button>
-                )}
-              >
-                {(close) => (
-                  <>
-                    {sortOptions.map((option) => (
+              // The location trail. Its last stop — "全部笔记" at the root, the
+              // current tag inside one — IS the dropdown trigger: label and
+              // caret fused into one pill that the topbar-action transition
+              // glides between breadcrumb layouts.
+              <Crumbs path={activeTag} onHome={showAll} onPick={(path) => pickTag(path)}>
+                <Menu
+                  align="left"
+                  portal
+                  className="loc-menu"
+                  panelClassName="loc-panel"
+                  trigger={(open) => (
+                    <button
+                      type="button"
+                      className={`loc-trigger${open ? " is-open" : ""}${activeTag ? "" : " is-root"}`}
+                      aria-haspopup="menu"
+                      aria-expanded={open}
+                      aria-label={tr("View options: sort and select", "视图选项：排序与多选")}
+                    >
+                      <span className="loc-label">{activeTag ? activeTag.split("/").at(-1) : tr("All memos", "全部笔记")}</span>
+                      <ChevronDown size={14} className="loc-caret" aria-hidden="true" />
+                    </button>
+                  )}
+                >
+                  {(close) => (
+                    <>
+                      <span className="action-menu__title" role="presentation">
+                        {tr("Sort by", "排序方式")}
+                      </span>
+                      {sortOptions.map((option) => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={option.key === sortKey}
+                          className={option.key === sortKey ? "is-selected" : ""}
+                          onClick={() => {
+                            close();
+                            if (option.key !== sortKey) changeFeed(() => setSortKey(option.key));
+                          }}
+                        >
+                          {option.label}
+                          {option.key === sortKey ? <Check size={15} className="menu-check" aria-hidden="true" /> : null}
+                        </button>
+                      ))}
+                      <span className="action-menu__sep" />
                       <button
-                        key={option.key}
                         type="button"
-                        role="menuitemradio"
-                        aria-checked={option.key === sortKey}
-                        className={option.key === sortKey ? "is-selected" : ""}
+                        role="menuitem"
                         onClick={() => {
                           close();
-                          if (option.key !== sortKey) changeFeed(() => setSortKey(option.key));
+                          enterSelectMode();
                         }}
                       >
-                        {option.label}
-                        {option.key === sortKey ? <Check size={15} className="menu-check" aria-hidden="true" /> : null}
+                        <ListChecks size={16} aria-hidden="true" />
+                        {tr("Select memos", "多选笔记")}
                       </button>
-                    ))}
-                  </>
-                )}
-              </Menu>
-            ) : null}
+                    </>
+                  )}
+                </Menu>
+              </Crumbs>
+            )}
             {view === "trash" && trashedMemos.length > 0 ? (
               // Empty Trash lives in the same slot as Sort (and shares its
               // view-transition-name), so swapping views morphs one pill into
@@ -1020,7 +1277,7 @@ export default function App() {
                 </span>
               </button>
             ) : null}
-            {view === "memos" && activeDay ? (
+            {view === "memos" && !selectMode && activeDay ? (
               <span key={`day-${activeDay}`} className="filter-chip">
                 {formatDayLabel(activeDay, locale)}
                 <button type="button" onClick={() => pickDay(null)} aria-label={tr("Clear date filter", "清除日期筛选")}>
@@ -1064,7 +1321,10 @@ export default function App() {
           </div>
         ) : null}
 
-        <section className="memo-feed" aria-label={view === "trash" ? tr("Trash", "回收站") : tr("Memo list", "笔记列表")}>
+        <section
+          className={`memo-feed${selectMode && view === "memos" ? " is-select" : ""}`}
+          aria-label={view === "trash" ? tr("Trash", "回收站") : tr("Memo list", "笔记列表")}
+        >
           {feedMemos.length === 0 ? (
             <div className="feed-empty">
               {view === "trash" ? (
@@ -1093,6 +1353,8 @@ export default function App() {
                 knownTags={knownTags}
                 editing={editingId === memo.id}
                 savingEdit={editingId === memo.id && savingEdit}
+                selecting={selectMode && view === "memos"}
+                selected={selectMode && selected.has(memo.id)}
                 vtName={index < 32 ? `memo-${memo.id}` : undefined}
                 getEntering={getEntering}
                 delay={Math.min(index, 12) * 0.045}

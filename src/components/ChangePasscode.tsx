@@ -69,7 +69,7 @@ export function ChangePasscode({ onClose, onDone }: ChangePasscodeProps) {
   };
   const subtitles: Record<Step, string> = {
     current: tr("Verify your identity before changing the passcode", "验证身份后才能修改密码"),
-    next: tr("Enter a new 4-digit passcode", "输入新的 4 位数字密码"),
+    next: tr("Enter a new passcode of 4 to 18 digits", "输入新的 4-18 位数字密码"),
     confirm: tr("Enter the new passcode one more time", "请再输入一次新密码")
   };
 

@@ -1,4 +1,4 @@
-import { Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Trash2, X } from "lucide-react";
+import { Check, Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Trash2, X } from "lucide-react";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { externalImagesOf, tokenizeLine } from "../lib/content";
 import { formatTime } from "../lib/dates";
@@ -49,6 +49,10 @@ interface MemoCardProps {
   knownTags: string[];
   editing: boolean;
   savingEdit: boolean;
+  /** Multi-select mode: the whole card becomes a toggle, actions retire. */
+  selecting: boolean;
+  selected: boolean;
+  onToggleSelect: () => void;
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onSaveEdit: (data: { content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
@@ -190,7 +194,7 @@ function MemoMenuBody({ close, inTrash, pinned, onTogglePin, onStartEdit, onCopy
 
 export function MemoCard(props: MemoCardProps) {
   const { locale, tr } = useI18n();
-  const { memo, variant, editing } = props;
+  const { memo, variant, editing, selecting, selected } = props;
   // External links that failed to load render as a compact fallback chip.
   const [brokenUrls, setBrokenUrls] = useState<Set<string>>(new Set());
 
@@ -216,7 +220,11 @@ export function MemoCard(props: MemoCardProps) {
   }
 
   return (
-    <article className={`memo-card${pinned && !inTrash ? " is-pinned" : ""}${inTrash ? " is-trash" : ""}`}>
+    <article
+      className={`memo-card${pinned && !inTrash ? " is-pinned" : ""}${inTrash ? " is-trash" : ""}${selecting ? " is-selecting" : ""}${
+        selected ? " is-selected" : ""
+      }`}
+    >
       {editing ? (
         <Editor
           mode="edit"
@@ -241,31 +249,39 @@ export function MemoCard(props: MemoCardProps) {
             </time>
             <div className="memo-head-right">
               {pinned && !inTrash ? <Pin size={13} className="memo-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}
-              <Menu
-                trigger={(open) => (
-                  <button
-                    type="button"
-                    className={`icon-button memo-menu-trigger${open ? " is-open" : ""}`}
-                    aria-label={tr("Memo actions", "操作菜单")}
-                  >
-                    <MoreHorizontal size={17} aria-hidden="true" />
-                  </button>
-                )}
-              >
-                {(close) => (
-                  <MemoMenuBody
-                    close={close}
-                    inTrash={inTrash}
-                    pinned={pinned}
-                    onTogglePin={props.onTogglePin}
-                    onStartEdit={props.onStartEdit}
-                    onCopy={props.onCopy}
-                    onDelete={props.onDelete}
-                    onRestore={props.onRestore}
-                    onPurge={props.onPurge}
-                  />
-                )}
-              </Menu>
+              {/* The ⋯ menu and the select ring share one 26px cell: entering
+                  select mode swaps them in place with zero layout shift. */}
+              <div className="memo-tool-slot">
+                <Menu
+                  trigger={(open) => (
+                    <button
+                      type="button"
+                      className={`icon-button memo-menu-trigger${open ? " is-open" : ""}`}
+                      aria-label={tr("Memo actions", "操作菜单")}
+                      tabIndex={selecting ? -1 : 0}
+                    >
+                      <MoreHorizontal size={17} aria-hidden="true" />
+                    </button>
+                  )}
+                >
+                  {(close) => (
+                    <MemoMenuBody
+                      close={close}
+                      inTrash={inTrash}
+                      pinned={pinned}
+                      onTogglePin={props.onTogglePin}
+                      onStartEdit={props.onStartEdit}
+                      onCopy={props.onCopy}
+                      onDelete={props.onDelete}
+                      onRestore={props.onRestore}
+                      onPurge={props.onPurge}
+                    />
+                  )}
+                </Menu>
+                <span className="memo-select-box" aria-hidden="true">
+                  <Check size={13} strokeWidth={3.2} />
+                </span>
+              </div>
             </div>
           </header>
 
@@ -306,6 +322,19 @@ export function MemoCard(props: MemoCardProps) {
                 )
               )}
             </div>
+          ) : null}
+
+          {selecting ? (
+            // One interactive surface for the whole card: it sits above every
+            // inner control (tags, images, the retired ⋯ menu), so a tap
+            // anywhere toggles selection and nothing else can fire.
+            <button
+              type="button"
+              className="memo-select-overlay"
+              aria-pressed={selected}
+              aria-label={selected ? tr("Deselect this memo", "取消选择这条笔记") : tr("Select this memo", "选择这条笔记")}
+              onClick={props.onToggleSelect}
+            />
           ) : null}
         </>
       )}
