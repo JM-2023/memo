@@ -65,7 +65,7 @@ export function periodStats(memos: Memo[], kind: PeriodKind, now = new Date()): 
 
 export interface TotalStats {
   memoCount: number;
-  /** Days since the first memo, inclusive — flomo's "天". 0 when empty. */
+  /** Days since the first memo, inclusive. 0 when empty. */
   daySpan: number;
   /** Distinct local days that have at least one memo. */
   activeDays: number;

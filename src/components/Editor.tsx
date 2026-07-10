@@ -44,6 +44,9 @@ export function Editor({ mode, initialContent = "", existingImages = [], knownTa
   const [error, setError] = useState<string | null>(null);
   // Counter, not boolean: dragenter/leave fire per child element.
   const [dragDepth, setDragDepth] = useState(0);
+  // Attachments play their exit animation before the state actually drops
+  // them — keys are image ids (existing) or preview URLs (pending).
+  const [removingKeys, setRemovingKeys] = useState<ReadonlySet<string>>(new Set());
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
   const areaRef = useRef<HTMLTextAreaElement>(null);
@@ -51,6 +54,19 @@ export function Editor({ mode, initialContent = "", existingImages = [], knownTa
   const linkRef = useRef<HTMLInputElement>(null);
 
   const keptExisting = useMemo(() => existingImages.filter((image) => !removedIds.includes(image.id)), [existingImages, removedIds]);
+
+  function beginRemove(key: string) {
+    setRemovingKeys((value) => new Set(value).add(key));
+  }
+  function settleRemove(key: string, drop: () => void) {
+    setRemovingKeys((value) => {
+      if (!value.has(key)) return value;
+      const next = new Set(value);
+      next.delete(key);
+      return next;
+    });
+    drop();
+  }
   const totalImages = keptExisting.length + newImages.length;
   const canSubmit = !busy && compressing === 0 && (content.trim().length > 0 || totalImages > 0);
 
@@ -265,7 +281,12 @@ export function Editor({ mode, initialContent = "", existingImages = [], knownTa
     if (!canSubmit) return;
     setError(null);
     try {
-      const ok = await onSubmit({ content: content.trim(), newImages, removeImageIds: removedIds });
+      // Attachments mid-exit-animation count as removed already.
+      const ok = await onSubmit({
+        content: content.trim(),
+        newImages: newImages.filter((image) => !removingKeys.has(image.previewUrl)),
+        removeImageIds: [...removedIds, ...existingImages.filter((image) => removingKeys.has(image.id)).map((image) => image.id)]
+      });
       if (ok && mode === "create") {
         setContent("");
         setNewImages([]);
@@ -328,29 +349,43 @@ export function Editor({ mode, initialContent = "", existingImages = [], knownTa
       {totalImages > 0 || compressing > 0 ? (
         <div className="editor-attachments">
           {keptExisting.map((image) => (
-            <div key={image.id} className="attachment">
+            <div
+              key={image.id}
+              className={`attachment${removingKeys.has(image.id) ? " is-removing" : ""}`}
+              onAnimationEnd={(event) => {
+                if (event.animationName !== "attach-out") return;
+                settleRemove(image.id, () => setRemovedIds((value) => [...value, image.id]));
+              }}
+            >
               <img src={`/api/images/${image.id}`} alt="" />
               <button
                 type="button"
                 className="attachment-remove"
                 aria-label={tr("Remove image", "移除图片")}
-                onClick={() => setRemovedIds((value) => [...value, image.id])}
+                onClick={() => beginRemove(image.id)}
               >
                 <X size={12} aria-hidden="true" />
               </button>
             </div>
           ))}
-          {newImages.map((image, index) => (
-            <div key={image.previewUrl} className="attachment">
+          {newImages.map((image) => (
+            <div
+              key={image.previewUrl}
+              className={`attachment${removingKeys.has(image.previewUrl) ? " is-removing" : ""}`}
+              onAnimationEnd={(event) => {
+                if (event.animationName !== "attach-out") return;
+                settleRemove(image.previewUrl, () => {
+                  URL.revokeObjectURL(image.previewUrl);
+                  setNewImages((value) => value.filter((item) => item.previewUrl !== image.previewUrl));
+                });
+              }}
+            >
               <img src={image.previewUrl} alt="" />
               <button
                 type="button"
                 className="attachment-remove"
                 aria-label={tr("Remove image", "移除图片")}
-                onClick={() => {
-                  URL.revokeObjectURL(image.previewUrl);
-                  setNewImages((value) => value.filter((_, i) => i !== index));
-                }}
+                onClick={() => beginRemove(image.previewUrl)}
               >
                 <X size={12} aria-hidden="true" />
               </button>

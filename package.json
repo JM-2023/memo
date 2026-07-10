@@ -1,6 +1,6 @@
 {
   "name": "memo",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "type": "module",
   "engines": {
@@ -10,8 +10,8 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "pages:dev": "vite build && wrangler pages dev dist --compatibility-date=2026-06-22",
-    "db:migrate:local": "wrangler d1 migrations apply flomo --local",
-    "db:migrate:remote": "wrangler d1 migrations apply flomo --remote",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "hash-password": "node scripts/hash-password.mjs",
     "deploy": "npm run build && wrangler pages deploy dist"
   },

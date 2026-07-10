@@ -1,6 +1,6 @@
-# MEMO — Self-hosted flomo-style notes on Cloudflare
+# MEMO — Private notes on Cloudflare
 
-MEMO is a personal, single-owner note app built with Cloudflare Pages, Pages Functions, and D1. It is designed for typical personal use within Cloudflare's Free plan and does not require R2. The interface uses the same Liquid Glass design language as `project-manager-pwa`, supports light and dark themes, and is available in English and Simplified Chinese. English is the default; the language can be changed in Settings and is remembered by the browser.
+MEMO is a personal, single-owner note app built with Cloudflare Pages, Pages Functions, and D1. It is designed for typical personal use within Cloudflare's Free plan and does not require R2. The interface supports light and dark themes and is available in English and Simplified Chinese. English is the default; the language can be changed in Settings and is remembered by the browser.
 
 ## Features
 
@@ -53,7 +53,7 @@ The Pages project must exist before Pages secrets can be added. For a new Cloudf
    npx wrangler d1 create your-d1-database
    ```
 
-   Copy the returned `database_id` into the `[[d1_databases]]` section of `wrangler.toml`. Keep the binding name as `DB` and the database name as `flomo`.
+   Copy the returned `database_id` into the `[[d1_databases]]` section of `wrangler.toml`. Keep the binding name as `DB`, set the database name to `memo`, and set the top-level Pages project name to `memo`.
 
 3. Apply the production migrations:
 

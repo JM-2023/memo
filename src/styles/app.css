@@ -1,6 +1,5 @@
 /* =========================================================================
-   MEMO — flomo-style notebook on the Liquid Glass design system
-   (tokens ported from project-manager-pwa so both apps share one language)
+   MEMO — private notebook interface
    --------------------------------------------------------------------------
    Tiers: A — liquid glass + signature spring (send button, popovers, pin pad);
    B — quiet glass (keypad, segmented chips); C — flat/transparent (icon
@@ -129,9 +128,8 @@
     0 4px 10px rgba(20, 27, 45, 0.1),
     0 24px 46px -12px rgba(20, 27, 45, 0.36);
 
-  /* Send-button glass (ported from project-manager's Liquid Glass download
-     button). Light = clear glass: specular highlight + translucent white
-     tint + real frost (saturate(200%) blur(20px)) + the reference shadows. */
+  /* Send-button glass. Light = clear glass: specular highlight + translucent
+     white tint + real frost (saturate(200%) blur(20px)) + deep shadows. */
   --dl-rim: rgba(10, 16, 28, 0.12);
   --dl-fill:
     radial-gradient(180px 260px at 50% 0%, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0) 60%),
@@ -474,9 +472,36 @@ a:hover { text-decoration: underline; }
   100% { clip-path: circle(150% at 50% 42%); opacity: 1; }
 }
 @keyframes menu-morph { from { opacity: 0; transform: translateY(-4px) scale(0.92); } to { opacity: 1; transform: none; } }
+@keyframes menu-out { to { opacity: 0; transform: translateY(-4px) scale(0.94); } }
 @keyframes menu-item { from { opacity: 0; } to { opacity: 1; } }
 @keyframes heat-slide-left { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
 @keyframes heat-slide-right { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: none; } }
+/* Outgoing heatmap grid mirrors the incoming slide; period switches fade. */
+@keyframes heat-leave-left { to { opacity: 0; transform: translateX(-22px); } }
+@keyframes heat-leave-right { to { opacity: 0; transform: translateX(22px); } }
+@keyframes heat-leave-fade { to { opacity: 0; transform: scale(0.98); } }
+@keyframes heat-arrive { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: none; } }
+/* Split-flap digits: the old character tips up over the top of the drum
+   while the new one rolls in from below (mirrored when counting down). */
+@keyframes roll-char-out-up { to { opacity: 0; transform: translateY(-0.55em) rotateX(76deg) scale(0.94); } }
+@keyframes roll-char-in-up { from { opacity: 0; transform: translateY(0.55em) rotateX(-76deg) scale(0.94); } to { opacity: 1; transform: none; } }
+@keyframes roll-char-out-down { to { opacity: 0; transform: translateY(0.55em) rotateX(-76deg) scale(0.94); } }
+@keyframes roll-char-in-down { from { opacity: 0; transform: translateY(-0.55em) rotateX(76deg) scale(0.94); } to { opacity: 1; transform: none; } }
+/* Digit columns appearing/disappearing melt the width via a 0fr track. */
+@keyframes roll-slot-grow { from { grid-template-columns: 0fr; } to { grid-template-columns: 1fr; } }
+@keyframes roll-slot-collapse { from { grid-template-columns: 1fr; } to { grid-template-columns: 0fr; } }
+/* Directional text swap (heatmap title): new copy chases the old one. */
+@keyframes swap-in-fwd { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+@keyframes swap-in-back { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: none; } }
+@keyframes swap-in-fade { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+@keyframes swap-out-fwd { to { opacity: 0; transform: translateX(-16px); } }
+@keyframes swap-out-back { to { opacity: 0; transform: translateX(16px); } }
+@keyframes swap-out-fade { to { opacity: 0; transform: translateY(-5px); } }
+/* Attachment removal: fade, recede, then give the row its width back. */
+@keyframes attach-out {
+  55% { opacity: 0; transform: scale(0.86); }
+  100% { opacity: 0; transform: scale(0.86); width: 0; margin-right: -8px; border-color: transparent; }
+}
 @keyframes lightbox-zoom { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
 @keyframes drawer-in { from { transform: translateX(-102%); } to { transform: none; } }
 /* Chart bars grow out of the baseline (the column clips the overflow). */
@@ -580,6 +605,10 @@ a:hover { text-decoration: underline; }
   box-shadow: var(--menu-highlight), var(--shadow-lg);
   transform-origin: top right;
   animation: menu-morph 0.26s var(--ease-spring) both;
+}
+.action-menu.is-closing {
+  animation: menu-out 0.16s var(--ease) both;
+  pointer-events: none;
 }
 .action-menu.align-right { right: 0; }
 .action-menu.align-left { left: 0; transform-origin: top left; }
@@ -914,6 +943,57 @@ a:hover { text-decoration: underline; }
 .period-figures strong { color: var(--ink); font-size: 0.95rem; font-weight: 800; }
 .period-sep { width: 1px; height: 12px; background: var(--line-strong); }
 
+/* ---- Rolling digits (split-flap) ----
+   Each character sits on its own drum column; only columns whose character
+   changed roll over, rippling outward from the units digit. Appearing and
+   vanishing columns animate their track between 0fr and 1fr so the number's
+   width morphs instead of jumping. */
+.roll { display: inline-block; font-variant-numeric: tabular-nums; }
+.roll-inner { display: inline-flex; }
+.roll-slot { display: inline-grid; grid-template-columns: 1fr; }
+.roll-slot.is-grow,
+.roll-slot.is-collapse { animation: roll-slot-grow 0.42s var(--ease-out) both; animation-delay: calc(var(--ri) * 0.03s); }
+.roll-slot.is-collapse { animation-name: roll-slot-collapse; }
+.roll-pane {
+  display: grid;
+  min-width: 0;
+  /* Clip sideways while a column melts away; stay open vertically so the
+     drum can poke above/below the line box mid-roll. */
+  overflow: clip visible;
+  perspective: 320px;
+}
+.roll-char { grid-area: 1 / 1; white-space: pre; backface-visibility: hidden; }
+.roll-char-in { animation: roll-char-in-up 0.5s var(--ease-out) both; animation-delay: calc(var(--ri) * 0.03s); }
+.roll-char-out { animation: roll-char-out-up 0.32s var(--ease) both; animation-delay: calc(var(--ri) * 0.03s); pointer-events: none; }
+.roll-down .roll-char-in { animation-name: roll-char-in-down; }
+.roll-down .roll-char-out { animation-name: roll-char-out-down; }
+
+/* ---- Directional text swap ----
+   The outgoing copy exits on an absolute layer while the incoming one slides
+   in; SwapText tweens the container width between the two sizes. */
+.swap {
+  position: relative;
+  display: inline-grid;
+  justify-items: center;
+  white-space: nowrap;
+  overflow: clip;
+}
+.swap-cur { grid-area: 1 / 1; min-width: 0; }
+.swap-cur.swap-anim { animation: swap-in-fade 0.42s var(--ease-out) both; }
+.swap-cur.swap-anim.dir-fwd { animation-name: swap-in-fwd; }
+.swap-cur.swap-anim.dir-back { animation-name: swap-in-back; }
+.swap-old {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  pointer-events: none;
+  animation: swap-out-fade 0.26s var(--ease) both;
+}
+.swap-old.dir-fwd { animation-name: swap-out-fwd; }
+.swap-old.dir-back { animation-name: swap-out-back; }
+
 /* ---- Heatmap ----
    Horizontal in every period: week = one row of seven squares, month = a
    wall-calendar (weekday columns × week rows), year = a GitHub-style band
@@ -936,14 +1016,27 @@ a:hover { text-decoration: underline; }
 @media (hover: hover) { .heatmap-title:hover { background: var(--wash); color: var(--ink); } }
 .heatmap-title:active { transform: scale(0.96); }
 .heatmap-total { color: var(--muted); font-size: 0.74rem; font-weight: 650; }
+/* Title swaps as one block (label + count) in step with the grid slide. */
+.heatmap-title-swap .swap-cur,
+.heatmap-title-swap .swap-old { display: inline-flex; align-items: baseline; gap: 8px; }
 
 .heatmap-grid { display: grid; align-items: stretch; }
 /* Week + month: weekday header on top, weeks flowing as rows. */
 .heatmap-grid.is-cal { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
 /* Year band: 7 weekday rows, one column per week of the half-year. */
 .heatmap-grid.is-year { grid-auto-flow: column; grid-template-rows: repeat(7, auto); gap: 2px; }
+/* Paging window: the outgoing grid keeps rendering on an absolute layer that
+   slides away underneath while the incoming one slides in; Heatmap tweens
+   this element's height between the two grids so the sidebar below glides.
+   The clip margin keeps edge-cell hover rings from being cropped. */
+.heat-viewport { position: relative; overflow: clip; overflow-clip-margin: 8px; }
+.heat-leaving { position: absolute; inset: 0 0 auto 0; pointer-events: none; }
+.heat-leaving.leave-left { animation: heat-leave-left 0.3s var(--ease) both; }
+.heat-leaving.leave-right { animation: heat-leave-right 0.3s var(--ease) both; }
+.heat-leaving.leave-fade { animation: heat-leave-fade 0.26s var(--ease) both; }
 .heatmap .slide-left { animation: heat-slide-left 0.45s var(--ease-out) both; }
 .heatmap .slide-right { animation: heat-slide-right 0.45s var(--ease-out) both; }
+.heat-current.heat-arrive { animation: heat-arrive 0.4s var(--ease-out) both; }
 .heat-colhead {
   display: grid;
   place-items: center;
@@ -1123,7 +1216,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 }
 .drawer-toggle { display: none; }
 
-.breadcrumb { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; }
+.breadcrumb { --breadcrumb-gap: 8px; display: flex; flex: 1; min-width: 0; align-items: center; gap: var(--breadcrumb-gap); }
 .breadcrumb-root {
   padding: 5px 10px;
   color: var(--muted);
@@ -1167,12 +1260,17 @@ button.crumb:active { background: var(--wash-strong); }
 .crumb.is-leaving, .crumb-sep.is-leaving { animation: crumb-out 0.26s var(--ease) both; pointer-events: none; }
 /* Leaving segments paint from the settled breadcrumb edge without taking up
    flex space. The sort control can move directly to its final position while
-   the old path folds away above it. */
+   the old path folds away above it. Zero width alone is not enough: as a flex
+   item the span still spends one row gap, and when it unmounted mid-glide the
+   sort pill's view-transition target would shift 8px left — a visible kick
+   after the motion had settled. The negative margin hands that gap back, so
+   mounting/unmounting the ghosts never moves layout at all. */
 .crumb-ghosts {
   display: inline-flex;
   flex: 0 0 0;
   width: 0;
   min-width: 0;
+  margin-left: calc(-1 * var(--breadcrumb-gap));
   align-items: center;
   gap: 1px;
   overflow: visible;
@@ -1386,6 +1484,10 @@ button.crumb:active { background: var(--wash-strong); }
   box-shadow: var(--shadow-xs);
   animation: pop-in 0.4s var(--ease-pop) both;
 }
+/* Exit before unmount: recede, then hand the row the freed width (the
+   trailing negative margin swallows the flex gap so nothing snaps). */
+.attachment.is-removing { animation: attach-out 0.34s var(--ease) both; }
+.attachment.is-removing .attachment-remove { pointer-events: none; }
 .attachment img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .attachment.is-busy { display: grid; place-items: center; color: var(--muted); background: var(--surface-2); }
 .attachment-remove {
@@ -1870,7 +1972,8 @@ button.memo-tag:active {
   border-radius: 3px;
   outline: 2px solid transparent;
   outline-offset: 1px;
-  transition: outline-color var(--t) var(--ease), filter var(--t) var(--ease);
+  /* Background included so switching years crossfades the whole grid. */
+  transition: outline-color var(--t) var(--ease), filter var(--t) var(--ease), background 0.45s var(--ease), box-shadow 0.45s var(--ease);
 }
 @media (hover: hover) {
   .mini-cell:not(.placeholder):hover { outline-color: color-mix(in srgb, var(--heat-3) 42%, transparent); filter: saturate(1.16) brightness(1.06); }
@@ -1891,7 +1994,8 @@ button.memo-tag:active {
   background: linear-gradient(180deg, var(--heat-2), var(--heat-3));
   border-radius: 5px 5px 2px 2px;
   animation: bar-rise 0.7s var(--ease-out) both;
-  transition: filter var(--t) var(--ease);
+  /* Height included so switching years glides the bars to their new size. */
+  transition: filter var(--t) var(--ease), height 0.55s var(--ease-out);
 }
 @media (hover: hover) { .stats-bar-col:hover .stats-bar:not(.is-zero) { filter: saturate(1.15) brightness(1.08); } }
 .stats-bar.is-zero { background: var(--surface-3); }

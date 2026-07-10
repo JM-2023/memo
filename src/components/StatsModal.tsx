@@ -4,6 +4,7 @@ import { dateKey, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } fr
 import { useI18n } from "../lib/i18n";
 import { buildHeatMonth, computeStreaks, countsByDay, totalStats, wordCountOf, type HeatMonth } from "../lib/stats";
 import type { Memo } from "../lib/types";
+import { RollingText } from "./RollingText";
 import { useTip } from "./Tip";
 
 interface StatsModalProps {
@@ -202,8 +203,9 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
             >
               <ChevronLeft size={16} aria-hidden="true" />
             </button>
-            <span key={year} className="stats-year">
-              {formatYear(year, locale)}
+            <span className="stats-year">
+              {/* Keyed by locale: zh appends 年, which must not roll against digits. */}
+              <RollingText key={locale} value={year} text={formatYear(year, locale)} />
             </span>
             <button
               type="button"
@@ -220,11 +222,13 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
           </button>
         </header>
 
-        <div key={year} className="stats-body">
+        <div className="stats-body">
           <div className="stat-tiles">
             {yearTiles.map((tile, index) => (
               <div key={tile.label} className="stat-tile" style={{ animationDelay: `${index * 0.04}s` }}>
-                <span className="stat-tile-value">{formatNumber(tile.value)}</span>
+                <span className="stat-tile-value">
+                  <RollingText value={tile.value} />
+                </span>
                 <span className="stat-tile-label">{tile.label}</span>
               </div>
             ))}
@@ -236,14 +240,18 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
               <div key={month} className="mini-month" style={{ animationDelay: `${month * 0.03}s` }}>
                 <div className="mini-month-head">
                   <span className="mini-month-name">{monthFormatter.format(new Date(year, month, 1))}</span>
-                  <span className="mini-month-count">{formatNumber(memoCount)}</span>
+                  <span className="mini-month-count">
+                    <RollingText value={memoCount} />
+                  </span>
                 </div>
                 <div className="mini-grid">
-                  {heat.weeks.map((week) =>
-                    week.map((cell) =>
+                  {/* Cells keyed by grid position, not date — switching years
+                      mutates them in place so the colours crossfade. */}
+                  {heat.weeks.map((week, weekIndex) =>
+                    week.map((cell, dayIndex) =>
                       cell.inRange && !cell.isFuture ? (
                         <span
-                          key={cell.key}
+                          key={`${weekIndex}-${dayIndex}`}
                           className={`mini-cell level-${cell.level}${cell.isToday ? " is-today" : ""}`}
                           role="img"
                           tabIndex={0}
@@ -267,7 +275,11 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                           onBlur={tip.hide}
                         />
                       ) : (
-                        <span key={cell.key} className={`mini-cell placeholder${cell.inRange ? " future" : ""}`} aria-hidden="true" />
+                        <span
+                          key={`${weekIndex}-${dayIndex}`}
+                          className={`mini-cell placeholder${cell.inRange ? " future" : ""}`}
+                          aria-hidden="true"
+                        />
                       )
                     )
                   )}
@@ -309,7 +321,9 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
           <div className="stat-tiles all-time">
             {allTiles.map((tile, index) => (
               <div key={tile.label} className="stat-tile" style={{ animationDelay: `${index * 0.03}s` }}>
-                <span className="stat-tile-value">{formatNumber(tile.value)}</span>
+                <span className="stat-tile-value">
+                  <RollingText value={tile.value} />
+                </span>
                 <span className="stat-tile-label">{tile.label}</span>
               </div>
             ))}

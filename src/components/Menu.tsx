@@ -30,22 +30,35 @@ interface PortalPos {
 /**
  * Popover action menu (Tier A floating glass). Owns open state, closes on
  * outside pointer-down and Escape, and animates in via .action-menu CSS.
+ * Closing holds the panel one beat in a "closing" phase so it can play the
+ * reverse morph before unmounting.
  */
 export function Menu({ trigger, children, align = "right", className, portal = false }: MenuProps) {
-  const [open, setOpen] = useState(false);
+  const [phase, setPhase] = useState<"closed" | "open" | "closing">("closed");
   const [pos, setPos] = useState<PortalPos | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const open = phase === "open";
+
+  function requestClose() {
+    setPhase((value) => (value === "open" ? "closing" : value));
+  }
+
+  useEffect(() => {
+    if (phase !== "closing") return;
+    const timer = window.setTimeout(() => setPhase("closed"), 170);
+    return () => window.clearTimeout(timer);
+  }, [phase]);
 
   useEffect(() => {
     if (!open) return;
     function onPointerDown(event: PointerEvent) {
       const target = event.target as Node;
       if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return;
-      setOpen(false);
+      requestClose();
     }
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") requestClose();
     }
     window.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("keydown", onKey);
@@ -77,7 +90,7 @@ export function Menu({ trigger, children, align = "right", className, portal = f
 
   useEffect(() => {
     if (!open || !portal) return;
-    const close = () => setOpen(false);
+    const close = () => requestClose();
     window.addEventListener("scroll", close, { capture: true, passive: true });
     window.addEventListener("resize", close);
     return () => {
@@ -87,8 +100,8 @@ export function Menu({ trigger, children, align = "right", className, portal = f
   }, [open, portal]);
 
   useEffect(() => {
-    if (!open) setPos(null);
-  }, [open]);
+    if (phase === "closed") setPos(null);
+  }, [phase]);
 
   // right: "auto" neutralises the class-based `.align-right { right: 0 }` —
   // combined with the inline fixed `left` it would otherwise double-constrain
@@ -106,15 +119,21 @@ export function Menu({ trigger, children, align = "right", className, portal = f
       : { position: "fixed", top: -9999, left: -9999, right: "auto", visibility: "hidden" }
     : undefined;
 
-  const panel = open ? (
-    <div ref={panelRef} className={`action-menu align-${align}${portal ? " is-portal" : ""}`} style={panelStyle} role="menu">
-      {children(() => setOpen(false))}
-    </div>
-  ) : null;
+  const panel =
+    phase !== "closed" ? (
+      <div
+        ref={panelRef}
+        className={`action-menu align-${align}${portal ? " is-portal" : ""}${phase === "closing" ? " is-closing" : ""}`}
+        style={panelStyle}
+        role="menu"
+      >
+        {children(requestClose)}
+      </div>
+    ) : null;
 
   return (
     <div ref={rootRef} className={`menu-root${open ? " is-open" : ""}${className ? ` ${className}` : ""}`}>
-      <div className="menu-trigger-slot" onClick={() => setOpen((value) => !value)}>
+      <div className="menu-trigger-slot" onClick={() => setPhase((value) => (value === "open" ? "closing" : "open"))}>
         {trigger(open)}
       </div>
       {portal ? (panel ? createPortal(panel, document.body) : null) : panel}

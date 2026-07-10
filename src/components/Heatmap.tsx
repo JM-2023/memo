@@ -1,8 +1,9 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { addDays, dateKey, formatDayLabel, startOfWeek, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { buildHeatWeeks, type HeatCell, type PeriodKind } from "../lib/stats";
+import { SwapText } from "./SwapText";
 import { useTip } from "./Tip";
 
 interface HeatmapProps {
@@ -70,7 +71,7 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
   const now = new Date();
   // Paging within the selected period. Switching periods derives back to
   // offset 0 (no effect needed — `nav.period` going stale resets it).
-  const [nav, setNav] = useState({ period, offset: 0, serial: 0, direction: 0 });
+  const [nav, setNav] = useState({ period, offset: 0, direction: 0 });
   const offset = nav.period === period ? nav.offset : 0;
   const direction = nav.period === period ? nav.direction : 0;
 
@@ -123,17 +124,28 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
 
   function shift(delta: number) {
     tip.hide();
-    setNav((value) => ({ period, offset: offset + delta, serial: value.serial + 1, direction: delta }));
+    setNav({ period, offset: offset + delta, direction: delta });
   }
 
   function goHome() {
     if (offset === 0) return;
     tip.hide();
-    setNav((value) => ({ period, offset: 0, serial: value.serial + 1, direction: offset < 0 ? 1 : -1 }));
+    setNav({ period, offset: 0, direction: offset < 0 ? 1 : -1 });
   }
 
-  const slideClass = direction > 0 ? " slide-left" : direction < 0 ? " slide-right" : "";
   const [homeEn, homeZh] = HOME_LABEL[period];
+
+  // ---- Grid transition machinery ----
+  // The outgoing grid keeps rendering on an absolute layer that slides away
+  // (opposite the incoming slide), and the viewport's height tweens between
+  // the two grids' sizes so the sidebar below glides instead of jumping.
+  const gridKey = `${period}:${offset}`;
+  const [leaving, setLeaving] = useState<{ node: ReactNode; dir: number; serial: number } | null>(null);
+  const lastGridRef = useRef<{ key: string; node: ReactNode; period: PeriodKind } | null>(null);
+  const enterDirRef = useRef<number | null>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const leaveHeightRef = useRef<number | null>(null);
+  const leaveSerialRef = useRef(0);
 
   const cellNode = (cell: HeatCell) =>
     cell.inRange && !cell.isFuture ? (
@@ -158,6 +170,69 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
       <span key={cell.key} className={`heat-cell placeholder${cell.inRange ? " future" : ""}`} aria-hidden="true" />
     );
 
+  const gridNode =
+    period === "year" && yearBands ? (
+      <div className="heat-year">
+        {yearBands.map((band, bandIndex) => {
+          // Both bands share one column count so their cells match in size.
+          const cols = Math.max(yearBands[0].length, yearBands[1].length);
+          return (
+            <div key={bandIndex} className="heat-band">
+              <div className="heat-months" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }} aria-hidden="true">
+                {monthMarksOf(band).map((mark) => (
+                  <span key={mark.week} style={{ gridColumnStart: mark.week + 1 }}>
+                    {mark.label}
+                  </span>
+                ))}
+              </div>
+              <div className="heatmap-grid is-year" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
+                {band.map((week) => week.map(cellNode))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    ) : (
+      <div className="heatmap-grid is-cal">
+        {weekdayLabels.map((label, index) => (
+          <span key={`${label}-${index}`} className="heat-colhead" aria-hidden="true">
+            {label}
+          </span>
+        ))}
+        {weeks.map((week) => week.map(cellNode))}
+      </div>
+    );
+
+  const lastGrid = lastGridRef.current;
+  if (lastGrid !== null && lastGrid.key !== gridKey) {
+    // Paging slides sideways; period switches crossfade (dir 0). Height is
+    // read during render, while the DOM still shows the outgoing grid.
+    const dir = lastGrid.period === period ? direction : 0;
+    leaveHeightRef.current = viewportRef.current?.offsetHeight ?? null;
+    leaveSerialRef.current += 1;
+    enterDirRef.current = dir;
+    setLeaving({ node: lastGrid.node, dir, serial: leaveSerialRef.current });
+  }
+  lastGridRef.current = { key: gridKey, node: gridNode, period };
+
+  useLayoutEffect(() => {
+    const el = viewportRef.current;
+    const from = leaveHeightRef.current;
+    leaveHeightRef.current = null;
+    if (!el || from === null) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const to = el.offsetHeight;
+    if (Math.abs(to - from) < 1) return;
+    el.animate([{ height: `${from}px` }, { height: `${to}px` }], {
+      duration: 400,
+      easing: "cubic-bezier(0.16, 1, 0.3, 1)"
+    });
+  }, [gridKey]);
+
+  const enterDir = enterDirRef.current;
+  const enterClass = enterDir === null ? "" : enterDir > 0 ? " slide-left" : enterDir < 0 ? " slide-right" : " heat-arrive";
+  const swapDir = lastGrid !== null && lastGrid.period === period ? direction : 0;
+
   return (
     <div className="heatmap">
       <div className="heatmap-head">
@@ -179,8 +254,10 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
           }}
           onMouseLeave={tip.hide}
         >
-          {title}
-          <span className="heatmap-total">{count(rangeTotal, "memo")}</span>
+          <SwapText id={gridKey} dir={swapDir} className="heatmap-title-swap">
+            {title}
+            <span className="heatmap-total">{count(rangeTotal, "memo")}</span>
+          </SwapText>
         </button>
         <button
           type="button"
@@ -193,37 +270,23 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
         </button>
       </div>
 
-      {period === "year" && yearBands ? (
-        <div key={nav.serial} className={`heat-year${slideClass}`}>
-          {yearBands.map((band, bandIndex) => {
-            // Both bands share one column count so their cells match in size.
-            const cols = Math.max(yearBands[0].length, yearBands[1].length);
-            return (
-              <div key={bandIndex} className="heat-band">
-                <div className="heat-months" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }} aria-hidden="true">
-                  {monthMarksOf(band).map((mark) => (
-                    <span key={mark.week} style={{ gridColumnStart: mark.week + 1 }}>
-                      {mark.label}
-                    </span>
-                  ))}
-                </div>
-                <div className="heatmap-grid is-year" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
-                  {band.map((week) => week.map(cellNode))}
-                </div>
-              </div>
-            );
-          })}
+      <div ref={viewportRef} className="heat-viewport">
+        <div key={gridKey} className={`heat-current${enterClass}`}>
+          {gridNode}
         </div>
-      ) : (
-        <div key={nav.serial} className={`heatmap-grid is-cal${slideClass}`}>
-          {weekdayLabels.map((label, index) => (
-            <span key={`${label}-${index}`} className="heat-colhead" aria-hidden="true">
-              {label}
-            </span>
-          ))}
-          {weeks.map((week) => week.map(cellNode))}
-        </div>
-      )}
+        {leaving ? (
+          <div
+            key={`leave-${leaving.serial}`}
+            className={`heat-leaving${leaving.dir > 0 ? " leave-left" : leaving.dir < 0 ? " leave-right" : " leave-fade"}`}
+            aria-hidden="true"
+            onAnimationEnd={(event) => {
+              if (event.target === event.currentTarget) setLeaving(null);
+            }}
+          >
+            {leaving.node}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

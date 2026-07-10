@@ -1,7 +1,7 @@
 import { MD_IMAGE_PATTERN, stripLinks, URL_PATTERN } from "./content";
 import type { Memo } from "./types";
 
-// flomo-style tags: #标签 or hierarchical #领域/子类. A tag runs until
+// Tags can be flat (#标签) or hierarchical (#领域/子类). A tag runs until
 // whitespace/#/punctuation; interior "/" nests levels. URLs are blanked
 // first so a fragment like https://x.com/a#section never becomes a tag.
 const TAG_PATTERN = /#([\p{L}\p{N}_\-/·]+)/gu;

@@ -7,6 +7,7 @@ import type { Memo } from "../lib/types";
 import type { ThemeChoice } from "../lib/theme";
 import { Heatmap } from "./Heatmap";
 import { Menu } from "./Menu";
+import { RollingText } from "./RollingText";
 import { TagTree } from "./TagTree";
 import { useTip } from "./Tip";
 
@@ -194,8 +195,8 @@ export function Sidebar(props: SidebarProps) {
             onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("View detailed statistics", "查看详细统计") })}
             onMouseLeave={tip.hide}
           >
-            <span key={totals.memoCount} className="stat-number">
-              {formatNumber(totals.memoCount)}
+            <span className="stat-number">
+              <RollingText value={totals.memoCount} />
             </span>
             <span className="stat-label">{tr("Memos", "笔记")}</span>
           </button>
@@ -206,8 +207,8 @@ export function Sidebar(props: SidebarProps) {
             onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("View detailed statistics", "查看详细统计") })}
             onMouseLeave={tip.hide}
           >
-            <span key={uniqueTagCount} className="stat-number">
-              {formatNumber(uniqueTagCount)}
+            <span className="stat-number">
+              <RollingText value={uniqueTagCount} />
             </span>
             <span className="stat-label">{tr("Tags", "标签")}</span>
           </button>
@@ -226,8 +227,8 @@ export function Sidebar(props: SidebarProps) {
             }
             onMouseLeave={tip.hide}
           >
-            <span key={totals.daySpan} className="stat-number">
-              {formatNumber(totals.daySpan)}
+            <span className="stat-number">
+              <RollingText value={totals.daySpan} />
             </span>
             <span className="stat-label">{tr("Days", "天")}</span>
           </button>
@@ -249,15 +250,31 @@ export function Sidebar(props: SidebarProps) {
               </button>
             ))}
           </div>
-          <div key={period} className="period-figures">
+          <div className="period-figures">
             <span>
-              <strong>{formatNumber(stats.memoCount)}</strong>{" "}
-              {tr(stats.memoCount === 1 ? "memo" : "memos", "条笔记")}
+              <strong>
+                <RollingText value={stats.memoCount} />
+              </strong>{" "}
+              {/* Keyed by language: a locale switch swaps instantly like the
+                  rest of the UI; only plural changes roll. */}
+              <RollingText
+                key={language}
+                value={stats.memoCount}
+                text={tr(stats.memoCount === 1 ? "memo" : "memos", "条笔记")}
+                align="left"
+              />
             </span>
             <span className="period-sep" aria-hidden="true" />
             <span>
-              <strong>{formatNumber(stats.wordSum)}</strong>{" "}
-              {tr(stats.wordSum === 1 ? "character" : "characters", "字")}
+              <strong>
+                <RollingText value={stats.wordSum} />
+              </strong>{" "}
+              <RollingText
+                key={language}
+                value={stats.wordSum}
+                text={tr(stats.wordSum === 1 ? "character" : "characters", "字")}
+                align="left"
+              />
             </span>
           </div>
         </div>
@@ -269,12 +286,16 @@ export function Sidebar(props: SidebarProps) {
         <button type="button" className={`nav-item${view === "memos" && !filtersActive ? " is-active" : ""}`} onClick={props.onShowAll}>
           <Inbox size={16} aria-hidden="true" />
           {tr("All memos", "全部笔记")}
-          <span className="nav-count">{formatNumber(totals.memoCount)}</span>
+          <span className="nav-count">
+            <RollingText value={totals.memoCount} />
+          </span>
         </button>
         <button type="button" className={`nav-item${view === "trash" ? " is-active" : ""}`} onClick={props.onOpenTrash}>
           <Trash2 size={16} aria-hidden="true" />
           {tr("Trash", "回收站")}
-          <span className="nav-count">{formatNumber(trashCount)}</span>
+          <span className="nav-count">
+            <RollingText value={trashCount} />
+          </span>
         </button>
       </nav>
 
