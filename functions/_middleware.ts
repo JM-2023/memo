@@ -21,7 +21,17 @@ const CONTENT_SECURITY_POLICY = [
   "frame-ancestors 'none'"
 ].join("; ");
 
+const CANONICAL_HOST = "notes.example";
+
 export async function onRequest(context: AppContext): Promise<Response> {
+  const requestUrl = new URL(context.request.url);
+  if (requestUrl.hostname.endsWith(".pages.dev")) {
+    requestUrl.protocol = "https:";
+    requestUrl.hostname = CANONICAL_HOST;
+    requestUrl.port = "";
+    return Response.redirect(requestUrl.toString(), 301);
+  }
+
   let response: Response;
   try {
     response = await context.next();
