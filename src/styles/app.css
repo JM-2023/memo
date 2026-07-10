@@ -904,7 +904,10 @@ a:hover { text-decoration: underline; }
   scrollbar-width: thin;
 }
 
-.sidebar-head { display: flex; align-items: center; margin-bottom: 12px; }
+/* 32px = the topbar's 12px bottom inset + the composer's 20px top margin:
+   both header rows are 44px tall under a 16px top inset, so this drop puts
+   the stat panel's top edge and the editor card's on one horizon (y = 92). */
+.sidebar-head { display: flex; align-items: center; margin-bottom: 32px; }
 .user-button {
   display: flex;
   align-items: center;
@@ -1269,7 +1272,23 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 /* =========================================================================
    Main column
    ========================================================================= */
-.main-column { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; padding-bottom: 60px; }
+/* One shared content column. --content-inset is the distance from the main
+   column's edge to the content edge; the topbar pads by it while the composer
+   and feed subtract it twice, so the location pill, the searchbox, the editor
+   card and every memo card hang on the same two verticals at any width. The
+   gutter breathes 16→40px with the viewport; once the column can hold the
+   880px cap, the (100% − cap)/2 term takes over and the surplus becomes
+   symmetric margin that the topbar follows instead of drifting to the edge. */
+.main-column {
+  --content-max: 880px;
+  --content-inset: max(clamp(16px, 3vw, 40px), calc((100% - var(--content-max)) / 2));
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-bottom: 60px;
+}
 
 .topbar {
   position: sticky;
@@ -1280,8 +1299,10 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   gap: 10px;
   width: 100%;
   /* Top inset 16px = .sidebar-inner's, so this row and the sidebar header
-     read as one band (see .breadcrumb min-height for the row-height half). */
-  padding: 16px clamp(16px, 4vw, 56px) 12px;
+     read as one band (see .breadcrumb min-height for the row-height half).
+     Horizontal inset = the content column's: the pill and searchbox align
+     with the cards below, and the sticky band still spans the full column. */
+  padding: 16px var(--content-inset) 12px;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
 }
 .drawer-toggle { display: none; }
@@ -1299,6 +1320,16 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
    the current segment fused with the view-options dropdown (see
    .loc-trigger). */
 .crumbs { display: flex; align-items: center; gap: 1px; min-width: 0; overflow: hidden; }
+/* Optical alignment: the trail's first glyph — ⌂'s icon in a tag, the root
+   pill's label at home — sits exactly on the content column's left edge, its
+   transparent padding bleeding into the gutter the way a hover wash does.
+   The pull lives on the nav, not the first child, because .crumbs clips
+   overflow. Mobile skips it: the drawer toggle owns the left edge there, and
+   pulling would eat the 10px gap next to it. */
+@media (min-width: 901px) {
+  .crumbs:has(> .crumb-home:first-child) { margin-left: -8px; } /* ⌂ pad-left */
+  .crumbs:has(> .loc-menu:first-child) { margin-left: -10px; } /* pill pad-left */
+}
 .crumb {
   display: inline-flex;
   align-items: center;
@@ -1361,6 +1392,11 @@ button.crumb:active { background: var(--wash-strong); }
   width: auto;
   margin-left: 0;
   transform: translateY(-50%);
+}
+/* Desktop pulls the trail 8px into the gutter (optical alignment above), so
+   the replay pins to the same pulled coordinates. */
+@media (min-width: 901px) {
+  .crumb-ghosts.is-home { left: -8px; }
 }
 /* The fused location pill — the breadcrumb's current segment ("全部笔记" at
    the root, the deepest tag inside one) and the view-options dropdown
@@ -1561,12 +1597,12 @@ button.crumb:active { background: var(--wash-strong); }
 /* =========================================================================
    Editor (composer + in-card edit)
    ========================================================================= */
-/* The feed column scales with the viewport (up to 880px) instead of a fixed
-   700px, so large displays get a properly wide writing surface. The composer
-   is position:relative + z-index because its entrance animation leaves a
+/* Width comes from the shared column (see .main-column: --content-inset
+   already caps the content at --content-max). The composer is
+   position:relative + z-index because its entrance animation leaves a
    stacking context behind — without the bump, the tag-suggest popover would
    paint underneath the first memo card. */
-.composer { position: relative; z-index: 30; width: min(880px, calc(100% - clamp(32px, 6vw, 80px))); margin: 20px 0 6px; animation: rise-in 0.6s var(--ease-out) both; }
+.composer { position: relative; z-index: 30; width: calc(100% - var(--content-inset) * 2); margin: 20px 0 6px; animation: rise-in 0.6s var(--ease-out) both; }
 
 .editor {
   position: relative;
@@ -1812,7 +1848,7 @@ button.crumb:active { background: var(--wash-strong); }
 /* =========================================================================
    Memo feed
    ========================================================================= */
-.memo-feed { display: grid; width: min(880px, calc(100% - clamp(32px, 6vw, 80px))); gap: 14px; margin-top: 16px; }
+.memo-feed { display: grid; width: calc(100% - var(--content-inset) * 2); gap: 14px; margin-top: 16px; }
 /* Invisible marker that asks for the next feed page when scrolled near. */
 .feed-sentinel { height: 1px; }
 /* Each slot's entrance animation leaves a stacking context (fill-mode both
@@ -2349,7 +2385,9 @@ button.memo-tag:active {
 }
 
 @media (max-width: 560px) {
-  .composer, .memo-feed { width: calc(100% - 24px); }
+  /* Phones tighten the shared column gutter; topbar, composer and feed all
+     follow the one token. */
+  .main-column { --content-inset: 12px; }
   .memo-images { grid-template-columns: repeat(2, 1fr); }
   .memo-images.count-1 { grid-template-columns: minmax(0, 1fr); }
   .lightbox { padding: 16px; }
