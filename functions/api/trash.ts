@@ -1,12 +1,12 @@
 import { requireAuth } from "./_utils/auth";
-import { nextSeq } from "./_utils/memos";
+import { contentKeyOf } from "./_utils/crypto";
 import { json, requireSameOrigin } from "./_utils/response";
 import type { AppContext } from "./_utils/types";
 
 /**
- * DELETE /api/trash — empty the recycle bin: hard-delete every trashed memo
- * and its attachments. One shared tombstone seq is enough; sync only needs
- * "purged after N".
+ * Empty Trash as one set-based transaction. The selected set cannot change
+ * between tombstone creation, attachment deletion, and memo deletion. Each
+ * tombstone receives its own seq so sync pages remain strictly bounded.
  */
 export async function onRequestDelete(context: AppContext): Promise<Response> {
   const originError = requireSameOrigin(context.request);
@@ -14,20 +14,33 @@ export async function onRequestDelete(context: AppContext): Promise<Response> {
   const denied = await requireAuth(context);
   if (denied) return denied;
 
-  const result = await context.env.DB.prepare("SELECT id FROM memos WHERE deleted_at IS NOT NULL").all<{ id: string }>();
-  const ids = (result.results ?? []).map((row) => row.id);
-  if (ids.length === 0) {
-    return json({ ok: true, purgedIds: [] });
-  }
+  // Empty Trash never needs plaintext, but it is irreversible. Validate the
+  // deployment key first so a stale page cannot destroy encrypted rows while
+  // the server is running with a missing or rotated MEMO_ENC_KEY.
+  await contentKeyOf(context.env);
 
-  const seq = await nextSeq(context.env.DB);
-  const statements: D1PreparedStatement[] = [];
-  for (const id of ids) {
-    statements.push(context.env.DB.prepare("DELETE FROM memo_images WHERE memo_id = ?").bind(id));
-    statements.push(context.env.DB.prepare("INSERT OR REPLACE INTO tombstones (id, seq) VALUES (?, ?)").bind(id, seq));
-  }
-  statements.push(context.env.DB.prepare("DELETE FROM memos WHERE deleted_at IS NOT NULL"));
-  await context.env.DB.batch(statements);
+  const db = context.env.DB;
+  const results = await db.batch([
+    db.prepare(
+      `UPDATE sync_counter
+       SET n = n + (SELECT COUNT(*) FROM memos WHERE deleted_at IS NOT NULL)
+       WHERE id = 1 AND EXISTS (SELECT 1 FROM memos WHERE deleted_at IS NOT NULL)
+       RETURNING n`
+    ),
+    db.prepare(
+      `INSERT OR REPLACE INTO tombstones (id, seq)
+       SELECT id,
+              (SELECT n FROM sync_counter WHERE id = 1)
+                - (SELECT COUNT(*) FROM memos WHERE deleted_at IS NOT NULL)
+                + ROW_NUMBER() OVER (ORDER BY id)
+       FROM memos
+       WHERE deleted_at IS NOT NULL
+       RETURNING id, seq`
+    ),
+    db.prepare("DELETE FROM memo_images WHERE memo_id IN (SELECT id FROM memos WHERE deleted_at IS NOT NULL)"),
+    db.prepare("DELETE FROM memos WHERE deleted_at IS NOT NULL")
+  ]);
 
-  return json({ ok: true, purgedIds: ids });
+  const purged = ((results[1]?.results ?? []) as unknown as { id: string; seq: number }[]).sort((left, right) => left.seq - right.seq);
+  return json({ ok: true, purged, purgedIds: purged.map((row) => row.id) });
 }

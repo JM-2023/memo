@@ -1,5 +1,6 @@
 import { Hash, Image as ImageIcon, ImagePlus, Link2, Loader2, Send, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
+import { ApiError } from "../lib/api";
 import { compressImage } from "../lib/images";
 import { useI18n } from "../lib/i18n";
 import type { MemoImage, NewImagePayload } from "../lib/types";
@@ -14,9 +15,11 @@ interface EditorProps {
   existingImages?: MemoImage[];
   knownTags: string[];
   busy: boolean;
-  onSubmit: (data: { content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
+  onSubmit: (data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
   onCancel?: () => void;
   autoFocus?: boolean;
+  conflictMessage?: string | null;
+  onAcceptRemoteBase?: () => void;
 }
 
 interface Suggestion {
@@ -33,7 +36,18 @@ interface Suggestion {
  * (all compressed client-side and stored), or as an external link that
  * renders as a preview without touching the database.
  */
-export function Editor({ mode, initialContent = "", existingImages = [], knownTags, busy, onSubmit, onCancel, autoFocus }: EditorProps) {
+export function Editor({
+  mode,
+  initialContent = "",
+  existingImages = [],
+  knownTags,
+  busy,
+  onSubmit,
+  onCancel,
+  autoFocus,
+  conflictMessage,
+  onAcceptRemoteBase
+}: EditorProps) {
   const { errorMessage, tr } = useI18n();
   const tip = useTip();
   const [content, setContent] = useState(initialContent);
@@ -52,6 +66,9 @@ export function Editor({ mode, initialContent = "", existingImages = [], knownTa
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const linkRef = useRef<HTMLInputElement>(null);
+  // Stable across ambiguous network failures; rotate only after a confirmed
+  // create so retrying the same draft remains idempotent.
+  const draftIdRef = useRef(crypto.randomUUID());
 
   const keptExisting = useMemo(() => existingImages.filter((image) => !removedIds.includes(image.id)), [existingImages, removedIds]);
 
@@ -68,7 +85,7 @@ export function Editor({ mode, initialContent = "", existingImages = [], knownTa
     drop();
   }
   const totalImages = keptExisting.length + newImages.length;
-  const canSubmit = !busy && compressing === 0 && (content.trim().length > 0 || totalImages > 0);
+  const canSubmit = !busy && !conflictMessage && compressing === 0 && (content.trim().length > 0 || totalImages > 0);
 
   useEffect(() => {
     autoGrow();
@@ -85,6 +102,19 @@ export function Editor({ mode, initialContent = "", existingImages = [], knownTa
   useEffect(() => {
     if (linkOpen) linkRef.current?.focus();
   }, [linkOpen]);
+
+  // If an update committed but its response was lost, the conflict payload
+  // will contain our stable image ids. Retire the matching local payloads so
+  // accepting the new base does not try to insert the same attachments again.
+  useEffect(() => {
+    if (newImages.length === 0 || existingImages.length === 0) return;
+    const storedIds = new Set(existingImages.map((image) => image.id));
+    const committed = newImages.filter((image) => storedIds.has(image.id));
+    if (committed.length === 0) return;
+    for (const image of committed) URL.revokeObjectURL(image.previewUrl);
+    setNewImages((current) => current.filter((image) => !storedIds.has(image.id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingImages]);
 
   // Object URLs for pending attachments leak unless revoked; only revoke on
   // unmount (successful submit unmounts or clears the list).
@@ -283,11 +313,13 @@ export function Editor({ mode, initialContent = "", existingImages = [], knownTa
     try {
       // Attachments mid-exit-animation count as removed already.
       const ok = await onSubmit({
+        clientId: draftIdRef.current,
         content: content.trim(),
         newImages: newImages.filter((image) => !removingKeys.has(image.previewUrl)),
         removeImageIds: [...removedIds, ...existingImages.filter((image) => removingKeys.has(image.id)).map((image) => image.id)]
       });
       if (ok && mode === "create") {
+        draftIdRef.current = crypto.randomUUID();
         setContent("");
         setNewImages([]);
         previewUrls.current = [];
@@ -297,6 +329,20 @@ export function Editor({ mode, initialContent = "", existingImages = [], knownTa
         requestAnimationFrame(autoGrow);
       }
     } catch (cause) {
+      const rotateCreateId =
+        mode === "create" && cause instanceof ApiError && (cause.code === "MEMO_ID_RETIRED" || cause.code === "VERSION_CONFLICT");
+      if (rotateCreateId) {
+        // Keep the draft, but rotate the stable create id so another save can
+        // neither resurrects a purge nor overwrites an edited existing memo.
+        draftIdRef.current = crypto.randomUUID();
+        setError(
+          tr(
+            "The existing memo was kept. Your draft is safe; save again to create it as a new memo.",
+            "现有笔记已保留。草稿仍然安全；再次保存会另建一条笔记。"
+          )
+        );
+        return;
+      }
       setError(errorMessage(cause, "Couldn’t save the memo", "保存失败"));
     }
   }
@@ -357,7 +403,7 @@ export function Editor({ mode, initialContent = "", existingImages = [], knownTa
                 settleRemove(image.id, () => setRemovedIds((value) => [...value, image.id]));
               }}
             >
-              <img src={`/api/images/${image.id}`} alt="" />
+              <img src={`/api/images/${image.id}`} alt="" decoding="async" />
               <button
                 type="button"
                 className="attachment-remove"
@@ -380,7 +426,7 @@ export function Editor({ mode, initialContent = "", existingImages = [], knownTa
                 });
               }}
             >
-              <img src={image.previewUrl} alt="" />
+              <img src={image.previewUrl} alt="" decoding="async" />
               <button
                 type="button"
                 className="attachment-remove"
@@ -429,6 +475,16 @@ export function Editor({ mode, initialContent = "", existingImages = [], knownTa
       </div>
 
       {error ? <p className="editor-error">{error}</p> : null}
+      {conflictMessage ? (
+        <div className="editor-conflict" role="alert">
+          <p>{conflictMessage}</p>
+          {onAcceptRemoteBase ? (
+            <button type="button" className="ghost-button" onClick={onAcceptRemoteBase}>
+              {tr("Keep my draft and continue", "保留草稿并继续")}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="editor-bar">
         <div className="editor-tools">

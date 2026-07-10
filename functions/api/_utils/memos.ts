@@ -3,6 +3,7 @@
 export interface MemoRow {
   id: string;
   content: string;
+  content_format: string;
   created_at: string;
   updated_at: string;
   pinned_at: string | null;
@@ -20,7 +21,18 @@ export interface ImageMetaRow {
   bytes: number;
 }
 
-export const MEMO_COLUMNS = "id, content, created_at, updated_at, pinned_at, deleted_at, seq";
+export const MEMO_COLUMNS = "id, content, content_format, created_at, updated_at, pinned_at, deleted_at, seq";
+
+export const CURRENT_SEQ_SQL = "(SELECT n FROM sync_counter WHERE id = 1)";
+export const DEFAULT_SYNC_PAGE_SIZE = 100;
+export const MAX_SYNC_PAGE_SIZE = 200;
+
+/** Clamp a user-provided page size to a predictable per-request budget. */
+export function parsePageLimit(value: string | null, fallback = DEFAULT_SYNC_PAGE_SIZE): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(MAX_SYNC_PAGE_SIZE, Math.max(1, Math.floor(parsed)));
+}
 
 export interface MemoJson {
   id: string;
@@ -73,14 +85,18 @@ export function shapeTagMeta(row: TagMetaRow): TagMetaJson {
 }
 
 /**
- * Atomically claim the next global sequence number. D1 serialises writes per
- * database, so RETURNING hands every caller a distinct value; gaps from failed
- * follow-up writes are harmless.
+ * Build (but do not execute) the counter claim for a mutation transaction.
+ * The caller MUST put this statement and every business write in the same
+ * D1Database.batch(). The predicate is repeated by the business statement so
+ * an OCC conflict/idempotent no-op neither changes data nor consumes a seq.
  */
-export async function nextSeq(db: D1Database): Promise<number> {
-  const row = await db.prepare("UPDATE sync_counter SET n = n + 1 WHERE id = 1 RETURNING n").first<{ n: number }>();
-  if (!row) {
-    throw new Error("sync_counter row missing — run migrations");
-  }
-  return row.n;
+export function claimSeq(db: D1Database, predicateSql: string, bindings: unknown[] = []): D1PreparedStatement {
+  return db
+    .prepare(`UPDATE sync_counter SET n = n + 1 WHERE id = 1 AND (${predicateSql}) RETURNING n`)
+    .bind(...bindings);
+}
+
+export function claimedSeq(result: D1Result<unknown> | undefined): number | null {
+  const row = result?.results?.[0] as { n?: unknown } | undefined;
+  return typeof row?.n === "number" && Number.isSafeInteger(row.n) ? row.n : null;
 }

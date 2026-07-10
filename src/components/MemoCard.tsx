@@ -49,13 +49,15 @@ interface MemoCardProps {
   knownTags: string[];
   editing: boolean;
   savingEdit: boolean;
+  editConflict: boolean;
   /** Multi-select mode: the whole card becomes a toggle, actions retire. */
   selecting: boolean;
   selected: boolean;
   onToggleSelect: () => void;
   onStartEdit: () => void;
   onCancelEdit: () => void;
-  onSaveEdit: (data: { content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
+  onSaveEdit: (data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
+  onAcceptEditConflict: () => void;
   onTogglePin: () => void;
   onCopy: () => void;
   onDelete: () => void;
@@ -232,6 +234,15 @@ export function MemoCard(props: MemoCardProps) {
           existingImages={memo.images}
           knownTags={props.knownTags}
           busy={props.savingEdit}
+          conflictMessage={
+            props.editConflict
+              ? tr(
+                  "This memo changed elsewhere. Your draft is preserved. Continue only if you intend to save it over the latest version.",
+                  "这条笔记已在别处更新。你的草稿已保留；确认要基于最新版本继续后，再次保存会覆盖远端内容。"
+                )
+              : null
+          }
+          onAcceptRemoteBase={props.onAcceptEditConflict}
           onSubmit={props.onSaveEdit}
           onCancel={props.onCancelEdit}
           autoFocus
@@ -297,7 +308,14 @@ export function MemoCard(props: MemoCardProps) {
                   onClick={() => props.onOpenImage(lightboxItems, index)}
                   aria-label={tr("View image", "查看图片")}
                 >
-                  <img src={`/api/images/${image.id}`} alt="" loading="lazy" width={image.width || undefined} height={image.height || undefined} />
+                  <img
+                    src={`/api/images/${image.id}`}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    width={image.width || undefined}
+                    height={image.height || undefined}
+                  />
                 </button>
               ))}
               {externalUrls.map((url) =>
@@ -314,7 +332,7 @@ export function MemoCard(props: MemoCardProps) {
                     onClick={() => props.onOpenImage(lightboxItems, Math.max(0, lightboxItems.findIndex((item) => item.src === url)))}
                     aria-label={tr("View external image", "查看外链图片")}
                   >
-                    <img src={url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => markBroken(url)} />
+                    <img src={url} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => markBroken(url)} />
                     <span className="ext-badge" aria-hidden="true">
                       <Link2 size={11} />
                     </span>

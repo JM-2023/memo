@@ -16,12 +16,13 @@ import { StatsModal } from "./components/StatsModal";
 import { SwapText } from "./components/SwapText";
 import {
   AuthRequiredError,
+  ApiError,
   bootstrap,
   createMemo,
   emptyTrash,
   exportData,
   getAuthStatus,
-  importData,
+  importDataInChunks,
   login,
   logout,
   pinTag,
@@ -35,11 +36,13 @@ import {
   updateMemo,
   type BackupPayload
 } from "./lib/api";
-import { adoptCacheKey, clearSnapshot, mergeMemoDelta, mergeTagDelta, openSnapshot, peekSnapshotCursor, saveSnapshot } from "./lib/cache";
+import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, readSealedSnapshot, saveSnapshot } from "./lib/cache";
 import { dateKey, formatDayLabel } from "./lib/dates";
 import { useI18n } from "./lib/i18n";
+import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
 import { countsByDay, dayKeyOf } from "./lib/stats";
-import { buildTagTree, isValidTagPath, tagMatches, tagsOf } from "./lib/tags";
+import { applySyncDelta, createSyncState, memosOf, purgedOf, tagsOfState, type PurgedMemo } from "./lib/syncState";
+import { buildTagTree, isValidTagPath, tagMatches, tagRenamePathsOverlap, tagsOf } from "./lib/tags";
 import { applyTheme, loadTheme, nextTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, NewImagePayload, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
@@ -57,6 +60,36 @@ interface ToastState {
 }
 
 const SORT_KEYS: SortKey[] = ["created-desc", "created-asc", "updated-desc", "updated-asc"];
+const EMPTY_TAGS: string[] = [];
+const searchTextCache = new WeakMap<Memo, string>();
+
+function searchableText(memo: Memo): string {
+  let value = searchTextCache.get(memo);
+  if (value === undefined) {
+    value = memo.content.toLowerCase();
+    searchTextCache.set(memo, value);
+  }
+  return value;
+}
+
+async function mapSettledWithLimit<T, R>(items: readonly T[], limit: number, worker: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  const results = new Array<PromiseSettledResult<R>>(items.length);
+  let cursor = 0;
+  async function consume() {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      try {
+        results[index] = { status: "fulfilled", value: await worker(items[index]) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, consume));
+  return results;
+}
 
 const SORT_COMPARATORS: Record<SortKey, (a: Memo, b: Memo) => number> = {
   "created-desc": (a, b) => b.createdAt.localeCompare(a.createdAt),
@@ -102,7 +135,8 @@ const FEED_PAGE = 80;
 interface FeedHandlers {
   startEdit: (id: string) => void;
   cancelEdit: () => void;
-  saveEdit: (memo: Memo, data: { content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
+  saveEdit: (memo: Memo, data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
+  acceptEditConflict: (id: string) => void;
   togglePin: (memo: Memo) => void;
   copy: (memo: Memo) => void;
   trash: (memo: Memo) => void;
@@ -119,6 +153,7 @@ interface FeedItemProps {
   knownTags: string[];
   editing: boolean;
   savingEdit: boolean;
+  editConflict: boolean;
   selecting: boolean;
   selected: boolean;
   vtName: string | undefined;
@@ -136,7 +171,7 @@ interface FeedItemProps {
  * deliberately left out of the equality check.
  */
 const FeedItem = reactMemo(
-  function FeedItem({ memo, variant, knownTags, editing, savingEdit, selecting, selected, vtName, getEntering, delay, handlers }: FeedItemProps) {
+  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, selecting, selected, vtName, getEntering, delay, handlers }: FeedItemProps) {
     return (
       <MemoSlot vtName={vtName} entering={getEntering()} delay={delay}>
         <MemoCard
@@ -145,12 +180,14 @@ const FeedItem = reactMemo(
           knownTags={knownTags}
           editing={editing}
           savingEdit={savingEdit}
+          editConflict={editConflict}
           selecting={selecting}
           selected={selected}
           onToggleSelect={() => handlers.toggleSelect(memo)}
           onStartEdit={() => handlers.startEdit(memo.id)}
           onCancelEdit={handlers.cancelEdit}
           onSaveEdit={(data) => handlers.saveEdit(memo, data)}
+          onAcceptEditConflict={() => handlers.acceptEditConflict(memo.id)}
           onTogglePin={() => handlers.togglePin(memo)}
           onCopy={() => handlers.copy(memo)}
           onDelete={() => handlers.trash(memo)}
@@ -168,6 +205,7 @@ const FeedItem = reactMemo(
     prev.knownTags === next.knownTags &&
     prev.editing === next.editing &&
     prev.savingEdit === next.savingEdit &&
+    prev.editConflict === next.editConflict &&
     prev.selecting === next.selecting &&
     prev.selected === next.selected &&
     prev.vtName === next.vtName &&
@@ -188,9 +226,24 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>("checking");
   const [needsSetup, setNeedsSetup] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
-  const [memos, setMemos] = useState<Memo[]>([]);
-  // path → pinnedAt for pinned tags (server-side tag_meta, synced like memos).
-  const [pinnedTags, setPinnedTags] = useState<Map<string, string>>(new Map());
+  const [syncState, setSyncState] = useState(() => createSyncState());
+  // Cursor paired with the rendered state for cache persistence. The network
+  // cursor may advance just before React commits a delta; stamping that newer
+  // cursor onto the previous render could make a warm start skip the delta.
+  const [snapshotCursor, setSnapshotCursor] = useState(0);
+  const [snapshotSyncEpoch, setSnapshotSyncEpoch] = useState("");
+  const syncStateRef = useRef(syncState);
+  syncStateRef.current = syncState;
+  // Invalidates results from requests that started under an older session.
+  // This matters when a delayed mutation resolves after logout + re-login:
+  // its response must never be merged into the newly bootstrapped notebook.
+  const sessionEpochRef = useRef(0);
+  const skipNextSnapshotSaveRef = useRef(false);
+  const memos = useMemo(() => memosOf(syncState), [syncState.memos]);
+  const pinnedTags = useMemo(
+    () => new Map([...syncState.tags.values()].filter((tag) => tag.pinnedAt).map((tag) => [tag.path, tag.pinnedAt as string])),
+    [syncState.tags]
+  );
   const [theme, setTheme] = useState<ThemeChoice>(loadTheme);
 
   const [view, setView] = useState<View>("memos");
@@ -202,6 +255,8 @@ export default function App() {
 
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const editingBaseSeqRef = useRef<number | null>(null);
+  const [editConflictId, setEditConflictId] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   // Multi-select mode: entered from the location dropdown, exits via 取消 /
   // Escape / view switches / a fully successful batch delete.
@@ -250,56 +305,61 @@ export default function App() {
     localStorage.setItem("memo-sort", sortKey);
   }, [sortKey]);
 
-  const upsertMemos = useCallback((changed: Memo[], purged: string[]) => {
-    setMemos((list) => {
-      const byId = new Map(list.map((memo) => [memo.id, memo]));
-      for (const memo of changed) byId.set(memo.id, memo);
-      for (const id of purged) byId.delete(id);
-      return [...byId.values()];
-    });
+  const applySyncChanges = useCallback((changed: readonly Memo[], purged: readonly PurgedMemo[], tags: readonly TagMeta[], cursor?: number) => {
+    setSyncState((current) => applySyncDelta(current, { memos: changed, purged, tags }));
+    if (cursor !== undefined) setSnapshotCursor((current) => Math.max(current, cursor));
   }, []);
-
-  /** Merge touched tag_meta rows; a NULL pinnedAt row erases the pin. */
-  const applyTagMeta = useCallback((tags: TagMeta[]) => {
-    if (tags.length === 0) return;
-    setPinnedTags((current) => {
-      const next = new Map(current);
-      for (const tag of tags) {
-        if (tag.pinnedAt) next.set(tag.path, tag.pinnedAt);
-        else next.delete(tag.path);
-      }
-      return next;
-    });
-  }, []);
-
-  const applySyncChanges = useCallback(
-    (changed: Memo[], purged: string[], tags: TagMeta[]) => {
-      if (changed.length > 0 || purged.length > 0) upsertMemos(changed, purged);
-      applyTagMeta(tags);
-    },
-    [upsertMemos, applyTagMeta]
-  );
 
   const dropToLogin = useCallback(() => {
+    sessionEpochRef.current += 1;
+    forgetCacheKey();
     setPhase("login");
-    setMemos([]);
+    setSyncState(createSyncState());
+    setSnapshotCursor(0);
+    setSnapshotSyncEpoch("");
+    setEditingId(null);
+    setEditConflictId(null);
+    setChangingPasscode(false);
     showToast(tr("Your session expired. Enter your passcode again.", "登录已过期，请重新输入密码"), "error");
   }, [showToast, tr]);
 
-  const { setCursor, getCursor, runSync, notifyPeers } = useSync({
-    enabled: phase === "ready",
+  const handlePeerLogout = useCallback(() => {
+    sessionEpochRef.current += 1;
+    void invalidateSnapshot();
+    setSyncState(createSyncState());
+    setSnapshotCursor(0);
+    setSnapshotSyncEpoch("");
+    setEditingId(null);
+    setEditConflictId(null);
+    setChangingPasscode(false);
+    setPhase("login");
+    showToast(tr("Another tab logged out. Enter your passcode again.", "另一个标签页已退出，请重新输入密码"), "error");
+  }, [showToast, tr]);
+
+  const handleServerReset = useCallback(() => {
+    sessionEpochRef.current += 1;
+    void invalidateSnapshot().finally(() => window.location.reload());
+  }, []);
+
+  const { setCursor, setSyncEpoch, runSync, notifyPeers, notifyLogout } = useSync({
+    // Changing the passcode rotates session_generation and the cookie. Abort
+    // old-cookie heartbeats during that window so a legitimate success cannot
+    // be followed by a stale 401 that drops every tab back to the gate.
+    enabled: phase === "ready" && !changingPasscode,
     applyChanges: applySyncChanges,
-    onAuthLost: dropToLogin
+    onAuthLost: dropToLogin,
+    onPeerLogout: handlePeerLogout,
+    onServerReset: handleServerReset
   });
 
   /** Apply a mutation response locally, then reconcile cursor + sibling tabs. */
   const commitMutation = useCallback(
-    (memo?: Memo) => {
-      if (memo) upsertMemos([memo], []);
+    (delta: { memos?: Memo[]; purged?: PurgedMemo[]; tags?: TagMeta[] }) => {
+      applySyncChanges(delta.memos ?? [], delta.purged ?? [], delta.tags ?? []);
       void runSync();
       notifyPeers();
     },
-    [upsertMemos, runSync, notifyPeers]
+    [applySyncChanges, runSync, notifyPeers]
   );
 
   const enterApp = useCallback(
@@ -309,45 +369,119 @@ export default function App() {
       // constant-size no matter how large the notebook grows. Auth errors
       // propagate to the caller exactly like the bootstrap path's.
       let entered = false;
-      const cachedCursor = await peekSnapshotCursor();
-      if (cachedCursor !== null) {
-        const delta = await syncSince(cachedCursor);
+      skipNextSnapshotSaveRef.current = false;
+      const sealed = await readSealedSnapshot();
+      if (sealed) {
+        let delta = await syncSince(sealed.cursor, { includeCacheKey: true });
         adoptCacheKey(delta.cacheKey);
-        const snapshot = await openSnapshot();
-        if (snapshot) {
-          setMemos(mergeMemoDelta(snapshot.memos, delta.memos, delta.purged));
-          const tags = mergeTagDelta(snapshot.tags, delta.tags);
-          setPinnedTags(new Map(tags.filter((tag) => tag.pinnedAt).map((tag) => [tag.path, tag.pinnedAt as string])));
-          setCursor(delta.cursor);
-          entered = true;
+        const snapshot = await openSnapshot(sealed);
+        // The server epoch catches a replaced database even when its new
+        // numeric counter has already grown past this sleeping client.
+        if (snapshot && delta.syncEpoch === snapshot.syncEpoch && delta.cursor >= sealed.cursor) {
+          const warmSyncEpoch = snapshot.syncEpoch;
+          let warmValid = true;
+          let nextState = createSyncState(snapshot.memos, snapshot.tags, snapshot.purged);
+          let warmChanged = delta.memos.length > 0 || delta.purged.length > 0 || delta.tags.length > 0;
+          nextState = applySyncDelta(nextState, delta);
+          let cursor = delta.cursor;
+          while (delta.hasMore) {
+            const previous = cursor;
+            delta = await syncSince(cursor);
+            adoptCacheKey(delta.cacheKey);
+            if (delta.syncEpoch !== warmSyncEpoch) {
+              warmValid = false;
+              break;
+            }
+            warmChanged ||= delta.memos.length > 0 || delta.purged.length > 0 || delta.tags.length > 0;
+            nextState = applySyncDelta(nextState, delta);
+            cursor = delta.cursor;
+            if (cursor <= previous) throw new Error("Sync page did not advance its cursor");
+          }
+          if (warmValid) {
+            setSyncState(nextState);
+            setSnapshotCursor(cursor);
+            setSnapshotSyncEpoch(warmSyncEpoch);
+            setCursor(cursor);
+            setSyncEpoch(warmSyncEpoch);
+            // The sealed record is already the exact working set when the warm
+            // delta is empty. Avoid immediately re-encrypting the same notebook.
+            skipNextSnapshotSaveRef.current = !warmChanged;
+            entered = true;
+          }
         }
-        // Unreadable snapshot (rotated key, stale format) → cold path below.
+        if (!entered) {
+          // Corrupt ciphertext, a rotated cache key, or a lower server cursor
+          // / different server epoch means this record belongs to unusable
+          // history. Clear it before cold bootstrap.
+          await invalidateSnapshot();
+        }
       }
       if (!entered) {
-        const data = await bootstrap();
-        adoptCacheKey(data.cacheKey);
-        setMemos(data.memos);
-        setPinnedTags(new Map(data.tags.filter((tag) => tag.pinnedAt).map((tag) => [tag.path, tag.pinnedAt as string])));
-        setCursor(data.cursor);
+        let page = await bootstrap();
+        adoptCacheKey(page.cacheKey);
+        const snapshotCursor = page.cursor;
+        const bootstrapSyncEpoch = page.syncEpoch;
+        let nextState = createSyncState(page.memos, page.tags);
+        let after = page.nextAfter;
+        while (page.hasMore) {
+          if (after === undefined || after === null) throw new Error("Bootstrap page is missing its continuation cursor");
+          const previous = after;
+          page = await bootstrap(after, snapshotCursor);
+          if (page.syncEpoch !== bootstrapSyncEpoch) throw new Error("Database history changed during bootstrap");
+          adoptCacheKey(page.cacheKey);
+          nextState = applySyncDelta(nextState, { memos: page.memos, tags: page.tags });
+          after = page.nextAfter;
+          if (page.hasMore && (after === undefined || after === null || after === previous)) {
+            throw new Error("Bootstrap page did not advance its continuation cursor");
+          }
+        }
+        setSyncState(nextState);
+        setSnapshotCursor(snapshotCursor);
+        setSnapshotSyncEpoch(bootstrapSyncEpoch);
+        setCursor(snapshotCursor);
+        setSyncEpoch(bootstrapSyncEpoch);
       }
+      setBootError(null);
       setPhase("ready");
       if (withReveal) {
         setReveal(true);
         window.setTimeout(() => setReveal(false), 900);
       }
     },
-    [setCursor]
+    [setCursor, setSyncEpoch]
   );
 
   // Persist the working set (sealed) once changes settle.
   useEffect(() => {
-    if (phase !== "ready") return;
+    if (phase !== "ready" || !snapshotSyncEpoch) return;
+    if (skipNextSnapshotSaveRef.current) {
+      skipNextSnapshotSaveRef.current = false;
+      return;
+    }
+    let idleId = 0;
+    let fallbackId = 0;
+    const save = () => {
+      void saveSnapshot({
+        cursor: snapshotCursor,
+        syncEpoch: snapshotSyncEpoch,
+        memos,
+        tags: tagsOfState(syncState),
+        purged: purgedOf(syncState)
+      });
+    };
     const timer = window.setTimeout(() => {
-      const tags: TagMeta[] = [...pinnedTags].map(([path, pinnedAt]) => ({ path, pinnedAt, seq: 0 }));
-      void saveSnapshot({ cursor: getCursor(), memos, tags });
-    }, 800);
-    return () => window.clearTimeout(timer);
-  }, [phase, memos, pinnedTags, getCursor]);
+      if (typeof window.requestIdleCallback === "function") {
+        idleId = window.requestIdleCallback(save, { timeout: 3_000 });
+      } else {
+        fallbackId = window.setTimeout(save, 0);
+      }
+    }, 600);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearTimeout(fallbackId);
+      if (idleId) window.cancelIdleCallback(idleId);
+    };
+  }, [phase, snapshotCursor, snapshotSyncEpoch, syncState, memos]);
 
   useEffect(() => {
     let cancelled = false;
@@ -385,9 +519,12 @@ export default function App() {
   /** Session-expiry aware wrapper: any 401 mid-use drops back to the gate. */
   const guard = useCallback(
     async <T,>(action: () => Promise<T>): Promise<T | undefined> => {
+      const epoch = sessionEpochRef.current;
       try {
-        return await action();
+        const result = await action();
+        return epoch === sessionEpochRef.current ? result : undefined;
       } catch (cause) {
+        if (epoch !== sessionEpochRef.current) return undefined;
         if (cause instanceof AuthRequiredError) {
           dropToLogin();
           return undefined;
@@ -416,6 +553,29 @@ export default function App() {
   }, [activeMemos, locale]);
   const byDay = useMemo(() => countsByDay(activeMemos), [activeMemos]);
 
+  useEffect(() => {
+    if (!activeTag) return;
+    const stillExists = activeMemos.some((memo) => tagsOf(memo).some((tag) => tagMatches(tag, activeTag)));
+    if (!stillExists) setActiveTag(null);
+  }, [activeTag, activeMemos]);
+
+  useEffect(() => {
+    if (!editingId) {
+      editingBaseSeqRef.current = null;
+      setEditConflictId(null);
+      return;
+    }
+    const current = syncState.memos.get(editingId);
+    if (!current || current.deletedAt) {
+      setEditingId(null);
+      setEditConflictId(null);
+      showToast(tr("This memo was removed elsewhere, so editing was closed.", "这条笔记已在别处删除，编辑已关闭"), "error");
+      return;
+    }
+    const baseSeq = editingBaseSeqRef.current;
+    if (baseSeq !== null && current.seq > baseSeq) setEditConflictId(editingId);
+  }, [editingId, syncState.memos, showToast, tr]);
+
   const trimmedQuery = query.trim().toLowerCase();
   // Filtering follows the keystroke at deferred priority: the input never
   // waits for a big feed to re-render.
@@ -431,7 +591,7 @@ export default function App() {
       list = list.filter((memo) => dayKeyOf(memo) === activeDay);
     }
     if (deferredQuery) {
-      list = list.filter((memo) => memo.content.toLowerCase().includes(deferredQuery));
+      list = list.filter((memo) => searchableText(memo).includes(deferredQuery));
     }
     const compare = SORT_COMPARATORS[sortKey];
     return [...list].sort((a, b) => {
@@ -625,26 +785,29 @@ export default function App() {
   );
 
   async function handleLogin(pin: string) {
+    sessionEpochRef.current += 1;
     await login(pin);
     await enterApp(true);
   }
 
   async function handleSetup(pin: string) {
+    sessionEpochRef.current += 1;
     await setupPassword(pin);
     setNeedsSetup(false);
     await enterApp(true);
   }
 
   async function handleLogout() {
+    sessionEpochRef.current += 1;
     try {
       await logout();
     } catch {
       // Even a failed call clears the local session view.
     }
-    // Explicit logout means "leave nothing behind on this device". (A mere
-    // session expiry keeps the snapshot — it is sealed without a session.)
-    void clearSnapshot();
-    setMemos([]);
+    notifyLogout();
+    setSyncState(createSyncState());
+    setSnapshotCursor(0);
+    setSnapshotSyncEpoch("");
     setActiveTag(null);
     setActiveDay(null);
     setQuery("");
@@ -652,32 +815,92 @@ export default function App() {
     setSelectMode(false);
     setSelected(new Set());
     setPhase("login");
+    await invalidateSnapshot();
   }
 
-  async function handleCreate(data: { content: string; newImages: NewImagePayload[]; removeImageIds: string[] }): Promise<boolean> {
+  async function handleCreate(data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }): Promise<boolean> {
     setCreating(true);
     try {
-      const result = await guard(() => createMemo(data.content, data.newImages));
+      const result = await guard(() => createMemo(data.clientId, data.content, data.newImages));
       if (!result) return false;
-      commitMutation(result.memo);
+      let saved = result.memo;
+      if (result.idempotent) {
+        // The first create committed but its response was lost. Apply any edits
+        // made to the still-open draft as a version-checked update instead of
+        // clearing them or creating a duplicate memo.
+        const draftImageIds = new Set(data.newImages.map((image) => image.id));
+        const storedImageIds = new Set(saved.images.map((image) => image.id));
+        const resumed = await guard(() =>
+          updateMemo(saved.id, {
+            expectedSeq: saved.seq,
+            content: data.content,
+            addImages: data.newImages.filter((image) => !storedImageIds.has(image.id)),
+            removeImageIds: saved.images.filter((image) => !draftImageIds.has(image.id)).map((image) => image.id)
+          })
+        );
+        if (!resumed?.memo) return false;
+        saved = resumed.memo;
+      }
+      commitMutation({ memos: [saved] });
       for (const image of data.newImages) URL.revokeObjectURL(image.previewUrl);
       return true;
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "VERSION_CONFLICT") {
+        if (cause.current) {
+          if (memoMatchesSubmittedDraft(cause.current, data.content, data.newImages.map((image) => image.id))) {
+            // The recovery update itself committed but its response was lost.
+            // The desired server value is authoritative success; clearing this
+            // draft avoids rotating the id and creating a duplicate memo.
+            commitMutation({ memos: [cause.current] });
+            for (const image of data.newImages) URL.revokeObjectURL(image.previewUrl);
+            return true;
+          }
+          applySyncChanges([cause.current], [], []);
+        }
+        void runSync();
+        throw cause;
+      }
+      throw cause;
     } finally {
       setCreating(false);
     }
   }
 
-  async function handleSaveEdit(memo: Memo, data: { content: string; newImages: NewImagePayload[]; removeImageIds: string[] }): Promise<boolean> {
+  function reconcileVersionConflict(cause: unknown, preserveDraft = false): boolean {
+    if (!(cause instanceof ApiError) || cause.code !== "VERSION_CONFLICT") return false;
+    if (cause.current) applySyncChanges([cause.current], [], []);
+    void runSync();
+    if (preserveDraft && editingId) setEditConflictId(editingId);
+    showToast(
+      preserveDraft
+        ? tr("A newer version arrived. Your draft is safe; review it before saving again.", "远端已有新版本，草稿已保留；请确认后再次保存")
+        : tr("This memo changed elsewhere. The latest version is now shown.", "这条笔记已在别处更新，已显示最新版本"),
+      "error"
+    );
+    return true;
+  }
+
+  async function handleSaveEdit(memo: Memo, data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }): Promise<boolean> {
     setSavingEdit(true);
     try {
       const result = await guard(() =>
-        updateMemo(memo.id, { content: data.content, addImages: data.newImages, removeImageIds: data.removeImageIds })
+        updateMemo(memo.id, {
+          expectedSeq: editingBaseSeqRef.current ?? memo.seq,
+          content: data.content,
+          addImages: data.newImages,
+          removeImageIds: data.removeImageIds
+        })
       );
-      if (!result) return false;
-      commitMutation(result.memo);
+      if (!result?.memo) return false;
+      commitMutation({ memos: [result.memo] });
       setEditingId(null);
+      setEditConflictId(null);
+      editingBaseSeqRef.current = null;
       showToast(tr("Saved", "已保存"));
       return true;
+    } catch (cause) {
+      if (reconcileVersionConflict(cause, true)) return false;
+      throw cause;
     } finally {
       setSavingEdit(false);
     }
@@ -685,14 +908,17 @@ export default function App() {
 
   async function handleTogglePin(memo: Memo) {
     try {
-      const result = await guard(() => updateMemo(memo.id, { pinned: !memo.pinnedAt }));
+      const result = await guard(() => updateMemo(memo.id, { expectedSeq: memo.seq, pinned: !memo.pinnedAt }));
       if (!result) return;
+      const nextMemo = result.memo ?? (result.memoPatch ? { ...memo, ...result.memoPatch } : null);
+      if (!nextMemo) return;
       // Pinning reorders the feed — let the card glide to its new slot.
-      withViewTransition(() => flushSync(() => upsertMemos([result.memo], [])));
+      withViewTransition(() => flushSync(() => applySyncChanges([nextMemo], [], [])));
       void runSync();
       notifyPeers();
-      showToast(result.memo.pinnedAt ? tr("Pinned", "已置顶") : tr("Unpinned", "已取消置顶"));
+      showToast(nextMemo.pinnedAt ? tr("Pinned", "已置顶") : tr("Unpinned", "已取消置顶"));
     } catch (cause) {
+      if (reconcileVersionConflict(cause)) return;
       showToast(errorMessage(cause, "Couldn’t update the memo", "更新失败"), "error");
     }
   }
@@ -713,43 +939,46 @@ export default function App() {
    * No height-collapse hand-off, so there is nothing to snap at the end.
    */
   const applyRemoval = useCallback(
-    (changed: Memo[], purged: string[]) => {
-      withViewTransition(() => flushSync(() => upsertMemos(changed, purged)));
+    (changed: Memo[], purged: PurgedMemo[]) => {
+      withViewTransition(() => flushSync(() => applySyncChanges(changed, purged, [])));
       void runSync();
       notifyPeers();
     },
-    [upsertMemos, runSync, notifyPeers]
+    [applySyncChanges, runSync, notifyPeers]
   );
 
   async function handleTrash(memo: Memo) {
     try {
-      const result = await guard(() => trashMemo(memo.id));
+      const result = await guard(() => trashMemo(memo.id, memo.seq));
       if (!result) return;
       applyRemoval([result.memo], []);
       showToast(tr("Moved to Trash", "已移入回收站"));
     } catch (cause) {
+      if (reconcileVersionConflict(cause)) return;
       showToast(errorMessage(cause, "Couldn’t delete the memo", "删除失败"), "error");
     }
   }
 
   async function handleRestore(memo: Memo) {
     try {
-      const result = await guard(() => restoreMemo(memo.id));
+      const result = await guard(() => restoreMemo(memo.id, memo.seq));
       if (!result) return;
       applyRemoval([result.memo], []);
       showToast(tr("Restored", "已恢复"));
     } catch (cause) {
+      if (reconcileVersionConflict(cause)) return;
       showToast(errorMessage(cause, "Couldn’t restore the memo", "恢复失败"), "error");
     }
   }
 
   async function handlePurge(memo: Memo) {
     try {
-      const result = await guard(() => purgeMemo(memo.id));
+      const result = await guard(() => purgeMemo(memo.id, memo.seq));
       if (!result) return;
-      applyRemoval([], [memo.id]);
+      applyRemoval([], result.purged);
       showToast(tr("Permanently deleted", "已彻底删除"));
     } catch (cause) {
+      if (reconcileVersionConflict(cause)) return;
       showToast(errorMessage(cause, "Couldn’t delete the memo", "删除失败"), "error");
     }
   }
@@ -758,7 +987,7 @@ export default function App() {
     try {
       const result = await guard(() => emptyTrash());
       if (!result) return;
-      applyRemoval([], result.purgedIds);
+      applyRemoval([], result.purged);
       showToast(tr("Trash emptied", "回收站已清空"));
     } catch (cause) {
       showToast(errorMessage(cause, "Couldn’t empty Trash", "清空失败"), "error");
@@ -771,25 +1000,34 @@ export default function App() {
    * (and the selection toolbar collapsing back into the breadcrumb) glide.
    */
   async function handleBatchTrash() {
-    const ids = [...selected].filter((id) => activeMemoIds.has(id));
-    if (ids.length === 0 || batchBusy) return;
+    const targets = [...selected]
+      .map((id) => syncStateRef.current.memos.get(id))
+      .filter((memo): memo is Memo => Boolean(memo && !memo.deletedAt));
+    if (targets.length === 0 || batchBusy) return;
+    const sessionEpoch = sessionEpochRef.current;
     setBatchBusy(true);
     try {
-      const results = await Promise.allSettled(ids.map((id) => trashMemo(id)));
+      const results = await mapSettledWithLimit(targets, 4, (memo) => trashMemo(memo.id, memo.seq));
+      if (sessionEpoch !== sessionEpochRef.current) return;
       const changed: Memo[] = [];
       const failedIds: string[] = [];
       let authLost = false;
       results.forEach((result, index) => {
         if (result.status === "fulfilled") changed.push(result.value.memo);
         else {
-          failedIds.push(ids[index]);
+          failedIds.push(targets[index].id);
           if (result.reason instanceof AuthRequiredError) authLost = true;
+          else reconcileVersionConflict(result.reason);
         }
       });
+      if (authLost) {
+        dropToLogin();
+        return;
+      }
       if (changed.length > 0) {
         withViewTransition(() =>
           flushSync(() => {
-            upsertMemos(changed, []);
+            applySyncChanges(changed, [], []);
             if (failedIds.length === 0) {
               // Job done — leave select mode in the same breath.
               setSelectMode(false);
@@ -802,10 +1040,6 @@ export default function App() {
         );
         void runSync();
         notifyPeers();
-      }
-      if (authLost) {
-        dropToLogin();
-        return;
       }
       if (failedIds.length > 0) {
         showToast(tr(`Couldn’t delete ${count(failedIds.length, "memo")}`, `有 ${count(failedIds.length, "memo")} 删除失败`), "error");
@@ -827,6 +1061,13 @@ export default function App() {
     trash: handleTrash,
     restore: handleRestore,
     purge: handlePurge,
+    acceptEditConflict: (id: string) => {
+      const current = syncStateRef.current.memos.get(id);
+      if (!current || current.deletedAt) return;
+      editingBaseSeqRef.current = current.seq;
+      setEditConflictId(null);
+      showToast(tr("Your draft is still here. Saving now will use the latest version as its base.", "草稿仍在；再次保存将以最新版本为基线"));
+    },
     pickTag,
     toggleSelect
   });
@@ -837,15 +1078,31 @@ export default function App() {
     trash: handleTrash,
     restore: handleRestore,
     purge: handlePurge,
+    acceptEditConflict: (id: string) => {
+      const current = syncStateRef.current.memos.get(id);
+      if (!current || current.deletedAt) return;
+      editingBaseSeqRef.current = current.seq;
+      setEditConflictId(null);
+      showToast(tr("Your draft is still here. Saving now will use the latest version as its base.", "草稿仍在；再次保存将以最新版本为基线"));
+    },
     pickTag,
     toggleSelect
   };
   const getEntering = useCallback(() => !enterSuppressRef.current, []);
   const feedHandlers = useMemo<FeedHandlers>(
     () => ({
-      startEdit: (id) => setEditingId(id),
-      cancelEdit: () => setEditingId(null),
+      startEdit: (id) => {
+        editingBaseSeqRef.current = syncStateRef.current.memos.get(id)?.seq ?? null;
+        setEditConflictId(null);
+        setEditingId(id);
+      },
+      cancelEdit: () => {
+        editingBaseSeqRef.current = null;
+        setEditConflictId(null);
+        setEditingId(null);
+      },
       saveEdit: (memo, data) => feedActionsRef.current.saveEdit(memo, data),
+      acceptEditConflict: (id) => feedActionsRef.current.acceptEditConflict(id),
       togglePin: (memo) => void feedActionsRef.current.togglePin(memo),
       copy: (memo) => void feedActionsRef.current.copy(memo),
       trash: (memo) => void feedActionsRef.current.trash(memo),
@@ -918,7 +1175,7 @@ export default function App() {
     try {
       const result = await guard(() => pinTag(path, pinned));
       if (!result) return;
-      applyTagMeta([result.tag]);
+      applySyncChanges([], [], [result.tag]);
       void runSync();
       notifyPeers();
       showToast(pinned ? tr("Tag pinned", "标签已置顶") : tr("Tag unpinned", "已取消置顶"));
@@ -930,6 +1187,10 @@ export default function App() {
   async function handleRenameTagConfirmed(to: string) {
     if (!renameTagTarget) return;
     const from = renameTagTarget;
+    if (tagRenamePathsOverlap(from, to)) {
+      showToast(tr("A tag cannot be renamed to its own parent or child path.", "标签不能重命名到自身的上级或下级路径"), "error");
+      return;
+    }
     setDialogBusy(true);
     try {
       const result = await guard(() => renameTag(from, to));
@@ -943,6 +1204,8 @@ export default function App() {
       notifyPeers();
       showToast(tr(`Renamed to #${to}; updated ${count(result.updated, "memo")}`, `已重命名为 #${to}，更新了 ${count(result.updated, "memo")}`));
     } catch (cause) {
+      void runSync();
+      notifyPeers();
       showToast(errorMessage(cause, "Couldn’t rename the tag", "重命名失败"), "error");
     } finally {
       setDialogBusy(false);
@@ -968,6 +1231,8 @@ export default function App() {
       notifyPeers();
       showToast(tr(`Tag removed; updated ${count(result.updated, "memo")}`, `已移除标签，更新了 ${count(result.updated, "memo")}`));
     } catch (cause) {
+      void runSync();
+      notifyPeers();
       showToast(errorMessage(cause, "Couldn’t remove the tag", "移除失败"), "error");
     }
   }
@@ -1009,7 +1274,7 @@ export default function App() {
     const { payload } = importTarget;
     setDialogBusy(true);
     try {
-      const result = await guard(() => importData(payload));
+      const result = await guard(() => importDataInChunks(payload));
       if (!result) return;
       setImportTarget(null);
       // The imported rows carry fresh seqs, so one incremental sync pulls
@@ -1022,6 +1287,10 @@ export default function App() {
           : tr("Nothing new — every memo already exists", "没有新内容，笔记都已存在")
       );
     } catch (cause) {
+      // Earlier chunks may already be committed; reconcile them and let a
+      // retry safely skip their stable ids.
+      void runSync();
+      notifyPeers();
       showToast(errorMessage(cause, "Couldn’t import the backup", "导入失败"), "error");
     } finally {
       setDialogBusy(false);
@@ -1106,7 +1375,10 @@ export default function App() {
             closeDrawer();
           }}
           onCycleTheme={() => setTheme((value) => nextTheme(value))}
-          onChangePasscode={() => setChangingPasscode(true)}
+          onChangePasscode={() => {
+            sessionEpochRef.current += 1;
+            setChangingPasscode(true);
+          }}
           onExportData={() => void handleExport()}
           onImportData={() => importFileRef.current?.click()}
           onLogout={() => void handleLogout()}
@@ -1350,9 +1622,10 @@ export default function App() {
                 key={memo.id}
                 memo={memo}
                 variant={view === "trash" ? "trash" : "normal"}
-                knownTags={knownTags}
+                knownTags={editingId === memo.id ? knownTags : EMPTY_TAGS}
                 editing={editingId === memo.id}
                 savingEdit={editingId === memo.id && savingEdit}
+                editConflict={editingId === memo.id && editConflictId === memo.id}
                 selecting={selectMode && view === "memos"}
                 selected={selectMode && selected.has(memo.id)}
                 vtName={index < 32 ? `memo-${memo.id}` : undefined}
@@ -1407,6 +1680,9 @@ export default function App() {
           busy={dialogBusy}
           validate={(value) => {
             if (value === renameTagTarget) return tr("The new name is unchanged", "新旧名称相同");
+            if (renameTagTarget && tagRenamePathsOverlap(renameTagTarget, value)) {
+              return tr("Choose a path outside this tag’s own parent/child tree", "请选择该标签上下级路径之外的位置");
+            }
             if (!isValidTagPath(value)) return tr("Use letters, numbers, -, _, or ·, with / between levels", "可用中英文、数字、-、_、·，用 / 分层");
             return null;
           }}
@@ -1422,6 +1698,7 @@ export default function App() {
       {changingPasscode ? (
         <ChangePasscode
           onClose={() => setChangingPasscode(false)}
+          onAuthLost={dropToLogin}
           onDone={() => {
             setChangingPasscode(false);
             showToast(tr("Passcode updated", "密码已更新"));

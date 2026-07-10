@@ -8,7 +8,7 @@ const TAG_PATTERN = /#([\p{L}\p{N}_\-/·]+)/gu;
 
 /** A well-formed tag path: charset segments joined by single slashes. */
 export function isValidTagPath(path: string): boolean {
-  return /^[\p{L}\p{N}_\-·]+(\/[\p{L}\p{N}_\-·]+)*$/u.test(path);
+  return new TextEncoder().encode(path).byteLength <= 128 && /^[\p{L}\p{N}_\-·]+(\/[\p{L}\p{N}_\-·]+)*$/u.test(path);
 }
 
 export function extractTags(content: string): string[] {
@@ -92,6 +92,11 @@ export interface TagNode {
 /** True when a memo tagged `tag` belongs under filter `path` (self or descendant). */
 export function tagMatches(tag: string, path: string): boolean {
   return tag === path || tag.startsWith(`${path}/`);
+}
+
+/** Overlapping subtrees cannot be replayed idempotently after an interruption. */
+export function tagRenamePathsOverlap(from: string, to: string): boolean {
+  return to.startsWith(`${from}/`) || from.startsWith(`${to}/`);
 }
 
 export function buildTagTree(memos: Memo[], pinnedAtOf?: Map<string, string>, locale = "en-US"): { tree: TagNode[]; uniqueTagCount: number } {

@@ -71,6 +71,8 @@
   /* Micro overshoot for small pops — the curve provides the bounce, so the
      motion stays continuous (no keyframed mid-flight jumps). */
   --ease-pop: cubic-bezier(0.3, 1.42, 0.52, 1);
+  /* Split-flap wheel step: ~4% overshoot reads as the flap's damped click. */
+  --ease-drum: cubic-bezier(0.3, 1.36, 0.44, 1);
 
   /* ----- Liquid glass material ----- */
   --lx: 26%;
@@ -491,15 +493,34 @@ a:hover { text-decoration: underline; }
 @keyframes heat-leave-right { to { opacity: 0; transform: translateX(22px); } }
 @keyframes heat-leave-fade { to { opacity: 0; transform: scale(0.98); } }
 @keyframes heat-arrive { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: none; } }
-/* Split-flap digits: the old character tips up over the top of the drum
-   while the new one rolls in from below (mirrored when counting down). */
-@keyframes roll-char-out-up { to { opacity: 0; transform: translateY(-0.55em) rotateX(76deg) scale(0.94); } }
-@keyframes roll-char-in-up { from { opacity: 0; transform: translateY(0.55em) rotateX(-76deg) scale(0.94); } to { opacity: 1; transform: none; } }
-@keyframes roll-char-out-down { to { opacity: 0; transform: translateY(0.55em) rotateX(-76deg) scale(0.94); } }
-@keyframes roll-char-in-down { from { opacity: 0; transform: translateY(-0.55em) rotateX(76deg) scale(0.94); } to { opacity: 1; transform: none; } }
-/* Digit columns appearing/disappearing melt the width via a 0fr track. */
-@keyframes roll-slot-grow { from { grid-template-columns: 0fr; } to { grid-template-columns: 1fr; } }
-@keyframes roll-slot-collapse { from { grid-template-columns: 1fr; } to { grid-template-columns: 0fr; } }
+/* Split-flap digits: the old and new characters ride one rigid drum — same
+   duration, same easing, a constant ~84° apart — so a step reads as a single
+   wheel-click that settles with the easing's damped overshoot. The numbers
+   model a cylinder of radius 0.62em: y = r·sin84°, scale ≈ depth recession.
+   Opacity windows overlap so the cell never reads blank mid-roll: the old
+   face stays lit while it tips over the horizon, the new face lights early. */
+@keyframes roll-char-out-up {
+  0% { opacity: 1; transform: none; }
+  55% { opacity: 0.92; }
+  84% { opacity: 0; }
+  100% { opacity: 0; transform: translateY(-0.62em) rotateX(84deg) scale(0.9); }
+}
+@keyframes roll-char-in-up {
+  0% { opacity: 0; transform: translateY(0.62em) rotateX(-84deg) scale(0.9); }
+  34% { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes roll-char-out-down {
+  0% { opacity: 1; transform: none; }
+  55% { opacity: 0.92; }
+  84% { opacity: 0; }
+  100% { opacity: 0; transform: translateY(0.62em) rotateX(-84deg) scale(0.9); }
+}
+@keyframes roll-char-in-down {
+  0% { opacity: 0; transform: translateY(-0.62em) rotateX(84deg) scale(0.9); }
+  34% { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
 /* Directional text swap (heatmap title): new copy chases the old one. */
 @keyframes swap-in-fwd { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
 @keyframes swap-in-back { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: none; } }
@@ -507,6 +528,10 @@ a:hover { text-decoration: underline; }
 @keyframes swap-out-fwd { to { opacity: 0; transform: translateX(-16px); } }
 @keyframes swap-out-back { to { opacity: 0; transform: translateX(16px); } }
 @keyframes swap-out-fade { to { opacity: 0; transform: translateY(-5px); } }
+/* Tag ranking rows: newcomers rise into their rank, dropped rows sink away
+   in place while the survivors FLIP-glide between ranks (StatsModal). */
+@keyframes tag-row-in { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
+@keyframes tag-row-out { to { opacity: 0; transform: translateY(7px); } }
 /* Attachment removal: fade, recede, then give the row its width back. */
 @keyframes attach-out {
   55% { opacity: 0; transform: scale(0.86); }
@@ -980,25 +1005,34 @@ a:hover { text-decoration: underline; }
 /* ---- Rolling digits (split-flap) ----
    Each character sits on its own drum column; only columns whose character
    changed roll over, rippling outward from the units digit. Appearing and
-   vanishing columns animate their track between 0fr and 1fr so the number's
-   width morphs instead of jumping. */
+   vanishing columns tween their track between 0fr and 1fr so the number's
+   width morphs instead of jumping — a transition (not an animation), so an
+   interrupted grow/collapse retargets from wherever the track currently is,
+   and @starting-style routes freshly inserted columns through the same tween. */
 .roll { display: inline-block; font-variant-numeric: tabular-nums; }
 .roll-inner { display: inline-flex; }
-.roll-slot { display: inline-grid; grid-template-columns: 1fr; }
-.roll-slot.is-grow,
-.roll-slot.is-collapse { animation: roll-slot-grow 0.42s var(--ease-out) both; animation-delay: calc(var(--ri) * 0.03s); }
-.roll-slot.is-collapse { animation-name: roll-slot-collapse; }
+.roll-slot {
+  display: inline-grid;
+  grid-template-columns: 1fr;
+  transition: grid-template-columns 0.5s var(--ease-out) calc(var(--ri) * 0.03s);
+}
+.roll-slot.is-collapse { grid-template-columns: 0fr; }
+@starting-style {
+  .roll-slot.is-grow { grid-template-columns: 0fr; }
+}
 .roll-pane {
   display: grid;
   min-width: 0;
   /* Clip sideways while a column melts away; stay open vertically so the
      drum can poke above/below the line box mid-roll. */
   overflow: clip visible;
-  perspective: 320px;
+  /* Em-based so the wheel's depth reads the same at every type size. */
+  perspective: 5.5em;
 }
 .roll-char { grid-area: 1 / 1; white-space: pre; backface-visibility: hidden; }
-.roll-char-in { animation: roll-char-in-up 0.5s var(--ease-out) both; animation-delay: calc(var(--ri) * 0.03s); }
-.roll-char-out { animation: roll-char-out-up 0.32s var(--ease) both; animation-delay: calc(var(--ri) * 0.03s); pointer-events: none; }
+.roll-char-in,
+.roll-char-out { animation: roll-char-in-up 0.56s var(--ease-drum) both; animation-delay: calc(var(--ri) * 0.03s); }
+.roll-char-out { animation-name: roll-char-out-up; pointer-events: none; }
 .roll-char-in.is-down { animation-name: roll-char-in-down; }
 .roll-char-out.is-down { animation-name: roll-char-out-down; }
 
@@ -1637,6 +1671,21 @@ button.crumb:active { background: var(--wash-strong); }
 .attachment-remove:active { transform: scale(0.85); }
 
 .editor-error { margin: 0; color: var(--danger); font-size: 0.82rem; font-weight: 600; animation: fade-up 0.2s var(--ease) both; }
+.editor-conflict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  border-radius: 10px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.editor-conflict p { margin: 0; }
+.editor-conflict .ghost-button { flex: 0 0 auto; }
 
 /* Drag-and-drop target: a dashed veil swells in while a file hovers. */
 .editor-drop {
@@ -1770,7 +1819,12 @@ button.crumb:active { background: var(--wash-strong); }
    keeps the animated opacity applied), which is what used to trap an open
    card menu underneath the next card. Raising the open slot fixes stacking
    for good. */
-.memo-slot { position: relative; animation: rise-in 0.6s var(--ease-out) both; }
+.memo-slot {
+  position: relative;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
+  animation: rise-in 0.6s var(--ease-out) both;
+}
 /* Slots mounted by a filter swap: the view transition owns the motion. */
 .memo-slot.no-enter { animation: none; }
 .memo-slot:has(.menu-root.is-open) { z-index: 66; }
@@ -2137,14 +2191,15 @@ button.memo-tag:active {
   border-radius: 3px;
   outline: 2px solid transparent;
   outline-offset: 1px;
-  /* Background included so switching years crossfades the whole grid. */
-  transition: outline-color var(--t) var(--ease), filter var(--t) var(--ease), background 0.45s var(--ease), box-shadow 0.45s var(--ease);
+  /* Background and opacity included so switching years crossfades the whole
+     grid — cells melting into or out of a month's edge fade, never pop. */
+  transition: outline-color var(--t) var(--ease), filter var(--t) var(--ease), background 0.45s var(--ease), box-shadow 0.45s var(--ease), opacity 0.45s var(--ease);
 }
 @media (hover: hover) {
   .mini-cell:not(.placeholder):hover { outline-color: color-mix(in srgb, var(--heat-3) 42%, transparent); filter: saturate(1.16) brightness(1.06); }
 }
-.mini-cell.placeholder { visibility: hidden; }
-.mini-cell.placeholder.future { visibility: visible; background: color-mix(in srgb, var(--ink) 3%, transparent); box-shadow: none; }
+.mini-cell.placeholder { opacity: 0; pointer-events: none; }
+.mini-cell.placeholder.future { opacity: 1; background: color-mix(in srgb, var(--ink) 3%, transparent); box-shadow: none; }
 .mini-cell.level-1 { background: var(--heat-1); }
 .mini-cell.level-2 { background: var(--heat-2); }
 .mini-cell.level-3 { background: var(--heat-3); }
@@ -2159,11 +2214,13 @@ button.memo-tag:active {
   background: linear-gradient(180deg, var(--heat-2), var(--heat-3));
   border-radius: 5px 5px 2px 2px;
   animation: bar-rise 0.7s var(--ease-out) both;
-  /* Height included so switching years glides the bars to their new size. */
-  transition: filter var(--t) var(--ease), height 0.55s var(--ease-out);
+  /* Height and fill included so switching years glides the bars to their new
+     size in a left-to-right ripple (--bar-d, set inline per column). */
+  transition: filter var(--t) var(--ease), height 0.55s var(--ease-out) var(--bar-d, 0s), background 0.5s var(--ease) var(--bar-d, 0s);
 }
 @media (hover: hover) { .stats-bar-col:hover .stats-bar:not(.is-zero) { filter: saturate(1.15) brightness(1.08); } }
-.stats-bar.is-zero { background: var(--surface-3); }
+/* Two-stop gradient (not a flat color) so zero↔nonzero can crossfade. */
+.stats-bar.is-zero { background: linear-gradient(180deg, var(--surface-3), var(--surface-3)); }
 .stats-bar-labels {
   display: grid;
   grid-auto-flow: column;
@@ -2178,17 +2235,26 @@ button.memo-tag:active {
 .stats-chart { display: grid; gap: 10px; }
 .stats-chart .stats-bars { height: 96px; }
 
-/* Top tags of the year: quiet ranked bars — name, share, count. Switching
-   years crossfades the names (SwapText), glides the bars and rolls the
-   counts, mirroring the chart behaviour above. */
-.stats-tags { display: grid; gap: 2px; }
+/* Top tags of the year: quiet ranked bars — name, share, count. Rows are
+   keyed by tag name, so switching years FLIP-glides survivors to their new
+   rank (TagRows), sinks the dropped rows out on an absolute layer, raises
+   newcomers in, and rolls the counts — no slot ever teleports its contents. */
+.stats-tags { position: relative; display: grid; gap: 2px; }
 .stats-tag-row { display: flex; align-items: center; gap: 12px; padding: 4px 2px; }
-.stats-tag-swap { flex: none; width: min(170px, 36%); justify-items: start; }
-.stats-tag-swap .swap-old { justify-content: flex-start; }
+.stats-tag-row.is-entering { animation: tag-row-in 0.46s var(--ease-out) both; }
+.stats-tag-row.is-leaving {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  animation: tag-row-out 0.3s var(--ease) both;
+}
+.stats-tag-name-box { flex: none; width: min(170px, 36%); min-width: 0; }
 .stats-tag-name { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--ink-soft); font-size: 0.85rem; font-weight: 650; }
 .stats-tag-track { flex: 1; height: 4px; background: var(--surface-3); border-radius: 2px; }
 .stats-tag-fill { display: block; height: 100%; max-width: 100%; background: var(--primary); border-radius: inherit; transition: width 0.55s var(--ease-out); }
 .stats-tag-count { flex: none; min-width: 2em; color: var(--muted); font-size: 0.8rem; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+.stats-tags-empty { margin: 0; padding: 5px 2px; color: var(--muted); font-size: 0.85rem; font-weight: 600; animation: fade-up 0.4s var(--ease-out) both; }
 
 /* Tier 4, all-time footnotes: a hairline ledger — rows, not boxes. */
 .stats-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); column-gap: 28px; }

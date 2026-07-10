@@ -1,6 +1,7 @@
 export function json(data: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json; charset=utf-8");
+  if (!headers.has("Cache-Control")) headers.set("Cache-Control", "no-store");
   return new Response(JSON.stringify(data), { ...init, headers });
 }
 
@@ -12,6 +13,7 @@ export type ApiErrorCode =
   | "PASSCODE_ALREADY_CONFIGURED"
   | "INVALID_REQUEST_BODY"
   | "MEMO_NOT_FOUND"
+  | "MEMO_ID_RETIRED"
   | "MEMO_TRASHED"
   | "MEMO_EMPTY"
   | "IMAGE_LIMIT_EXCEEDED"
@@ -20,8 +22,11 @@ export type ApiErrorCode =
   | "TAG_INVALID"
   | "TAG_NAME_UNCHANGED"
   | "TAG_NOT_FOUND"
+  | "TAG_OPERATION_BUSY"
   | "IMAGE_NOT_FOUND"
   | "INVALID_ORIGIN"
+  | "VERSION_CONFLICT"
+  | "DECRYPTION_FAILED"
   | "INTERNAL_ERROR";
 
 export type ApiErrorParams = Record<string, string | number | boolean | null>;
@@ -35,11 +40,28 @@ export function apiError(status: number, code: ApiErrorCode, error: string, para
 }
 
 export async function readJson<T>(request: Request, maxBytes = 1_000_000): Promise<T> {
-  const length = Number(request.headers.get("content-length") ?? "0");
-  if (length > maxBytes) {
-    throw new Error("Request body is too large");
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > maxBytes) throw new Error("Request body is too large");
+  if (!request.body) throw new Error("Request body is missing");
+
+  // Content-Length is optional for streamed/chunked requests. Count actual
+  // bytes while reading so endpoint limits remain real memory bounds.
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      await reader.cancel();
+      throw new Error("Request body is too large");
+    }
+    text += decoder.decode(value, { stream: true });
   }
-  return request.json() as Promise<T>;
+  text += decoder.decode();
+  return JSON.parse(text) as T;
 }
 
 export function requireSameOrigin(request: Request): Response | null {

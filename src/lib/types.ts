@@ -20,6 +20,8 @@ export interface Memo {
 }
 
 export interface NewImagePayload {
+  /** Stable client-generated id; retries must not duplicate an attachment. */
+  id: string;
   dataBase64: string;
   mime: string;
   width: number;

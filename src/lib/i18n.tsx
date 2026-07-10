@@ -153,8 +153,20 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           return localized("The request data is invalid.", "请求数据无效");
         case "MEMO_NOT_FOUND":
           return localized("Memo not found.", "笔记不存在");
+        case "MEMO_ID_RETIRED":
+          return localized(
+            "That memo was permanently deleted. Your draft is safe; save again to create it with a new id.",
+            "原笔记已被永久删除。草稿仍然保留；再次保存会使用新的编号创建。"
+          );
         case "MEMO_TRASHED":
           return localized("Restore this memo before editing it.", "笔记在回收站中，请先恢复");
+        case "VERSION_CONFLICT":
+          return localized("This memo changed elsewhere. Review the latest version and try again.", "这条笔记已在别处更新，请确认最新版本后重试");
+        case "DECRYPTION_FAILED":
+          return localized(
+            "The memos could not be decrypted. Check the server MEMO_ENC_KEY; no data will be written until it is fixed.",
+            "无法解密笔记，请检查服务器 MEMO_ENC_KEY，修复前不会写入数据"
+          );
         case "MEMO_EMPTY":
           return localized("A memo must contain text or at least one image.", "笔记需要包含文字或至少一张图片");
         case "IMAGE_LIMIT_EXCEEDED": {
@@ -177,6 +189,8 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           return localized("The new tag name is the same as the current name.", "新旧名称相同");
         case "TAG_NOT_FOUND":
           return localized("Tag not found.", "标签不存在");
+        case "TAG_OPERATION_BUSY":
+          return localized("Another tag rename or removal is still running. Try again shortly.", "另一个标签重命名或删除仍在进行，请稍后重试");
         case "IMAGE_NOT_FOUND":
           return localized("Image not found.", "图片不存在");
         case "INVALID_ORIGIN":

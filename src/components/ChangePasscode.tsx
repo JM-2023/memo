@@ -1,18 +1,19 @@
 import { KeyRound } from "lucide-react";
 import { useState } from "react";
-import { changePassword } from "../lib/api";
+import { AuthRequiredError, changePassword } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { PasscodePad } from "./PasscodePad";
 
 interface ChangePasscodeProps {
   onClose: () => void;
   onDone: () => void;
+  onAuthLost: () => void;
 }
 
 type Step = "current" | "next" | "confirm";
 
 /** Full-screen overlay reusing the login pad: current → new → confirm. */
-export function ChangePasscode({ onClose, onDone }: ChangePasscodeProps) {
+export function ChangePasscode({ onClose, onDone, onAuthLost }: ChangePasscodeProps) {
   const { errorMessage, tr } = useI18n();
   const [step, setStep] = useState<Step>("current");
   const [busy, setBusy] = useState(false);
@@ -54,6 +55,10 @@ export function ChangePasscode({ onClose, onDone }: ChangePasscodeProps) {
       await changePassword(currentPin, pin);
       onDone();
     } catch (cause) {
+      if (cause instanceof AuthRequiredError) {
+        onAuthLost();
+        return;
+      }
       setCurrentPin("");
       setNextPin("");
       fail(errorMessage(cause, "Couldn’t change the passcode. Try again.", "修改失败，请重试"), "current");

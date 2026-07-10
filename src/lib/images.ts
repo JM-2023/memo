@@ -10,6 +10,7 @@ function loadImage(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const image = new Image();
+    image.decoding = "async";
     image.onload = () => resolve(image);
     image.onerror = () => {
       URL.revokeObjectURL(url);
@@ -61,6 +62,7 @@ export async function compressImage(file: File): Promise<NewImagePayload> {
         }
         if (blob && blob.size <= MAX_BYTES) {
           return {
+            id: crypto.randomUUID(),
             dataBase64: await blobToBase64(blob),
             mime: blob.type,
             width,

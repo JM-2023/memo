@@ -19,8 +19,15 @@ import { nowIso } from "./response";
 
 export const ENC_PREFIX = "enc1:";
 
-/** What readers see if a sealed row can no longer be opened (key rotated/lost). */
-export const UNDECRYPTABLE_TEXT = "[Unable to decrypt this memo — the server encryption key changed or is missing.]";
+export type ContentFormat = "plain" | "enc1";
+
+/** A sealed row must never degrade into ordinary text that a mutation can save. */
+export class DecryptionError extends Error {
+  constructor(message = "Memo content could not be decrypted.") {
+    super(message);
+    this.name = "DecryptionError";
+  }
+}
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -44,21 +51,42 @@ function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
 
 // One import per isolate; the env value never changes within a deployment.
 const keyCache = new Map<string, Promise<CryptoKey>>();
+// Store only completed verification facts globally. Never share an in-flight
+// D1 promise across requests; Workers forbids performing I/O on behalf of a
+// different request context.
+const verifiedContentModes = new Set<string>();
 
-/** The content key, or null when MEMO_ENC_KEY is absent/malformed (plaintext mode). */
-export function contentKeyOf(env: AppEnv): Promise<CryptoKey | null> {
+/** The content key, or null when MEMO_ENC_KEY is absent (plaintext mode). */
+export async function contentKeyOf(env: AppEnv): Promise<CryptoKey | null> {
   const hex = (env.MEMO_ENC_KEY ?? "").trim();
-  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
-    return Promise.resolve(null);
+  if (hex && !/^[0-9a-fA-F]{64}$/.test(hex)) {
+    throw new DecryptionError("MEMO_ENC_KEY is malformed.");
   }
-  let cached = keyCache.get(hex);
-  if (!cached) {
-    const bytes = new Uint8Array(32);
-    for (let index = 0; index < 32; index += 1) bytes[index] = parseInt(hex.slice(index * 2, index * 2 + 2), 16);
-    cached = crypto.subtle.importKey("raw", bytes, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
-    keyCache.set(hex, cached);
+  let key: CryptoKey | null = null;
+  if (hex) {
+    let cached = keyCache.get(hex);
+    if (!cached) {
+      const bytes = new Uint8Array(32);
+      for (let index = 0; index < 32; index += 1) bytes[index] = parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+      cached = crypto.subtle.importKey("raw", bytes, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+      keyCache.set(hex, cached);
+    }
+    key = await cached;
   }
-  return cached;
+
+  // Verify a representative existing ciphertext once per isolate before any
+  // content write or destructive bulk operation. This prevents a valid-looking
+  // but wrong/missing deployment key from creating a mixed-key database.
+  const mode = hex || "<plaintext>";
+  if (!verifiedContentModes.has(mode)) {
+    const sample = await env.DB.prepare("SELECT content FROM memos WHERE content_format = 'enc1' LIMIT 1").first<{ content: string }>();
+    if (sample) {
+      if (!key) throw new DecryptionError("MEMO_ENC_KEY is missing for encrypted content.");
+      await openContent(key, sample.content, "enc1");
+    }
+    verifiedContentModes.add(mode);
+  }
+  return key;
 }
 
 export async function sealContent(key: CryptoKey, text: string): Promise<string> {
@@ -71,34 +99,42 @@ export async function sealContent(key: CryptoKey, text: string): Promise<string>
 }
 
 /**
- * Inverse of sealContent, forgiving by design: plaintext rows (pre-encryption
- * history, or plaintext mode) pass through untouched, and a sealed row that
- * won't open degrades to a readable marker instead of failing the request.
+ * Inverse of sealContent. Explicit row metadata prevents a plaintext memo that
+ * happens to begin with "enc1:" from being mistaken for ciphertext. The
+ * optional format is only a compatibility bridge for callers being migrated.
  */
-export async function openContent(key: CryptoKey | null, stored: string): Promise<string> {
-  if (!stored.startsWith(ENC_PREFIX)) {
+export async function openContent(key: CryptoKey | null, stored: string, format?: string): Promise<string> {
+  if (format !== undefined && format !== "plain" && format !== "enc1") {
+    throw new DecryptionError(`Unsupported memo content format: ${format}`);
+  }
+  const resolvedFormat: ContentFormat = format === "plain" || format === "enc1" ? format : stored.startsWith(ENC_PREFIX) ? "enc1" : "plain";
+  if (resolvedFormat === "plain") {
     return stored;
   }
   if (!key) {
-    return UNDECRYPTABLE_TEXT;
+    throw new DecryptionError("MEMO_ENC_KEY is missing for encrypted content.");
   }
   try {
     const combined = base64ToBytes(stored.slice(ENC_PREFIX.length));
+    if (!stored.startsWith(ENC_PREFIX) || combined.byteLength < 29) throw new Error("Invalid encrypted payload");
     const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: combined.subarray(0, 12) }, key, combined.subarray(12));
     return decoder.decode(plaintext);
-  } catch {
-    return UNDECRYPTABLE_TEXT;
+  } catch (cause) {
+    throw new DecryptionError(cause instanceof Error ? `Memo content could not be decrypted: ${cause.message}` : undefined);
   }
 }
 
 /** Open `content` on every row of a result set (mutates in place). */
-export async function openContentRows<T extends { content: string }>(env: AppEnv, rows: T[]): Promise<CryptoKey | null> {
+export async function openContentRows<T extends { content: string; content_format?: string }>(env: AppEnv, rows: T[]): Promise<CryptoKey | null> {
   const key = await contentKeyOf(env);
-  await Promise.all(
-    rows.map(async (row) => {
-      row.content = await openContent(key, row.content);
-    })
-  );
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(8, rows.length) }, async () => {
+    while (cursor < rows.length) {
+      const row = rows[cursor++];
+      row.content = await openContent(key, row.content, row.content_format);
+    }
+  });
+  await Promise.all(workers);
   return key;
 }
 
@@ -130,13 +166,13 @@ export async function getOrCreateCacheKey(env: AppEnv): Promise<string> {
   return (await read()) ?? fresh;
 }
 
-// Once per isolate is plenty: the scan is only needed until legacy plaintext
-// rows are gone, and isolates recycle often enough to converge quickly.
 let backfillScheduled = false;
+const BACKFILL_ROWS_PER_PASS = 16;
 
 /**
  * Gradually seal rows written before encryption was enabled. Runs off the
- * request path (waitUntil), 100 rows per pass. Sealing is a storage-format
+ * request path (waitUntil), 16 rows per pass to stay inside the Free-plan D1
+ * per-invocation query budget. Sealing is a storage-format
  * change, not an edit: seq stays put, so other devices never re-sync over it.
  * The `content = ?` guard makes each row a no-op if a real edit landed
  * between the read and the write.
@@ -148,20 +184,26 @@ export function scheduleEncryptionBackfill(context: AppContext): void {
     (async () => {
       const key = await contentKeyOf(context.env);
       if (!key) return;
-      const result = await context.env.DB.prepare("SELECT id, content FROM memos WHERE content NOT LIKE ? LIMIT 100")
-        .bind(`${ENC_PREFIX}%`)
+      const result = await context.env.DB.prepare("SELECT id, content FROM memos WHERE content_format = 'plain' LIMIT ?")
+        .bind(BACKFILL_ROWS_PER_PASS)
         .all<{ id: string; content: string }>();
       const rows = result.results ?? [];
       if (rows.length === 0) return;
       const statements: D1PreparedStatement[] = [];
       for (const row of rows) {
         statements.push(
-          context.env.DB.prepare("UPDATE memos SET content = ? WHERE id = ? AND content = ?").bind(await sealContent(key, row.content), row.id, row.content)
+          context.env.DB
+            .prepare("UPDATE memos SET content = ?, content_format = 'enc1' WHERE id = ? AND content = ? AND content_format = 'plain'")
+            .bind(await sealContent(key, row.content), row.id, row.content)
         );
       }
       await context.env.DB.batch(statements);
-    })().catch(() => {
-      // Backfill is opportunistic; the next isolate retries.
-    })
+    })()
+      .catch((error) => {
+        console.error("Encryption backfill failed", error);
+      })
+      .finally(() => {
+        backfillScheduled = false;
+      })
   );
 }

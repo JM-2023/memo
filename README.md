@@ -6,12 +6,12 @@ MEMO is a personal, single-owner note app built with Cloudflare Pages, Pages Fun
 
 - **Passcode gate:** protect the notebook with a numeric passcode (4–18 digits). The salted PBKDF2 hash is stored in D1, and authenticated sessions use an HMAC-signed cookie. Data and stored-image APIs return `401` until the session is authenticated.
 - **Dashboard and statistics:** browse memo, tag, and day totals; weekly, monthly, and yearly memo and character counts; a horizontal heatmap that follows the This week / This month / This year selector (week strip, wall-calendar month, GitHub-style year band) and pages backwards period by period; and a detailed yearly statistics view with monthly activity, weekday and time-of-day distributions, and streaks. All timestamps are stored in UTC and rendered in the viewer's local time zone.
-- **Hierarchical tags:** organize notes with paths such as `#parent/child`, navigate through breadcrumb segments, and pin, rename, or remove tags. Tag changes are rewritten in the affected memos on the server and then synchronized to other devices.
+- **Hierarchical tags:** organize notes with paths such as `#parent/child`, navigate through breadcrumb segments, and pin, rename, or remove tags. Global rewrites are bounded and resumable, then synchronize to other devices. Rename targets must sit outside the source tag's own ancestor/descendant subtree so an interrupted operation can be replayed safely.
 - **Writing and media:** search and sort by created or edited time, use tag autocomplete, and add images by selecting, pasting, or dragging files. External image links in Markdown or direct image URLs are previewed without using D1 storage.
 - **Memo actions:** pin, edit, copy, or delete a memo, and open images in a lightbox.
 - **Recycle bin:** normal deletion keeps the memo and its attachments available for restoration. Permanent deletion and emptying the recycle bin remove the memo rows and images, leaving only small tombstones so other devices can synchronize the deletion.
 - **Portable backups:** export the entire notebook, including Trash, inline images, and pinned tags, to a readable JSON file. Import merges new memo IDs, skips existing ones, and encrypts restored content with the destination deployment key.
-- **Incremental synchronization:** every synchronized memo or tag mutation receives a globally increasing `seq`. Clients pull changes with `GET /api/sync?since=N` after local writes, when the window regains focus or visibility, and every 60 seconds. `BroadcastChannel` keeps tabs in the same browser in sync immediately.
+- **Incremental synchronization:** every synchronized memo or tag mutation receives a globally increasing `seq`. Clients merge responses by entity version, pull changes with `GET /api/sync?since=N` after local writes, when the window regains focus or visibility, and every 60 seconds. Tabs in the same browser share one network pull through Web Locks and exchange the resulting delta through `BroadcastChannel`.
 - **Instant startup:** each device keeps an AES-GCM-sealed snapshot of the notebook in IndexedDB. A page load is then a single incremental sync instead of a full download, no matter how large the notebook is. The snapshot key is held server-side and only handed out on authenticated responses, so a device without a valid session stores nothing but ciphertext; logging out deletes the snapshot.
 - **Encryption at rest (optional):** with the `MEMO_ENC_KEY` secret set, memo text is sealed with AES-256-GCM before it reaches D1, so database dumps, backups, and console views hold only ciphertext (about 28 bytes plus base64 overhead per memo). Rows written before the key existed are sealed gradually in the background. Images are intentionally left unsealed to avoid ~33% extra storage.
 
@@ -32,7 +32,15 @@ npm run pages:dev
 
 Set a long, random `SESSION_SECRET` in `.dev.vars` before starting the local Pages server. The app is then available at <http://localhost:8788>.
 
-To enable content encryption at rest locally, also set `MEMO_ENC_KEY` in `.dev.vars` (64 hex characters, e.g. from `openssl rand -hex 32`). In production, set it once with `wrangler pages secret put MEMO_ENC_KEY`. **Never change the key after data exists** — sealed rows only open with the key that sealed them; a lost or rotated key makes existing memo text unreadable.
+To enable content encryption at rest locally, also set `MEMO_ENC_KEY` in `.dev.vars` (64 hex characters, e.g. from `openssl rand -hex 32`). In production, set it once with `wrangler pages secret put MEMO_ENC_KEY`. **Never change the key after data exists** — sealed rows only open with the key that sealed them; a lost, missing, or rotated key makes content APIs fail closed instead of treating ciphertext as editable text.
+
+Migration `0004_sync_integrity.sql` gives every memo an explicit `content_format`. It conservatively classifies legacy rows whose stored value begins with `enc1:` as encrypted. If an old plaintext memo literally began with those five characters, identify that row before enabling encryption and set only its `content_format` back to `plain` in D1. Do not change genuine encrypted rows.
+
+The same migration creates a random `sync_epoch` for the database history. A newly bound D1 database is detected even if its numeric sync counter has already passed a sleeping device's old cursor. If you intentionally restore an older backup into the same D1 database, rotate the epoch once after the restore so connected clients discard snapshots from the replaced history:
+
+```sql
+UPDATE sync_counter SET sync_epoch = lower(hex(randomblob(16))) WHERE id = 1;
+```
 
 On the first visit, the app asks you to create a passcode of 4–18 digits. The passcode hash is stored in the local D1 database and is not reset when the development server restarts.
 
@@ -91,6 +99,15 @@ The Pages project must exist before Pages secrets can be added. For a new Cloudf
 
 Subsequent releases only need the migrations step when new migration files exist, followed by `npm run deploy`.
 
+## Verification
+
+Run the deterministic synchronization, encryption, tag, and local-cache tests, followed by the production build:
+
+```bash
+npm test
+npm run build
+```
+
 ## Passcodes, sessions, and security
 
 - Passcodes are hashed with PBKDF2-HMAC-SHA-256 using a random 16-byte salt and 100,000 iterations. The plaintext passcode is never stored.
@@ -99,7 +116,7 @@ Subsequent releases only need the migrations step when new migration files exist
 - After a passcode has been created or changed in the app, the D1-stored hash takes precedence over `APP_PASSWORD_HASH`. Redeploying the code does not reset it.
 - State-changing API requests with an `Origin` header are rejected when the origin does not match the app. Responses also include a restrictive Content Security Policy, clickjacking protection, MIME sniffing protection, and `noindex` directives.
 - With `MEMO_ENC_KEY` set, memo content is encrypted at rest with AES-256-GCM (`enc1:` prefix in the `content` column) and decrypted only at the API boundary. The key lives in the deployment environment, so this protects the database layer (dumps, backups, the D1 console), not against someone who controls the Cloudflare account itself. Without the secret, the app runs in plaintext mode.
-- The per-device IndexedDB snapshot is sealed with a random server-held key delivered only on authenticated responses; only the numeric sync cursor is stored in the clear. An expired session leaves the local cache unreadable, and an explicit logout deletes it.
+- The per-device IndexedDB snapshot is sealed with a random server-held key delivered only on authenticated responses; only the numeric sync cursor and an opaque random cache epoch are stored in the clear. An expired session leaves the local cache unreadable, and an explicit logout deletes it.
 - `.dev.vars` contains secrets and is ignored by Git. Never commit it, session secrets, passcode hashes, or exported notebook data.
 - A numeric passcode is intended as a lightweight gate for a personal notebook. For a publicly discoverable or higher-risk deployment, add stronger edge access control such as Cloudflare Access or an equivalent authentication layer.
 

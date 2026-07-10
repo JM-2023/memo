@@ -1,12 +1,11 @@
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { dateKey, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { buildHeatMonth, computeStreaks, countsByDay, totalStats, wordCountOf, type HeatMonth } from "../lib/stats";
 import { tagsOf } from "../lib/tags";
 import type { Memo } from "../lib/types";
 import { RollingText } from "./RollingText";
-import { SwapText } from "./SwapText";
 import { useTip } from "./Tip";
 
 interface StatsModalProps {
@@ -43,7 +42,14 @@ function BarChart({ values, max, labels, tips }: BarChartProps) {
           >
             <span
               className={`stats-bar${value > 0 ? "" : " is-zero"}`}
-              style={{ height: value > 0 ? `${(value / max) * 100}%` : "4px", animationDelay: `${index * 0.025}s` }}
+              style={
+                {
+                  height: value > 0 ? `${(value / max) * 100}%` : "4px",
+                  animationDelay: `${index * 0.025}s`,
+                  // Year switches resize the bars in a left-to-right ripple.
+                  "--bar-d": `${index * 0.014}s`
+                } as CSSProperties
+              }
             />
           </div>
         ))}
@@ -53,6 +59,137 @@ function BarChart({ values, max, labels, tips }: BarChartProps) {
           <span key={index}>{label}</span>
         ))}
       </div>
+    </div>
+  );
+}
+
+interface LeavingTag {
+  name: string;
+  count: number;
+  pct: number;
+  top: number;
+  serial: number;
+}
+
+const TAG_GLIDE: KeyframeAnimationOptions = { duration: 480, easing: "cubic-bezier(0.24, 1.1, 0.32, 1)" };
+
+/**
+ * Ranked tag bars keyed by tag name. Switching years FLIP-glides surviving
+ * rows to their new rank, sinks dropped rows out in place, raises newcomers
+ * in, and tweens the list height — a re-ranking reads as rows trading places
+ * instead of five fixed slots teleporting their contents.
+ */
+function TagRows({ tags, emptyLabel }: { tags: [string, number][]; emptyLabel: string }) {
+  const { formatNumber } = useI18n();
+  const max = tags[0]?.[1] ?? 1;
+  const boxRef = useRef<HTMLDivElement>(null);
+  const rowsRef = useRef(new Map<string, HTMLDivElement>());
+  const flipsRef = useRef(new Map<string, Animation>());
+  const boxAnimRef = useRef<Animation | null>(null);
+  const lastRef = useRef<[string, number][] | null>(null);
+  const snapRef = useRef<{ tops: Map<string, number>; height: number } | null>(null);
+  const enteringRef = useRef(new Set<string>());
+  const serialRef = useRef(0);
+  const [leaving, setLeaving] = useState<LeavingTag[]>([]);
+
+  const last = lastRef.current;
+  if (last !== null && last.map(([name]) => name).join("\0") !== tags.map(([name]) => name).join("\0")) {
+    // Render-phase snapshot: the DOM still shows the outgoing ranking, so
+    // capture where each row visually sits (mid-flight transforms included)
+    // and how tall the list currently is.
+    const tops = new Map<string, number>();
+    for (const [name, el] of rowsRef.current) {
+      if (el.isConnected) tops.set(name, el.getBoundingClientRect().top);
+    }
+    snapRef.current = { tops, height: boxRef.current?.offsetHeight ?? 0 };
+    serialRef.current += 1;
+    const names = new Set(tags.map(([name]) => name));
+    const lastMax = last[0]?.[1] ?? 1;
+    const gone: LeavingTag[] = last
+      .filter(([name]) => !names.has(name))
+      .map(([name, count]) => ({
+        name,
+        count,
+        pct: (count / lastMax) * 100,
+        top: rowsRef.current.get(name)?.offsetTop ?? 0,
+        serial: serialRef.current
+      }));
+    enteringRef.current = new Set(tags.filter(([name]) => !last.some(([lastName]) => lastName === name)).map(([name]) => name));
+    // Keep older ghosts that are still fading, unless their tag re-entered.
+    setLeaving((current) => [...current.filter((ghost) => !names.has(ghost.name) && !gone.some((g) => g.name === ghost.name)), ...gone]);
+  }
+  lastRef.current = tags;
+
+  useLayoutEffect(() => {
+    const snap = snapRef.current;
+    snapRef.current = null;
+    if (!snap || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    for (const [name, el] of rowsRef.current) {
+      const from = snap.tops.get(name);
+      if (from === undefined || !el.isConnected) continue;
+      // Cancel before measuring: a mid-flight FLIP transform would otherwise
+      // pollute the target rect. Nothing paints between cancel and animate.
+      flipsRef.current.get(name)?.cancel();
+      const delta = from - el.getBoundingClientRect().top;
+      if (Math.abs(delta) < 0.5) continue;
+      flipsRef.current.set(name, el.animate([{ transform: `translateY(${delta}px)` }, { transform: "none" }], TAG_GLIDE));
+    }
+    // Tween the list height so the ledger below glides instead of jumping;
+    // clip while it runs so ghost rows can't spill over the next section.
+    const box = boxRef.current;
+    if (!box) return;
+    boxAnimRef.current?.cancel();
+    const to = box.offsetHeight;
+    if (Math.abs(to - snap.height) < 1) return;
+    box.style.overflow = "clip";
+    const anim = box.animate([{ height: `${snap.height}px` }, { height: `${to}px` }], TAG_GLIDE);
+    anim.onfinish = anim.oncancel = () => {
+      box.style.overflow = "";
+    };
+    boxAnimRef.current = anim;
+  });
+
+  return (
+    <div ref={boxRef} className="stats-tags">
+      {tags.map(([name, tagCount], index) => (
+        <div
+          key={name}
+          ref={(el) => {
+            if (el) rowsRef.current.set(name, el);
+            else rowsRef.current.delete(name);
+          }}
+          className={`stats-tag-row${enteringRef.current.has(name) ? " is-entering" : ""}`}
+          style={enteringRef.current.has(name) ? { animationDelay: `${index * 0.035}s` } : undefined}
+        >
+          <span className="stats-tag-name-box">
+            <span className="stats-tag-name">#{name}</span>
+          </span>
+          <span className="stats-tag-track">
+            <span className="stats-tag-fill" style={{ width: `${(tagCount / max) * 100}%` }} />
+          </span>
+          <span className="stats-tag-count">
+            <RollingText value={tagCount} />
+          </span>
+        </div>
+      ))}
+      {tags.length === 0 ? <p className="stats-tags-empty">{emptyLabel}</p> : null}
+      {leaving.map((ghost) => (
+        <div
+          key={`ghost-${ghost.serial}-${ghost.name}`}
+          className="stats-tag-row is-leaving"
+          style={{ top: ghost.top }}
+          aria-hidden="true"
+          onAnimationEnd={() => setLeaving((current) => current.filter((item) => item !== ghost))}
+        >
+          <span className="stats-tag-name-box">
+            <span className="stats-tag-name">#{ghost.name}</span>
+          </span>
+          <span className="stats-tag-track">
+            <span className="stats-tag-fill" style={{ width: `${ghost.pct}%` }} />
+          </span>
+          <span className="stats-tag-count">{formatNumber(ghost.count)}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -184,7 +321,6 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5);
   }, [memos, year]);
-  const tagMax = topTags[0]?.[1] ?? 1;
 
   const busiestDay = useMemo(() => {
     let best: { key: string; count: number } | null = null;
@@ -303,10 +439,14 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                   </div>
                   <div className="mini-grid">
                     {/* Cells keyed by grid position, not date — switching years
-                        mutates them in place so the colours crossfade. */}
-                    {heat.weeks.map((week, weekIndex) =>
-                      week.map((cell, dayIndex) =>
-                        cell.inRange && !cell.isFuture ? (
+                        mutates them in place so the colours crossfade. Every
+                        month renders six week rows, so the calendar (and every
+                        section below it) keeps one height across years instead
+                        of jumping when a year needs more or fewer weeks. */}
+                    {Array.from({ length: 6 }, (_, weekIndex) =>
+                      Array.from({ length: 7 }, (_, dayIndex) => {
+                        const cell = heat.weeks[weekIndex]?.[dayIndex];
+                        return cell && cell.inRange && !cell.isFuture ? (
                           <span
                             key={`${weekIndex}-${dayIndex}`}
                             className={`mini-cell level-${cell.level}${cell.isToday ? " is-today" : ""}`}
@@ -334,11 +474,11 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                         ) : (
                           <span
                             key={`${weekIndex}-${dayIndex}`}
-                            className={`mini-cell placeholder${cell.inRange ? " future" : ""}`}
+                            className={`mini-cell placeholder${cell?.inRange ? " future" : ""}`}
                             aria-hidden="true"
                           />
-                        )
-                      )
+                        );
+                      })
                     )}
                   </div>
                 </div>
@@ -377,30 +517,16 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
             </div>
           </section>
 
-          {topTags.length > 0 ? (
+          {uniqueTagCount > 0 ? (
             <section className="stats-section" style={{ animationDelay: "0.24s" }}>
               <h3 className="stats-section-title">{tr("Top tags", "常用标签")}</h3>
-              <div className="stats-tags">
-                {/* Rows keyed by rank: switching years keeps the five slots,
-                    so names crossfade, bars glide and counts roll in place. */}
-                {topTags.map(([name, tagCount], index) => (
-                  <div key={index} className="stats-tag-row">
-                    <SwapText id={name} className="stats-tag-swap">
-                      <span className="stats-tag-name">#{name}</span>
-                    </SwapText>
-                    <span className="stats-tag-track">
-                      <span className="stats-tag-fill" style={{ width: `${(tagCount / tagMax) * 100}%` }} />
-                    </span>
-                    <span className="stats-tag-count">
-                      <RollingText value={tagCount} />
-                    </span>
-                  </div>
-                ))}
-              </div>
+              {/* Kept mounted across tagless years (the empty note takes the
+                  rows' place), so the section never pops in or out. */}
+              <TagRows tags={topTags} emptyLabel={tr("No tags this year", "这一年还没有用过标签")} />
             </section>
           ) : null}
 
-          <section className="stats-section" style={{ animationDelay: topTags.length > 0 ? "0.3s" : "0.24s" }}>
+          <section className="stats-section" style={{ animationDelay: uniqueTagCount > 0 ? "0.3s" : "0.24s" }}>
             <h3 className="stats-section-title">{tr("All time", "全部时间")}</h3>
             <div className="stats-facts">
               {facts.map((fact) => (

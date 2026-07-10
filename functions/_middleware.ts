@@ -1,4 +1,5 @@
 import type { AppContext } from "./api/_utils/types";
+import { DecryptionError } from "./api/_utils/crypto";
 import { apiError } from "./api/_utils/response";
 
 // The app is fully self-contained (no external scripts, fonts, or API hosts),
@@ -37,9 +38,13 @@ export async function onRequest(context: AppContext): Promise<Response> {
     response = await context.next();
   } catch (error) {
     console.error("Unhandled request error", error);
-    response = apiError(500, "INTERNAL_ERROR", "An unexpected server error occurred.");
+    response =
+      error instanceof DecryptionError
+        ? apiError(503, "DECRYPTION_FAILED", "Encrypted memo content is unavailable. Check the server encryption key before retrying.")
+        : apiError(500, "INTERNAL_ERROR", "An unexpected server error occurred.");
   }
   const headers = new Headers(response.headers);
+  if (requestUrl.pathname.startsWith("/api/") && !headers.has("Cache-Control")) headers.set("Cache-Control", "no-store");
   headers.set("Referrer-Policy", "same-origin");
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");

@@ -156,8 +156,8 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
           )}
         </Menu>
       </div>
-      {hasChildren ? (
-        <div className={`tag-children${expanded ? " is-open" : ""}`}>
+      {hasChildren && expanded ? (
+        <div className="tag-children is-open">
           <ul>
             {node.children.map((child) => (
               <TagRow
