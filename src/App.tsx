@@ -1,4 +1,4 @@
-import { ArrowDownWideNarrow, Check, Loader2, Menu as MenuIcon, NotebookPen, Search, Trash2, X } from "lucide-react";
+import { ArrowDownWideNarrow, Check, ChevronRight, Home, Loader2, Menu as MenuIcon, NotebookPen, Search, Trash2, X } from "lucide-react";
 import { memo as reactMemo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { ChangePasscode } from "./components/ChangePasscode";
@@ -718,13 +718,21 @@ export default function App() {
     []
   );
 
+  /**
+   * Arming/disarming Empty Trash swaps the pill's label (and width) — run it
+   * through a view transition so the pill morphs instead of snapping. Blur
+   * and view-switch disarms stay plain setState: they race other transitions.
+   */
+  const setEmptyTrashArm = useCallback((value: boolean) => {
+    withViewTransition(() => flushSync(() => setConfirmEmptyTrash(value)));
+  }, []);
   // A primed Empty Trash button disarms on its own if the second click
   // never lands.
   useEffect(() => {
     if (!confirmEmptyTrash) return;
-    const timer = window.setTimeout(() => setConfirmEmptyTrash(false), 4000);
+    const timer = window.setTimeout(() => setEmptyTrashArm(false), 4000);
     return () => window.clearTimeout(timer);
-  }, [confirmEmptyTrash]);
+  }, [confirmEmptyTrash, setEmptyTrashArm]);
   useEffect(() => {
     if (view !== "trash") setConfirmEmptyTrash(false);
   }, [view]);
@@ -923,10 +931,23 @@ export default function App() {
             <MenuIcon size={18} aria-hidden="true" />
           </button>
           <div className="breadcrumb">
-            {view === "memos" && activeTag ? (
+            {view === "trash" ? (
+              // Trash reuses the tag-drilldown breadcrumb language: ⌂ / 回收站,
+              // same cascade-in, ⌂ steps back out to All memos.
+              <nav className="crumbs" aria-label={tr("Location", "当前位置")}>
+                <button type="button" className="crumb crumb-home" onClick={showAll} aria-label={tr("All memos", "全部笔记")} style={{ animationDelay: "0s" }}>
+                  <Home size={15} aria-hidden="true" />
+                </button>
+                <ChevronRight size={13} className="crumb-sep" aria-hidden="true" style={{ animationDelay: "0.03s" }} />
+                <span className="crumb crumb-trash is-current" aria-current="page" style={{ animationDelay: "0.07s" }}>
+                  <Trash2 size={13} aria-hidden="true" />
+                  {tr("Trash", "回收站")}
+                </span>
+              </nav>
+            ) : activeTag ? (
               <Crumbs path={activeTag} onHome={showAll} onPick={(path) => pickTag(path)} />
             ) : (
-              <button type="button" className={`breadcrumb-root${filtersActive || view === "trash" ? "" : " is-current"}`} onClick={showAll}>
+              <button type="button" className={`breadcrumb-root${filtersActive ? "" : " is-current"}`} onClick={showAll}>
                 {tr("All memos", "全部笔记")}
               </button>
             )}
@@ -969,14 +990,35 @@ export default function App() {
                 )}
               </Menu>
             ) : null}
-            {view === "trash" ? (
-              <span key="trash-chip" className="filter-chip is-trash">
-                <Trash2 size={12} aria-hidden="true" />
-                {tr("Trash", "回收站")}
-                <button type="button" onClick={showAll} aria-label={tr("Exit Trash", "退出回收站")}>
-                  <X size={12} aria-hidden="true" />
-                </button>
-              </span>
+            {view === "trash" && trashedMemos.length > 0 ? (
+              // Empty Trash lives in the same slot as Sort (and shares its
+              // view-transition-name), so swapping views morphs one pill into
+              // the other.
+              <button
+                type="button"
+                className={`trash-empty-button${confirmEmptyTrash ? " is-confirm" : ""}`}
+                aria-label={
+                  confirmEmptyTrash
+                    ? tr(`Delete ${count(trashedMemos.length, "memo")} forever?`, `彻底删除 ${count(trashedMemos.length, "memo")}？`)
+                    : tr("Empty Trash", "清空回收站")
+                }
+                onClick={() => {
+                  if (!confirmEmptyTrash) {
+                    setEmptyTrashArm(true);
+                    return;
+                  }
+                  setConfirmEmptyTrash(false);
+                  void handleEmptyTrash();
+                }}
+                onBlur={() => setConfirmEmptyTrash(false)}
+              >
+                <Trash2 size={14} aria-hidden="true" />
+                <span>
+                  {confirmEmptyTrash
+                    ? tr(`Delete ${count(trashedMemos.length, "memo")} forever?`, `彻底删除 ${count(trashedMemos.length, "memo")}？`)
+                    : tr("Empty Trash", "清空回收站")}
+                </span>
+              </button>
             ) : null}
             {view === "memos" && activeDay ? (
               <span key={`day-${activeDay}`} className="filter-chip">
@@ -987,28 +1029,7 @@ export default function App() {
               </span>
             ) : null}
           </div>
-          {view === "trash" ? (
-            trashedMemos.length > 0 ? (
-              <button
-                type="button"
-                className={`trash-empty-button${confirmEmptyTrash ? " is-confirm" : ""}`}
-                onClick={() => {
-                  if (!confirmEmptyTrash) {
-                    setConfirmEmptyTrash(true);
-                    return;
-                  }
-                  setConfirmEmptyTrash(false);
-                  void handleEmptyTrash();
-                }}
-                onBlur={() => setConfirmEmptyTrash(false)}
-              >
-                <Trash2 size={14} aria-hidden="true" />
-                {confirmEmptyTrash
-                  ? tr(`Delete ${count(trashedMemos.length, "memo")} forever?`, `彻底删除 ${count(trashedMemos.length, "memo")}？`)
-                  : tr("Empty Trash", "清空回收站")}
-              </button>
-            ) : null
-          ) : (
+          {view === "memos" ? (
             <div className={`searchbox${searchOpen || query ? " is-open" : ""}`}>
               <Search size={15} className="searchbox-icon" aria-hidden="true" />
               <input
@@ -1034,7 +1055,7 @@ export default function App() {
                 </button>
               ) : null}
             </div>
-          )}
+          ) : null}
         </div>
 
         {view === "memos" ? (

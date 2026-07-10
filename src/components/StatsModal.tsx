@@ -238,7 +238,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                   <span className="mini-month-name">{monthFormatter.format(new Date(year, month, 1))}</span>
                   <span className="mini-month-count">{formatNumber(memoCount)}</span>
                 </div>
-                <div className="mini-grid" style={{ gridTemplateColumns: `repeat(${heat.weeks.length}, 1fr)` }}>
+                <div className="mini-grid">
                   {heat.weeks.map((week) =>
                     week.map((cell) =>
                       cell.inRange && !cell.isFuture ? (

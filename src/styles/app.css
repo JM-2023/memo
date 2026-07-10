@@ -1155,6 +1155,9 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 }
 .crumb.is-current { color: var(--ink); }
 .crumb-home { flex: none; padding: 6px 8px; color: var(--muted); }
+/* Trash location crumb: same geometry as a tag crumb, danger-tinted icon. */
+.crumb-trash { gap: 5px; }
+.crumb-trash svg { flex: none; color: var(--danger); }
 @media (hover: hover) {
   button.crumb:hover { background: var(--wash); color: var(--ink); }
 }
@@ -1176,7 +1179,12 @@ button.crumb:active { background: var(--wash-strong); }
   white-space: nowrap;
   pointer-events: none;
 }
-/* Sort picker sits beside "全部笔记". */
+/* Sort picker sits beside "全部笔记". Its view-transition-name is what keeps
+   it steady while the breadcrumb changes: named, it FLIP-glides to its new
+   offset inside the same transition that moves the cards, instead of
+   double-imaging in the root cross-fade. The name is shared with the Empty
+   Trash pill — the two occupy the same "contextual action" slot and never
+   render together, so swapping views morphs one pill into the other. */
 .sort-trigger {
   display: inline-flex;
   align-items: center;
@@ -1187,12 +1195,16 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 700;
   border-radius: var(--r-pill);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+  view-transition-name: topbar-action;
 }
 @media (hover: hover) { .sort-trigger:hover { background: var(--wash); color: var(--ink); } }
 .sort-trigger:active { transform: scale(0.95); }
 .sort-trigger.is-open { background: var(--wash-strong); color: var(--ink); }
 .sort-menu .action-menu { min-width: 196px; }
 
+/* Day filter chip. At most one renders at a time, so the view-transition-name
+   stays unique: it glides along when the breadcrumb before it changes width
+   and gets a proper depart/arrive instead of blinking in the root fade. */
 .filter-chip {
   display: inline-flex;
   align-items: center;
@@ -1208,14 +1220,8 @@ button.crumb:active { background: var(--wash-strong); }
   white-space: nowrap;
   overflow: hidden;
   animation: pop-in 0.34s var(--ease-pop) both;
+  view-transition-name: day-filter-chip;
 }
-.filter-chip.is-trash {
-  color: var(--danger);
-  background: var(--danger-tint);
-  border-color: color-mix(in srgb, var(--danger) 24%, transparent);
-}
-.filter-chip.is-trash button { color: var(--danger); }
-@media (hover: hover) { .filter-chip.is-trash button:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); } }
 .filter-chip button {
   display: grid;
   place-items: center;
@@ -1266,28 +1272,30 @@ button.crumb:active { background: var(--wash-strong); }
 @media (hover: hover) { .searchbox-clear:hover { background: var(--wash-strong); color: var(--ink); } }
 .searchbox-clear:active { transform: scale(0.85); }
 
+/* Empty Trash — the trash view's counterpart of the sort pill: identical
+   ghost geometry, danger-tinted. It carries the shared topbar-action
+   view-transition-name (see .sort-trigger), so it arrives by morphing out of
+   the sort pill rather than popping in; arming (label/width change) rides a
+   view transition too, so the pill stretches smoothly. */
 .trash-empty-button {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 13px;
+  gap: 5px;
+  padding: 5px 11px;
   color: var(--danger);
-  font-size: 0.86rem;
+  font-size: 0.84rem;
   font-weight: 700;
   white-space: nowrap;
-  background: transparent;
-  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
   border-radius: var(--r-pill);
-  transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease), transform var(--t-fast) var(--ease);
-  animation: pop-in 0.34s var(--ease-pop) both;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
+  view-transition-name: topbar-action;
 }
-@media (hover: hover) { .trash-empty-button:hover { background: var(--danger-tint); box-shadow: var(--shadow-xs); } }
-.trash-empty-button:active { transform: scale(0.96); }
+@media (hover: hover) { .trash-empty-button:hover { background: var(--danger-tint); } }
+.trash-empty-button:active { transform: scale(0.95); }
 /* Armed state (first click): filled red, asking for the second click. */
 .trash-empty-button.is-confirm {
   color: #fff;
   background: var(--danger);
-  border-color: var(--danger);
   box-shadow: var(--shadow-sm);
 }
 @media (hover: hover) { .trash-empty-button.is-confirm:hover { background: color-mix(in srgb, var(--danger) 88%, black); } }
@@ -1803,14 +1811,16 @@ button.memo-tag:active {
 }
 .overlay.is-closing .stats-modal { animation: modal-out 0.24s var(--ease) both; }
 .stats-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 12px;
   padding: 15px 18px 12px;
   border-bottom: 1px solid var(--glass-rim);
 }
 .stats-head h2 { margin: 0; font-size: 1.08rem; font-weight: 800; letter-spacing: -0.01em; }
-.stats-year-nav { display: flex; align-items: center; gap: 4px; margin-inline: auto; }
+.stats-year-nav { display: flex; align-items: center; gap: 4px; justify-self: center; }
+.stats-close { justify-self: end; }
 .stats-year { min-width: 76px; text-align: center; font-size: 0.98rem; font-weight: 800; font-variant-numeric: tabular-nums; animation: fade-up 0.3s var(--ease) both; }
 .stats-body {
   display: grid;
@@ -1851,7 +1861,7 @@ button.memo-tag:active {
 .mini-month-head { display: flex; align-items: baseline; justify-content: space-between; font-size: 0.76rem; font-weight: 700; }
 .mini-month-name { color: var(--ink-soft); }
 .mini-month-count { color: var(--muted); font-variant-numeric: tabular-nums; }
-.mini-grid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, auto); gap: 3px; }
+.mini-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
 .mini-cell {
   width: 100%;
   height: auto;
@@ -1981,7 +1991,9 @@ button.memo-tag:active {
   .memo-images { grid-template-columns: repeat(2, 1fr); }
   .memo-images.count-1 { grid-template-columns: minmax(0, 1fr); }
   .lightbox { padding: 16px; }
-  .trash-empty-button { padding: 7px 10px; font-size: 0.8rem; }
+  /* Both action pills go icon-only; the armed question still shows its text. */
+  .trash-empty-button span { display: none; }
+  .trash-empty-button.is-confirm span { display: inline; }
   .sort-trigger span { display: none; }
   .crumb { max-width: 6.5em; padding: 5px 7px; }
 }
