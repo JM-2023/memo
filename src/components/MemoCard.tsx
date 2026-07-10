@@ -1,47 +1,14 @@
 import { Check, Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Trash2, X } from "lucide-react";
-import { Fragment, useMemo, useState, type ReactNode } from "react";
-import { externalImagesOf, tokenizeLine } from "../lib/content";
+import { useMemo, useState } from "react";
+import { externalImagesOf } from "../lib/content";
 import { formatTime } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
-import type { LightboxItem, Memo, NewImagePayload } from "../lib/types";
+import { visualLinesOf } from "../lib/lineDiff";
+import type { LightboxItem, Memo, MemoImage, NewImagePayload } from "../lib/types";
 import { Editor } from "./Editor";
+import { MemoLine } from "./memoLines";
+import { MemoStage } from "./MemoStage";
 import { Menu } from "./Menu";
-
-function renderLine(line: string, key: number, interactive: boolean, onPickTag: (path: string) => void): ReactNode {
-  if (!line) return <p key={key} className="memo-blank" />;
-  const tokens = tokenizeLine(line);
-  // Image tokens leave the text flow (they render in the media grid); a line
-  // that was only an image link collapses entirely.
-  const visible = tokens.filter((token) => token.kind !== "image");
-  if (visible.every((token) => token.kind === "text" && token.text.trim() === "")) {
-    return tokens.length === visible.length ? <p key={key} className="memo-blank" /> : null;
-  }
-  return (
-    <p key={key}>
-      {visible.map((token, index) => {
-        if (token.kind === "tag") {
-          return interactive ? (
-            <button key={index} type="button" className="memo-tag" onClick={() => onPickTag(token.path)}>
-              {token.raw}
-            </button>
-          ) : (
-            <span key={index} className="memo-tag is-static">
-              {token.raw}
-            </span>
-          );
-        }
-        if (token.kind === "link") {
-          return (
-            <a key={index} href={token.url} target="_blank" rel="noreferrer noopener">
-              {token.url}
-            </a>
-          );
-        }
-        return <Fragment key={index}>{token.kind === "text" ? token.text : null}</Fragment>;
-      })}
-    </p>
-  );
-}
 
 interface MemoCardProps {
   memo: Memo;
@@ -212,6 +179,8 @@ export function MemoCard(props: MemoCardProps) {
   const pinned = Boolean(memo.pinnedAt);
   const inTrash = variant === "trash";
   const mediaCount = memo.images.length + externalUrls.length;
+  // Media-set fingerprint for the stage's change detection.
+  const mediaKey = useMemo(() => [...memo.images.map((image) => image.id), ...externalUrls].join("|"), [memo.images, externalUrls]);
 
   function markBroken(url: string) {
     setBrokenUrls((value) => {
@@ -221,141 +190,211 @@ export function MemoCard(props: MemoCardProps) {
     });
   }
 
+  const timeLabel = inTrash
+    ? tr(`Deleted ${formatTime(memo.deletedAt ?? memo.createdAt, locale)}`, `删除于 ${formatTime(memo.deletedAt ?? memo.createdAt, locale)}`)
+    : formatTime(memo.createdAt, locale);
+
+  // Inert clone of one content line — replay overlay + ghost measure layer.
+  // Tags keep their live look (ghosts must be pixel-identical to the card).
+  const renderGhostLine = (raw: string) => <MemoLine raw={raw} tagMode={inTrash ? "static" : "ghost"} />;
+
+  // Inert media grid of an arbitrary (content, images) state — same classes
+  // as the live grid so geometry and paint match exactly.
+  const renderGhostMedia = (content: string, images: MemoImage[]) => {
+    const urls = externalImagesOf(content);
+    const count = images.length + urls.length;
+    if (count === 0) return null;
+    return (
+      <div className={`memo-images count-${Math.min(count, 3)}`}>
+        {images.map((image) => (
+          <div key={image.id} className="memo-image">
+            <img src={`/api/images/${image.id}`} alt="" decoding="async" width={image.width || undefined} height={image.height || undefined} />
+          </div>
+        ))}
+        {urls.map((url) =>
+          brokenUrls.has(url) ? (
+            <div key={url} className="memo-image-broken">
+              <ImageOff size={16} aria-hidden="true" />
+              <span>{tr("Image link is unavailable", "图片链接已失效")}</span>
+            </div>
+          ) : (
+            <div key={url} className="memo-image is-external">
+              <img src={url} alt="" decoding="async" referrerPolicy="no-referrer" />
+              <span className="ext-badge" aria-hidden="true">
+                <Link2 size={11} />
+              </span>
+            </div>
+          )
+        )}
+      </div>
+    );
+  };
+
+  const renderGhost = (content: string, images: MemoImage[]) => (
+    <>
+      <header className="memo-head">
+        <time className="memo-time">{timeLabel}</time>
+        <div className="memo-head-right">
+          <div className="memo-tool-slot" />
+        </div>
+      </header>
+      <div className="memo-content">
+        {visualLinesOf(content).map((line) => (
+          <MemoLine key={line.key} raw={line.raw} tagMode={inTrash ? "static" : "ghost"} />
+        ))}
+      </div>
+      {renderGhostMedia(content, images)}
+    </>
+  );
+
+  const viewBody = (
+    <>
+      <header className="memo-head">
+        <time className="memo-time" dateTime={inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt}>
+          {timeLabel}
+        </time>
+        <div className="memo-head-right">
+          {pinned && !inTrash ? <Pin size={13} className="memo-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}
+          {/* The ⋯ menu and the select ring share one 26px cell: entering
+              select mode swaps them in place with zero layout shift. */}
+          <div className="memo-tool-slot">
+            <Menu
+              trigger={(open) => (
+                <button
+                  type="button"
+                  className={`icon-button memo-menu-trigger${open ? " is-open" : ""}`}
+                  aria-label={tr("Memo actions", "操作菜单")}
+                  tabIndex={selecting ? -1 : 0}
+                >
+                  <MoreHorizontal size={17} aria-hidden="true" />
+                </button>
+              )}
+            >
+              {(close) => (
+                <MemoMenuBody
+                  close={close}
+                  inTrash={inTrash}
+                  pinned={pinned}
+                  onTogglePin={props.onTogglePin}
+                  onStartEdit={props.onStartEdit}
+                  onCopy={props.onCopy}
+                  onDelete={props.onDelete}
+                  onRestore={props.onRestore}
+                  onPurge={props.onPurge}
+                />
+              )}
+            </Menu>
+            <span className="memo-select-box" aria-hidden="true">
+              <Check size={13} strokeWidth={3.2} />
+            </span>
+          </div>
+        </div>
+      </header>
+
+      <div className="memo-content">
+        {visualLinesOf(memo.content).map((line) => (
+          <MemoLine key={line.key} raw={line.raw} tagMode={inTrash ? "static" : "button"} onPickTag={props.onPickTag} />
+        ))}
+      </div>
+
+      {mediaCount > 0 ? (
+        <div className={`memo-images count-${Math.min(mediaCount, 3)}`}>
+          {memo.images.map((image, index) => (
+            <button
+              key={image.id}
+              type="button"
+              className="memo-image"
+              onClick={() => props.onOpenImage(lightboxItems, index)}
+              aria-label={tr("View image", "查看图片")}
+            >
+              <img
+                src={`/api/images/${image.id}`}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                width={image.width || undefined}
+                height={image.height || undefined}
+              />
+            </button>
+          ))}
+          {externalUrls.map((url) =>
+            brokenUrls.has(url) ? (
+              <a key={url} className="memo-image-broken" href={url} target="_blank" rel="noreferrer noopener" title={url}>
+                <ImageOff size={16} aria-hidden="true" />
+                <span>{tr("Image link is unavailable", "图片链接已失效")}</span>
+              </a>
+            ) : (
+              <button
+                key={url}
+                type="button"
+                className="memo-image is-external"
+                onClick={() => props.onOpenImage(lightboxItems, Math.max(0, lightboxItems.findIndex((item) => item.src === url)))}
+                aria-label={tr("View external image", "查看外链图片")}
+              >
+                <img src={url} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => markBroken(url)} />
+                <span className="ext-badge" aria-hidden="true">
+                  <Link2 size={11} />
+                </span>
+              </button>
+            )
+          )}
+        </div>
+      ) : null}
+
+      {selecting ? (
+        // One interactive surface for the whole card: it sits above every
+        // inner control (tags, images, the retired ⋯ menu), so a tap
+        // anywhere toggles selection and nothing else can fire.
+        <button
+          type="button"
+          className="memo-select-overlay"
+          aria-pressed={selected}
+          aria-label={selected ? tr("Deselect this memo", "取消选择这条笔记") : tr("Select this memo", "选择这条笔记")}
+          onClick={props.onToggleSelect}
+        />
+      ) : null}
+    </>
+  );
+
   return (
     <article
       className={`memo-card${pinned && !inTrash ? " is-pinned" : ""}${inTrash ? " is-trash" : ""}${selecting ? " is-selecting" : ""}${
         selected ? " is-selected" : ""
       }`}
     >
-      {editing ? (
-        <Editor
-          mode="edit"
-          initialContent={memo.content}
-          existingImages={memo.images}
-          knownTags={props.knownTags}
-          busy={props.savingEdit}
-          conflictMessage={
-            props.editConflict
-              ? tr(
-                  "This memo changed elsewhere. Your draft is preserved. Continue only if you intend to save it over the latest version.",
-                  "这条笔记已在别处更新。你的草稿已保留；确认要基于最新版本继续后，再次保存会覆盖远端内容。"
-                )
-              : null
-          }
-          onAcceptRemoteBase={props.onAcceptEditConflict}
-          onSubmit={props.onSaveEdit}
-          onCancel={props.onCancelEdit}
-          autoFocus
-        />
-      ) : (
-        <>
-          <header className="memo-head">
-            <time className="memo-time" dateTime={inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt}>
-              {inTrash
-                ? tr(
-                    `Deleted ${formatTime(memo.deletedAt ?? memo.createdAt, locale)}`,
-                    `删除于 ${formatTime(memo.deletedAt ?? memo.createdAt, locale)}`
-                  )
-                : formatTime(memo.createdAt, locale)}
-            </time>
-            <div className="memo-head-right">
-              {pinned && !inTrash ? <Pin size={13} className="memo-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}
-              {/* The ⋯ menu and the select ring share one 26px cell: entering
-                  select mode swaps them in place with zero layout shift. */}
-              <div className="memo-tool-slot">
-                <Menu
-                  trigger={(open) => (
-                    <button
-                      type="button"
-                      className={`icon-button memo-menu-trigger${open ? " is-open" : ""}`}
-                      aria-label={tr("Memo actions", "操作菜单")}
-                      tabIndex={selecting ? -1 : 0}
-                    >
-                      <MoreHorizontal size={17} aria-hidden="true" />
-                    </button>
-                  )}
-                >
-                  {(close) => (
-                    <MemoMenuBody
-                      close={close}
-                      inTrash={inTrash}
-                      pinned={pinned}
-                      onTogglePin={props.onTogglePin}
-                      onStartEdit={props.onStartEdit}
-                      onCopy={props.onCopy}
-                      onDelete={props.onDelete}
-                      onRestore={props.onRestore}
-                      onPurge={props.onPurge}
-                    />
-                  )}
-                </Menu>
-                <span className="memo-select-box" aria-hidden="true">
-                  <Check size={13} strokeWidth={3.2} />
-                </span>
-              </div>
-            </div>
-          </header>
-
-          <div className="memo-content">{memo.content.split("\n").map((line, index) => renderLine(line, index, !inTrash, props.onPickTag))}</div>
-
-          {mediaCount > 0 ? (
-            <div className={`memo-images count-${Math.min(mediaCount, 3)}`}>
-              {memo.images.map((image, index) => (
-                <button
-                  key={image.id}
-                  type="button"
-                  className="memo-image"
-                  onClick={() => props.onOpenImage(lightboxItems, index)}
-                  aria-label={tr("View image", "查看图片")}
-                >
-                  <img
-                    src={`/api/images/${image.id}`}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    width={image.width || undefined}
-                    height={image.height || undefined}
-                  />
-                </button>
-              ))}
-              {externalUrls.map((url) =>
-                brokenUrls.has(url) ? (
-                  <a key={url} className="memo-image-broken" href={url} target="_blank" rel="noreferrer noopener" title={url}>
-                    <ImageOff size={16} aria-hidden="true" />
-                    <span>{tr("Image link is unavailable", "图片链接已失效")}</span>
-                  </a>
-                ) : (
-                  <button
-                    key={url}
-                    type="button"
-                    className="memo-image is-external"
-                    onClick={() => props.onOpenImage(lightboxItems, Math.max(0, lightboxItems.findIndex((item) => item.src === url)))}
-                    aria-label={tr("View external image", "查看外链图片")}
-                  >
-                    <img src={url} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => markBroken(url)} />
-                    <span className="ext-badge" aria-hidden="true">
-                      <Link2 size={11} />
-                    </span>
-                  </button>
-                )
-              )}
-            </div>
-          ) : null}
-
-          {selecting ? (
-            // One interactive surface for the whole card: it sits above every
-            // inner control (tags, images, the retired ⋯ menu), so a tap
-            // anywhere toggles selection and nothing else can fire.
-            <button
-              type="button"
-              className="memo-select-overlay"
-              aria-pressed={selected}
-              aria-label={selected ? tr("Deselect this memo", "取消选择这条笔记") : tr("Select this memo", "选择这条笔记")}
-              onClick={props.onToggleSelect}
+      <MemoStage
+        editing={editing}
+        content={memo.content}
+        mediaKey={mediaKey}
+        images={memo.images}
+        view={viewBody}
+        editor={
+          editing ? (
+            <Editor
+              mode="edit"
+              initialContent={memo.content}
+              existingImages={memo.images}
+              knownTags={props.knownTags}
+              busy={props.savingEdit}
+              conflictMessage={
+                props.editConflict
+                  ? tr(
+                      "This memo changed elsewhere. Your draft is preserved. Continue only if you intend to save it over the latest version.",
+                      "这条笔记已在别处更新。你的草稿已保留；确认要基于最新版本继续后，再次保存会覆盖远端内容。"
+                    )
+                  : null
+              }
+              onAcceptRemoteBase={props.onAcceptEditConflict}
+              onSubmit={props.onSaveEdit}
+              onCancel={props.onCancelEdit}
+              autoFocus
             />
-          ) : null}
-        </>
-      )}
+          ) : null
+        }
+        renderGhost={renderGhost}
+        renderGhostMedia={renderGhostMedia}
+        renderLine={renderGhostLine}
+      />
     </article>
   );
 }

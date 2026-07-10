@@ -1,5 +1,5 @@
 import { Hash, Image as ImageIcon, ImagePlus, Link2, Loader2, Send, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import { ApiError } from "../lib/api";
 import { compressImage } from "../lib/images";
 import { useI18n } from "../lib/i18n";
@@ -87,12 +87,15 @@ export function Editor({
   const totalImages = keptExisting.length + newImages.length;
   const canSubmit = !busy && !conflictMessage && compressing === 0 && (content.trim().length > 0 || totalImages > 0);
 
-  useEffect(() => {
+  // Layout effect: the textarea must reach its grown height before the card
+  // stage measures the editor scene for its height morph. preventScroll keeps
+  // entering edit mode from yanking the page — the stage animates instead.
+  useLayoutEffect(() => {
     autoGrow();
     if (autoFocus) {
       const area = areaRef.current;
       if (area) {
-        area.focus();
+        area.focus({ preventScroll: true });
         area.setSelectionRange(area.value.length, area.value.length);
       }
     }

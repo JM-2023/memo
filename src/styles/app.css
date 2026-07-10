@@ -52,7 +52,8 @@
   /* Radii — one small scale, kept concentric: an inner corner is its parent
      minus the padding between them (seg thumbs, menu rows), or simply the
      next stop down. Full capsules are reserved for true circles (dots,
-     ×-buttons) and the send button's own geometry. */
+     ×-buttons). The send button rides the scale too: --r-xl at rest, +4px
+     hover swell. */
   --r-xs: 4px;
   --r-sm: 6px;
   --r-md: 8px;
@@ -1623,7 +1624,7 @@ button.crumb:active { background: var(--wash-strong); }
   background: var(--field-bg);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
-  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
+  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), height 0.16s var(--ease);
 }
 .editor-edit textarea:focus { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring); }
 
@@ -1636,6 +1637,8 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: 0.95rem;
   line-height: 1.65;
   outline: none;
+  /* autoGrow sets height per input; easing it keeps typing from snapping. */
+  transition: height 0.16s var(--ease);
 }
 .editor textarea::placeholder { color: var(--muted); }
 
@@ -1714,7 +1717,7 @@ button.crumb:active { background: var(--wash-strong); }
   gap: 10px;
   padding: 9px 10px;
   border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-  border-radius: 10px;
+  border-radius: var(--r-md);
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 8%, transparent);
   font-size: 0.8rem;
@@ -1798,8 +1801,8 @@ button.crumb:active { background: var(--wash-strong); }
   --px: 20px;
   --py-h: 12px;
   --px-h: 23px;
-  --rad: 18px;
-  --rad-h: 22px;
+  --rad: var(--r-xl);
+  --rad-h: calc(var(--r-xl) + 4px);
   position: relative;
   isolation: isolate;
   display: inline-flex;
@@ -1882,6 +1885,53 @@ button.crumb:active { background: var(--wash-strong); }
 }
 .memo-card:hover { box-shadow: var(--shadow-sm); }
 .memo-card.is-pinned { border-color: color-mix(in srgb, var(--primary) 32%, var(--line)); }
+
+/* ---- Scene morph stage (view ↔ edit ↔ saved-diff replay) ----
+   MemoStage drives all motion with WAAPI; these rules only build the layers.
+   During a morph the stage's height is pinned and tweened, so the card (and
+   the page below it) resizes on one smooth curve instead of jumping. Every
+   per-line replay animation is transform/opacity/clip-path — compositor
+   work; the lone height tween is the only property touching layout. */
+.card-stage { position: relative; }
+.card-stage.is-morphing { overflow: clip; }
+/* Scenes replicate the card's own grid, so a lone scene is layout-identical
+   to the pre-stage card body. */
+.stage-scene { display: grid; gap: 8px; }
+/* Outgoing scene: floats above the incoming one and fades out; its surface
+   background masks the target until the cross-fade reveals it. */
+.stage-scene.is-out {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  z-index: 4;
+  background: var(--surface);
+  pointer-events: none;
+}
+/* Ghost: pixel-identical inert render of the previous content. Hidden, it is
+   the replay's old-geometry measure layer; visible (.is-out), it doubles as
+   the outgoing scene for remote view→view updates. */
+.stage-ghost {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.stage-ghost.is-out { visibility: visible; }
+/* While clones replay the diff, the real content holds its layout but not
+   its pixels (visibility keeps geometry). */
+.stage-hold > .memo-content, .stage-hold > .memo-images { visibility: hidden; }
+.stage-overlay { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+/* Each clone is one .memo-content-classed line pinned to the stage top and
+   placed purely via translateY, keeping the whole replay off the layout. */
+.stage-line {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+.stage-line .memo-images { margin-top: 0; }
 
 /* ---- Multi-select ---- */
 @media (hover: hover) { .memo-card.is-selecting:hover { border-color: color-mix(in srgb, var(--primary) 30%, var(--line)); } }
