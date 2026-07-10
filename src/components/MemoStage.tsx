@@ -12,7 +12,7 @@ import type { MemoImage } from "../lib/types";
  *    page never jumps.
  *  - saved edits (and remote content updates) replay their line diff:
  *    removed lines shutter closed in place, surviving lines glide to their
- *    new positions, added lines rise in with a brief accent afterglow.
+ *    new positions, added lines rise in staggered.
  *
  * Frame-rate discipline: every per-line animation is transform/opacity/
  * clip-path (compositor-only); the single height tween on the stage is the
@@ -90,8 +90,6 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
   const animsRef = useRef<Animation[]>([]);
   /** Identity guard: a settle callback only lands if its plan is still live. */
   const morphRef = useRef<MorphPlan | null>(null);
-  /** The plan whose settle commit should run the added-line afterglow. */
-  const finishedPlanRef = useRef<MorphPlan | null>(null);
   const editorHeldRef = useRef<ReactNode>(null);
   if (editor) editorHeldRef.current = editor;
 
@@ -116,29 +114,6 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
       for (const anim of animsRef.current) anim.cancel();
       animsRef.current = [];
       if (stage) stage.style.height = "";
-      const done = finishedPlanRef.current;
-      finishedPlanRef.current = null;
-      if (done?.kind === "replay" && done.ops) {
-        // Afterglow on the freshly added real lines — paint-only, subtle.
-        const lines = viewRef.current?.querySelector(".memo-content")?.children;
-        if (lines) {
-          for (const op of done.ops) {
-            if (op.type !== "add" || !op.raw.trim()) continue;
-            const el = lines[op.newIndex] as HTMLElement | undefined;
-            if (!el) continue;
-            animsRef.current.push(
-              el.animate(
-                [
-                  { backgroundColor: "color-mix(in srgb, var(--primary) 13%, transparent)", boxShadow: "0 0 0 5px color-mix(in srgb, var(--primary) 13%, transparent)", borderRadius: "6px" },
-                  { backgroundColor: "color-mix(in srgb, var(--primary) 13%, transparent)", boxShadow: "0 0 0 5px color-mix(in srgb, var(--primary) 13%, transparent)", borderRadius: "6px", offset: 0.3 },
-                  { backgroundColor: "transparent", boxShadow: "0 0 0 5px transparent", borderRadius: "6px" }
-                ],
-                { duration: 900, delay: 60, easing: EASE, fill: "backwards" }
-              )
-            );
-          }
-        }
-      }
       return;
     }
 
@@ -270,7 +245,6 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
     for (const anim of animsRef.current) anim.cancel();
     animsRef.current = [];
     const anims = animsRef.current;
-    finishedPlanRef.current = plan;
 
     stage.style.height = `${h0}px`;
     anims.push(
