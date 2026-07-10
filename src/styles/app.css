@@ -1852,9 +1852,9 @@ button.crumb:active { background: var(--wash-strong); }
 /* Invisible marker that asks for the next feed page when scrolled near. */
 .feed-sentinel { height: 1px; }
 /* Each slot's entrance animation leaves a stacking context (fill-mode both
-   keeps the animated opacity applied), which is what used to trap an open
-   card menu underneath the next card. Raising the open slot fixes stacking
-   for good. */
+   keeps the animated opacity applied), and content-visibility's paint
+   containment clips descendants at the slot's edge — either alone hides an
+   open card menu behind or under the next card. */
 .memo-slot {
   position: relative;
   content-visibility: auto;
@@ -1863,7 +1863,11 @@ button.crumb:active { background: var(--wash-strong); }
 }
 /* Slots mounted by a filter swap: the view transition owns the motion. */
 .memo-slot.no-enter { animation: none; }
-.memo-slot:has(.menu-root.is-open) { z-index: 66; }
+/* While the ⋯ panel is mounted, lift the slot's containment (so the panel
+   can spill past a short card) and raise the slot above its siblings. Keyed
+   to .action-menu rather than .is-open: the panel outlives the open state
+   through its closing morph, and re-clipping mid-close would cut it off. */
+.memo-slot:has(.action-menu) { z-index: 66; content-visibility: visible; }
 
 .memo-card {
   position: relative;
