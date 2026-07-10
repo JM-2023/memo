@@ -3,8 +3,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { dateKey, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { buildHeatMonth, computeStreaks, countsByDay, totalStats, wordCountOf, type HeatMonth } from "../lib/stats";
+import { tagsOf } from "../lib/tags";
 import type { Memo } from "../lib/types";
 import { RollingText } from "./RollingText";
+import { SwapText } from "./SwapText";
 import { useTip } from "./Tip";
 
 interface StatsModalProps {
@@ -67,6 +69,13 @@ function formatHour(hour: number, locale: string): string {
 
 function formatHourRange(hour: number, locale: string): string {
   return `${formatHour(hour, locale)} – ${formatHour(hour + 1, locale)}`;
+}
+
+/* Local-midnight parse: `new Date("2026-03-05")` lands on UTC midnight, which
+   shifts a day backwards in negative-offset timezones. */
+function parseDayKey(key: string): Date {
+  const [year, month, day] = key.split("-").map(Number);
+  return new Date(year, month - 1, day);
 }
 
 interface YearData {
@@ -164,23 +173,49 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
   const weekdaysFull = useMemo(() => weekdayNames(locale, "long"), [locale]);
   const weekdaysNarrow = useMemo(() => weekdayNames(locale, "narrow"), [locale]);
   const monthFormatter = useMemo(() => new Intl.DateTimeFormat(locale, { month: "short" }), [locale]);
+  const dayFormatter = useMemo(() => new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric" }), [locale]);
 
-  const yearTiles = [
-    { label: tr("Memos", "笔记"), value: yearData.memoCount },
-    { label: tr("Characters", "字数"), value: yearData.words },
-    { label: tr("Active days", "活跃天数"), value: yearData.activeDays },
-    { label: tr("Images", "图片"), value: yearData.imageCount }
-  ];
-  const allTiles = [
+  // Top tags of the selected year — the one categorical stat in the modal.
+  const topTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const memo of memos) {
+      if (new Date(memo.createdAt).getFullYear() !== year) continue;
+      for (const tag of tagsOf(memo)) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5);
+  }, [memos, year]);
+  const tagMax = topTags[0]?.[1] ?? 1;
+
+  const busiestDay = useMemo(() => {
+    let best: { key: string; count: number } | null = null;
+    for (const [key, dayCount] of byDay) {
+      if (!best || dayCount > best.count || (dayCount === best.count && key > best.key)) best = { key, count: dayCount };
+    }
+    return best;
+  }, [byDay]);
+
+  // Rounded to one decimal; the trailing .0 is dropped so integers stay short.
+  const perActiveDay = yearData.activeDays > 0 ? Math.round((yearData.memoCount / yearData.activeDays) * 10) / 10 : 0;
+
+  const facts: { label: string; value: number; suffix?: string; wide?: boolean }[] = [
     { label: tr("Total memos", "总笔记"), value: totals.memoCount },
     { label: tr("Total characters", "总字数"), value: allWords },
+    { label: tr("Images", "图片"), value: allImages },
+    { label: tr("Tags", "标签"), value: uniqueTagCount },
     { label: tr("Days recorded", "记录天数"), value: totals.daySpan },
     { label: tr("Active days", "活跃天数"), value: totals.activeDays },
-    { label: tr("Longest streak", "最长连击"), value: streaks.longest },
-    { label: tr("Current streak", "当前连击"), value: streaks.current },
-    { label: tr("Images", "图片"), value: allImages },
-    { label: tr("Tags", "标签"), value: uniqueTagCount }
+    { label: tr("Longest streak", "最长连击"), value: streaks.longest, suffix: tr(streaks.longest === 1 ? " day" : " days", " 天") },
+    { label: tr("Current streak", "当前连击"), value: streaks.current, suffix: tr(streaks.current === 1 ? " day" : " days", " 天") }
   ];
+  if (busiestDay) {
+    facts.push({
+      label: tr("Busiest day", "单日最多"),
+      value: busiestDay.count,
+      suffix: `${tr(busiestDay.count === 1 ? " memo · " : " memos · ", " 条 · ")}${dayFormatter.format(parseDayKey(busiestDay.key))}`,
+      // Long value (count + date), so it closes the ledger on its own line.
+      wide: true
+    });
+  }
 
   return (
     <div
@@ -223,80 +258,105 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
         </header>
 
         <div className="stats-body">
-          <div className="stat-tiles">
-            {yearTiles.map((tile, index) => (
-              <div key={tile.label} className="stat-tile" style={{ animationDelay: `${index * 0.04}s` }}>
-                <span className="stat-tile-value">
-                  <RollingText value={tile.value} />
-                </span>
-                <span className="stat-tile-label">{tile.label}</span>
-              </div>
-            ))}
-          </div>
+          {/* Hierarchy: one hero figure, its supporting figures in a muted
+              line, then progressively quieter sections — no two tiers share
+              a treatment, and nothing wears a card frame. */}
+          <section className="stats-section stats-hero">
+            <div className="stats-hero-main">
+              <span className="stats-hero-value">
+                <RollingText value={yearData.memoCount} />
+              </span>
+              <span className="stats-hero-unit">{tr(yearData.memoCount === 1 ? "memo" : "memos", "条笔记")}</span>
+            </div>
+            <div className="stats-hero-figs">
+              <span className="stats-fig">
+                {tr("", "活跃 ")}
+                <RollingText value={yearData.activeDays} />
+                {tr(yearData.activeDays === 1 ? " active day" : " active days", " 天")}
+              </span>
+              <span className="stats-fig">
+                {tr("", "日均 ")}
+                <RollingText value={perActiveDay} text={String(perActiveDay)} />
+                {tr(" per active day", " 条")}
+              </span>
+              <span className="stats-fig">
+                <RollingText value={yearData.words} />
+                {tr(" characters", " 字")}
+              </span>
+              <span className="stats-fig">
+                <RollingText value={yearData.imageCount} />
+                {tr(yearData.imageCount === 1 ? " image" : " images", " 张图片")}
+              </span>
+            </div>
+          </section>
 
-          <h3 className="stats-section-title">{tr("Monthly heatmaps", "每月热力图")}</h3>
-          <div className="months-grid">
-            {yearData.months.map(({ month, count: memoCount, heat }) => (
-              <div key={month} className="mini-month" style={{ animationDelay: `${month * 0.03}s` }}>
-                <div className="mini-month-head">
-                  <span className="mini-month-name">{monthFormatter.format(new Date(year, month, 1))}</span>
-                  <span className="mini-month-count">
-                    <RollingText value={memoCount} />
-                  </span>
-                </div>
-                <div className="mini-grid">
-                  {/* Cells keyed by grid position, not date — switching years
-                      mutates them in place so the colours crossfade. */}
-                  {heat.weeks.map((week, weekIndex) =>
-                    week.map((cell, dayIndex) =>
-                      cell.inRange && !cell.isFuture ? (
-                        <span
-                          key={`${weekIndex}-${dayIndex}`}
-                          className={`mini-cell level-${cell.level}${cell.isToday ? " is-today" : ""}`}
-                          role="img"
-                          tabIndex={0}
-                          aria-label={tr(
-                            `${formatDayLabel(cell.key, locale)}, ${count(cell.count, "memo")}`,
-                            `${formatDayLabel(cell.key, locale)}，${count(cell.count, "memo")}`
-                          )}
-                          onMouseEnter={(event) =>
-                            tip.show(event.currentTarget, {
-                              strong: count(cell.count, "memo"),
-                              text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
-                            })
-                          }
-                          onMouseLeave={tip.hide}
-                          onFocus={(event) =>
-                            tip.show(event.currentTarget, {
-                              strong: count(cell.count, "memo"),
-                              text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
-                            })
-                          }
-                          onBlur={tip.hide}
-                        />
-                      ) : (
-                        <span
-                          key={`${weekIndex}-${dayIndex}`}
-                          className={`mini-cell placeholder${cell.inRange ? " future" : ""}`}
-                          aria-hidden="true"
-                        />
+          <section className="stats-section" style={{ animationDelay: "0.06s" }}>
+            <h3 className="stats-section-title">{tr("Daily activity", "每日活跃")}</h3>
+            <div className="months-grid">
+              {yearData.months.map(({ month, count: memoCount, heat }) => (
+                <div key={month} className="mini-month">
+                  <div className="mini-month-head">
+                    <span className="mini-month-name">{monthFormatter.format(new Date(year, month, 1))}</span>
+                    <span className="mini-month-count">
+                      <RollingText value={memoCount} />
+                    </span>
+                  </div>
+                  <div className="mini-grid">
+                    {/* Cells keyed by grid position, not date — switching years
+                        mutates them in place so the colours crossfade. */}
+                    {heat.weeks.map((week, weekIndex) =>
+                      week.map((cell, dayIndex) =>
+                        cell.inRange && !cell.isFuture ? (
+                          <span
+                            key={`${weekIndex}-${dayIndex}`}
+                            className={`mini-cell level-${cell.level}${cell.isToday ? " is-today" : ""}`}
+                            role="img"
+                            tabIndex={0}
+                            aria-label={tr(
+                              `${formatDayLabel(cell.key, locale)}, ${count(cell.count, "memo")}`,
+                              `${formatDayLabel(cell.key, locale)}，${count(cell.count, "memo")}`
+                            )}
+                            onMouseEnter={(event) =>
+                              tip.show(event.currentTarget, {
+                                strong: count(cell.count, "memo"),
+                                text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
+                              })
+                            }
+                            onMouseLeave={tip.hide}
+                            onFocus={(event) =>
+                              tip.show(event.currentTarget, {
+                                strong: count(cell.count, "memo"),
+                                text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
+                              })
+                            }
+                            onBlur={tip.hide}
+                          />
+                        ) : (
+                          <span
+                            key={`${weekIndex}-${dayIndex}`}
+                            className={`mini-cell placeholder${cell.inRange ? " future" : ""}`}
+                            aria-hidden="true"
+                          />
+                        )
                       )
-                    )
-                  )}
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </section>
 
-          <h3 className="stats-section-title">{tr("Memos by month", "每月笔记")}</h3>
-          <BarChart
-            values={yearData.months.map(({ count }) => count)}
-            max={yearData.monthMax}
-            labels={yearData.months.map(({ month }) => monthFormatter.format(new Date(year, month, 1)))}
-            tips={yearData.months.map(({ month }) => formatMonthYear(year, month, locale))}
-          />
+          <section className="stats-section" style={{ animationDelay: "0.12s" }}>
+            <h3 className="stats-section-title">{tr("Memos by month", "每月笔记")}</h3>
+            <BarChart
+              values={yearData.months.map(({ count }) => count)}
+              max={yearData.monthMax}
+              labels={yearData.months.map(({ month }) => monthFormatter.format(new Date(year, month, 1)))}
+              tips={yearData.months.map(({ month }) => formatMonthYear(year, month, locale))}
+            />
+          </section>
 
-          <div className="stats-chart-row">
+          <section className="stats-section stats-chart-row" style={{ animationDelay: "0.18s" }}>
             <div className="stats-chart">
               <h3 className="stats-section-title">{tr("Distribution by weekday", "星期分布")}</h3>
               <BarChart
@@ -315,19 +375,45 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                 tips={yearData.hourCounts.map((_, index) => formatHourRange(index, locale))}
               />
             </div>
-          </div>
+          </section>
 
-          <h3 className="stats-section-title">{tr("All time", "全部时间")}</h3>
-          <div className="stat-tiles all-time">
-            {allTiles.map((tile, index) => (
-              <div key={tile.label} className="stat-tile" style={{ animationDelay: `${index * 0.03}s` }}>
-                <span className="stat-tile-value">
-                  <RollingText value={tile.value} />
-                </span>
-                <span className="stat-tile-label">{tile.label}</span>
+          {topTags.length > 0 ? (
+            <section className="stats-section" style={{ animationDelay: "0.24s" }}>
+              <h3 className="stats-section-title">{tr("Top tags", "常用标签")}</h3>
+              <div className="stats-tags">
+                {/* Rows keyed by rank: switching years keeps the five slots,
+                    so names crossfade, bars glide and counts roll in place. */}
+                {topTags.map(([name, tagCount], index) => (
+                  <div key={index} className="stats-tag-row">
+                    <SwapText id={name} className="stats-tag-swap">
+                      <span className="stats-tag-name">#{name}</span>
+                    </SwapText>
+                    <span className="stats-tag-track">
+                      <span className="stats-tag-fill" style={{ width: `${(tagCount / tagMax) * 100}%` }} />
+                    </span>
+                    <span className="stats-tag-count">
+                      <RollingText value={tagCount} />
+                    </span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </section>
+          ) : null}
+
+          <section className="stats-section" style={{ animationDelay: topTags.length > 0 ? "0.3s" : "0.24s" }}>
+            <h3 className="stats-section-title">{tr("All time", "全部时间")}</h3>
+            <div className="stats-facts">
+              {facts.map((fact) => (
+                <div key={fact.label} className={`stats-fact${fact.wide ? " is-wide" : ""}`}>
+                  <span className="stats-fact-label">{fact.label}</span>
+                  <span className="stats-fact-value">
+                    <RollingText value={fact.value} />
+                    {fact.suffix ? <span className="stats-fact-sub">{fact.suffix}</span> : null}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
         </div>
       </div>
     </div>

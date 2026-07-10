@@ -36,12 +36,57 @@ function sharedCount(a: string[], b: string[]): number {
  *   morphing pill already animates into that spot (a ghost there would
  *   double-image it).
  */
+interface GhostTrail {
+  /** Folding back to the root: ⌂ retreats with the trail. */
+  home: boolean;
+  parts: string[];
+}
+
+interface TrailCrumbProps {
+  part: string;
+  /** This crumb is the spot the pill just vacated — resolve in place. */
+  settle: boolean;
+  sepDelay: string;
+  crumbDelay: string;
+  onPick: () => void;
+}
+
+/**
+ * One ancestor segment: separator + button. Its entrance — settling in place
+ * vs cascading in from the left — is frozen at mount: the classes drive CSS
+ * animations, and re-deriving them on a later render (once prevPath has moved
+ * on) would swap animation-name and replay the entrance on a crumb that is
+ * standing still. Only a remount (the prefix key) legitimately restarts it.
+ */
+function TrailCrumb({ part, settle, sepDelay, crumbDelay, onPick }: TrailCrumbProps) {
+  const [entrance] = useState(() => ({ settle, sepDelay, crumbDelay }));
+  const cls = entrance.settle ? " is-settling" : "";
+  return (
+    <>
+      <ChevronRight
+        size={13}
+        className={`crumb-sep${cls}`}
+        aria-hidden="true"
+        style={entrance.settle ? undefined : { animationDelay: entrance.sepDelay }}
+      />
+      <button
+        type="button"
+        className={`crumb${cls}`}
+        onClick={onPick}
+        style={entrance.settle ? undefined : { animationDelay: entrance.crumbDelay }}
+      >
+        {part}
+      </button>
+    </>
+  );
+}
+
 export function Crumbs({ path, onHome, onPick, children }: CrumbsProps) {
   const { tr } = useI18n();
   const parts = path ? path.split("/") : [];
   const ancestors = parts.slice(0, -1);
   // Segments from the previous, deeper path that are animating out.
-  const [ghosts, setGhosts] = useState<string[]>([]);
+  const [ghosts, setGhosts] = useState<GhostTrail | null>(null);
   const prevRef = useRef<string[]>([]);
   const prevParts = prevRef.current;
   const prevPath = prevParts.join("/");
@@ -53,18 +98,23 @@ export function Crumbs({ path, onHome, onPick, children }: CrumbsProps) {
   useLayoutEffect(() => {
     const prev = prevRef.current;
     prevRef.current = parts;
-    if (parts.length > 0 && parts.length < prev.length && sharedCount(prev, parts) === parts.length) {
+    if (parts.length < prev.length && sharedCount(prev, parts) === parts.length) {
       // Up-navigation. prev's last segment is the old current (the pill's old
-      // snapshot), prev[parts.length - 1] becomes the new current (the pill's
-      // new snapshot) — ghost only what lies strictly between them.
+      // snapshot), the segment before the drop becomes the new current (the
+      // pill's new snapshot) — ghost only what lies strictly between them.
+      // Going all the way home folds ⌂ back too, so the trail collapses with
+      // the same language at every depth instead of blinking out.
       const dropped = prev.slice(parts.length, prev.length - 1);
-      if (dropped.length > 0) {
-        setGhosts(dropped);
-        const timer = window.setTimeout(() => setGhosts([]), 300);
+      const home = parts.length === 0;
+      if (dropped.length > 0 || home) {
+        setGhosts({ home, parts: dropped });
+        // Outlives exit duration + the deepest stagger (fill: both holds the
+        // finished ghosts invisible until the sweep).
+        const timer = window.setTimeout(() => setGhosts(null), 600);
         return () => window.clearTimeout(timer);
       }
     }
-    setGhosts([]);
+    setGhosts(null);
     return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path]);
@@ -81,26 +131,17 @@ export function Crumbs({ path, onHome, onPick, children }: CrumbsProps) {
             </button>
             {ancestors.map((part, index) => {
               const prefix = parts.slice(0, index + 1).join("/");
-              // Drilled exactly one level: this crumb is where the pill just
-              // was — resolve it in place instead of sliding it in.
-              const settle = prefix === prevPath ? " is-settling" : "";
               return (
-                <Fragment key={prefix}>
-                  <ChevronRight
-                    size={13}
-                    className={`crumb-sep${settle}`}
-                    aria-hidden="true"
-                    style={settle ? undefined : { animationDelay: enterDelay(index, 0.03) }}
-                  />
-                  <button
-                    type="button"
-                    className={`crumb${settle}`}
-                    onClick={() => onPick(prefix)}
-                    style={settle ? undefined : { animationDelay: enterDelay(index, 0.07) }}
-                  >
-                    {part}
-                  </button>
-                </Fragment>
+                <TrailCrumb
+                  key={prefix}
+                  part={part}
+                  // Drilled exactly one level: this crumb is where the pill
+                  // just was — resolve it in place instead of sliding it in.
+                  settle={prefix === prevPath}
+                  sepDelay={enterDelay(index, 0.03)}
+                  crumbDelay={enterDelay(index, 0.07)}
+                  onPick={() => onPick(prefix)}
+                />
               );
             })}
             {/* The current segment's separator. Its own view-transition-name
@@ -111,16 +152,24 @@ export function Crumbs({ path, onHome, onPick, children }: CrumbsProps) {
         ) : null}
         {children}
       </nav>
-      {ghosts.length > 0 ? (
+      {ghosts ? (
         // Zero-width overlay sibling: the fold-back plays where the segments
         // were, but the row's layout settles instantly — so anything after
         // the crumbs (the fused pill, the day chip) FLIPs straight to its
-        // final spot instead of snapping when the ghosts unmount.
-        <span className="crumb-ghosts" aria-hidden="true">
-          {ghosts.map((part, ghostIndex) => {
-            const prefix = [...parts, ...ghosts.slice(0, ghostIndex + 1)].join("/");
+        // final spot instead of snapping when the ghosts unmount. Folding to
+        // the root instead pins the trail at the breadcrumb's left edge (its
+        // true old coordinates), since the flow there now belongs to the
+        // arriving root pill.
+        <span className={`crumb-ghosts${ghosts.home ? " is-home" : ""}`} aria-hidden="true">
+          {ghosts.home ? (
+            <span className="crumb crumb-home is-leaving" style={{ animationDelay: `${ghosts.parts.length * 0.05}s` }}>
+              <Home size={15} aria-hidden="true" />
+            </span>
+          ) : null}
+          {ghosts.parts.map((part, ghostIndex) => {
+            const prefix = [...parts, ...ghosts.parts.slice(0, ghostIndex + 1)].join("/");
             // Deepest ghost leaves first — the trail folds back into its parent.
-            const delay = `${(ghosts.length - 1 - ghostIndex) * 0.05}s`;
+            const delay = `${(ghosts.parts.length - 1 - ghostIndex) * 0.05}s`;
             return (
               <Fragment key={prefix}>
                 <ChevronRight size={13} className="crumb-sep is-leaving" aria-hidden="true" style={{ animationDelay: delay }} />

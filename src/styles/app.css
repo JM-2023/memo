@@ -16,12 +16,12 @@
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 
-  /* Brand accent — indigo */
-  --primary: #4f46e5;
-  --primary-dark: #4338ca;
+  /* Brand accent — the leaf logo's sage green, one family app-wide */
+  --primary: #3d7a5b;
+  --primary-dark: #326349;
   --primary-ink: #ffffff;
-  --primary-tint: #eef2ff;
-  --primary-tint-strong: #e0e7ff;
+  --primary-tint: #ecf4ee;
+  --primary-tint-strong: #d9eadf;
 
   /* Neutrals / surfaces */
   --bg: #f3f4f7;
@@ -36,25 +36,28 @@
   --line: #e6e8ee;
   --line-strong: #d3d7e0;
 
-  --sage: #16a34a;
-  --danger: #dc2626;
-  --danger-tint: #fef2f2;
+  --danger: #b5483f;
+  --danger-tint: #f8eeec;
 
-  --ring: rgba(79, 70, 229, 0.32);
+  --ring: rgba(61, 122, 91, 0.22);
 
-  /* Elevation */
+  /* Elevation — four stops, each a contact line plus a tight, low-alpha
+     ambient that stays smaller than what casts it. Hairline borders do the
+     separating; xs/sm sit on the page, shadow/lg are for floating layers. */
   --shadow-xs: 0 1px 2px rgba(20, 27, 45, 0.05);
   --shadow-sm: 0 1px 2px rgba(20, 27, 45, 0.05), 0 2px 6px -2px rgba(20, 27, 45, 0.07);
-  --shadow: 0 2px 4px rgba(20, 27, 45, 0.05), 0 8px 20px -8px rgba(20, 27, 45, 0.14);
-  --shadow-lg: 0 4px 8px rgba(20, 27, 45, 0.06), 0 18px 42px -14px rgba(20, 27, 45, 0.24);
+  --shadow: 0 1px 2px rgba(20, 27, 45, 0.05), 0 6px 14px -6px rgba(20, 27, 45, 0.12);
+  --shadow-lg: 0 2px 6px rgba(20, 27, 45, 0.06), 0 14px 30px -10px rgba(20, 27, 45, 0.18);
 
-  /* Radii */
-  --r-xs: 8px;
-  --r-sm: 10px;
-  --r-md: 14px;
-  --r-lg: 18px;
-  --r-xl: 24px;
-  --r-pill: 999px;
+  /* Radii — one small scale, kept concentric: an inner corner is its parent
+     minus the padding between them (seg thumbs, menu rows), or simply the
+     next stop down. Full capsules are reserved for true circles (dots,
+     ×-buttons) and the send button's own geometry. */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
 
   /* Motion */
   --t-fast: 0.12s;
@@ -102,31 +105,33 @@
     linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.6)),
     var(--lg-iris);
   --chip-rim: rgba(20, 27, 45, 0.12);
+  /* Chips and keys sit on the page, they don't float: contact shadow only.
+     High elevation stays reserved for true overlays (menus, modals). */
   --chip-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.92),
     inset 0 -7px 15px -8px rgba(20, 27, 45, 0.06),
     0 1px 2px rgba(20, 27, 45, 0.06),
-    0 10px 24px -10px rgba(20, 27, 45, 0.24);
+    0 3px 8px -3px rgba(20, 27, 45, 0.14);
   --chip-hover-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 1),
     inset 0 -7px 15px -8px rgba(20, 27, 45, 0.06),
-    0 2px 4px rgba(20, 27, 45, 0.07),
-    0 16px 30px -10px rgba(20, 27, 45, 0.28);
+    0 1px 3px rgba(20, 27, 45, 0.07),
+    0 5px 12px -5px rgba(20, 27, 45, 0.18);
 
-  /* PRIMARY (send): richest, clearest liquid glass — transparent, not tinted. */
+  /* PRIMARY (brand logos): richest, clearest liquid glass — transparent, not tinted. */
   --primary-fill: var(--chip-fill);
   --primary-hover-fill: var(--chip-hover-fill);
   --primary-rim: rgba(20, 27, 45, 0.14);
   --primary-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.96),
     inset 0 -8px 18px -8px rgba(20, 27, 45, 0.07),
-    0 2px 6px rgba(20, 27, 45, 0.08),
-    0 16px 34px -10px rgba(20, 27, 45, 0.3);
+    0 1px 3px rgba(20, 27, 45, 0.08),
+    0 4px 10px -4px rgba(20, 27, 45, 0.16);
   --primary-hover-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 1),
     inset 0 -8px 18px -8px rgba(20, 27, 45, 0.07),
-    0 4px 10px rgba(20, 27, 45, 0.1),
-    0 24px 46px -12px rgba(20, 27, 45, 0.36);
+    0 2px 4px rgba(20, 27, 45, 0.09),
+    0 6px 14px -6px rgba(20, 27, 45, 0.2);
 
   /* Send-button glass. Light = clear glass: specular highlight + translucent
      white tint + real frost (saturate(200%) blur(20px)) + deep shadows. */
@@ -146,15 +151,14 @@
   --wash: rgba(20, 27, 45, 0.05);
   --wash-strong: rgba(20, 27, 45, 0.08);
 
-  /* Heatmap ramp — GitHub greens. Green is reserved for "activity"
-     (heat cells, stat bars); indigo stays the interaction accent. */
+  /* Heatmap ramp — GitHub greens, for activity intensity only. */
   --heat-1: #9be9a8;
   --heat-2: #40c463;
   --heat-3: #30a14e;
   --heat-4: #216e39;
 
-  /* Sidebar accent — muted sage green (pairs with the heatmap greens);
-     indigo remains the content/interaction accent in the main column. */
+  /* Sidebar accent — same sage family as --primary, kept as separate
+     tokens so the sidebar's tints can be tuned independently. */
   --leaf: #3d7a5b;
   --leaf-tint: #ecf4ee;
   --leaf-tint-strong: #d9eadf;
@@ -175,11 +179,11 @@
   :root:not([data-theme="light"]) {
     color-scheme: dark;
 
-    --primary: #818cf8;
-    --primary-dark: #aab2fc;
-    --primary-ink: #14152b;
-    --primary-tint: #1e2138;
-    --primary-tint-strong: #2a2e4d;
+    --primary: #9ed0b5;
+    --primary-dark: #b7dfc9;
+    --primary-ink: #0e2118;
+    --primary-tint: #1a2a21;
+    --primary-tint-strong: #27412f;
 
     --bg: #0c0e13;
     --surface: #16191f;
@@ -193,16 +197,15 @@
     --line: #272c38;
     --line-strong: #39404f;
 
-    --sage: #4ade80;
-    --danger: #f87171;
-    --danger-tint: #2a1717;
+    --danger: #e2837a;
+    --danger-tint: #2c1a17;
 
-    --ring: rgba(129, 140, 248, 0.4);
+    --ring: rgba(158, 208, 181, 0.3);
 
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.45);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
-    --shadow: 0 2px 4px rgba(0, 0, 0, 0.5), 0 10px 24px -8px rgba(0, 0, 0, 0.6);
-    --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.5), 0 20px 46px -14px rgba(0, 0, 0, 0.72);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 6px 14px -6px rgba(0, 0, 0, 0.55);
+    --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.5), 0 14px 30px -10px rgba(0, 0, 0, 0.62);
 
     --lg-specular: radial-gradient(220px 240px at var(--lx) var(--ly),
         rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05) 46%, rgba(255, 255, 255, 0) 72%);
@@ -230,26 +233,26 @@
       inset 0 0 0 1px rgba(255, 255, 255, 0.05),
       inset 0 -1px 1px rgba(0, 0, 0, 0.3),
       0 1px 2px rgba(0, 0, 0, 0.4),
-      0 8px 18px -10px rgba(0, 0, 0, 0.6);
+      0 3px 7px -3px rgba(0, 0, 0, 0.5);
     --chip-hover-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.07),
       inset 0 -1px 1px rgba(0, 0, 0, 0.3),
-      0 2px 4px rgba(0, 0, 0, 0.45),
-      0 14px 26px -10px rgba(0, 0, 0, 0.66);
+      0 1px 3px rgba(0, 0, 0, 0.45),
+      0 5px 11px -5px rgba(0, 0, 0, 0.55);
 
     --primary-fill: var(--chip-fill);
     --primary-hover-fill: var(--chip-hover-fill);
     --primary-rim: rgba(255, 255, 255, 0.2);
     --primary-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-      inset 0 -2px 4px rgba(30, 27, 75, 0.5),
-      0 2px 4px rgba(0, 0, 0, 0.4),
-      0 12px 26px -8px rgba(79, 70, 229, 0.45);
+      inset 0 -2px 4px rgba(0, 0, 0, 0.35),
+      0 1px 3px rgba(0, 0, 0, 0.4),
+      0 4px 10px -4px rgba(0, 0, 0, 0.55);
     --primary-hover-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.07),
-      inset 0 -2px 4px rgba(30, 27, 75, 0.5),
-      0 4px 8px rgba(0, 0, 0, 0.45),
-      0 18px 34px -8px rgba(79, 70, 229, 0.5);
+      inset 0 -2px 4px rgba(0, 0, 0, 0.35),
+      0 2px 4px rgba(0, 0, 0, 0.45),
+      0 6px 14px -6px rgba(0, 0, 0, 0.6);
 
     /* Send-button glass, dark: the reference's final render — transparent
        body, white rim, no frost pass. */
@@ -271,6 +274,11 @@
     --heat-3: #26a641;
     --heat-4: #39d353;
 
+    --leaf: #9ed0b5;
+    --leaf-tint: #1a2a21;
+    --leaf-tint-strong: #27412f;
+    --leaf-logo: linear-gradient(145deg, #6fae8e, #41725a);
+
     --tip-bg: rgba(42, 46, 58, 0.94);
     --tip-ink: #eef0f6;
     --tip-muted: rgba(238, 240, 246, 0.62);
@@ -282,11 +290,11 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --primary: #818cf8;
-  --primary-dark: #aab2fc;
-  --primary-ink: #14152b;
-  --primary-tint: #1e2138;
-  --primary-tint-strong: #2a2e4d;
+  --primary: #9ed0b5;
+  --primary-dark: #b7dfc9;
+  --primary-ink: #0e2118;
+  --primary-tint: #1a2a21;
+  --primary-tint-strong: #27412f;
 
   --bg: #0c0e13;
   --surface: #16191f;
@@ -300,16 +308,15 @@
   --line: #272c38;
   --line-strong: #39404f;
 
-  --sage: #4ade80;
-  --danger: #f87171;
-  --danger-tint: #2a1717;
+  --danger: #e2837a;
+  --danger-tint: #2c1a17;
 
-  --ring: rgba(129, 140, 248, 0.4);
+  --ring: rgba(158, 208, 181, 0.3);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.45);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
-  --shadow: 0 2px 4px rgba(0, 0, 0, 0.5), 0 10px 24px -8px rgba(0, 0, 0, 0.6);
-  --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.5), 0 20px 46px -14px rgba(0, 0, 0, 0.72);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 6px 14px -6px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.5), 0 14px 30px -10px rgba(0, 0, 0, 0.62);
 
   --lg-specular: radial-gradient(220px 240px at var(--lx) var(--ly),
       rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05) 46%, rgba(255, 255, 255, 0) 72%);
@@ -337,26 +344,26 @@
     inset 0 0 0 1px rgba(255, 255, 255, 0.05),
     inset 0 -1px 1px rgba(0, 0, 0, 0.3),
     0 1px 2px rgba(0, 0, 0, 0.4),
-    0 8px 18px -10px rgba(0, 0, 0, 0.6);
+    0 3px 7px -3px rgba(0, 0, 0, 0.5);
   --chip-hover-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.07),
     inset 0 -1px 1px rgba(0, 0, 0, 0.3),
-    0 2px 4px rgba(0, 0, 0, 0.45),
-    0 14px 26px -10px rgba(0, 0, 0, 0.66);
+    0 1px 3px rgba(0, 0, 0, 0.45),
+    0 5px 11px -5px rgba(0, 0, 0, 0.55);
 
   --primary-fill: var(--chip-fill);
   --primary-hover-fill: var(--chip-hover-fill);
   --primary-rim: rgba(255, 255, 255, 0.2);
   --primary-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-    inset 0 -2px 4px rgba(30, 27, 75, 0.5),
-    0 2px 4px rgba(0, 0, 0, 0.4),
-    0 12px 26px -8px rgba(79, 70, 229, 0.45);
+    inset 0 -2px 4px rgba(0, 0, 0, 0.35),
+    0 1px 3px rgba(0, 0, 0, 0.4),
+    0 4px 10px -4px rgba(0, 0, 0, 0.55);
   --primary-hover-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.07),
-    inset 0 -2px 4px rgba(30, 27, 75, 0.5),
-    0 4px 8px rgba(0, 0, 0, 0.45),
-    0 18px 34px -8px rgba(79, 70, 229, 0.5);
+    inset 0 -2px 4px rgba(0, 0, 0, 0.35),
+    0 2px 4px rgba(0, 0, 0, 0.45),
+    0 6px 14px -6px rgba(0, 0, 0, 0.6);
 
   /* Send-button glass, dark: the reference's final render — transparent
      body, white rim, no frost pass. */
@@ -422,8 +429,11 @@ button, input, select, textarea { font: inherit; letter-spacing: 0; color: var(-
 button { cursor: pointer; background: none; border: 0; padding: 0; }
 button:disabled { cursor: not-allowed; opacity: 0.5; }
 
-:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent); outline-offset: 2px; }
 button:focus-visible { outline: none; background: var(--wash-strong); }
+/* Text fields carry their own focus treatment (accent border + soft ring),
+   so the detached rectangle never doubles up on them. */
+input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; }
 
 a { color: var(--primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -542,8 +552,9 @@ a:hover { text-decoration: underline; }
   color: var(--tip-muted);
   background: var(--tip-bg);
   border: 1px solid var(--tip-rim);
-  border-radius: 11px;
-  box-shadow: var(--shadow-lg);
+  border-radius: var(--r-md);
+  /* Mid elevation: the bubble is ~30px tall, so the lg fog would out-size it. */
+  box-shadow: var(--shadow);
   -webkit-backdrop-filter: blur(6px) saturate(1.15);
   backdrop-filter: blur(6px) saturate(1.15);
   font-size: 0.78rem;
@@ -702,7 +713,7 @@ a:hover { text-decoration: underline; }
   margin-left: auto;
   padding: 2px;
   background: var(--surface-3);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-md);
 }
 .lang-seg-thumb {
   position: absolute;
@@ -712,7 +723,8 @@ a:hover { text-decoration: underline; }
   width: calc((100% - 4px) / 2);
   background: var(--chip-fill);
   border: 1px solid var(--chip-rim);
-  border-radius: var(--r-pill);
+  /* Concentric with the 2px-padded track. */
+  border-radius: calc(var(--r-md) - 2px);
   box-shadow: var(--chip-shadow);
   transition: transform 0.38s var(--ease-spring);
 }
@@ -726,7 +738,7 @@ a:hover { text-decoration: underline; }
   font-size: 0.78rem;
   font-weight: 700;
   text-align: center;
-  border-radius: var(--r-pill);
+  border-radius: calc(var(--r-md) - 2px);
   transition: color var(--t) var(--ease);
 }
 @media (hover: hover) { .lang-seg button:hover:not(.is-active) { color: var(--ink-soft); } }
@@ -910,7 +922,7 @@ a:hover { text-decoration: underline; }
   justify-items: center;
   gap: 1px;
   padding: 6px 4px 7px;
-  border-radius: var(--r-md);
+  border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .stat-cell:hover { background: var(--wash); } }
@@ -925,7 +937,7 @@ a:hover { text-decoration: underline; }
   grid-template-columns: repeat(3, 1fr);
   padding: 3px;
   background: var(--surface-3);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-md);
 }
 .period-seg-thumb {
   position: absolute;
@@ -935,7 +947,8 @@ a:hover { text-decoration: underline; }
   width: calc((100% - 6px) / 3);
   background: var(--chip-fill);
   border: 1px solid var(--chip-rim);
-  border-radius: var(--r-pill);
+  /* Concentric with the 3px-padded track. */
+  border-radius: calc(var(--r-md) - 3px);
   box-shadow: var(--chip-shadow);
   transition: transform 0.34s var(--ease-spring);
 }
@@ -946,7 +959,7 @@ a:hover { text-decoration: underline; }
   color: var(--muted);
   font-size: 0.82rem;
   font-weight: 700;
-  border-radius: var(--r-pill);
+  border-radius: calc(var(--r-md) - 3px);
   transition: color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .period-seg button:hover:not(.is-active) { color: var(--ink-soft); } }
@@ -986,8 +999,8 @@ a:hover { text-decoration: underline; }
 .roll-char { grid-area: 1 / 1; white-space: pre; backface-visibility: hidden; }
 .roll-char-in { animation: roll-char-in-up 0.5s var(--ease-out) both; animation-delay: calc(var(--ri) * 0.03s); }
 .roll-char-out { animation: roll-char-out-up 0.32s var(--ease) both; animation-delay: calc(var(--ri) * 0.03s); pointer-events: none; }
-.roll-down .roll-char-in { animation-name: roll-char-in-down; }
-.roll-down .roll-char-out { animation-name: roll-char-out-down; }
+.roll-char-in.is-down { animation-name: roll-char-in-down; }
+.roll-char-out.is-down { animation-name: roll-char-out-down; }
 
 /* ---- Directional text swap ----
    The outgoing copy exits on an absolute layer while the incoming one slides
@@ -1031,7 +1044,7 @@ a:hover { text-decoration: underline; }
   color: var(--ink-soft);
   font-size: 0.88rem;
   font-weight: 700;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .heatmap-title:hover { background: var(--wash); color: var(--ink); } }
@@ -1097,7 +1110,7 @@ a:hover { text-decoration: underline; }
   aspect-ratio: 1;
   padding: 0;
   background: var(--surface-3);
-  border-radius: 7px;
+  border-radius: var(--r-sm);
   /* Hover = a soft halo ring (outline, so the today/active box-shadow rings
      stay untouched) + a slight saturation lift. No scaling. */
   outline: 3px solid transparent;
@@ -1232,12 +1245,21 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 12px clamp(16px, 4vw, 56px);
+  /* Top inset 16px = .sidebar-inner's, so this row and the sidebar header
+     read as one band (see .breadcrumb min-height for the row-height half). */
+  padding: 16px clamp(16px, 4vw, 56px) 12px;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
 }
 .drawer-toggle { display: none; }
 
-.breadcrumb { --breadcrumb-gap: 8px; display: flex; flex: 1; min-width: 0; align-items: center; gap: var(--breadcrumb-gap); }
+/* position: relative anchors the to-root ghost trail (see .crumb-ghosts.is-home).
+   min-height = the sidebar header row (.user-button: 30px logo + 7px padding
+   ×2): with the topbar's 16px top inset matching .sidebar-inner's, My MEMO,
+   the location pill and the searchbox all sit on one centerline across the
+   column boundary. A fixed row height also keeps every view's topbar equally
+   tall (the searchbox is memos-only), so the topbar-action pill morphs home
+   along one baseline instead of a diagonal. */
+.breadcrumb { --breadcrumb-gap: 8px; position: relative; display: flex; flex: 1; min-width: 0; min-height: 44px; align-items: center; gap: var(--breadcrumb-gap); }
 
 /* Tag drilldown breadcrumb: ⌂ / 欢迎 / [简介 ⌄] — every ancestor clickable,
    the current segment fused with the view-options dropdown (see
@@ -1295,6 +1317,17 @@ button.crumb:active { background: var(--wash-strong); }
   white-space: nowrap;
   pointer-events: none;
 }
+/* Folding to the root: the whole trail (⌂ included) replays at its true old
+   coordinates — the breadcrumb's left edge — while the root pill glides in
+   over it, so home speaks the same fold-back language as any other up-step. */
+.crumb-ghosts.is-home {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: auto;
+  margin-left: 0;
+  transform: translateY(-50%);
+}
 /* The fused location pill — the breadcrumb's current segment ("全部笔记" at
    the root, the deepest tag inside one) and the view-options dropdown
    trigger are one control: label + caret. Its view-transition-name is what
@@ -1319,8 +1352,9 @@ button.crumb:active { background: var(--wash-strong); }
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
   view-transition-name: topbar-action;
 }
-/* At the root the pill doubles as the view title, so it sits a size up. */
-.loc-trigger.is-root { font-size: 1.02rem; }
+/* The root pill keeps the exact geometry of a tag pill: the topbar-action
+   morph home is then a pure glide + label cross-fade — no size change for
+   the snapshot to stretch into. */
 @media (hover: hover) {
   .loc-trigger:hover { background: var(--wash); }
   .loc-trigger:hover .loc-caret { color: var(--ink-soft); }
@@ -1344,7 +1378,9 @@ button.crumb:active { background: var(--wash-strong); }
   color: var(--primary-dark);
   background: var(--primary-tint);
   border: 1px solid var(--primary-tint-strong);
-  border-radius: var(--r-pill);
+  /* Same radius as .loc-trigger — the topbar-action morph between them
+     keeps one constant corner instead of tweening 999px→10px. */
+  border-radius: var(--r-sm);
   font-size: 0.86rem;
   font-weight: 700;
   white-space: nowrap;
@@ -1358,7 +1394,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: 0.84rem;
   font-weight: 700;
   white-space: nowrap;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   animation: crumb-in 0.5s var(--ease-out) both;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
@@ -1376,7 +1412,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: 0.84rem;
   font-weight: 700;
   white-space: nowrap;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   animation: crumb-in 0.5s var(--ease-out) both;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
   view-transition-name: select-delete;
@@ -1402,7 +1438,7 @@ button.crumb:active { background: var(--wash-strong); }
   color: var(--primary-dark);
   background: var(--primary-tint);
   border: 1px solid var(--primary-tint-strong);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   font-size: 0.84rem;
   font-weight: 700;
   white-space: nowrap;
@@ -1437,7 +1473,7 @@ button.crumb:active { background: var(--wash-strong); }
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-md);
   font-size: 0.9rem;
   outline: none;
   box-shadow: var(--shadow-xs);
@@ -1445,7 +1481,7 @@ button.crumb:active { background: var(--wash-strong); }
 }
 .searchbox input::placeholder { color: var(--muted); }
 @media (hover: hover) { .searchbox input:hover { border-color: var(--line-strong); } }
-.searchbox input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--ring); }
+.searchbox input:focus { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring); }
 .searchbox-clear {
   position: absolute;
   right: 7px;
@@ -1474,7 +1510,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: 0.84rem;
   font-weight: 700;
   white-space: nowrap;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
   view-transition-name: topbar-action;
 }
@@ -1516,7 +1552,7 @@ button.crumb:active { background: var(--wash-strong); }
   padding: 10px 12px;
   background: var(--field-bg);
   border: 1px solid var(--line);
-  border-radius: var(--r-md);
+  border-radius: var(--r-sm);
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
 .editor-edit textarea:focus { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring); }
@@ -1545,7 +1581,7 @@ button.crumb:active { background: var(--wash-strong); }
   padding: 6px;
   background: var(--menu-fill);
   border: 1px solid var(--glass-rim-strong);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
   animation: menu-morph 0.18s var(--ease-spring) both;
 }
@@ -1558,7 +1594,7 @@ button.crumb:active { background: var(--wash-strong); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  border-radius: var(--r-xs);
+  border-radius: var(--r-sm);
   transition: background 0.14s ease, color 0.14s ease;
 }
 .tag-suggest button.is-active, .tag-suggest button:hover { background: var(--wash-strong); color: var(--primary-dark); }
@@ -1837,7 +1873,7 @@ button.crumb:active { background: var(--wash-strong); }
   padding: 1px 8px 2px;
   color: var(--primary-dark);
   background: var(--primary-tint);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   font-size: 0.86rem;
   font-weight: 650;
   line-height: 1.5;
@@ -1867,37 +1903,18 @@ button.memo-tag:active {
 .memo-image {
   position: relative;
   aspect-ratio: 1;
-  border-radius: var(--r-md);
+  border-radius: var(--r-sm);
   overflow: hidden;
   border: 1px solid var(--line);
-  transition: border-color var(--t) var(--ease), box-shadow var(--t-slow) var(--ease);
 }
-.memo-image img { width: 100%; height: 100%; object-fit: cover; display: block; transition: filter 0.4s var(--ease); }
-/* Specular sweep: a soft light band crosses the tile on hover — glass
-   catching light, not a card jumping at the cursor. */
-.memo-image::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  background: linear-gradient(112deg, transparent 38%, rgba(255, 255, 255, 0.24) 50%, transparent 62%);
-  transform: translateX(-135%) skewX(-4deg);
-  opacity: 0;
-}
+/* One hover cue: the photo itself brightens a touch (the hairline border
+   already separates it from the card). Press dims it back down. */
+.memo-image img { width: 100%; height: 100%; object-fit: cover; display: block; transition: filter 0.28s var(--ease); }
 @media (hover: hover) {
-  .memo-image:hover {
-    border-color: color-mix(in srgb, var(--primary) 42%, var(--line));
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent), var(--shadow-sm);
-  }
-  .memo-image:hover img { filter: brightness(1.05) saturate(1.05); }
-  .memo-image:hover::after {
-    opacity: 1;
-    transform: translateX(135%) skewX(-4deg);
-    transition: transform 0.72s var(--ease), opacity 0.24s var(--ease);
-  }
+  .memo-image:hover img { filter: brightness(1.06); }
 }
 .memo-image:active img { filter: brightness(0.94); }
+.memo-image:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent); outline-offset: 2px; }
 /* External links wear a small corner badge; the bytes never touch D1. */
 .memo-image .ext-badge {
   position: absolute;
@@ -1928,7 +1945,7 @@ button.memo-tag:active {
   text-align: center;
   background: var(--surface-2);
   border: 1px dashed var(--line-strong);
-  border-radius: var(--r-md);
+  border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .memo-image-broken:hover { background: var(--surface-3); color: var(--ink-soft); text-decoration: none; } }
@@ -2028,7 +2045,7 @@ button.memo-tag:active {
   padding: 4px 12px;
   color: #fff;
   background: rgba(12, 14, 19, 0.55);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   font-size: 0.82rem;
   font-weight: 700;
 }
@@ -2042,7 +2059,7 @@ button.memo-tag:active {
   padding: 6px 13px;
   color: #fff;
   background: rgba(12, 14, 19, 0.55);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   font-size: 0.82rem;
   font-weight: 700;
   transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
@@ -2080,40 +2097,30 @@ button.memo-tag:active {
 .stats-year { min-width: 76px; text-align: center; font-size: 0.98rem; font-weight: 800; font-variant-numeric: tabular-nums; animation: fade-up 0.3s var(--ease) both; }
 .stats-body {
   display: grid;
-  gap: 14px;
+  gap: 18px;
   padding: 18px 20px 26px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
-.stats-section-title { margin: 8px 0 0; color: var(--ink-soft); font-size: 0.85rem; font-weight: 750; }
+/* One entrance per section (staggered inline in the JSX), so the modal reads
+   top-down — hero, calendar, charts, footnotes — instead of raining tiles. */
+.stats-section { display: grid; gap: 10px; animation: rise-in 0.55s var(--ease-out) both; }
+.stats-section-title { margin: 0; color: var(--ink-soft); font-size: 0.85rem; font-weight: 750; }
 
-.stat-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; }
-.stat-tile {
-  display: grid;
-  gap: 2px;
-  justify-items: center;
-  padding: 14px 10px 12px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-xs);
-  animation: rise-in 0.5s var(--ease-out) both;
-}
-.stat-tile-value { font-size: 1.32rem; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.stat-tile-label { color: var(--muted); font-size: 0.76rem; font-weight: 600; }
+/* Tier 1: the year's headline figure, set in type — no card frame. The
+   supporting figures share one muted line beneath it. */
+.stats-hero { gap: 3px; padding-top: 2px; }
+.stats-hero-main { display: flex; align-items: baseline; gap: 10px; }
+.stats-hero-value { font-size: 2.6rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.stats-hero-unit { color: var(--ink-soft); font-size: 1rem; font-weight: 700; }
+.stats-hero-figs { display: flex; flex-wrap: wrap; gap: 4px 18px; color: var(--muted); font-size: 0.86rem; font-weight: 600; }
+.stats-fig { white-space: nowrap; }
+.stats-fig .roll { color: var(--ink-soft); font-weight: 750; font-variant-numeric: tabular-nums; }
 
-.months-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(138px, 1fr)); gap: 12px; }
-.mini-month {
-  display: grid;
-  gap: 8px;
-  align-content: start;
-  padding: 10px 11px 12px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-xs);
-  animation: rise-in 0.5s var(--ease-out) both;
-}
+.months-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 14px 18px; }
+/* Tier 2: twelve bare calendar textures on the section's shared surface —
+   whitespace separates the months, not twelve identical card frames. */
+.mini-month { display: grid; gap: 6px; align-content: start; }
 .mini-month-head { display: flex; align-items: baseline; justify-content: space-between; font-size: 0.76rem; font-weight: 700; }
 .mini-month-name { color: var(--ink-soft); }
 .mini-month-count { color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -2122,7 +2129,11 @@ button.memo-tag:active {
   width: 100%;
   height: auto;
   aspect-ratio: 1;
-  background: var(--surface-3);
+  /* These sit straight on the modal's glass (no white card behind them since
+     the unboxing): an ink-relative wash plus a hairline inset ring keeps
+     empty days legible in both themes and gives coloured cells a crisp edge. */
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent);
   border-radius: 3px;
   outline: 2px solid transparent;
   outline-offset: 1px;
@@ -2133,7 +2144,7 @@ button.memo-tag:active {
   .mini-cell:not(.placeholder):hover { outline-color: color-mix(in srgb, var(--heat-3) 42%, transparent); filter: saturate(1.16) brightness(1.06); }
 }
 .mini-cell.placeholder { visibility: hidden; }
-.mini-cell.placeholder.future { visibility: visible; background: color-mix(in srgb, var(--surface-3) 45%, transparent); }
+.mini-cell.placeholder.future { visibility: visible; background: color-mix(in srgb, var(--ink) 3%, transparent); box-shadow: none; }
 .mini-cell.level-1 { background: var(--heat-1); }
 .mini-cell.level-2 { background: var(--heat-2); }
 .mini-cell.level-3 { background: var(--heat-3); }
@@ -2166,7 +2177,26 @@ button.memo-tag:active {
 .stats-chart-row { display: grid; grid-template-columns: 2fr 3fr; gap: 18px; align-items: start; }
 .stats-chart { display: grid; gap: 10px; }
 .stats-chart .stats-bars { height: 96px; }
-.stats-chart .stats-section-title { margin-top: 0; }
+
+/* Top tags of the year: quiet ranked bars — name, share, count. Switching
+   years crossfades the names (SwapText), glides the bars and rolls the
+   counts, mirroring the chart behaviour above. */
+.stats-tags { display: grid; gap: 2px; }
+.stats-tag-row { display: flex; align-items: center; gap: 12px; padding: 4px 2px; }
+.stats-tag-swap { flex: none; width: min(170px, 36%); justify-items: start; }
+.stats-tag-swap .swap-old { justify-content: flex-start; }
+.stats-tag-name { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--ink-soft); font-size: 0.85rem; font-weight: 650; }
+.stats-tag-track { flex: 1; height: 4px; background: var(--surface-3); border-radius: 2px; }
+.stats-tag-fill { display: block; height: 100%; max-width: 100%; background: var(--primary); border-radius: inherit; transition: width 0.55s var(--ease-out); }
+.stats-tag-count { flex: none; min-width: 2em; color: var(--muted); font-size: 0.8rem; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+
+/* Tier 4, all-time footnotes: a hairline ledger — rows, not boxes. */
+.stats-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); column-gap: 28px; }
+.stats-fact { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 8px 2px; border-top: 1px solid var(--glass-rim); }
+.stats-fact.is-wide { grid-column: 1 / -1; }
+.stats-fact-label { color: var(--muted); font-size: 0.82rem; font-weight: 600; white-space: nowrap; }
+.stats-fact-value { font-size: 0.92rem; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stats-fact-sub { color: var(--muted); font-weight: 600; }
 
 /* =========================================================================
    Toast
@@ -2180,8 +2210,9 @@ button.memo-tag:active {
   color: var(--ink);
   background: var(--menu-fill);
   border: 1px solid var(--glass-rim-strong);
-  border-radius: var(--r-pill);
-  box-shadow: var(--menu-highlight), var(--shadow-lg);
+  border-radius: var(--r-lg);
+  /* ~38px tall — mid elevation keeps the shadow smaller than the toast. */
+  box-shadow: var(--menu-highlight), var(--shadow);
   font-size: 0.9rem;
   font-weight: 700;
   transform: translateX(-50%);
@@ -2205,6 +2236,14 @@ button.memo-tag:active {
    removal reads as the card receding while its neighbours glide up. */
 ::view-transition-old(*):only-child { animation: card-depart 0.26s var(--ease) both; }
 ::view-transition-new(*):only-child { animation: fade-in 0.3s var(--ease) 0.08s both; }
+/* The topbar-action pill morphs between labels of very different widths (a
+   short tag ↔ 全部笔记 ↔ 已选 N 条). Snapshots default to inline-size:100%/
+   block-size:auto, so the old label stretches to the interpolating group
+   width — going home, a narrow tag pill ballooned down-left while gliding
+   into the wide root pill. Pinned to the row height instead, every morph is
+   the same pure glide with the labels cross-fading at natural size. */
+::view-transition-old(topbar-action),
+::view-transition-new(topbar-action) { inline-size: auto; block-size: 100%; }
 
 /* =========================================================================
    Responsive — sidebar becomes an animated drawer
@@ -2236,8 +2275,9 @@ button.memo-tag:active {
 
 @media (max-width: 720px) {
   .stats-chart-row { grid-template-columns: 1fr; gap: 14px; }
-  .months-grid { grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); }
+  .months-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
   .stats-body { padding: 14px 14px 20px; }
+  .stats-hero-value { font-size: 2.15rem; }
   .stats-bars { gap: 3px; }
   .stats-bar-labels { gap: 3px; }
 }

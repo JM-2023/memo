@@ -11,7 +11,7 @@ interface UseSyncOptions {
 }
 
 /**
- * Keeps this client seamlessly in step with the server. The server stamps
+ * Keeps this client in step with the server. The server stamps
  * every write with a global `seq`; we hold the last cursor and pull
  * increments:
  *   - right after each local mutation (reconciles the cursor and catches

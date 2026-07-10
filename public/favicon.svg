@@ -1,7 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect x="4" y="4" width="56" height="56" rx="14" fill="#4f46e5"/>
-  <rect x="15" y="15" width="15" height="15" rx="4.5" fill="#ffffff" opacity="0.95"/>
-  <rect x="34" y="15" width="15" height="15" rx="4.5" fill="#ffffff" opacity="0.62"/>
-  <rect x="15" y="34" width="15" height="15" rx="4.5" fill="#ffffff" opacity="0.62"/>
-  <rect x="34" y="34" width="15" height="15" rx="4.5" fill="#ffffff" opacity="0.32"/>
+  <defs>
+    <linearGradient id="leaf" x1="0.21" y1="0.09" x2="0.79" y2="0.91">
+      <stop offset="0" stop-color="#66a385"/>
+      <stop offset="1" stop-color="#3d7a5b"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#leaf)"/>
+  <!-- lucide "notebook-pen" — the same mark as the in-app logo -->
+  <g transform="translate(16 16) scale(1.3333)" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/>
+    <path d="M2 6h4"/>
+    <path d="M2 10h4"/>
+    <path d="M2 14h4"/>
+    <path d="M2 18h4"/>
+    <path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/>
+  </g>
 </svg>
