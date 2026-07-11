@@ -27,7 +27,9 @@ interface CreateBody {
   images?: ImagePayload[];
 }
 
-export const MAX_CONTENT_CHARS = 20_000;
+// Mirrored by the composer (src/components/Editor.tsx); encrypted 40k CJK is
+// ~160KB base64, far under the D1 parameter sizes images already exercise.
+export const MAX_CONTENT_CHARS = 40_000;
 export const MAX_IMAGES_PER_MEMO = 9;
 // Client compresses to ≤900KB binary; base64 inflates 4/3. Anything past this
 // means the client-side pipeline was bypassed, so reject rather than risk D1

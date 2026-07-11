@@ -1636,11 +1636,55 @@ button.crumb:active { background: var(--wash-strong); }
   color: var(--ink);
   font-size: 0.95rem;
   line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
   outline: none;
   /* autoGrow sets height per input; easing it keeps typing from snapping. */
   transition: height 0.16s var(--ease);
 }
+/* Pinned (not UA default) so the over-limit mirror reproduces the exact
+   same line breaks. Create mode only: .editor-edit keeps its own padding,
+   and this rule is source-ordered after it. */
+.editor-create textarea { padding: 2px; }
 .editor textarea::placeholder { color: var(--muted); }
+
+/* Over-limit ink: a pointer-transparent mirror of the textarea stacked on
+   top of it. Its text is invisible — only the <mark> background paints, so
+   everything past the cap reads as a red selection over the real glyphs.
+   Box metrics and wrap rules must match the textarea exactly or the tint
+   drifts off the text. */
+.editor-field { position: relative; display: grid; }
+.editor-overflow {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  padding: 2px;
+  color: transparent;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  pointer-events: none;
+}
+/* The edit field's 1px border declaration is dead (.editor textarea's
+   border: 0 wins on order), so the mirror matches padding only. */
+.editor-edit .editor-overflow { padding: 10px 12px; }
+.editor-overflow mark {
+  color: transparent;
+  background: color-mix(in srgb, var(--danger) 26%, transparent);
+  border-radius: 2px;
+}
+
+.editor-count {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  animation: fade-up 0.2s var(--ease) both;
+}
+.editor-count.is-over { color: var(--danger); }
 
 .tag-suggest {
   position: absolute;

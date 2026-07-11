@@ -16,6 +16,13 @@ import type { MemoImage, NewImagePayload } from "../lib/types";
 import { useTip } from "./Tip";
 
 const MAX_IMAGES = 9;
+/** Mirrors MAX_CONTENT_CHARS in functions/api/memos/index.ts. */
+const MAX_CONTENT_CHARS = 40_000;
+/** Hard input cap: lets pastes overshoot the limit (so the overflow can be
+ * shown) without ever asking the mirror layer to render megabytes. */
+const HARD_INPUT_CAP = 100_000;
+/** The counter appears once this close to the cap. */
+const COUNTER_FROM = MAX_CONTENT_CHARS - 2_000;
 
 interface EditorProps {
   mode: "create" | "edit";
@@ -77,6 +84,7 @@ export function Editor({
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const overflowRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const linkRef = useRef<HTMLInputElement>(null);
   // Stable across ambiguous network failures; rotate only after a confirmed
@@ -98,7 +106,27 @@ export function Editor({
     drop();
   }
   const totalImages = keptExisting.length + newImages.length;
-  const canSubmit = !busy && !conflictMessage && compressing === 0 && (content.trim().length > 0 || totalImages > 0);
+  const overLimit = content.length > MAX_CONTENT_CHARS;
+  const canSubmit = !busy && !conflictMessage && compressing === 0 && !overLimit && (content.trim().length > 0 || totalImages > 0);
+
+  // Never split a surrogate pair at the highlight boundary — the mirror would
+  // render two replacement glyphs at a different width and the red region
+  // would drift off the real text.
+  let overflowCut = MAX_CONTENT_CHARS;
+  if (overLimit) {
+    const boundary = content.charCodeAt(overflowCut - 1);
+    if (boundary >= 0xd800 && boundary <= 0xdbff) overflowCut -= 1;
+  }
+
+  /** The mirror is its own (hidden) scroller; keep it glued to the textarea. */
+  function syncOverflowScroll() {
+    const layer = overflowRef.current;
+    const area = areaRef.current;
+    if (layer && area) layer.scrollTop = area.scrollTop;
+  }
+  useLayoutEffect(() => {
+    if (overLimit) syncOverflowScroll();
+  }, [content, overLimit]);
 
   // Layout effect: the textarea must reach its grown height before the card
   // stage measures the editor scene for its height morph. preventScroll keeps
@@ -422,22 +450,31 @@ export function Editor({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      <textarea
-        ref={areaRef}
-        value={content}
-        placeholder={tr("What’s on your mind…", "现在的想法是……")}
-        rows={mode === "create" ? 2 : 3}
-        maxLength={20000}
-        onChange={(event) => {
-          setContent(event.target.value);
-          refreshSuggestion(event.target.value, event.target.selectionStart);
-          autoGrow();
-        }}
-        onClick={(event) => refreshSuggestion(content, event.currentTarget.selectionStart)}
-        onKeyDown={onKeyDown}
-        onPaste={onPaste}
-        onBlur={() => window.setTimeout(() => setSuggestion(null), 120)}
-      />
+      <div className="editor-field">
+        <textarea
+          ref={areaRef}
+          value={content}
+          placeholder={tr("What’s on your mind…", "现在的想法是……")}
+          rows={mode === "create" ? 2 : 3}
+          maxLength={HARD_INPUT_CAP}
+          onChange={(event) => {
+            setContent(event.target.value);
+            refreshSuggestion(event.target.value, event.target.selectionStart);
+            autoGrow();
+          }}
+          onScroll={syncOverflowScroll}
+          onClick={(event) => refreshSuggestion(content, event.currentTarget.selectionStart)}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          onBlur={() => window.setTimeout(() => setSuggestion(null), 120)}
+        />
+        {overLimit ? (
+          <div ref={overflowRef} className="editor-overflow" aria-hidden="true">
+            {content.slice(0, overflowCut)}
+            <mark>{content.slice(overflowCut)}</mark>
+          </div>
+        ) : null}
+      </div>
 
       {suggestion ? (
         <div className="tag-suggest" role="listbox" aria-label={tr("Tag suggestions", "标签建议")}>
@@ -641,6 +678,14 @@ export function Editor({
           />
         </div>
         <div className="editor-actions">
+          {content.length >= COUNTER_FROM ? (
+            <span
+              className={`editor-count${overLimit ? " is-over" : ""}`}
+              title={overLimit ? tr("Over the memo length limit", "已超出单条笔记字数上限") : undefined}
+            >
+              {content.length.toLocaleString()} / {MAX_CONTENT_CHARS.toLocaleString()}
+            </span>
+          ) : null}
           {mode === "edit" && onCancel ? (
             <button type="button" className="ghost-button" onClick={onCancel} disabled={busy}>
               {tr("Cancel", "取消")}
