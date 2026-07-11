@@ -145,10 +145,10 @@
   --dl-sampling: saturate(200%) blur(20px);
   --dl-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.2),
-    0 12px 35px rgba(0, 0, 0, 0.25),
-    0 2px 8px rgba(0, 0, 0, 0.15);
-  --dl-hover-shadow: 0 12px 35px rgba(0, 0, 0, 0.22);
-  --dl-active-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+    0 8px 24px rgba(0, 0, 0, 0.18),
+    0 2px 6px rgba(0, 0, 0, 0.12);
+  --dl-hover-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+  --dl-active-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
 
   /* Tier C wash (hover for transparent controls) */
   --wash: rgba(20, 27, 45, 0.05);
@@ -264,10 +264,10 @@
     --dl-sampling: none;
     --dl-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 12px 35px rgba(0, 0, 0, 0.25),
-      0 2px 8px rgba(0, 0, 0, 0.15);
-    --dl-hover-shadow: 0 12px 35px rgba(0, 0, 0, 0.22);
-    --dl-active-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+      0 8px 24px rgba(0, 0, 0, 0.18),
+      0 2px 6px rgba(0, 0, 0, 0.12);
+    --dl-hover-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+    --dl-active-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
 
     --wash: rgba(255, 255, 255, 0.06);
     --wash-strong: rgba(255, 255, 255, 0.1);
@@ -375,10 +375,10 @@
   --dl-sampling: none;
   --dl-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.2),
-    0 12px 35px rgba(0, 0, 0, 0.25),
-    0 2px 8px rgba(0, 0, 0, 0.15);
-  --dl-hover-shadow: 0 12px 35px rgba(0, 0, 0, 0.22);
-  --dl-active-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+    0 8px 24px rgba(0, 0, 0, 0.18),
+    0 2px 6px rgba(0, 0, 0, 0.12);
+  --dl-hover-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+  --dl-active-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
 
   --wash: rgba(255, 255, 255, 0.06);
   --wash-strong: rgba(255, 255, 255, 0.1);
@@ -430,7 +430,7 @@ body {
 
 button, input, select, textarea { font: inherit; letter-spacing: 0; color: var(--ink); }
 button { cursor: pointer; background: none; border: 0; padding: 0; }
-button:disabled { cursor: not-allowed; opacity: 0.5; }
+button:disabled { cursor: default; opacity: 0.5; }
 
 :focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent); outline-offset: 2px; }
 button:focus-visible { outline: none; background: var(--wash-strong); }
