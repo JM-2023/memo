@@ -2054,6 +2054,22 @@ button.crumb:active { background: var(--wash-strong); }
 .md-hr { display: flex; align-items: center; min-height: 1.4em; }
 .md-hr::before { content: ""; width: 100%; height: 1px; background: var(--line-strong); }
 
+/* Table rows. Every "|" line is an independent equal-column grid, so rows
+   align across the card with no shared table box — a lone replay clone lays
+   out exactly like the same row inside the card. The delimiter line renders
+   as the header rule; .is-th (row right above a delimiter) is the header. */
+.md-tr {
+  display: grid;
+  grid-template-columns: repeat(var(--md-cols, 1), minmax(0, 1fr));
+  column-gap: 12px;
+  padding-block: 3px;
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.md-tr.is-th { font-weight: 650; border-bottom: none; }
+.md-trule { display: flex; align-items: center; min-height: 9px; }
+.md-trule::before { content: ""; width: 100%; height: 1px; background: var(--line-strong); }
+
 .memo-content strong { font-weight: 650; }
 .memo-content del { color: var(--muted); text-decoration-color: color-mix(in srgb, currentColor 55%, transparent); }
 .memo-content mark {

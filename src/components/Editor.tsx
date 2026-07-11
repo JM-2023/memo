@@ -1,9 +1,17 @@
-import { Bold, Hash, Image as ImageIcon, ImagePlus, Link2, List, Loader2, Send, X } from "lucide-react";
+import { Bold, Hash, Image as ImageIcon, ImagePlus, Link2, List, Loader2, Send, Table, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import { ApiError } from "../lib/api";
 import { compressImage } from "../lib/images";
 import { useI18n } from "../lib/i18n";
-import { continueListOnEnter, shiftListIndent, toggleBulletLine, toggleWrap, type EditPatch } from "../lib/markdownEdit";
+import {
+  continueListOnEnter,
+  insertTableTemplate,
+  shiftListIndent,
+  tableTabStop,
+  toggleBulletLine,
+  toggleWrap,
+  type EditPatch
+} from "../lib/markdownEdit";
 import type { MemoImage, NewImagePayload } from "../lib/types";
 import { useTip } from "./Tip";
 
@@ -34,8 +42,9 @@ interface Suggestion {
  * The composer used both for new memos and in-place editing. Plain text with
  * #tag affordances: a toolbar "#" button, live tag autocomplete under the
  * caret token. Markdown is written as plain syntax (cards render it):
- * Enter continues list/task/quote lines, Tab indents them, ⌘B/⌘I/⌘E/⌘⇧S/⌘⇧H
- * wrap the selection, and the toolbar covers bold + list for touch. Images
+ * Enter continues list/task/quote lines and builds tables row by row, Tab
+ * indents lists and hops table cells, ⌘B/⌘I/⌘E/⌘⇧S/⌘⇧H wrap the selection,
+ * and the toolbar covers bold + list + table for touch. Images
  * arrive four ways: file picker, paste, drag-and-drop (all compressed
  * client-side and stored), or as an external link that renders as a preview
  * without touching the database.
@@ -332,9 +341,13 @@ export function Editor({
         }
       }
     }
-    // Tab indents only on list lines, so it keeps moving focus elsewhere.
+    // Tab hops table cells and indents list lines; anywhere else it keeps
+    // moving focus.
     if (event.key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) {
-      const patch = shiftListIndent(content, event.currentTarget.selectionStart, event.shiftKey ? -1 : 1);
+      const dir = event.shiftKey ? -1 : 1;
+      const patch =
+        tableTabStop(content, event.currentTarget.selectionStart, dir) ??
+        shiftListIndent(content, event.currentTarget.selectionStart, dir);
       if (patch) {
         event.preventDefault();
         applyPatch(patch);
@@ -577,6 +590,19 @@ export function Editor({
             onMouseLeave={tip.hide}
           >
             <List size={17} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => {
+              const area = areaRef.current;
+              if (area) applyPatch(insertTableTemplate(content, area.selectionStart, tr("Col 1", "列 1"), tr("Col 2", "列 2")));
+            }}
+            aria-label={tr("Insert table", "插入表格")}
+            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Insert table", "插入表格") })}
+            onMouseLeave={tip.hide}
+          >
+            <Table size={16} aria-hidden="true" />
           </button>
           <button
             type="button"

@@ -4,7 +4,9 @@
 // line alone — block syntax from the line's prefix, inline syntax within the
 // remainder. No cross-line constructs (fenced code blocks, setext headings,
 // real <ul>/<ol> grouping): those would need context the replay's per-line
-// clones cannot carry. Block parsing changes HOW a line renders, never
+// clones cannot carry. Tables fit the rule because every "|" row is its own
+// equal-column grid — no shared <table> box, so a lone row renders the same
+// as a row among siblings. Block parsing changes HOW a line renders, never
 // WHETHER it renders — the collapse decision stays with tokenizeLine /
 // lineRenders.
 
@@ -17,7 +19,12 @@ export type Block =
   | { kind: "ordered"; depth: number; ordinal: string; text: string }
   | { kind: "task"; depth: number; checked: boolean; text: string }
   | { kind: "quote"; text: string }
-  | { kind: "hr" };
+  | { kind: "hr" }
+  /** One "| a | b |" table row. Each row is rendered as its own equal-column
+   *  grid, so rows align across the card without any shared table box. */
+  | { kind: "trow"; cells: string[] }
+  /** The "| --- | --- |" delimiter row — rendered as the header rule. */
+  | { kind: "trule"; cols: number };
 
 const HR_PATTERN = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
 // "# Heading" needs the space — "#tag" (no space) stays a tag.
@@ -33,7 +40,50 @@ function depthOf(indent: string): number {
   return Math.min(Math.floor(indent.replace(/\t/g, "  ").length / 2), 3);
 }
 
+// A delimiter cell: dashes with optional GFM alignment colons. Alignment
+// itself is not honored — data rows cannot see the delimiter statelessly.
+const TRULE_CELL = /^:?-+:?$/;
+
+/**
+ * Split "| a | b |" into trimmed cell texts, or null when the line is not a
+ * table row. A row must start with "|" and contain at least one more
+ * *unescaped* "|"; "\|" is a literal pipe inside a cell. The trailing "|"
+ * is optional — "| a | b" still yields two cells.
+ */
+export function parseTableCells(raw: string): string[] | null {
+  const line = raw.trim();
+  if (line[0] !== "|") return null;
+  const cells: string[] = [];
+  let cell = "";
+  let closed = false;
+  for (let i = 1; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === "\\" && line[i + 1] === "|") {
+      cell += "|";
+      i += 1;
+    } else if (ch === "|") {
+      cells.push(cell.trim());
+      cell = "";
+      closed = true;
+    } else {
+      cell += ch;
+    }
+  }
+  if (!closed) return null;
+  if (cell.trim() !== "") cells.push(cell.trim());
+  return cells;
+}
+
+/** True when every cell is a "---" / ":--:" delimiter — the header rule row. */
+export function isTableRule(cells: string[]): boolean {
+  return cells.every((cell) => TRULE_CELL.test(cell));
+}
+
 export function parseBlock(raw: string): Block {
+  if (raw.includes("|")) {
+    const cells = parseTableCells(raw);
+    if (cells) return isTableRule(cells) ? { kind: "trule", cols: cells.length } : { kind: "trow", cells };
+  }
   if (HR_PATTERN.test(raw)) return { kind: "hr" };
   const heading = HEADING_PATTERN.exec(raw);
   if (heading) return { kind: "heading", level: Math.min(heading[1].length, 3) as 1 | 2 | 3, text: heading[2] };

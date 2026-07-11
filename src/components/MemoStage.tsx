@@ -64,7 +64,7 @@ interface MemoStageProps {
   /** Just the media grid of a given state; null when it has none. */
   renderGhostMedia: (content: string, images: MemoImage[]) => ReactNode | null;
   /** One inert rendered line (replay overlay clones). */
-  renderLine: (raw: string) => ReactNode;
+  renderLine: (raw: string, nextRaw?: string) => ReactNode;
 }
 
 function buildPlan(prev: Snap, next: Snap): MorphPlan | null {
@@ -330,11 +330,19 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
       ) : null}
       {replay ? (
         <div key="overlay" className="stage-overlay" ref={overlayRef} aria-hidden="true">
-          {replay.ops!.map((op, index) => (
-            <div key={index} className="memo-content stage-line">
-              {renderLine(op.raw)}
-            </div>
-          ))}
+          {replay.ops!.map((op, index) => {
+            // The line below this one in the text this row belongs to (old
+            // text for del rows, new text for keep/add) — MemoLine uses it
+            // to keep table-header bolding identical in the clone.
+            const below = replay
+              .ops!.slice(index + 1)
+              .find((next) => (op.type === "del" ? next.type !== "add" : next.type !== "del"))?.raw;
+            return (
+              <div key={index} className="memo-content stage-line">
+                {renderLine(op.raw, below)}
+              </div>
+            );
+          })}
           {mediaKept ? (
             <div className="stage-line is-media-kept">{renderGhostMedia(snap.content, snap.images)}</div>
           ) : (

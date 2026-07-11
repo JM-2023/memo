@@ -65,6 +65,28 @@ describe("parseBlock", () => {
     expect(parseBlock("*****")).toEqual({ kind: "hr" });
     expect(parseBlock("--")).toEqual({ kind: "p", text: "--" });
   });
+
+  it("parses pipe rows into table cells", () => {
+    expect(parseBlock("| a | b |")).toEqual({ kind: "trow", cells: ["a", "b"] });
+    expect(parseBlock("| 名称 | 数量 | 备注 |")).toEqual({ kind: "trow", cells: ["名称", "数量", "备注"] });
+    // The trailing pipe is optional; empty cells survive.
+    expect(parseBlock("| a | b")).toEqual({ kind: "trow", cells: ["a", "b"] });
+    expect(parseBlock("| a |  | c |")).toEqual({ kind: "trow", cells: ["a", "", "c"] });
+    // "\|" is a literal pipe inside a cell.
+    expect(parseBlock("| a \\| b | c |")).toEqual({ kind: "trow", cells: ["a | b", "c"] });
+  });
+
+  it("recognizes the table delimiter row, alignment colons included", () => {
+    expect(parseBlock("| --- | --- |")).toEqual({ kind: "trule", cols: 2 });
+    expect(parseBlock("|:---|---:|:-:|")).toEqual({ kind: "trule", cols: 3 });
+    expect(parseBlock("|---|")).toEqual({ kind: "trule", cols: 1 });
+  });
+
+  it("leaves non-row pipes as prose", () => {
+    expect(parseBlock("| alone")).toEqual({ kind: "p", text: "| alone" });
+    expect(parseBlock("a | b")).toEqual({ kind: "p", text: "a | b" });
+    expect(parseBlock("x || y 表示逻辑或")).toEqual({ kind: "p", text: "x || y 表示逻辑或" });
+  });
 });
 
 describe("parseInline", () => {

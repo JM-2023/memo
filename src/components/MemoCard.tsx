@@ -196,7 +196,9 @@ export function MemoCard(props: MemoCardProps) {
 
   // Inert clone of one content line — replay overlay + ghost measure layer.
   // Tags keep their live look (ghosts must be pixel-identical to the card).
-  const renderGhostLine = (raw: string) => <MemoLine raw={raw} tagMode={inTrash ? "static" : "ghost"} />;
+  const renderGhostLine = (raw: string, nextRaw?: string) => (
+    <MemoLine raw={raw} nextRaw={nextRaw} tagMode={inTrash ? "static" : "ghost"} />
+  );
 
   // Inert media grid of an arbitrary (content, images) state — same classes
   // as the live grid so geometry and paint match exactly.
@@ -239,8 +241,8 @@ export function MemoCard(props: MemoCardProps) {
         </div>
       </header>
       <div className="memo-content">
-        {visualLinesOf(content).map((line) => (
-          <MemoLine key={line.key} raw={line.raw} tagMode={inTrash ? "static" : "ghost"} />
+        {visualLinesOf(content).map((line, index, lines) => (
+          <MemoLine key={line.key} raw={line.raw} nextRaw={lines[index + 1]?.raw} tagMode={inTrash ? "static" : "ghost"} />
         ))}
       </div>
       {renderGhostMedia(content, images)}
@@ -292,8 +294,14 @@ export function MemoCard(props: MemoCardProps) {
       </header>
 
       <div className="memo-content">
-        {visualLinesOf(memo.content).map((line) => (
-          <MemoLine key={line.key} raw={line.raw} tagMode={inTrash ? "static" : "button"} onPickTag={props.onPickTag} />
+        {visualLinesOf(memo.content).map((line, index, lines) => (
+          <MemoLine
+            key={line.key}
+            raw={line.raw}
+            nextRaw={lines[index + 1]?.raw}
+            tagMode={inTrash ? "static" : "button"}
+            onPickTag={props.onPickTag}
+          />
         ))}
       </div>
 

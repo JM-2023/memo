@@ -13,6 +13,13 @@ export type TagMode = "button" | "static" | "ghost";
 
 interface MemoLineProps {
   raw: string;
+  /**
+   * The following visual line, when the caller knows it. Only used to bold a
+   * table row that sits right above a "| --- |" delimiter — passing it as an
+   * explicit prop (instead of a CSS sibling selector) keeps the replay
+   * clones, which render one line each, pixel-identical to the real card.
+   */
+  nextRaw?: string;
   tagMode: TagMode;
   onPickTag?: (path: string) => void;
 }
@@ -71,7 +78,7 @@ function renderInline(nodes: Inline[], tagMode: TagMode, onPickTag?: (path: stri
  * below stays on tokenizeLine — lineRenders() in lib/lineDiff mirrors it
  * exactly, and markdown only changes HOW a row renders, never WHETHER.
  */
-export function MemoLine({ raw, tagMode, onPickTag }: MemoLineProps) {
+export function MemoLine({ raw, nextRaw, tagMode, onPickTag }: MemoLineProps) {
   if (!raw) return <p className="memo-blank" />;
   const tokens = tokenizeLine(raw);
   // Image tokens leave the text flow (they render in the media grid); a line
@@ -83,6 +90,19 @@ export function MemoLine({ raw, tagMode, onPickTag }: MemoLineProps) {
 
   const block = parseBlock(raw);
   if (block.kind === "hr") return <p className="md-hr" role="separator" />;
+  if (block.kind === "trule") return <p className="md-trule" role="separator" />;
+  if (block.kind === "trow") {
+    const isHead = nextRaw !== undefined && parseBlock(nextRaw).kind === "trule";
+    return (
+      <p className={`md-tr${isHead ? " is-th" : ""}`} style={{ "--md-cols": block.cells.length } as CSSProperties}>
+        {block.cells.map((cell, index) => (
+          <span key={index} className="md-td">
+            {renderInline(parseInline(cell), tagMode, onPickTag)}
+          </span>
+        ))}
+      </p>
+    );
+  }
 
   const inline = renderInline(parseInline(block.text), tagMode, onPickTag);
   switch (block.kind) {
