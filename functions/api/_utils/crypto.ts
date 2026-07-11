@@ -116,7 +116,9 @@ export async function openContent(key: CryptoKey | null, stored: string, format?
   }
   try {
     const combined = base64ToBytes(stored.slice(ENC_PREFIX.length));
-    if (!stored.startsWith(ENC_PREFIX) || combined.byteLength < 29) throw new Error("Invalid encrypted payload");
+    // Minimum valid payload is 28 bytes: 12-byte IV + 16-byte GCM tag around an
+    // EMPTY plaintext — image-only memos store content "" and must round-trip.
+    if (!stored.startsWith(ENC_PREFIX) || combined.byteLength < 28) throw new Error("Invalid encrypted payload");
     const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: combined.subarray(0, 12) }, key, combined.subarray(12));
     return decoder.decode(plaintext);
   } catch (cause) {

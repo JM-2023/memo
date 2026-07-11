@@ -37,4 +37,21 @@ describe("content encryption fail-closed checks", () => {
   it("keeps a literal enc1 prefix when metadata says the row is plaintext", async () => {
     await expect(openContent(null, "enc1:hello world", "plain")).resolves.toBe("enc1:hello world");
   });
+
+  it("round-trips empty content (image-only memos)", async () => {
+    // 12-byte IV + 16-byte GCM tag = 28 bytes with no plaintext. A stricter
+    // minimum turned every image-only memo into a poison row that 503'd
+    // bootstrap, sync and export on read.
+    const key = await contentKeyOf(envWith("22".repeat(32), null));
+    const ciphertext = await sealContent(key!, "");
+    expect(ciphertext.startsWith("enc1:")).toBe(true);
+    await expect(openContent(key, ciphertext, "enc1")).resolves.toBe("");
+  });
+
+  it("still rejects payloads shorter than an empty-plaintext ciphertext", async () => {
+    const key = await contentKeyOf(envWith("55".repeat(32), null));
+    // 27 bytes = one short of IV + tag: below the smallest legal ciphertext.
+    const truncated = `enc1:${btoa(String.fromCharCode(...new Uint8Array(27)))}`;
+    await expect(openContent(key, truncated, "enc1")).rejects.toBeInstanceOf(DecryptionError);
+  });
 });
