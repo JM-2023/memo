@@ -1,8 +1,9 @@
-import { Hash, Image as ImageIcon, ImagePlus, Link2, Loader2, Send, X } from "lucide-react";
+import { Bold, Hash, Image as ImageIcon, ImagePlus, Link2, List, Loader2, Send, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import { ApiError } from "../lib/api";
 import { compressImage } from "../lib/images";
 import { useI18n } from "../lib/i18n";
+import { continueListOnEnter, shiftListIndent, toggleBulletLine, toggleWrap, type EditPatch } from "../lib/markdownEdit";
 import type { MemoImage, NewImagePayload } from "../lib/types";
 import { useTip } from "./Tip";
 
@@ -32,9 +33,12 @@ interface Suggestion {
 /**
  * The composer used both for new memos and in-place editing. Plain text with
  * #tag affordances: a toolbar "#" button, live tag autocomplete under the
- * caret token. Images arrive four ways: file picker, paste, drag-and-drop
- * (all compressed client-side and stored), or as an external link that
- * renders as a preview without touching the database.
+ * caret token. Markdown is written as plain syntax (cards render it):
+ * Enter continues list/task/quote lines, Tab indents them, ⌘B/⌘I/⌘E/⌘⇧S/⌘⇧H
+ * wrap the selection, and the toolbar covers bold + list for touch. Images
+ * arrive four ways: file picker, paste, drag-and-drop (all compressed
+ * client-side and stored), or as an external link that renders as a preview
+ * without touching the database.
  */
 export function Editor({
   mode,
@@ -200,6 +204,19 @@ export function Editor({
     insertAtCaret(`${needsSpace ? " " : ""}#`);
   }
 
+  /** Land a markdown edit: new value plus an exact selection to restore. */
+  function applyPatch(patch: EditPatch) {
+    setContent(patch.value);
+    requestAnimationFrame(() => {
+      const area = areaRef.current;
+      if (!area) return;
+      area.focus();
+      area.setSelectionRange(patch.start, patch.end);
+      refreshSuggestion(patch.value, patch.start);
+      autoGrow();
+    });
+  }
+
   function confirmLink() {
     const url = linkValue.trim();
     if (!/^https?:\/\/\S+$/i.test(url)) {
@@ -298,6 +315,40 @@ export function Editor({
       }
       if (event.key === "Escape") {
         setSuggestion(null);
+        return;
+      }
+    }
+    // Markdown aids. Plain Enter continues a list/task/quote line (an empty
+    // item exits instead); Shift+Enter stays a plain newline escape hatch,
+    // and Enter while the IME is composing must never be intercepted.
+    if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey && !event.nativeEvent.isComposing) {
+      const area = event.currentTarget;
+      if (area.selectionStart === area.selectionEnd) {
+        const patch = continueListOnEnter(content, area.selectionStart);
+        if (patch) {
+          event.preventDefault();
+          applyPatch(patch);
+          return;
+        }
+      }
+    }
+    // Tab indents only on list lines, so it keeps moving focus elsewhere.
+    if (event.key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      const patch = shiftListIndent(content, event.currentTarget.selectionStart, event.shiftKey ? -1 : 1);
+      if (patch) {
+        event.preventDefault();
+        applyPatch(patch);
+        return;
+      }
+    }
+    if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+      const key = event.key.toLowerCase();
+      const marker =
+        key === "b" ? "**" : key === "i" ? "*" : key === "e" ? "`" : key === "s" && event.shiftKey ? "~~" : key === "h" && event.shiftKey ? "==" : null;
+      if (marker) {
+        event.preventDefault();
+        const area = event.currentTarget;
+        applyPatch(toggleWrap(content, area.selectionStart, area.selectionEnd, marker));
         return;
       }
     }
@@ -500,6 +551,32 @@ export function Editor({
             onMouseLeave={tip.hide}
           >
             <Hash size={17} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => {
+              const area = areaRef.current;
+              if (area) applyPatch(toggleWrap(content, area.selectionStart, area.selectionEnd, "**"));
+            }}
+            aria-label={tr("Bold", "加粗")}
+            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Bold (⌘B)", "加粗（⌘B）") })}
+            onMouseLeave={tip.hide}
+          >
+            <Bold size={16} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => {
+              const area = areaRef.current;
+              if (area) applyPatch(toggleBulletLine(content, area.selectionStart));
+            }}
+            aria-label={tr("Bullet list", "列表")}
+            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Bullet list", "无序列表") })}
+            onMouseLeave={tip.hide}
+          >
+            <List size={17} aria-hidden="true" />
           </button>
           <button
             type="button"

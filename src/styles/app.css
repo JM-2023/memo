@@ -2011,6 +2011,74 @@ button.crumb:active { background: var(--wash-strong); }
 .memo-blank { min-height: 0.6em; }
 .memo-content a { text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--primary) 40%, transparent); text-underline-offset: 2px; }
 .memo-content a:hover { text-decoration-color: var(--primary); }
+
+/* ---- Markdown ---------------------------------------------------------
+   Per-line grammar: every construct fits one visual line, so rows keep
+   their 1:1 mapping with the diff replay's clones. No vertical margins —
+   a clone measures its row's top and re-renders the same block inside a
+   grid wrapper, so any margin would offset the copy from the original
+   (padding is safe: it stays inside the border box). */
+.memo-content .md-h1 { font-size: 1.17em; line-height: 1.5; font-weight: 700; padding-top: 3px; }
+.memo-content .md-h2 { font-size: 1.08em; line-height: 1.55; font-weight: 650; padding-top: 2px; }
+.memo-content .md-h3 { font-weight: 650; }
+
+/* List rows: marker in ::before, content in one flex body span (min-width
+   keeps overflow-wrap working inside flex). */
+.md-li { display: flex; gap: 9px; padding-inline-start: calc(var(--md-depth, 0) * 18px); }
+.md-li > .md-body { flex: 1 1 auto; min-width: 0; }
+/* line box ≈ 25.8px (0.95rem × 1.7) — margins center the fixed markers. */
+.md-bullet::before { content: ""; flex: none; width: 5px; height: 5px; margin-top: 10px; border-radius: 50%; background: var(--muted); }
+.md-ordered::before { content: attr(data-ord) "."; flex: none; min-width: 1.1em; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.md-task::before {
+  content: "";
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin-top: 5px;
+  border-radius: var(--r-xs);
+  border: 1.5px solid var(--line-strong);
+}
+.md-task.is-done::before {
+  border-color: var(--primary);
+  background: var(--primary)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='4.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+    center / 9px 9px no-repeat;
+}
+.md-task.is-done > .md-body {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+
+.md-quote { border-inline-start: 2px solid color-mix(in srgb, var(--primary) 42%, var(--line)); padding-inline-start: 12px; color: var(--ink-soft); }
+.md-hr { display: flex; align-items: center; min-height: 1.4em; }
+.md-hr::before { content: ""; width: 100%; height: 1px; background: var(--line-strong); }
+
+.memo-content strong { font-weight: 650; }
+.memo-content del { color: var(--muted); text-decoration-color: color-mix(in srgb, currentColor 55%, transparent); }
+.memo-content mark {
+  background: var(--primary-tint-strong);
+  color: inherit;
+  border-radius: var(--r-xs);
+  padding: 0.5px 3px;
+  margin-inline: 0.5px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.memo-content code {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.855em;
+  background: var(--surface-3);
+  border-radius: var(--r-xs);
+  padding: 1.5px 5px;
+  margin-inline: 1px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+/* Trash cards mute everything; sage accents step back to neutrals. */
+.memo-card.is-trash .md-quote { border-color: var(--line-strong); }
+.memo-card.is-trash .md-task.is-done::before { border-color: var(--muted); background-color: var(--muted); }
+
 .memo-tag {
   display: inline-block;
   margin: 0 1px;
