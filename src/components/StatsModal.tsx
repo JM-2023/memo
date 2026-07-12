@@ -1,5 +1,7 @@
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useModalA11y } from "../hooks/useModalA11y";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 import { dateKey, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { buildHeatMonth, computeStreaks, countsByDay, totalStats, wordCountOf, type HeatMonth } from "../lib/stats";
@@ -15,6 +17,7 @@ interface StatsModalProps {
 }
 
 interface BarChartProps {
+  label: string;
   values: number[];
   max: number;
   labels: string[];
@@ -22,23 +25,19 @@ interface BarChartProps {
 }
 
 /** Baseline-anchored bars that rise in with a slight stagger. Info-only. */
-function BarChart({ values, max, labels, tips }: BarChartProps) {
+function BarChart({ label, values, max, labels, tips }: BarChartProps) {
   const { count } = useI18n();
   const tip = useTip();
+  const summary = `${label}. ${tips.map((item, index) => `${item}: ${count(values[index], "memo")}`).join("; ")}`;
   return (
-    <div className="bar-chart">
-      <div className="stats-bars">
+    <div className="bar-chart" role="img" tabIndex={0} aria-label={summary}>
+      <div className="stats-bars" aria-hidden="true">
         {values.map((value, index) => (
           <div
             key={index}
             className="stats-bar-col"
-            role="img"
-            tabIndex={0}
-            aria-label={`${tips[index]}, ${count(value, "memo")}`}
             onMouseEnter={(event) => tip.show(event.currentTarget, { strong: count(value, "memo"), text: tips[index] })}
             onMouseLeave={tip.hide}
-            onFocus={(event) => tip.show(event.currentTarget, { strong: count(value, "memo"), text: tips[index] })}
-            onBlur={tip.hide}
           >
             <span
               className={`stats-bar${value > 0 ? "" : " is-zero"}`}
@@ -54,7 +53,7 @@ function BarChart({ values, max, labels, tips }: BarChartProps) {
           </div>
         ))}
       </div>
-      <div className="stats-bar-labels">
+      <div className="stats-bar-labels" aria-hidden="true">
         {labels.map((label, index) => (
           <span key={index}>{label}</span>
         ))}
@@ -283,22 +282,26 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
 
   const [year, setYear] = useState(maxYear);
   const [closing, setClosing] = useState(false);
+  const reducedMotion = useReducedMotion();
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const closeTimer = useRef(0);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
   function requestClose() {
     if (closing) return;
+    if (reducedMotion) {
+      closeRef.current();
+      return;
+    }
     setClosing(true);
-    window.setTimeout(() => closeRef.current(), 240);
+    closeTimer.current = window.setTimeout(() => closeRef.current(), 240);
   }
 
+  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
+
   useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") requestClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => window.clearTimeout(closeTimer.current);
   }, []);
 
   const byDay = useMemo(() => countsByDay(memos), [memos]);
@@ -355,10 +358,12 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
 
   return (
     <div
-      className={`overlay${closing ? " is-closing" : ""}`}
+      ref={overlayRef}
+      className={`overlay stats-overlay${closing ? " is-closing" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-label={tr("Detailed statistics", "详细统计")}
+      tabIndex={-1}
       onClick={requestClose}
     >
       <div className="stats-modal" onClick={(event) => event.stopPropagation()}>
@@ -388,7 +393,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
               <ChevronRight size={16} aria-hidden="true" />
             </button>
           </div>
-          <button type="button" className="icon-button stats-close" onClick={requestClose} aria-label={tr("Close", "关闭")}>
+          <button ref={closeButtonRef} type="button" className="icon-button stats-close" onClick={requestClose} aria-label={tr("Close", "关闭")}>
             <X size={18} aria-hidden="true" />
           </button>
         </header>
@@ -430,7 +435,19 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
             <h3 className="stats-section-title">{tr("Daily activity", "每日活跃")}</h3>
             <div className="months-grid">
               {yearData.months.map(({ month, count: memoCount, heat }) => (
-                <div key={month} className="mini-month">
+                <div
+                  key={month}
+                  className="mini-month"
+                  role="img"
+                  tabIndex={0}
+                  aria-label={`${monthFormatter.format(new Date(year, month, 1))}, ${count(memoCount, "memo")}. ${
+                    heat.weeks
+                      .flat()
+                      .filter((cell) => cell.inRange && !cell.isFuture && cell.count > 0)
+                      .map((cell) => `${formatDayLabel(cell.key, locale)}: ${count(cell.count, "memo")}`)
+                      .join("; ") || tr("No activity", "没有记录")
+                  }`}
+                >
                   <div className="mini-month-head">
                     <span className="mini-month-name">{monthFormatter.format(new Date(year, month, 1))}</span>
                     <span className="mini-month-count">
@@ -450,12 +467,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                           <span
                             key={`${weekIndex}-${dayIndex}`}
                             className={`mini-cell level-${cell.level}${cell.isToday ? " is-today" : ""}`}
-                            role="img"
-                            tabIndex={0}
-                            aria-label={tr(
-                              `${formatDayLabel(cell.key, locale)}, ${count(cell.count, "memo")}`,
-                              `${formatDayLabel(cell.key, locale)}，${count(cell.count, "memo")}`
-                            )}
+                            aria-hidden="true"
                             onMouseEnter={(event) =>
                               tip.show(event.currentTarget, {
                                 strong: count(cell.count, "memo"),
@@ -463,13 +475,6 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                               })
                             }
                             onMouseLeave={tip.hide}
-                            onFocus={(event) =>
-                              tip.show(event.currentTarget, {
-                                strong: count(cell.count, "memo"),
-                                text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
-                              })
-                            }
-                            onBlur={tip.hide}
                           />
                         ) : (
                           <span
@@ -489,6 +494,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
           <section className="stats-section" style={{ animationDelay: "0.12s" }}>
             <h3 className="stats-section-title">{tr("Memos by month", "每月笔记")}</h3>
             <BarChart
+              label={tr("Memos by month", "每月笔记")}
               values={yearData.months.map(({ count }) => count)}
               max={yearData.monthMax}
               labels={yearData.months.map(({ month }) => monthFormatter.format(new Date(year, month, 1)))}
@@ -500,6 +506,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
             <div className="stats-chart">
               <h3 className="stats-section-title">{tr("Distribution by weekday", "星期分布")}</h3>
               <BarChart
+                label={tr("Distribution by weekday", "星期分布")}
                 values={yearData.weekdayCounts}
                 max={yearData.weekdayMax}
                 labels={weekdaysNarrow}
@@ -509,6 +516,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
             <div className="stats-chart">
               <h3 className="stats-section-title">{tr("Distribution by time", "时段分布")}</h3>
               <BarChart
+                label={tr("Distribution by time", "时段分布")}
                 values={yearData.hourCounts}
                 max={yearData.hourMax}
                 labels={yearData.hourCounts.map((_, index) => (index % 6 === 0 ? formatHour(index, locale) : ""))}

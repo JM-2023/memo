@@ -1,5 +1,6 @@
 import { KeyRound } from "lucide-react";
 import { useState } from "react";
+import { useModalA11y } from "../hooks/useModalA11y";
 import { AuthRequiredError, changePassword } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { PasscodePad } from "./PasscodePad";
@@ -77,9 +78,18 @@ export function ChangePasscode({ onClose, onDone, onAuthLost }: ChangePasscodePr
     next: tr("Enter a new passcode of 4 to 18 digits", "输入新的 4-18 位数字密码"),
     confirm: tr("Enter the new passcode one more time", "请再输入一次新密码")
   };
+  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: onClose, escapeDisabled: busy });
 
   return (
-    <div className="passcode-overlay" role="dialog" aria-modal="true" aria-label={tr("Change passcode", "修改密码")}>
+    <div
+      ref={overlayRef}
+      className="passcode-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label={tr("Change passcode", "修改密码")}
+      aria-busy={busy || undefined}
+      tabIndex={-1}
+    >
       <PasscodePad
         icon={<KeyRound size={26} aria-hidden="true" />}
         title={titles[step]}
@@ -93,7 +103,7 @@ export function ChangePasscode({ onClose, onDone, onAuthLost }: ChangePasscodePr
         }}
         onComplete={handleComplete}
       />
-      <button type="button" className="ghost-button" onClick={onClose}>
+      <button type="button" className="ghost-button" onClick={onClose} disabled={busy}>
         {tr("Cancel", "取消")}
       </button>
     </div>

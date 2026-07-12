@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { addDays, dateKey, formatDayLabel, startOfWeek, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { buildHeatWeeks, type HeatCell, type PeriodKind } from "../lib/stats";
@@ -77,6 +77,22 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
 
   const { start, end } = rangeOf(period, offset, now);
   const weeks = useMemo(() => buildHeatWeeks(start, end, countsByDay, now), [period, offset, countsByDay]); // eslint-disable-line react-hooks/exhaustive-deps
+  const navigableCells = useMemo(
+    () =>
+      weeks.flatMap((week, weekIndex) =>
+        week.flatMap((cell, dayIndex) => (cell.inRange && !cell.isFuture ? [{ key: cell.key, weekIndex, dayIndex }] : []))
+      ),
+    [weeks]
+  );
+  const [focusedDay, setFocusedDay] = useState<string | null>(null);
+  const cellRefs = useRef(new Map<string, HTMLButtonElement>());
+  const navigableKeys = useMemo(() => new Set(navigableCells.map((cell) => cell.key)), [navigableCells]);
+  const rovingDay =
+    (focusedDay && navigableKeys.has(focusedDay) ? focusedDay : null) ??
+    (activeDay && navigableKeys.has(activeDay) ? activeDay : null) ??
+    navigableCells.find((cell) => weeks[cell.weekIndex][cell.dayIndex].isToday)?.key ??
+    navigableCells[0]?.key ??
+    null;
 
   const rangeTotal = useMemo(() => {
     let sum = 0;
@@ -135,6 +151,35 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
 
   const [homeEn, homeZh] = HOME_LABEL[period];
 
+  function moveCellFocus(event: ReactKeyboardEvent<HTMLButtonElement>, key: string) {
+    const current = navigableCells.find((cell) => cell.key === key);
+    if (!current) return;
+    let target = current;
+    if (event.key === "Home") target = navigableCells[0] ?? current;
+    else if (event.key === "End") target = navigableCells.at(-1) ?? current;
+    else {
+      let weekIndex = current.weekIndex;
+      let dayIndex = current.dayIndex;
+      if (period === "year") {
+        if (event.key === "ArrowLeft") weekIndex -= 1;
+        else if (event.key === "ArrowRight") weekIndex += 1;
+        else if (event.key === "ArrowUp") dayIndex -= 1;
+        else if (event.key === "ArrowDown") dayIndex += 1;
+        else return;
+      } else {
+        if (event.key === "ArrowLeft") dayIndex -= 1;
+        else if (event.key === "ArrowRight") dayIndex += 1;
+        else if (event.key === "ArrowUp") weekIndex -= 1;
+        else if (event.key === "ArrowDown") weekIndex += 1;
+        else return;
+      }
+      target = navigableCells.find((cell) => cell.weekIndex === weekIndex && cell.dayIndex === dayIndex) ?? current;
+    }
+    event.preventDefault();
+    setFocusedDay(target.key);
+    cellRefs.current.get(target.key)?.focus({ preventScroll: true });
+  }
+
   // ---- Grid transition machinery ----
   // The outgoing grid keeps rendering on an absolute layer that slides away
   // (opposite the incoming slide), and the viewport's height tweens between
@@ -151,12 +196,19 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
     cell.inRange && !cell.isFuture ? (
       <button
         key={cell.key}
+        ref={(node) => {
+          if (node) cellRefs.current.set(cell.key, node);
+          else if (!cellRefs.current.get(cell.key)?.isConnected) cellRefs.current.delete(cell.key);
+        }}
         type="button"
         className={`heat-cell level-${cell.level}${cell.isToday ? " is-today" : ""}${activeDay === cell.key ? " is-active" : ""}`}
         aria-label={tr(
           `${formatDayLabel(cell.key, locale)}, ${count(cell.count, "memo")}`,
           `${formatDayLabel(cell.key, locale)}，${count(cell.count, "memo")}`
         )}
+        tabIndex={cell.key === rovingDay ? 0 : -1}
+        onFocus={() => setFocusedDay(cell.key)}
+        onKeyDown={(event) => moveCellFocus(event, cell.key)}
         onMouseEnter={(event) =>
           tip.show(event.currentTarget, {
             strong: count(cell.count, "memo"),
@@ -277,6 +329,7 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
         {leaving ? (
           <div
             key={`leave-${leaving.serial}`}
+            ref={(node) => node?.setAttribute("inert", "")}
             className={`heat-leaving${leaving.dir > 0 ? " leave-left" : leaving.dir < 0 ? " leave-right" : " leave-fade"}`}
             aria-hidden="true"
             onAnimationEnd={(event) => {

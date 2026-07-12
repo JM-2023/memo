@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { useModalA11y } from "../hooks/useModalA11y";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
 
 interface ConfirmDialogProps {
@@ -15,26 +17,38 @@ interface ConfirmDialogProps {
 export function ConfirmDialog({ title, body, confirmLabel, busyLabel, busy, onCancel, onConfirm }: ConfirmDialogProps) {
   const { tr } = useI18n();
   const [closing, setClosing] = useState(false);
+  const reducedMotion = useReducedMotion();
+  const closeTimer = useRef(0);
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
 
   function requestClose() {
-    if (closing) return;
+    if (busy || closing) return;
+    if (reducedMotion) {
+      cancelRef.current();
+      return;
+    }
     setClosing(true);
-    window.setTimeout(() => cancelRef.current(), 240);
+    closeTimer.current = window.setTimeout(() => cancelRef.current(), 240);
   }
 
+  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, escapeDisabled: Boolean(busy) });
+
   useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") requestClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => window.clearTimeout(closeTimer.current);
   }, []);
 
   return (
-    <div className={`overlay${closing ? " is-closing" : ""}`} role="dialog" aria-modal="true" aria-label={title} onClick={requestClose}>
+    <div
+      ref={overlayRef}
+      className={`overlay${closing ? " is-closing" : ""}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      aria-busy={busy || undefined}
+      tabIndex={-1}
+      onClick={requestClose}
+    >
       <div className="confirm-card" onClick={(event) => event.stopPropagation()}>
         <h2>{title}</h2>
         <p>{body}</p>

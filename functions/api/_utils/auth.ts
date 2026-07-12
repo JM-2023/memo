@@ -3,14 +3,30 @@ import type { AppContext, AppEnv } from "./types";
 
 const encoder = new TextEncoder();
 const SESSION_COOKIE = "memo_session";
+// Migration 0005 keeps these legacy keys synchronized with auth_state during
+// rolling deploys and rollbacks. They also seed an upgraded database once.
 const PASSWORD_HASH_KEY = "local_password_hash";
-// Bumped on every passcode change. Cookies embed the generation they were
-// minted with; a mismatch invalidates them, so changing the passcode signs
-// every other device out even though the HMAC secret stays the same.
 const SESSION_GENERATION_KEY = "session_generation";
 // The deployed Workers runtime rejects PBKDF2 above 100k iterations, so 100k
 // is the strongest hash production can mint or verify.
 const HASH_ITERATIONS = 100_000;
+
+interface AuthStateRow {
+  password_hash: string;
+  session_generation: number;
+}
+
+interface LegacySettingRow {
+  key: string;
+  value_json: string;
+}
+
+export interface AuthStateSnapshot {
+  passwordHash: string;
+  sessionGeneration: number;
+}
+
+type AuthDatabase = Pick<D1Database, "prepare">;
 
 function base64UrlEncode(bytes: ArrayBuffer | Uint8Array): string {
   const array = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -57,43 +73,124 @@ async function timingSafeEqual(left: string, right: string): Promise<boolean> {
   return diff === 0;
 }
 
-async function readSetting(env: AppEnv, key: string): Promise<string | null> {
-  const row = await env.DB.prepare("SELECT value_json FROM app_settings WHERE key = ?").bind(key).first<{ value_json: string }>();
-  return row ? row.value_json : null;
-}
-
-async function writeSetting(env: AppEnv, key: string, valueJson: string): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO app_settings (key, value_json, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
-  )
-    .bind(key, valueJson, nowIso())
-    .run();
-}
-
 function normalizePasswordHash(hashSetting: string | undefined | null): string | null {
   const normalized = hashSetting?.trim().replace(/^['"]|['"]$/g, "");
   return normalized || null;
 }
 
-async function readStoredPasswordHash(env: AppEnv): Promise<string | null> {
-  const raw = await readSetting(env, PASSWORD_HASH_KEY);
-  if (!raw) return null;
+function parseLegacyGeneration(raw: string | null): number {
+  if (!raw) return 0;
   try {
-    const parsed = JSON.parse(raw) as { hash?: unknown };
-    return typeof parsed.hash === "string" ? normalizePasswordHash(parsed.hash) : null;
+    const parsed = Number(JSON.parse(raw));
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
   } catch {
-    return null;
+    return 0;
   }
 }
 
-/** The in-app hash wins; the deploy-time APP_PASSWORD_HASH only seeds a fresh DB. */
-export async function configuredPasswordHash(env: AppEnv): Promise<string | null> {
-  return (await readStoredPasswordHash(env)) ?? normalizePasswordHash(env.APP_PASSWORD_HASH);
+function authStateFromRow(row: AuthStateRow): AuthStateSnapshot {
+  const passwordHash = row.password_hash;
+  const sessionGeneration = Number(row.session_generation);
+  if (!normalizePasswordHash(passwordHash) || !Number.isSafeInteger(sessionGeneration) || sessionGeneration < 0) {
+    throw new Error("The persisted authentication state is invalid");
+  }
+  return { passwordHash, sessionGeneration };
 }
 
-export async function savePasswordHash(env: AppEnv, hash: string): Promise<void> {
-  await writeSetting(env, PASSWORD_HASH_KEY, JSON.stringify({ hash }));
+async function readAuthState(db: AuthDatabase): Promise<AuthStateSnapshot | null> {
+  const row = await db
+    .prepare("SELECT password_hash, session_generation FROM auth_state WHERE id = 1")
+    .first<AuthStateRow>();
+  return row ? authStateFromRow(row) : null;
+}
+
+async function legacyAuthSeed(db: AuthDatabase, env: AppEnv): Promise<AuthStateSnapshot | null> {
+  const result = await db
+    .prepare("SELECT key, value_json FROM app_settings WHERE key IN (?, ?)")
+    .bind(PASSWORD_HASH_KEY, SESSION_GENERATION_KEY)
+    .all<LegacySettingRow>();
+  const settings = new Map((result.results ?? []).map((row) => [row.key, row.value_json]));
+
+  let storedHash: string | null = null;
+  const rawHash = settings.get(PASSWORD_HASH_KEY);
+  if (rawHash) {
+    try {
+      const parsed = JSON.parse(rawHash) as { hash?: unknown };
+      storedHash = typeof parsed.hash === "string" ? normalizePasswordHash(parsed.hash) : null;
+    } catch {
+      storedHash = null;
+    }
+  }
+
+  // The in-database hash keeps precedence over the deploy-time seed so an old
+  // secret cannot silently undo a passcode change during an upgrade.
+  const passwordHash = storedHash ?? normalizePasswordHash(env.APP_PASSWORD_HASH);
+  if (!passwordHash) return null;
+  return {
+    passwordHash,
+    sessionGeneration: parseLegacyGeneration(settings.get(SESSION_GENERATION_KEY) ?? null)
+  };
+}
+
+async function insertAuthState(db: AuthDatabase, state: AuthStateSnapshot): Promise<AuthStateSnapshot | null> {
+  const row = await db
+    .prepare(
+      `INSERT INTO auth_state (id, password_hash, session_generation, updated_at)
+       VALUES (1, ?, ?, ?)
+       ON CONFLICT(id) DO NOTHING
+       RETURNING password_hash, session_generation`
+    )
+    .bind(state.passwordHash, state.sessionGeneration, nowIso())
+    .first<AuthStateRow>();
+  return row ? authStateFromRow(row) : null;
+}
+
+/**
+ * Read the canonical password hash and cookie generation as one snapshot.
+ * Existing app_settings rows, or APP_PASSWORD_HASH on a fresh deployment, are
+ * claimed with a single INSERT. Concurrent requests therefore converge on the
+ * same database row instead of choosing separate winners in application code.
+ */
+export async function configuredAuthState(env: AppEnv): Promise<AuthStateSnapshot | null> {
+  const db = env.DB.withSession("first-primary");
+  const current = await readAuthState(db);
+  if (current) return current;
+
+  const seed = await legacyAuthSeed(db, env);
+  if (!seed) return null;
+  return (await insertAuthState(db, seed)) ?? (await readAuthState(db));
+}
+
+/** The one successful INSERT is the sole winner of concurrent first setup. */
+export async function claimInitialPassword(env: AppEnv, passwordHash: string): Promise<AuthStateSnapshot | null> {
+  const normalized = normalizePasswordHash(passwordHash);
+  if (!normalized) throw new Error("The password hash is invalid");
+  const db = env.DB.withSession("first-primary");
+  return insertAuthState(db, { passwordHash: normalized, sessionGeneration: 0 });
+}
+
+/**
+ * Rotate hash and generation in one conditional statement. If another request
+ * changed either value after verification, no row is returned and this caller
+ * cannot overwrite the newer passcode.
+ */
+export async function changePasswordAtomically(
+  env: AppEnv,
+  expected: AuthStateSnapshot,
+  passwordHash: string
+): Promise<AuthStateSnapshot | null> {
+  const normalized = normalizePasswordHash(passwordHash);
+  if (!normalized) throw new Error("The password hash is invalid");
+  const row = await env.DB
+    .prepare(
+      `UPDATE auth_state
+       SET password_hash = ?, session_generation = session_generation + 1, updated_at = ?
+       WHERE id = 1 AND password_hash = ? AND session_generation = ?
+       RETURNING password_hash, session_generation`
+    )
+    .bind(normalized, nowIso(), expected.passwordHash, expected.sessionGeneration)
+    .first<AuthStateRow>();
+  return row ? authStateFromRow(row) : null;
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -126,37 +223,18 @@ export async function verifyPassword(password: string, hashSetting: string | und
   return false;
 }
 
-export async function verifyLocalPassword(env: AppEnv, password: string): Promise<boolean> {
-  return verifyPassword(password, await configuredPasswordHash(env));
-}
-
-async function readSessionGeneration(env: AppEnv): Promise<number> {
-  const raw = await readSetting(env, SESSION_GENERATION_KEY);
-  if (!raw) return 0;
-  // Tolerate a hand-edited or corrupted row: a malformed value must degrade to
-  // generation 0 (cookies just get invalidated), not crash login and setup.
-  try {
-    const parsed = Number(JSON.parse(raw));
-    return Number.isFinite(parsed) ? parsed : 0;
-  } catch {
-    return 0;
-  }
-}
-
-/** Invalidate every outstanding session cookie (called on passcode change). */
-export async function bumpSessionGeneration(env: AppEnv): Promise<void> {
-  const next = (await readSessionGeneration(env)) + 1;
-  await writeSetting(env, SESSION_GENERATION_KEY, JSON.stringify(next));
-}
-
-export async function createSessionCookie(env: AppEnv): Promise<string> {
+export async function createSessionCookie(env: AppEnv, sessionGeneration: number): Promise<string> {
   if (!env.SESSION_SECRET) {
     throw new Error("SESSION_SECRET is missing");
   }
-  const generation = await readSessionGeneration(env);
+  if (!Number.isSafeInteger(sessionGeneration) || sessionGeneration < 0) {
+    throw new Error("The session generation is invalid");
+  }
   const maxAge = 60 * 60 * 24 * 30;
   const expiresAt = Math.floor(Date.now() / 1000) + maxAge;
-  const payload = base64UrlEncode(encoder.encode(JSON.stringify({ sub: "owner", exp: expiresAt, gen: generation, nonce: crypto.randomUUID() })));
+  const payload = base64UrlEncode(
+    encoder.encode(JSON.stringify({ sub: "owner", exp: expiresAt, gen: sessionGeneration, nonce: crypto.randomUUID() }))
+  );
   const signature = await hmac(env.SESSION_SECRET, payload);
   return `${SESSION_COOKIE}=${encodeURIComponent(`${payload}.${signature}`)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 }
@@ -187,8 +265,10 @@ async function hasValidSession(env: AppEnv, request: Request): Promise<boolean> 
       return false;
     }
     // Cookies minted before the last passcode change carry a stale generation
-    // and stop being accepted.
-    return (parsed.gen ?? 0) === (await readSessionGeneration(env));
+    // and stop being accepted. Reading the canonical row also lazily seeds a
+    // fresh deployment from APP_PASSWORD_HASH.
+    const state = await configuredAuthState(env);
+    return state !== null && (parsed.gen ?? 0) === state.sessionGeneration;
   } catch {
     return false;
   }

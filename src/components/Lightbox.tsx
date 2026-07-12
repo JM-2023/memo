@@ -1,5 +1,7 @@
 import { ChevronLeft, ChevronRight, ExternalLink, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useModalA11y } from "../hooks/useModalA11y";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
 import type { LightboxItem } from "../lib/types";
 
@@ -14,22 +16,34 @@ export function Lightbox({ items, index, onClose }: LightboxProps) {
   const { tr } = useI18n();
   const [current, setCurrent] = useState(index);
   const [closing, setClosing] = useState(false);
+  const reducedMotion = useReducedMotion();
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const closeTimer = useRef(0);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
   function requestClose() {
+    if (closing) return;
+    if (reducedMotion) {
+      closeRef.current();
+      return;
+    }
     setClosing(true);
-    window.setTimeout(() => closeRef.current(), 240);
+    closeTimer.current = window.setTimeout(() => closeRef.current(), 240);
   }
+
+  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") requestClose();
       if (event.key === "ArrowLeft") setCurrent((value) => (value + items.length - 1) % items.length);
       if (event.key === "ArrowRight") setCurrent((value) => (value + 1) % items.length);
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.clearTimeout(closeTimer.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items.length]);
 
@@ -37,13 +51,24 @@ export function Lightbox({ items, index, onClose }: LightboxProps) {
 
   return (
     <div
+      ref={overlayRef}
       className={`overlay lightbox${closing ? " is-closing" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-label={tr("View image", "查看图片")}
+      tabIndex={-1}
       onClick={requestClose}
     >
-      <button type="button" className="lightbox-close icon-button" onClick={requestClose} aria-label={tr("Close", "关闭")}>
+      <button
+        ref={closeButtonRef}
+        type="button"
+        className="lightbox-close icon-button"
+        onClick={(event) => {
+          event.stopPropagation();
+          requestClose();
+        }}
+        aria-label={tr("Close", "关闭")}
+      >
         <X size={20} aria-hidden="true" />
       </button>
       {items.length > 1 ? (
@@ -76,7 +101,7 @@ export function Lightbox({ items, index, onClose }: LightboxProps) {
         key={item.src}
         className="lightbox-image"
         src={item.src}
-        alt=""
+        alt={tr(`Image ${current + 1} of ${items.length}`, `第 ${current + 1} 张图片，共 ${items.length} 张`)}
         referrerPolicy={item.external ? "no-referrer" : undefined}
         onClick={(event) => event.stopPropagation()}
       />
@@ -93,7 +118,7 @@ export function Lightbox({ items, index, onClose }: LightboxProps) {
         </a>
       ) : null}
       {items.length > 1 ? (
-        <div className="lightbox-count" aria-hidden="true">
+        <div className="lightbox-count" role="status" aria-live="polite" aria-atomic="true">
           {current + 1} / {items.length}
         </div>
       ) : null}

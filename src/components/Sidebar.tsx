@@ -1,5 +1,5 @@
 import { ChevronDown, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sun, Trash2, Upload } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useI18n } from "../lib/i18n";
 import { dayKeyOf, periodStats, totalStats, type PeriodKind } from "../lib/stats";
 import type { TagNode } from "../lib/tags";
@@ -36,6 +36,9 @@ interface SidebarProps {
   onExportData: () => void;
   onImportData: () => void;
   onLogout: () => void;
+  /** Mobile drawer state; supplied by the shell so Escape can dismiss it. */
+  drawerOpen?: boolean;
+  onCloseDrawer?: () => void;
 }
 
 const PERIODS: { kind: PeriodKind; en: string; zh: string }[] = [
@@ -56,6 +59,17 @@ export function Sidebar(props: SidebarProps) {
   const tip = useTip();
   const [period, setPeriod] = useState<PeriodKind>("week");
 
+  useEffect(() => {
+    if (!props.drawerOpen || !props.onCloseDrawer) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      props.onCloseDrawer?.();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [props.drawerOpen, props.onCloseDrawer]);
+
   const totals = useMemo(() => totalStats(memos), [memos]);
   const stats = useMemo(() => periodStats(memos, period), [memos, period]);
   // Local-day key of the earliest memo (dayKeyOf, not an ISO slice — the
@@ -72,6 +86,19 @@ export function Sidebar(props: SidebarProps) {
   const periodIndex = PERIODS.findIndex((option) => option.kind === period);
   const ThemeIcon = theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
   const [themeLabelEn, themeLabelZh] = THEME_LABELS[theme];
+
+  function onPeriodKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
+    let next = index;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (index + 1) % PERIODS.length;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = (index - 1 + PERIODS.length) % PERIODS.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = PERIODS.length - 1;
+    else return;
+    event.preventDefault();
+    setPeriod(PERIODS[next].kind);
+    const buttons = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("button[data-period]");
+    buttons?.[next]?.focus({ preventScroll: true });
+  }
 
   return (
     <div className="sidebar-inner">
@@ -235,16 +262,18 @@ export function Sidebar(props: SidebarProps) {
         </div>
 
         <div className="period-panel">
-          <div className="period-seg" role="tablist" aria-label={tr("Statistics period", "统计范围")}>
+          <div className="period-seg" role="group" aria-label={tr("Statistics period", "统计范围")}>
             <span className="period-seg-thumb" style={{ transform: `translateX(${periodIndex * 100}%)` }} aria-hidden="true" />
-            {PERIODS.map((option) => (
+            {PERIODS.map((option, index) => (
               <button
                 key={option.kind}
                 type="button"
-                role="tab"
-                aria-selected={period === option.kind}
+                data-period={option.kind}
+                aria-pressed={period === option.kind}
+                tabIndex={period === option.kind ? 0 : -1}
                 className={period === option.kind ? "is-active" : ""}
                 onClick={() => setPeriod(option.kind)}
+                onKeyDown={(event) => onPeriodKeyDown(event, index)}
               >
                 {tr(option.en, option.zh)}
               </button>

@@ -18,7 +18,7 @@ MEMO is a personal, single-owner note app built with Cloudflare Pages, Pages Fun
 
 ## Requirements
 
-- Node.js 20 or newer
+- Node.js 20.19+, 22.13+, or 24+
 - A Cloudflare account
 - Wrangler authentication for remote setup and deployment
 
@@ -43,7 +43,7 @@ The same migration creates a random `sync_epoch` for the database history. A new
 UPDATE sync_counter SET sync_epoch = lower(hex(randomblob(16))) WHERE id = 1;
 ```
 
-On the first visit, the app asks you to create a passcode of 4–18 digits. The passcode hash is stored in the local D1 database and is not reset when the development server restarts.
+On the first local visit, the app asks you to create a passcode of 4–18 digits. The passcode hash is stored in the local D1 database and is not reset when the development server restarts. Public deployments require `APP_PASSWORD_HASH` during provisioning; the unauthenticated in-app setup endpoint is limited to loopback hosts.
 
 ## First deployment to Cloudflare
 
@@ -56,18 +56,20 @@ The Pages project must exist before Pages secrets can be added. For a new Cloudf
    npx wrangler login
    ```
 
-2. Create the D1 database:
+2. Create separate production and preview D1 databases:
 
    ```bash
    npx wrangler d1 create your-d1-database
+   npx wrangler d1 create your-d1-database-preview
    ```
 
-   Copy the returned `database_id` into the `[[d1_databases]]` section of `wrangler.toml`. Keep the binding name as `DB`, set the database name to `memo`, and set the top-level Pages project name to `memo`.
+   Copy the production `database_id` into the top-level `[[d1_databases]]` section of `wrangler.toml`, and copy the preview ID into `[[env.preview.d1_databases]]`. Keep both binding names as `DB`. This prevents preview deployments from reading or writing production notes.
 
 3. Apply the production migrations:
 
    ```bash
    npm run db:migrate:remote
+   npm run db:migrate:preview
    ```
 
 4. Create the Pages project. Skip this command if `memo` already exists in your account:
@@ -76,21 +78,24 @@ The Pages project must exist before Pages secrets can be added. For a new Cloudf
    npx wrangler pages project create your-pages-project --production-branch main
    ```
 
-5. Generate and store a strong session secret. Run the first command, then paste its output when Wrangler prompts for the secret value:
+5. Generate independent session secrets for production and preview. Run `openssl` before each Wrangler command, then paste that command's output when Wrangler prompts for the secret value:
 
    ```bash
    openssl rand -hex 32
    npx wrangler pages secret put SESSION_SECRET --project-name your-pages-project
+   openssl rand -hex 32
+   npx wrangler pages secret put SESSION_SECRET --project-name your-pages-project --env preview
    ```
 
-6. Optionally pre-seed the passcode. Without this secret, the first production visit shows the create-passcode screen:
+6. Generate and store the initial passcode hash in both environments before their first public deployment:
 
    ```bash
    npm run hash-password -- "1234"
    npx wrangler pages secret put APP_PASSWORD_HASH --project-name your-pages-project
+   npx wrangler pages secret put APP_PASSWORD_HASH --project-name your-pages-project --env preview
    ```
 
-   Paste the complete output of `hash-password` when Wrangler prompts for the secret value.
+   Paste the complete output of `hash-password` at both prompts. Production and preview use separate D1 databases, so later in-app passcode changes remain isolated.
 
 7. Build and deploy the Pages application and its Functions:
 
@@ -98,22 +103,25 @@ The Pages project must exist before Pages secrets can be added. For a new Cloudf
    npm run deploy
    ```
 
-Subsequent releases only need the migrations step when new migration files exist, followed by `npm run deploy`.
+Subsequent releases only need both migration commands when new migration files exist, followed by `npm run deploy`.
 
 ## Verification
 
-Run the deterministic synchronization, encryption, tag, and local-cache tests, followed by the production build:
+Run the deterministic unit tests, the real Workers runtime + D1 migration tests, and the production build:
 
 ```bash
 npm test
 npm run build
 ```
 
+`npm test` runs the Node unit suite first and then the Workers suite through Cloudflare's Vitest integration. The latter starts a temporary local `workerd` process and applies every migration to an isolated D1 binding.
+
 ## Passcodes, sessions, and security
 
 - Passcodes are hashed with PBKDF2-HMAC-SHA-256 using a random 16-byte salt and 100,000 iterations. The plaintext passcode is never stored.
 - Session cookies are HMAC-SHA-256 signed and set with `HttpOnly`, `Secure`, `SameSite=Lax`, and a 30-day maximum age.
 - Changing the passcode from the app increments the session generation. Every other device is signed out immediately, while the current device receives a new session.
+- The passcode hash and session generation live in one `auth_state` row. Initial setup uses a single-winner insert, and passcode changes use a conditional update, so concurrent setup/login/change requests cannot mint a cookie against mismatched authentication state.
 - After a passcode has been created or changed in the app, the D1-stored hash takes precedence over `APP_PASSWORD_HASH`. Redeploying the code does not reset it.
 - State-changing API requests with an `Origin` header are rejected when the origin does not match the app. Responses also include a restrictive Content Security Policy, clickjacking protection, MIME sniffing protection, and `noindex` directives.
 - With `MEMO_ENC_KEY` set, memo content is encrypted at rest with AES-256-GCM (`enc1:` prefix in the `content` column) and decrypted only at the API boundary. The key lives in the deployment environment, so this protects the database layer (dumps, backups, the D1 console), not against someone who controls the Cloudflare account itself. Without the secret, the app runs in plaintext mode.

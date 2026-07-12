@@ -1,4 +1,4 @@
-import { bumpSessionGeneration, createSessionCookie, hashPassword, requireAuth, savePasswordHash, verifyLocalPassword } from "../_utils/auth";
+import { changePasswordAtomically, configuredAuthState, createSessionCookie, hashPassword, requireAuth, verifyPassword } from "../_utils/auth";
 import { apiError, json, readJson, requireSameOrigin } from "../_utils/response";
 import type { AppContext } from "../_utils/types";
 
@@ -24,13 +24,17 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   }
 
   try {
-    if (!(await verifyLocalPassword(context.env, current))) {
+    const state = await configuredAuthState(context.env);
+    if (!state || !(await verifyPassword(current, state.passwordHash))) {
       return apiError(401, "WRONG_CURRENT_PASSCODE", "Wrong current passcode");
     }
-    await savePasswordHash(context.env, await hashPassword(next));
-    // Sign every other device out; then mint a fresh cookie for this one.
-    await bumpSessionGeneration(context.env);
-    return json({ ok: true }, { headers: { "Set-Cookie": await createSessionCookie(context.env) } });
+    const changed = await changePasswordAtomically(context.env, state, await hashPassword(next));
+    if (!changed) {
+      return apiError(409, "WRONG_CURRENT_PASSCODE", "The passcode changed before this request completed. Try again.");
+    }
+    // The conditional update signs every other device out; this request gets a
+    // cookie carrying the exact generation returned by that same statement.
+    return json({ ok: true }, { headers: { "Set-Cookie": await createSessionCookie(context.env, changed.sessionGeneration) } });
   } catch {
     return apiError(500, "INTERNAL_ERROR", "The passcode could not be changed.");
   }

@@ -15,6 +15,7 @@ import { ScrollTopButton } from "./components/ScrollTopButton";
 import { Sidebar } from "./components/Sidebar";
 import { StatsModal } from "./components/StatsModal";
 import { SwapText } from "./components/SwapText";
+import { useModalA11y } from "./hooks/useModalA11y";
 import {
   AuthRequiredError,
   ApiError,
@@ -39,8 +40,10 @@ import {
 } from "./lib/api";
 import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, readSealedSnapshot, saveSnapshot } from "./lib/cache";
 import { dateKey, formatDayLabel } from "./lib/dates";
+import { filterPreservingId } from "./lib/feedSafety";
 import { useI18n } from "./lib/i18n";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
+import { selectionWithinVisibleIds } from "./lib/selection";
 import { countsByDay, dayKeyOf } from "./lib/stats";
 import { applySyncDelta, createSyncState, memosOf, purgedOf, tagsOfState, type PurgedMemo } from "./lib/syncState";
 import { buildTagTree, isValidTagPath, tagMatches, tagRenamePathsOverlap, tagsOf } from "./lib/tags";
@@ -49,7 +52,7 @@ import type { LightboxItem, Memo, NewImagePayload, SortKey, TagMeta } from "./li
 import { useSync } from "./lib/useSync";
 import { withViewTransition } from "./lib/viewTransition";
 
-type Phase = "checking" | "login" | "ready";
+type Phase = "checking" | "error" | "login" | "ready";
 type View = "memos" | "trash";
 
 interface ToastState {
@@ -256,6 +259,8 @@ export default function App() {
 
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const editingIdRef = useRef(editingId);
+  editingIdRef.current = editingId;
   const editingBaseSeqRef = useRef<number | null>(null);
   const [editConflictId, setEditConflictId] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -289,6 +294,11 @@ export default function App() {
   const [reveal, setReveal] = useState(false);
 
   const toastTimer = useRef(0);
+  const bootAttemptRef = useRef(0);
+  const drawerCloseTimerRef = useRef(0);
+  const drawerCallbackFrameRef = useRef(0);
+  const drawerAfterCloseRef = useRef<Array<() => void>>([]);
+  const logoutBusyRef = useRef(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const errorMessageRef = useRef(errorMessage);
   errorMessageRef.current = errorMessage;
@@ -301,6 +311,50 @@ export default function App() {
       toastTimer.current = window.setTimeout(() => setToast(null), 280);
     }, 2400);
   }, []);
+
+  const resetSessionUi = useCallback(() => {
+    window.clearTimeout(drawerCloseTimerRef.current);
+    window.cancelAnimationFrame(drawerCallbackFrameRef.current);
+    drawerAfterCloseRef.current = [];
+    emptyTrashBusyRef.current = false;
+    confirmBatchDeleteRef.current = false;
+    editingBaseSeqRef.current = null;
+    skipNextSnapshotSaveRef.current = false;
+
+    setSyncState(createSyncState());
+    setSnapshotCursor(0);
+    setSnapshotSyncEpoch("");
+    setActiveTag(null);
+    setActiveDay(null);
+    setQuery("");
+    setSearchOpen(false);
+    setView("memos");
+    setCreating(false);
+    setEditingId(null);
+    setEditConflictId(null);
+    setSavingEdit(false);
+    setSelectMode(false);
+    setSelected(new Set());
+    setConfirmBatchDelete(false);
+    setBatchBusy(false);
+    setRenameTagTarget(null);
+    setDialogBusy(false);
+    setConfirmEmptyTrash(false);
+    setImportTarget(null);
+    setLightbox(null);
+    setStatsOpen(false);
+    setChangingPasscode(false);
+    setDrawerOpen(false);
+    setDrawerClosing(false);
+    setReveal(false);
+  }, []);
+
+  const drawerRef = useModalA11y<HTMLElement>({
+    enabled: drawerOpen,
+    onEscape: () => closeDrawer(),
+    allowOutsideSelector: "[role='menu']",
+    isolateExemptSelector: ".drawer-backdrop"
+  });
 
   useEffect(() => {
     applyTheme(theme);
@@ -318,28 +372,19 @@ export default function App() {
   const dropToLogin = useCallback(() => {
     sessionEpochRef.current += 1;
     forgetCacheKey();
+    resetSessionUi();
     setPhase("login");
-    setSyncState(createSyncState());
-    setSnapshotCursor(0);
-    setSnapshotSyncEpoch("");
-    setEditingId(null);
-    setEditConflictId(null);
-    setChangingPasscode(false);
     showToast(tr("Your session expired. Enter your passcode again.", "登录已过期，请重新输入密码"), "error");
-  }, [showToast, tr]);
+  }, [resetSessionUi, showToast, tr]);
 
   const handlePeerLogout = useCallback(() => {
     sessionEpochRef.current += 1;
     void invalidateSnapshot();
-    setSyncState(createSyncState());
-    setSnapshotCursor(0);
-    setSnapshotSyncEpoch("");
-    setEditingId(null);
-    setEditConflictId(null);
-    setChangingPasscode(false);
+    forgetCacheKey();
+    resetSessionUi();
     setPhase("login");
     showToast(tr("Another tab logged out. Enter your passcode again.", "另一个标签页已退出，请重新输入密码"), "error");
-  }, [showToast, tr]);
+  }, [resetSessionUi, showToast, tr]);
 
   const handleServerReset = useCallback(() => {
     sessionEpochRef.current += 1;
@@ -488,38 +533,47 @@ export default function App() {
     };
   }, [phase, snapshotCursor, snapshotSyncEpoch, syncState, memos]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const status = await getAuthStatus();
-        if (cancelled) return;
-        setNeedsSetup(status.needsSetup);
-        if (status.needsSetup) {
-          setPhase("login");
-          return;
-        }
-        try {
-          await enterApp(false);
-        } catch (cause) {
-          if (cancelled) return;
-          if (cause instanceof AuthRequiredError) {
-            setPhase("login");
-          } else {
-            setBootError(errorMessageRef.current(cause, "Couldn’t load your memos", "加载失败"));
-            setPhase("login");
-          }
-        }
-      } catch (cause) {
-        if (cancelled) return;
-        setBootError(errorMessageRef.current(cause, "Couldn’t connect to the server", "无法连接服务器"));
+  const runInitialBoot = useCallback(async () => {
+    const attempt = ++bootAttemptRef.current;
+    setBootError(null);
+    setPhase("checking");
+
+    let status: Awaited<ReturnType<typeof getAuthStatus>>;
+    try {
+      status = await getAuthStatus();
+    } catch (cause) {
+      if (attempt !== bootAttemptRef.current) return;
+      setBootError(errorMessageRef.current(cause, "Couldn’t connect to the server", "无法连接服务器"));
+      setPhase("error");
+      return;
+    }
+
+    if (attempt !== bootAttemptRef.current) return;
+    setNeedsSetup(status.needsSetup);
+    if (status.needsSetup) {
+      setPhase("login");
+      return;
+    }
+
+    try {
+      await enterApp(false);
+    } catch (cause) {
+      if (attempt !== bootAttemptRef.current) return;
+      if (cause instanceof AuthRequiredError) {
         setPhase("login");
+      } else {
+        setBootError(errorMessageRef.current(cause, "Couldn’t load your memos", "加载失败"));
+        setPhase("error");
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    }
   }, [enterApp]);
+
+  useEffect(() => {
+    void runInitialBoot();
+    return () => {
+      bootAttemptRef.current += 1;
+    };
+  }, [runInitialBoot]);
 
   /** Session-expiry aware wrapper: any 401 mid-use drops back to the gate. */
   const guard = useCallback(
@@ -541,7 +595,6 @@ export default function App() {
   );
 
   const activeMemos = useMemo(() => memos.filter((memo) => !memo.deletedAt), [memos]);
-  const activeMemoIds = useMemo(() => new Set(activeMemos.map((memo) => memo.id)), [activeMemos]);
   const trashedMemos = useMemo(
     () => memos.filter((memo) => memo.deletedAt).sort((a, b) => (b.deletedAt ?? "").localeCompare(a.deletedAt ?? "")),
     [memos]
@@ -590,30 +643,39 @@ export default function App() {
   const visibleMemos = useMemo(() => {
     let list = activeMemos;
     if (activeTag) {
-      list = list.filter((memo) => tagsOf(memo).some((tag) => tagMatches(tag, activeTag)));
+      list = filterPreservingId(list, editingId, (memo) => tagsOf(memo).some((tag) => tagMatches(tag, activeTag)));
     }
     if (activeDay) {
-      list = list.filter((memo) => dayKeyOf(memo) === activeDay);
+      list = filterPreservingId(list, editingId, (memo) => dayKeyOf(memo) === activeDay);
     }
     if (deferredQuery) {
-      list = list.filter((memo) => searchableText(memo).includes(deferredQuery));
+      list = filterPreservingId(list, editingId, (memo) => searchableText(memo).includes(deferredQuery));
     }
     const compare = SORT_COMPARATORS[sortKey];
     return [...list].sort((a, b) => {
       if (Boolean(a.pinnedAt) !== Boolean(b.pinnedAt)) return a.pinnedAt ? -1 : 1;
       return compare(a, b);
     });
-  }, [activeMemos, activeTag, activeDay, deferredQuery, sortKey]);
+  }, [activeMemos, activeTag, activeDay, deferredQuery, editingId, sortKey]);
 
   const feedMemos = view === "trash" ? trashedMemos : visibleMemos;
+  const visibleFeedIds = useMemo(() => feedMemos.map((memo) => memo.id), [feedMemos]);
+  const visibleSelected = useMemo(() => selectionWithinVisibleIds(selected, visibleFeedIds), [selected, visibleFeedIds]);
 
   // The feed renders in pages: the first FEED_PAGE rows immediately, more as
   // the sentinel scrolls near. Keeps first paint and filter swaps flat no
   // matter how many memos exist.
   const [renderCap, setRenderCap] = useState(FEED_PAGE);
   useEffect(() => {
+    if (editingId) return;
     setRenderCap(FEED_PAGE);
-  }, [deferredQuery]);
+  }, [deferredQuery, editingId]);
+  const renderedFeedMemos = useMemo(() => {
+    const rendered = feedMemos.slice(0, renderCap);
+    if (!editingId || rendered.some((memo) => memo.id === editingId)) return rendered;
+    const editingMemo = feedMemos.find((memo) => memo.id === editingId);
+    return editingMemo ? [...rendered, editingMemo] : rendered;
+  }, [feedMemos, renderCap, editingId]);
   const hasMoreFeed = feedMemos.length > renderCap;
   const feedSentinelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -633,14 +695,37 @@ export default function App() {
     return () => observer.disconnect();
   }, [hasMoreFeed, renderCap]);
 
-  function closeDrawer() {
-    if (!drawerOpen) return;
+  function closeDrawer(afterClose?: () => void) {
+    if (!drawerOpen) {
+      afterClose?.();
+      return;
+    }
+    if (afterClose) drawerAfterCloseRef.current.push(afterClose);
+    if (drawerClosing) return;
     setDrawerClosing(true);
-    window.setTimeout(() => {
+    window.clearTimeout(drawerCloseTimerRef.current);
+    const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 240;
+    drawerCloseTimerRef.current = window.setTimeout(() => {
       setDrawerOpen(false);
       setDrawerClosing(false);
-    }, 240);
+      if (drawerAfterCloseRef.current.length > 0) {
+        window.cancelAnimationFrame(drawerCallbackFrameRef.current);
+        drawerCallbackFrameRef.current = window.requestAnimationFrame(() => {
+          const callbacks = drawerAfterCloseRef.current.splice(0);
+          for (const callback of callbacks) callback();
+        });
+      }
+    }, delay);
   }
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(drawerCloseTimerRef.current);
+      window.cancelAnimationFrame(drawerCallbackFrameRef.current);
+      drawerAfterCloseRef.current = [];
+    },
+    []
+  );
 
   // While true, slots mounting in the current (flushed) render skip their
   // entrance animation — the view transition owns the motion instead.
@@ -672,39 +757,43 @@ export default function App() {
     [drawerOpen]
   );
 
+  const blockNavigationWhileEditing = useCallback(() => {
+    if (!editingId) return false;
+    showToast(tr("Save or cancel the open edit before changing views.", "请先保存或取消当前编辑，再切换视图"), "error");
+    return true;
+  }, [editingId, showToast, tr]);
+
   const pickTag = useCallback(
     (path: string | null) => {
+      if (blockNavigationWhileEditing()) return;
       if (view === "memos" && activeTag === path) {
-        setEditingId(null);
         return;
       }
       changeFeed(() => {
         setActiveTag(path);
         setView("memos");
-        setEditingId(null);
       });
     },
-    [view, activeTag, changeFeed]
+    [view, activeTag, changeFeed, blockNavigationWhileEditing]
   );
 
   const pickDay = useCallback(
     (key: string | null) => {
+      if (blockNavigationWhileEditing()) return;
       if (view === "memos" && activeDay === key) {
-        setEditingId(null);
         return;
       }
       changeFeed(() => {
         setActiveDay(key);
         setView("memos");
-        setEditingId(null);
       });
     },
-    [view, activeDay, changeFeed]
+    [view, activeDay, changeFeed, blockNavigationWhileEditing]
   );
 
   const showAll = useCallback(() => {
+    if (blockNavigationWhileEditing()) return;
     if (view === "memos" && activeTag === null && activeDay === null && query.length === 0) {
-      setEditingId(null);
       return;
     }
     changeFeed(() => {
@@ -712,22 +801,21 @@ export default function App() {
       setActiveDay(null);
       setQuery("");
       setView("memos");
-      setEditingId(null);
     });
-  }, [view, activeTag, activeDay, query, changeFeed]);
+  }, [view, activeTag, activeDay, query, changeFeed, blockNavigationWhileEditing]);
 
   const openTrash = useCallback(() => {
+    if (blockNavigationWhileEditing()) return;
     if (view === "trash") return;
     changeFeed(() => {
       setView("trash");
-      setEditingId(null);
       // Same flush: the "已选 N 条" pill hands topbar-action to the Empty
       // Trash pill inside one morph instead of two competing transitions.
       setSelectMode(false);
       setSelected(new Set());
       setConfirmBatchDelete(false);
     });
-  }, [view, changeFeed]);
+  }, [view, changeFeed, blockNavigationWhileEditing]);
 
   /**
    * Select mode swaps the whole breadcrumb row for the selection toolbar; a
@@ -736,15 +824,15 @@ export default function App() {
    * while the card checkboxes pop in via their own CSS transitions.
    */
   const enterSelectMode = useCallback(() => {
+    if (blockNavigationWhileEditing()) return;
     withViewTransition(() =>
       flushSync(() => {
         setSelectMode(true);
         setSelected(new Set());
         setConfirmBatchDelete(false);
-        setEditingId(null);
       })
     );
-  }, []);
+  }, [blockNavigationWhileEditing]);
 
   const exitSelectMode = useCallback(() => {
     withViewTransition(() =>
@@ -792,35 +880,54 @@ export default function App() {
   async function handleLogin(pin: string) {
     sessionEpochRef.current += 1;
     await login(pin);
-    await enterApp(true);
+    try {
+      await enterApp(true);
+    } catch (cause) {
+      if (cause instanceof AuthRequiredError) throw cause;
+      setBootError(errorMessage(cause, "Couldn’t load your memos", "加载失败"));
+      setPhase("error");
+    }
   }
 
   async function handleSetup(pin: string) {
     sessionEpochRef.current += 1;
     await setupPassword(pin);
     setNeedsSetup(false);
-    await enterApp(true);
+    try {
+      await enterApp(true);
+    } catch (cause) {
+      if (cause instanceof AuthRequiredError) throw cause;
+      setBootError(errorMessage(cause, "Couldn’t load your memos", "加载失败"));
+      setPhase("error");
+    }
   }
 
   async function handleLogout() {
-    sessionEpochRef.current += 1;
+    if (logoutBusyRef.current) return;
+    logoutBusyRef.current = true;
     try {
-      await logout();
-    } catch {
-      // Even a failed call clears the local session view.
+      const result = await logout();
+      if (!result.ok) throw new ApiError("LOGOUT_FAILED", 500, "The server did not confirm logout");
+    } catch (cause) {
+      if (!(cause instanceof AuthRequiredError)) {
+        showToast(tr("Logout wasn’t confirmed. Your session remains open.", "退出未得到服务器确认，当前登录仍然有效"), "error");
+        return;
+      }
+    } finally {
+      logoutBusyRef.current = false;
     }
+
+    sessionEpochRef.current += 1;
     notifyLogout();
-    setSyncState(createSyncState());
-    setSnapshotCursor(0);
-    setSnapshotSyncEpoch("");
-    setActiveTag(null);
-    setActiveDay(null);
-    setQuery("");
-    setView("memos");
-    setSelectMode(false);
-    setSelected(new Set());
+    forgetCacheKey();
+    resetSessionUi();
     setPhase("login");
-    await invalidateSnapshot();
+    try {
+      await invalidateSnapshot();
+    } catch {
+      // The authenticated server session is already closed. A stale encrypted
+      // local snapshot cannot be opened after forgetCacheKey().
+    }
   }
 
   async function handleCreate(data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }): Promise<boolean> {
@@ -1023,7 +1130,7 @@ export default function App() {
    * (and the selection toolbar collapsing back into the breadcrumb) glide.
    */
   async function handleBatchTrash() {
-    const targets = [...selected]
+    const targets = [...visibleSelected]
       .map((id) => syncStateRef.current.memos.get(id))
       .filter((memo): memo is Memo => Boolean(memo && !memo.deletedAt));
     if (targets.length === 0 || batchBusy) return;
@@ -1078,6 +1185,16 @@ export default function App() {
   // survives every App re-render. (The handle* function declarations below
   // are hoisted, so assigning here each render is safe.)
   const feedActionsRef = useRef({
+    startEdit: (id: string) => {
+      const currentEditing = editingIdRef.current;
+      if (currentEditing && currentEditing !== id) {
+        showToast(tr("Save or cancel the open edit before editing another memo.", "请先保存或取消当前编辑，再编辑其他笔记"), "error");
+        return;
+      }
+      editingBaseSeqRef.current = syncStateRef.current.memos.get(id)?.seq ?? null;
+      setEditConflictId(null);
+      setEditingId(id);
+    },
     saveEdit: handleSaveEdit,
     togglePin: handleTogglePin,
     copy: handleCopy,
@@ -1095,6 +1212,16 @@ export default function App() {
     toggleSelect
   });
   feedActionsRef.current = {
+    startEdit: (id: string) => {
+      const currentEditing = editingIdRef.current;
+      if (currentEditing && currentEditing !== id) {
+        showToast(tr("Save or cancel the open edit before editing another memo.", "请先保存或取消当前编辑，再编辑其他笔记"), "error");
+        return;
+      }
+      editingBaseSeqRef.current = syncStateRef.current.memos.get(id)?.seq ?? null;
+      setEditConflictId(null);
+      setEditingId(id);
+    },
     saveEdit: handleSaveEdit,
     togglePin: handleTogglePin,
     copy: handleCopy,
@@ -1114,11 +1241,7 @@ export default function App() {
   const getEntering = useCallback(() => !enterSuppressRef.current, []);
   const feedHandlers = useMemo<FeedHandlers>(
     () => ({
-      startEdit: (id) => {
-        editingBaseSeqRef.current = syncStateRef.current.memos.get(id)?.seq ?? null;
-        setEditConflictId(null);
-        setEditingId(id);
-      },
+      startEdit: (id) => feedActionsRef.current.startEdit(id),
       cancelEdit: () => {
         editingBaseSeqRef.current = null;
         setEditConflictId(null);
@@ -1180,21 +1303,13 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selectMode, exitSelectMode]);
 
-  // Keep the selection honest when memos vanish underneath it (a sibling tab
-  // deleting synced memos, an import purge): drop ids that no longer exist.
+  // A filter change can hide a selected memo. Prune against the rendered feed
+  // so a later batch action can never affect a card the user can no longer see.
   useEffect(() => {
     if (!selectMode) return;
-    setSelected((current) => {
-      let pruned: Set<string> | null = null;
-      for (const id of current) {
-        if (!activeMemoIds.has(id)) {
-          pruned ??= new Set(current);
-          pruned.delete(id);
-        }
-      }
-      return pruned ?? current;
-    });
-  }, [selectMode, activeMemoIds]);
+    setSelected((current) => selectionWithinVisibleIds(current, visibleFeedIds));
+    setConfirmBatchDelete(false);
+  }, [selectMode, visibleFeedIds]);
 
   async function handlePinTag(path: string, pinned: boolean) {
     try {
@@ -1333,28 +1448,47 @@ export default function App() {
     );
   }
 
+  if (phase === "error") {
+    return (
+      <section className="splash" role="alert" aria-label={tr("Startup failed", "启动失败") }>
+        <div className="splash-logo">
+          <NotebookPen size={26} aria-hidden="true" />
+        </div>
+        <p>{bootError ?? tr("Couldn’t load your memos", "加载失败")}</p>
+        <button type="button" className="ghost-button" onClick={() => void runInitialBoot()}>
+          {tr("Retry", "重试")}
+        </button>
+      </section>
+    );
+  }
+
   if (phase === "login") {
     return (
       <>
         <LoginScreen needsSetup={needsSetup} onLogin={handleLogin} onSetup={handleSetup} />
-        {bootError ? <div className="toast is-error">{bootError}</div> : null}
+        {toast ? (
+          <div key={toast.id} className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`} role="status">
+            {toast.text}
+          </div>
+        ) : null}
       </>
     );
   }
 
-  const allVisibleSelected = feedMemos.length > 0 && feedMemos.every((memo) => selected.has(memo.id));
+  const visibleSelectedCount = visibleSelected.size;
+  const allVisibleSelected = feedMemos.length > 0 && visibleSelectedCount === feedMemos.length;
 
   function toggleSelectAll() {
     mutateSelection(() => {
       if (allVisibleSelected) setSelected(new Set());
-      else setSelected((current) => new Set([...current, ...feedMemos.map((memo) => memo.id)]));
+      else setSelected(new Set(visibleFeedIds));
     });
   }
 
   function handleBatchDeleteClick() {
     if (batchBusy) return;
     if (!confirmBatchDelete) {
-      if (selected.size > 0) setBatchDeleteArm(true);
+      if (visibleSelectedCount > 0) setBatchDeleteArm(true);
       return;
     }
     setConfirmBatchDelete(false);
@@ -1363,7 +1497,12 @@ export default function App() {
 
   return (
     <div className={`app-shell${reveal ? " first-reveal" : ""}`}>
-      <aside className={`sidebar${drawerOpen ? " is-open" : ""}${drawerClosing ? " is-closing" : ""}`}>
+      <aside
+        ref={drawerRef}
+        id="app-sidebar"
+        className={`sidebar${drawerOpen ? " is-open" : ""}${drawerClosing ? " is-closing" : ""}`}
+        tabIndex={-1}
+      >
         <Sidebar
           memos={activeMemos}
           tagTree={tagTree}
@@ -1373,11 +1512,13 @@ export default function App() {
           activeDay={activeDay}
           filtersActive={filtersActive}
           view={view}
+          drawerOpen={drawerOpen}
+          onCloseDrawer={() => closeDrawer()}
           trashCount={trashedMemos.length}
           theme={theme}
           pinnedTags={pinnedTags}
           onPinTag={(path, pinned) => void handlePinTag(path, pinned)}
-          onRenameTag={(path) => setRenameTagTarget(path)}
+          onRenameTag={(path) => closeDrawer(() => setRenameTagTarget(path))}
           onRemoveTag={(path) => void handleRemoveTag(path)}
           onPickTag={(path) => {
             pickTag(path);
@@ -1395,21 +1536,20 @@ export default function App() {
             openTrash();
             closeDrawer();
           }}
-          onOpenStats={() => {
-            setStatsOpen(true);
-            closeDrawer();
-          }}
+          onOpenStats={() => closeDrawer(() => setStatsOpen(true))}
           onCycleTheme={() => setTheme((value) => nextTheme(value))}
           onChangePasscode={() => {
-            sessionEpochRef.current += 1;
-            setChangingPasscode(true);
+            closeDrawer(() => {
+              sessionEpochRef.current += 1;
+              setChangingPasscode(true);
+            });
           }}
-          onExportData={() => void handleExport()}
-          onImportData={() => importFileRef.current?.click()}
+          onExportData={() => closeDrawer(() => void handleExport())}
+          onImportData={() => closeDrawer(() => importFileRef.current?.click())}
           onLogout={() => void handleLogout()}
         />
       </aside>
-      {drawerOpen ? <div className={`drawer-backdrop${drawerClosing ? " is-closing" : ""}`} onClick={closeDrawer} /> : null}
+      {drawerOpen ? <div className={`drawer-backdrop${drawerClosing ? " is-closing" : ""}`} onClick={() => closeDrawer()} /> : null}
 
       <main className="main-column">
         <div className="topbar">
@@ -1417,7 +1557,9 @@ export default function App() {
             type="button"
             className="icon-button drawer-toggle"
             onClick={() => (drawerOpen ? closeDrawer() : setDrawerOpen(true))}
-            aria-label={tr("Open sidebar", "打开侧栏")}
+            aria-label={drawerOpen ? tr("Close sidebar", "关闭侧栏") : tr("Open sidebar", "打开侧栏")}
+            aria-controls="app-sidebar"
+            aria-expanded={drawerOpen}
           >
             <MenuIcon size={18} aria-hidden="true" />
           </button>
@@ -1444,11 +1586,11 @@ export default function App() {
                 <span className="select-count" aria-live="polite">
                   {language === "zh-CN" ? (
                     <>
-                      已选 <RollingText value={selected.size} className="select-count-num" /> 条
+                      已选 <RollingText value={visibleSelectedCount} className="select-count-num" /> 条
                     </>
                   ) : (
                     <>
-                      <RollingText value={selected.size} className="select-count-num" /> selected
+                      <RollingText value={visibleSelectedCount} className="select-count-num" /> selected
                     </>
                   )}
                 </span>
@@ -1460,10 +1602,10 @@ export default function App() {
                 <button
                   type="button"
                   className={`select-delete${confirmBatchDelete ? " is-confirm" : ""}`}
-                  disabled={selected.size === 0 || batchBusy}
+                  disabled={visibleSelectedCount === 0 || batchBusy}
                   aria-label={
                     confirmBatchDelete
-                      ? tr(`Delete ${count(selected.size, "memo")}?`, `删除 ${count(selected.size, "memo")}？`)
+                      ? tr(`Delete ${count(visibleSelectedCount, "memo")}?`, `删除 ${count(visibleSelectedCount, "memo")}？`)
                       : tr("Delete selected memos", "删除所选笔记")
                   }
                   onClick={handleBatchDeleteClick}
@@ -1474,7 +1616,7 @@ export default function App() {
                     {batchBusy
                       ? tr("Deleting…", "删除中…")
                       : confirmBatchDelete
-                        ? tr(`Delete ${count(selected.size, "memo")}?`, `删除 ${count(selected.size, "memo")}？`)
+                        ? tr(`Delete ${count(visibleSelectedCount, "memo")}?`, `删除 ${count(visibleSelectedCount, "memo")}？`)
                         : tr("Delete", "删除")}
                   </span>
                 </button>
@@ -1591,6 +1733,7 @@ export default function App() {
                 ref={searchRef}
                 value={query}
                 placeholder={tr("Search memos", "搜索笔记")}
+                disabled={editingId !== null}
                 onChange={(event) => setQuery(event.target.value)}
                 onFocus={() => setSearchOpen(true)}
                 onBlur={() => setSearchOpen(false)}
@@ -1600,6 +1743,7 @@ export default function App() {
                   type="button"
                   className="searchbox-clear"
                   aria-label={tr("Clear search", "清空搜索")}
+                  disabled={editingId !== null}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => {
                     setQuery("");
@@ -1613,11 +1757,9 @@ export default function App() {
           ) : null}
         </div>
 
-        {view === "memos" ? (
-          <div className="composer">
-            <Editor mode="create" knownTags={knownTags} busy={creating} onSubmit={handleCreate} />
-          </div>
-        ) : null}
+        <div className="composer" hidden={view !== "memos"}>
+          <Editor mode="create" knownTags={knownTags} busy={creating} onSubmit={handleCreate} />
+        </div>
 
         <section
           className={`memo-feed${selectMode && view === "memos" ? " is-select" : ""}`}
@@ -1643,7 +1785,7 @@ export default function App() {
               )}
             </div>
           ) : (
-            feedMemos.slice(0, renderCap).map((memo, index) => (
+            renderedFeedMemos.map((memo, index) => (
               <FeedItem
                 key={memo.id}
                 memo={memo}
@@ -1690,7 +1832,9 @@ export default function App() {
           confirmLabel={tr("Import", "导入")}
           busyLabel={tr("Importing…", "导入中…")}
           busy={dialogBusy}
-          onCancel={() => setImportTarget(null)}
+          onCancel={() => {
+            if (!dialogBusy) setImportTarget(null);
+          }}
           onConfirm={() => void handleImportConfirmed()}
         />
       ) : null}
@@ -1719,7 +1863,9 @@ export default function App() {
               ? tr(`#${value} already exists. Renaming will merge the tags.`, `#${value} 已存在，重命名后两个标签会合并`)
               : null
           }
-          onCancel={() => setRenameTagTarget(null)}
+          onCancel={() => {
+            if (!dialogBusy) setRenameTagTarget(null);
+          }}
           onConfirm={(value) => void handleRenameTagConfirmed(value)}
         />
       ) : null}

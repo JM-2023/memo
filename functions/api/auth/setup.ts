@@ -1,4 +1,4 @@
-import { configuredPasswordHash, createSessionCookie, hashPassword, savePasswordHash } from "../_utils/auth";
+import { claimInitialPassword, configuredAuthState, createSessionCookie, hashPassword } from "../_utils/auth";
 import { apiError, json, readJson, requireSameOrigin } from "../_utils/response";
 import type { AppContext } from "../_utils/types";
 
@@ -8,6 +8,18 @@ interface SetupBody {
 
 function validPin(value: string): boolean {
   return /^\d{4,18}$/.test(value);
+}
+
+/** Public hosts must be provisioned with APP_PASSWORD_HASH during deployment. */
+export function allowsInAppSetup(request: Request): boolean {
+  const hostname = new URL(request.url).hostname.toLowerCase();
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]" ||
+    hostname === "::1" ||
+    hostname === "0.0.0.0"
+  );
 }
 
 export async function onRequestPost(context: AppContext): Promise<Response> {
@@ -21,11 +33,19 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   }
 
   try {
-    if (await configuredPasswordHash(context.env)) {
+    if (await configuredAuthState(context.env)) {
       return apiError(409, "PASSCODE_ALREADY_CONFIGURED", "Passcode already configured");
     }
   } catch {
     return apiError(500, "INTERNAL_ERROR", "The passcode configuration could not be checked.");
+  }
+
+  if (!allowsInAppSetup(context.request)) {
+    return apiError(
+      503,
+      "INTERNAL_ERROR",
+      "Public passcode setup is disabled. Configure APP_PASSWORD_HASH during deployment."
+    );
   }
 
   const body = await readJson<SetupBody>(context.request, 20_000).catch(() => null);
@@ -38,10 +58,16 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   }
 
   try {
-    // Mint the cookie before persisting the hash: if minting fails, nothing was
-    // saved, so the passcode state and the "Could not save" error can't diverge.
-    const cookie = await createSessionCookie(context.env);
-    await savePasswordHash(context.env, await hashPassword(password));
+    // Prepare every fallible artifact before claiming the one canonical row.
+    // A missing session secret can therefore never leave setup half-finished.
+    const [passwordHash, cookie] = await Promise.all([
+      hashPassword(password),
+      createSessionCookie(context.env, 0)
+    ]);
+    const claimed = await claimInitialPassword(context.env, passwordHash);
+    if (!claimed) {
+      return apiError(409, "PASSCODE_ALREADY_CONFIGURED", "Passcode already configured");
+    }
     return json({ ok: true }, { headers: { "Set-Cookie": cookie } });
   } catch {
     return apiError(500, "INTERNAL_ERROR", "The passcode could not be configured.");

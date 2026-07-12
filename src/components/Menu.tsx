@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 
 interface MenuProps {
   /** Renders the trigger button; `open` lets it style its active state. */
@@ -30,6 +31,15 @@ interface PortalPos {
   up: boolean;
 }
 
+const PAGE_FOCUSABLE = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])"
+].join(",");
+
 /**
  * Popover action menu (Tier A floating glass). Owns open state, closes on
  * outside pointer-down and Escape, and animates in via .action-menu CSS.
@@ -39,35 +49,104 @@ interface PortalPos {
 export function Menu({ trigger, children, align = "right", className, panelClassName, portal = false }: MenuProps) {
   const [phase, setPhase] = useState<"closed" | "open" | "closing">("closed");
   const [pos, setPos] = useState<PortalPos | null>(null);
+  const reducedMotion = useReducedMotion();
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const focusEdgeRef = useRef<"first" | "last">("first");
+  const restoreTriggerRef = useRef(false);
   const open = phase === "open";
 
-  function requestClose() {
+  function triggerElement() {
+    return rootRef.current?.querySelector<HTMLElement>(".menu-trigger-slot > button, .menu-trigger-slot [tabindex]:not([tabindex='-1'])") ?? null;
+  }
+
+  function menuItems() {
+    return [...(panelRef.current?.querySelectorAll<HTMLElement>("[role='menuitem'], [role='menuitemradio'], [role='menuitemcheckbox']") ?? [])].filter(
+      (item) => !item.hasAttribute("disabled") && item.getAttribute("aria-disabled") !== "true"
+    );
+  }
+
+  function focusAfterTrigger(backward: boolean) {
+    const triggerNode = triggerElement();
+    if (!triggerNode) return;
+    const candidates = [...document.querySelectorAll<HTMLElement>(PAGE_FOCUSABLE)].filter(
+      (element) =>
+        !panelRef.current?.contains(element) &&
+        !element.inert &&
+        element.getAttribute("aria-hidden") !== "true" &&
+        element.getClientRects().length > 0
+    );
+    const index = candidates.indexOf(triggerNode);
+    const target = index < 0 ? triggerNode : candidates[index + (backward ? -1 : 1)] ?? triggerNode;
+    target.focus({ preventScroll: true });
+  }
+
+  function requestClose(restoreTrigger = false) {
+    restoreTriggerRef.current = restoreTrigger;
     setPhase((value) => (value === "open" ? "closing" : value));
+  }
+
+  function requestOpen(edge: "first" | "last" = "first") {
+    focusEdgeRef.current = edge;
+    restoreTriggerRef.current = false;
+    setPhase("open");
   }
 
   useEffect(() => {
     if (phase !== "closing") return;
+    if (reducedMotion) {
+      setPhase("closed");
+      return;
+    }
     const timer = window.setTimeout(() => setPhase("closed"), 170);
     return () => window.clearTimeout(timer);
-  }, [phase]);
+  }, [phase, reducedMotion]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const items = menuItems();
+    const target = focusEdgeRef.current === "last" ? items.at(-1) : items[0];
+    target?.focus({ preventScroll: true });
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     function onPointerDown(event: PointerEvent) {
       const target = event.target as Node;
       if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return;
-      requestClose();
+      requestClose(false);
     }
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") requestClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        requestClose(true);
+        return;
+      }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        requestClose(false);
+        focusAfterTrigger(event.shiftKey);
+        return;
+      }
+      const items = menuItems();
+      if (items.length === 0) return;
+      const activeIndex = items.indexOf(document.activeElement as HTMLElement);
+      let target: HTMLElement | undefined;
+      if (event.key === "ArrowDown") target = activeIndex < 0 ? items[0] : items[(activeIndex + 1) % items.length];
+      else if (event.key === "ArrowUp") target = activeIndex < 0 ? items.at(-1) : items[(activeIndex - 1 + items.length) % items.length];
+      else if (event.key === "Home") target = items[0];
+      else if (event.key === "End") target = items.at(-1);
+      if (target) {
+        event.preventDefault();
+        target.focus();
+      }
     }
     window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
 
@@ -93,7 +172,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
 
   useEffect(() => {
     if (!open || !portal) return;
-    const close = () => requestClose();
+    const close = () => requestClose(false);
     window.addEventListener("scroll", close, { capture: true, passive: true });
     window.addEventListener("resize", close);
     return () => {
@@ -103,7 +182,10 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   }, [open, portal]);
 
   useEffect(() => {
-    if (phase === "closed") setPos(null);
+    if (phase !== "closed") return;
+    setPos(null);
+    if (restoreTriggerRef.current) triggerElement()?.focus({ preventScroll: true });
+    restoreTriggerRef.current = false;
   }, [phase]);
 
   // right: "auto" neutralises the class-based `.align-right { right: 0 }` —
@@ -129,14 +211,23 @@ export function Menu({ trigger, children, align = "right", className, panelClass
         className={`action-menu align-${align}${portal ? " is-portal" : ""}${phase === "closing" ? " is-closing" : ""}${panelClassName ? ` ${panelClassName}` : ""}`}
         style={panelStyle}
         role="menu"
+        aria-orientation="vertical"
       >
-        {children(requestClose)}
+        {children(() => requestClose(true))}
       </div>
     ) : null;
 
   return (
     <div ref={rootRef} className={`menu-root${open ? " is-open" : ""}${className ? ` ${className}` : ""}`}>
-      <div className="menu-trigger-slot" onClick={() => setPhase((value) => (value === "open" ? "closing" : "open"))}>
+      <div
+        className="menu-trigger-slot"
+        onClick={() => (open ? requestClose(true) : requestOpen("first"))}
+        onKeyDown={(event) => {
+          if (open || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
+          event.preventDefault();
+          requestOpen(event.key === "ArrowUp" ? "last" : "first");
+        }}
+      >
         {trigger(open)}
       </div>
       {portal ? (panel ? createPortal(panel, document.body) : null) : panel}

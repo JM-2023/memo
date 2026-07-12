@@ -31,37 +31,67 @@ export class AuthRequiredError extends ApiError {
   }
 }
 
+export const API_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * Give every API call a finite lifetime while preserving an explicit caller
+ * abort (used by the background sync hook). A private controller lets us
+ * distinguish a network timeout from navigation/unmount cancellation.
+ */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    cache: "no-store",
-    headers: init?.body ? { "Content-Type": "application/json" } : undefined,
-    ...init
-  });
-  if (!response.ok) {
-    let code = "REQUEST_FAILED";
-    let message = `Request failed (${response.status})`;
-    let params: ApiErrorParams | undefined;
-    let current: Memo | undefined;
-    try {
-      const data = (await response.json()) as ApiErrorPayload;
-      if (typeof data.code === "string" && data.code) code = data.code;
-      if (typeof data.error === "string" && data.error) message = data.error;
-      if (data.params && typeof data.params === "object" && !Array.isArray(data.params)) {
-        params = data.params as ApiErrorParams;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = globalThis.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, API_REQUEST_TIMEOUT_MS);
+  const callerSignal = init?.signal;
+  const abortFromCaller = () => controller.abort(callerSignal?.reason);
+  if (callerSignal?.aborted) abortFromCaller();
+  else callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+
+  try {
+    const response = await fetch(path, {
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+      ...init,
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      let code = "REQUEST_FAILED";
+      let message = `Request failed (${response.status})`;
+      let params: ApiErrorParams | undefined;
+      let current: Memo | undefined;
+      try {
+        const data = (await response.json()) as ApiErrorPayload;
+        if (typeof data.code === "string" && data.code) code = data.code;
+        if (typeof data.error === "string" && data.error) message = data.error;
+        if (data.params && typeof data.params === "object" && !Array.isArray(data.params)) {
+          params = data.params as ApiErrorParams;
+        }
+        if (data.current && typeof data.current === "object" && !Array.isArray(data.current)) {
+          current = data.current as Memo;
+        }
+      } catch {
+        if (timedOut) throw new ApiError("REQUEST_TIMEOUT", 408, "The server took too long to respond. Try again.");
+        // Keep the status-based fallback for non-JSON error responses.
       }
-      if (data.current && typeof data.current === "object" && !Array.isArray(data.current)) {
-        current = data.current as Memo;
+      if (response.status === 401 && code === "AUTH_REQUIRED") {
+        throw new AuthRequiredError(message, response.status, params);
       }
-    } catch {
-      // Keep the status-based fallback for non-JSON error responses.
+      throw new ApiError(code, response.status, message, params, current);
     }
-    if (response.status === 401 && code === "AUTH_REQUIRED") {
-      throw new AuthRequiredError(message, response.status, params);
+    return (await response.json()) as T;
+  } catch (cause) {
+    if (timedOut) {
+      throw new ApiError("REQUEST_TIMEOUT", 408, "The server took too long to respond. Try again.");
     }
-    throw new ApiError(code, response.status, message, params, current);
+    throw cause;
+  } finally {
+    globalThis.clearTimeout(timeout);
+    callerSignal?.removeEventListener("abort", abortFromCaller);
   }
-  return (await response.json()) as T;
 }
 
 export function getAuthStatus(): Promise<{ needsSetup: boolean }> {
@@ -339,12 +369,7 @@ export async function exportData(): Promise<Blob> {
   const tagParts: string[] = [];
   do {
     const query = after ? `?after=${encodeURIComponent(after)}` : "";
-    const response = await fetch(`/api/export${query}`, { credentials: "same-origin", cache: "no-store" });
-    if (!response.ok) {
-      if (response.status === 401) throw new AuthRequiredError();
-      throw new ApiError("REQUEST_FAILED", response.status, `Export failed (${response.status})`);
-    }
-    const page = (await response.json()) as ExportPage;
+    const page = await request<ExportPage>(`/api/export${query}`);
     if (!wroteHead) {
       parts.push(`{"format":"memo-backup","version":1,"exportedAt":${JSON.stringify(page.exportedAt)},"memos":[`);
       wroteHead = true;

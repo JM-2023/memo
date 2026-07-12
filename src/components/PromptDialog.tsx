@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { useModalA11y } from "../hooks/useModalA11y";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
 
 interface PromptDialogProps {
@@ -34,7 +36,9 @@ export function PromptDialog({
   const { tr } = useI18n();
   const [value, setValue] = useState(initialValue);
   const [closing, setClosing] = useState(false);
+  const reducedMotion = useReducedMotion();
   const inputRef = useRef<HTMLInputElement>(null);
+  const closeTimer = useRef(0);
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
 
@@ -44,24 +48,37 @@ export function PromptDialog({
   const canConfirm = trimmed.length > 0 && !error && !busy;
 
   function requestClose() {
-    if (closing) return;
+    if (busy || closing) return;
+    if (reducedMotion) {
+      cancelRef.current();
+      return;
+    }
     setClosing(true);
-    window.setTimeout(() => cancelRef.current(), 240);
+    closeTimer.current = window.setTimeout(() => cancelRef.current(), 240);
   }
 
+  const overlayRef = useModalA11y<HTMLDivElement>({
+    onEscape: requestClose,
+    escapeDisabled: Boolean(busy),
+    initialFocusRef: inputRef
+  });
+
   useEffect(() => {
-    inputRef.current?.focus();
     inputRef.current?.select();
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") requestClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => window.clearTimeout(closeTimer.current);
   }, []);
 
   return (
-    <div className={`overlay${closing ? " is-closing" : ""}`} role="dialog" aria-modal="true" aria-label={title} onClick={requestClose}>
+    <div
+      ref={overlayRef}
+      className={`overlay${closing ? " is-closing" : ""}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      aria-busy={busy || undefined}
+      tabIndex={-1}
+      onClick={requestClose}
+    >
       <div className="confirm-card" onClick={(event) => event.stopPropagation()}>
         <h2>{title}</h2>
         {body ? <p>{body}</p> : null}
@@ -79,6 +96,7 @@ export function PromptDialog({
             placeholder={placeholder}
             spellCheck={false}
             autoComplete="off"
+            disabled={busy}
             onChange={(event) => setValue(event.target.value)}
           />
           {error ? (

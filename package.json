@@ -1,18 +1,21 @@
 {
   "name": "memo",
-  "version": "2.2.1",
+  "version": "2.5.0",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || ^22.13.0 || >=24.0.0"
   },
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "test": "vitest run",
+    "test": "npm run test:unit && npm run test:workers",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:workers": "vitest run --config vitest.workers.config.ts",
     "build": "tsc --noEmit && vite build",
     "pages:dev": "vite build && wrangler pages dev dist --compatibility-date=2026-06-22",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "db:migrate:preview": "wrangler d1 migrations apply DB --remote --env preview",
     "hash-password": "node scripts/hash-password.mjs",
     "deploy": "npm run build && wrangler pages deploy dist --project-name your-pages-project"
   },
@@ -22,14 +25,18 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260708.1",
+    "@cloudflare/vitest-pool-workers": "^0.18.4",
+    "@cloudflare/workers-types": "^5.20260712.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
+    "@vitejs/plugin-react": "^4.7.0",
     "fake-indexeddb": "^6.2.5",
+    "jsdom": "^29.1.1",
     "typescript": "^5.5.4",
-    "vite": "^5.4.2",
-    "vitest": "^3.2.6",
+    "vite": "^6.4.3",
+    "vitest": "^4.1.0",
     "wrangler": "^4.110.0"
   }
 }

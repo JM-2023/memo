@@ -32,7 +32,8 @@
 
   --ink: #161922;
   --ink-soft: #4a5160;
-  --muted: #717a8a;
+  /* At least 4.6:1 across the light page, cards and recessed controls. */
+  --muted: #626d7d;
   --line: #e6e8ee;
   --line-strong: #d3d7e0;
 
@@ -196,7 +197,7 @@
 
     --ink: #e9ebf1;
     --ink-soft: #b3bacb;
-    --muted: #818aa0;
+    --muted: #848da3;
     --line: #272c38;
     --line-strong: #39404f;
 
@@ -307,7 +308,7 @@
 
   --ink: #e9ebf1;
   --ink-soft: #b3bacb;
-  --muted: #818aa0;
+  --muted: #848da3;
   --line: #272c38;
   --line-strong: #39404f;
 
@@ -432,8 +433,8 @@ button, input, select, textarea { font: inherit; letter-spacing: 0; color: var(-
 button { cursor: pointer; background: none; border: 0; padding: 0; }
 button:disabled { cursor: default; opacity: 0.5; }
 
-:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent); outline-offset: 2px; }
-button:focus-visible { outline: none; background: var(--wash-strong); }
+:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 78%, transparent); outline-offset: 2px; }
+button:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 78%, transparent); outline-offset: 2px; }
 /* Text fields carry their own focus treatment (accent border + soft ring),
    so the detached rectangle never doubles up on them. */
 input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; }
@@ -870,13 +871,15 @@ a:hover { text-decoration: underline; }
 .passcode-overlay {
   position: fixed;
   inset: 0;
-  z-index: 120;
+  z-index: 180;
   display: grid;
   justify-items: center;
   align-content: center;
   gap: 22px;
   padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
   background: var(--bg);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   animation: fade-in var(--t-slow) var(--ease) both;
 }
 
@@ -1071,7 +1074,7 @@ a:hover { text-decoration: underline; }
    wall-calendar (weekday columns × week rows), year = a GitHub-style band
    (week columns × weekday rows, month marks on top). Cells stay square via
    aspect-ratio and are sized by their column track. */
-.heatmap { display: grid; gap: 10px; margin-top: 2px; }
+.heatmap { display: grid; min-width: 0; gap: 10px; margin-top: 2px; }
 .heatmap-head { display: flex; align-items: center; justify-content: space-between; }
 .heatmap-nav { width: 28px; height: 28px; border-radius: var(--r-xs); }
 .heatmap-title {
@@ -1101,7 +1104,8 @@ a:hover { text-decoration: underline; }
    slides away underneath while the incoming one slides in; Heatmap tweens
    this element's height between the two grids so the sidebar below glides.
    The clip margin keeps edge-cell hover rings from being cropped. */
-.heat-viewport { position: relative; overflow: clip; overflow-clip-margin: 8px; }
+.heat-viewport { position: relative; min-width: 0; max-width: 100%; overflow: clip; overflow-clip-margin: 8px; }
+.heat-current { min-width: 0; max-width: 100%; }
 .heat-leaving { position: absolute; inset: 0 0 auto 0; pointer-events: none; }
 .heat-leaving.leave-left { animation: heat-leave-left 0.3s var(--ease) both; }
 .heat-leaving.leave-right { animation: heat-leave-right 0.3s var(--ease) both; }
@@ -1114,7 +1118,7 @@ a:hover { text-decoration: underline; }
   place-items: center;
   padding-bottom: 1px;
   color: var(--muted);
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   font-weight: 600;
   user-select: none;
 }
@@ -1126,7 +1130,7 @@ a:hover { text-decoration: underline; }
 .heat-months { display: grid; gap: 2px; }
 .heat-months span {
   color: var(--muted);
-  font-size: 0.58rem;
+  font-size: 0.68rem;
   font-weight: 600;
   line-height: 1.1;
   white-space: nowrap;
@@ -1501,7 +1505,8 @@ button.crumb:active { background: var(--wash-strong); }
    stays unique: it glides along when the breadcrumb before it changes width
    and gets a proper depart/arrive instead of blinking in the root fade. */
 .filter-chip {
-  display: inline-flex;
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
   align-items: center;
   gap: 5px;
   max-width: 200px;
@@ -2237,7 +2242,7 @@ button.memo-tag:active {
 .overlay {
   position: fixed;
   inset: 0;
-  z-index: 140;
+  z-index: 180;
   display: grid;
   place-items: center;
   padding: 24px;
@@ -2445,7 +2450,7 @@ button.memo-tag:active {
   grid-auto-columns: 1fr;
   gap: 6px;
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   font-weight: 600;
   text-align: center;
 }
@@ -2683,15 +2688,84 @@ button.memo-tag:active {
   .select-delete.is-confirm span { display: inline; }
 }
 
+/* At phone widths the search gets its own row. This preserves the date
+   filter's clear control and keeps the drawer trigger on the first row. */
+@media (max-width: 400px) {
+  .topbar { flex-wrap: wrap; gap: 8px; }
+  .breadcrumb { flex: 0 0 calc(100% - 40px); }
+  .breadcrumb:has(.filter-chip) .crumbs { flex: 1; }
+  .filter-chip { flex: none; max-width: min(132px, 48%); }
+  .searchbox,
+  .searchbox.is-open {
+    flex: 0 0 calc(100% - 40px);
+    width: calc(100% - 40px);
+    margin-left: 40px;
+  }
+
+  .stats-overlay { padding: 8px; }
+  .stats-modal { max-height: calc(100dvh - 16px); }
+  .stats-head {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "title close"
+      "year year";
+    gap: 6px 10px;
+    padding: 12px 12px 10px;
+  }
+  .stats-head h2 { grid-area: title; }
+  .stats-year-nav { grid-area: year; }
+  .stats-close { grid-area: close; }
+
+  .editor,
+  .editor-field,
+  .editor-bar,
+  .editor-tools,
+  .editor-actions { min-width: 0; }
+  .editor-bar { flex-wrap: wrap; }
+  .editor-actions { margin-left: auto; }
+}
+
+/* Short phones need the keypad to scroll as one surface, with the action
+   remaining reachable below it. The 44px keys retain a full touch target. */
+@media (max-height: 680px) {
+  .login-screen {
+    min-height: 100dvh;
+    align-items: start;
+    justify-items: center;
+    overflow-y: auto;
+    padding-block: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-bottom));
+  }
+  .passcode-overlay {
+    min-height: 100dvh;
+    max-height: 100dvh;
+    align-content: start;
+    gap: 12px;
+    padding: max(12px, env(safe-area-inset-top)) 16px max(12px, env(safe-area-inset-bottom));
+  }
+  .login-screen .pin-pad,
+  .passcode-overlay .pin-pad { gap: 14px; padding: 16px 20px 18px; }
+  .login-screen .pin-logo,
+  .passcode-overlay .pin-logo { width: 44px; height: 44px; margin-bottom: 2px; }
+  .login-screen .keypad,
+  .passcode-overlay .keypad { gap: 8px; }
+  .login-screen .keypad button,
+  .passcode-overlay .keypad button { min-height: 44px; }
+}
+
 /* =========================================================================
    Reduced motion — everything still works, nothing moves
    ========================================================================= */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
   }
+  :root,
+  :root[data-theme="dark"] { animation: none !important; }
   /* Belt and braces: the JS helper already skips startViewTransition. */
   ::view-transition-group(*),
   ::view-transition-old(*),
