@@ -2504,49 +2504,63 @@ button.memo-tag:active {
   translate: 0 8px;
   scale: 0.5;
   will-change: translate, scale, opacity;
-  transition:
-    opacity 100ms var(--slot-ease),
-    translate 100ms var(--slot-ease),
-    scale 100ms var(--slot-ease);
 }
 .scroll-top-slot.is-shown {
   opacity: 1;
   translate: 0 0;
-  scale: 1;
+  scale: none;
   pointer-events: auto;
-  transition:
-    opacity 300ms var(--slot-ease) 300ms,
-    translate 300ms var(--slot-ease) 300ms,
-    scale 300ms var(--slot-ease) 300ms;
 }
-/* 1px hairline outside the 32px disc, translucent surface over real blur —
-   the same glass reading in both themes via the rim/sampling tokens. */
+@media (prefers-reduced-motion: no-preference) {
+  .scroll-top-slot { transition: all 100ms var(--slot-ease); }
+  .scroll-top-slot.is-shown {
+    transition-duration: 300ms;
+    transition-delay: 300ms;
+  }
+}
+/* The demo disc verbatim: 1px hairline outside 32px, 65% surface over a
+   bare 2px blur, the two-layer soft drop. Surface tokens keep the same
+   recipe honest in dark; only the hairline needs a flip there. */
 .scroll-top-btn {
+  position: relative;
+  bottom: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 32px;
   height: 32px;
   box-sizing: content-box;
+  overflow: hidden;
   color: var(--ink);
   background: color-mix(in oklab, var(--surface) 65%, transparent);
   background-clip: padding-box;
-  border: 1px solid var(--glass-rim-strong);
-  border-radius: 999px;
-  -webkit-backdrop-filter: var(--glass-sampling);
-  backdrop-filter: var(--glass-sampling);
-  box-shadow: var(--shadow);
-  transition: background var(--t) var(--ease);
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: calc(infinity * 1px);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  box-shadow:
+    0 4px 4px 0 rgba(0, 0, 0, 0.04),
+    0 0 1px 0 rgba(0, 0, 0, 0.62);
+}
+@media (min-width: 640px) {
+  .scroll-top-btn {
+    box-shadow:
+      0 4px 6px -1px rgba(0, 0, 0, 0.1),
+      0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  }
 }
 .scroll-top-btn svg { display: block; }
 @media (hover: hover) {
-  .scroll-top-btn:hover { background: color-mix(in oklab, var(--surface-2) 78%, transparent); }
+  .scroll-top-btn:hover { background: color-mix(in oklab, var(--surface-2) 75%, transparent); }
 }
 .scroll-top-btn:focus-visible {
-  background: color-mix(in oklab, var(--surface-2) 78%, transparent);
   outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
   outline-offset: 2px;
 }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .scroll-top-btn { border-color: rgba(255, 255, 255, 0.15); }
+}
+:root[data-theme="dark"] .scroll-top-btn { border-color: rgba(255, 255, 255, 0.15); }
 
 /* =========================================================================
    Toast

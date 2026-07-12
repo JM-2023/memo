@@ -44,6 +44,12 @@ export function ScrollTopButton() {
   const endFlightRef = useRef(endFlight);
   endFlightRef.current = endFlight;
 
+  // The composer marks the top of the page: once it has fully scrolled out
+  // of view, the way back up is worth a button. Cached between scrolls and
+  // re-queried when a view switch swaps it out (trash has none — fall back
+  // to a viewport of scroll).
+  const composerRef = useRef<Element | null>(null);
+
   useEffect(() => {
     const onScroll = () => {
       const y = window.scrollY;
@@ -52,7 +58,12 @@ export function ScrollTopButton() {
         return;
       }
       if (programmaticRef.current) return;
-      setShown(y > window.innerHeight);
+      let composer = composerRef.current;
+      if (!composer || !composer.isConnected) {
+        composer = document.querySelector(".composer");
+        composerRef.current = composer;
+      }
+      setShown(composer ? composer.getBoundingClientRect().bottom < 0 : y > window.innerHeight);
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
@@ -104,7 +115,7 @@ export function ScrollTopButton() {
         {/* The demo's arrow glyph, rotated to point up. */}
         <svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor" aria-hidden="true">
           <path
-            d="M9.25 3.5a.75.75 0 0 1 1.5 0v10.19l3.72-3.72a.75.75 0 1 1 1.06 1.06l-5 5a.75.75 0 0 1-1.06 0l-5-5a.75.75 0 1 1 1.06-1.06l3.72 3.72V3.5Z"
+            d="M9.335 3.333a.665.665 0 0 1 1.33 0v11.728l4.698-4.698.104-.085a.665.665 0 0 1 .836 1.026l-5.833 5.833c-.26.26-.68.26-.94 0l-5.834-5.833-.085-.104a.666.666 0 0 1 .922-.922l.104.085 4.698 4.697z"
             transform="rotate(180 10 10)"
           />
         </svg>
