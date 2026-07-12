@@ -1,14 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "../lib/i18n";
 
-/** Show once the page has scrolled a full viewport; hide at the very top. */
+/** Below this the page counts as "at the top" and the button hides. */
 const AT_TOP = 2;
-/** Exponential glide time constant — remaining distance halves every ~76ms. */
-const FLIGHT_TAU = 110;
-/** Linear floor (px per ms) so the exponential tail still lands crisply. */
-const LANDING_FLOOR = 1.6;
+/** Launch velocity as a fraction of the spring's pure-decay speed (ω·y),
+ * so the click answers instantly without the first frame teleporting. */
+const LAUNCH_KICK = 0.35;
+/** A frame gap this long means the tab was hidden — land, don't resume. */
+const STALL_MS = 250;
+/** Spring integration substep (ms) so dropped frames stay numerically calm. */
+const SPRING_STEP = 8;
 /** User gestures that should cancel the glide and hand the wheel back. */
 const INTERRUPTS: (keyof WindowEventMap)[] = ["wheel", "touchstart", "mousedown", "keydown"];
+
+/** Nominal settle time: grows with the log of the distance, capped so even a
+ * mile-long feed lands in about a second. */
+const flightMs = (distance: number) =>
+  Math.min(1050, Math.max(500, 380 + 240 * Math.log10(Math.max(1, distance / 100))));
 
 /**
  * Back-to-top disc — the ChatGPT scroll-to-bottom button mirrored: same
@@ -18,10 +26,13 @@ const INTERRUPTS: (keyof WindowEventMap)[] = ["wheel", "touchstart", "mousedown"
  * and sticks to the viewport bottom, which keeps it centered on the content
  * column at every width for free.
  *
- * The glide is driven by hand rather than scrollTo({behavior: "smooth"}):
- * sweeping up through content-visibility:auto cards materializes them, and
- * the scroll-anchoring adjustments that follow can swallow a native smooth
- * scroll mid-flight. Absolute per-frame writes always win that fight.
+ * The glide is a hand-integrated critically damped spring rather than
+ * scrollTo({behavior: "smooth"}): sweeping up through content-visibility:auto
+ * cards materializes them, and the scroll-anchoring adjustments that follow
+ * can swallow a native smooth scroll mid-flight — absolute per-frame writes
+ * always win that fight. The spring also shapes the feel: velocity ramps in
+ * at launch, peaks mid-flight, and decays asymptotically into the landing,
+ * so arrival at the top has no terminal-velocity slam.
  */
 export function ScrollTopButton() {
   const { tr } = useI18n();
@@ -88,22 +99,40 @@ export function ScrollTopButton() {
       for (const type of INTERRUPTS) window.removeEventListener(type, onInterrupt);
     };
 
+    // Critically damped spring toward 0. The float position is ours — the
+    // browser rounds scrollTo to device pixels, and re-reading that rounded
+    // value would stall the sub-pixel tail — but any real outside shift
+    // (scroll anchoring re-measuring cards above) re-syncs it.
+    const omega = 6 / flightMs(window.scrollY); // 1/ms
+    let pos = window.scrollY;
+    let v = -LAUNCH_KICK * omega * pos;
+    let written = pos;
     let last = performance.now();
     const tick = (now: number) => {
       flightFrameRef.current = null;
-      const y = window.scrollY;
-      if (y <= AT_TOP) {
+      const dt = now - last;
+      last = now;
+      const actual = window.scrollY;
+      if (actual <= AT_TOP || dt > STALL_MS) {
         window.scrollTo(0, 0);
         endFlight();
         setShown(false);
         return;
       }
-      // Unclamped dt is deliberate: after a hidden-tab pause the first frame
-      // back covers the whole remaining distance — land, don't keep gliding.
-      const dt = now - last;
-      last = now;
-      const step = Math.max(y * (1 - Math.exp(-dt / FLIGHT_TAU)), dt * LANDING_FLOOR);
-      window.scrollTo(0, Math.max(0, y - step));
+      if (Math.abs(actual - written) > 1.5) pos = actual;
+      for (let t = dt; t > 0; t -= SPRING_STEP) {
+        const h = Math.min(t, SPRING_STEP);
+        v += (-omega * omega * pos - 2 * omega * v) * h;
+        pos += v * h;
+      }
+      if (pos < 0.75) {
+        window.scrollTo(0, 0);
+        endFlight();
+        setShown(false);
+        return;
+      }
+      written = pos;
+      window.scrollTo(0, pos);
       flightFrameRef.current = window.requestAnimationFrame(tick);
     };
     flightFrameRef.current = window.requestAnimationFrame(tick);
