@@ -2503,7 +2503,9 @@ button.memo-tag:active {
   opacity: 0;
   translate: 0 8px;
   scale: 0.5;
-  will-change: translate, scale, opacity;
+  /* No will-change here: will-change:opacity walls off the backdrop root,
+     so the disc's backdrop-filter would sample only this empty zero-height
+     slot and blur nothing. */
 }
 .scroll-top-slot.is-shown {
   opacity: 1;
