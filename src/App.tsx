@@ -11,6 +11,7 @@ import { MemoCard } from "./components/MemoCard";
 import { Menu } from "./components/Menu";
 import { PromptDialog } from "./components/PromptDialog";
 import { RollingText } from "./components/RollingText";
+import { ScrollTopButton } from "./components/ScrollTopButton";
 import { Sidebar } from "./components/Sidebar";
 import { StatsModal } from "./components/StatsModal";
 import { SwapText } from "./components/SwapText";
@@ -1637,6 +1638,8 @@ export default function App() {
           )}
           {hasMoreFeed ? <div ref={feedSentinelRef} className="feed-sentinel" aria-hidden="true" /> : null}
         </section>
+
+        <ScrollTopButton />
       </main>
 
       {lightbox ? <Lightbox items={lightbox.items} index={lightbox.index} onClose={() => setLightbox(null)} /> : null}
