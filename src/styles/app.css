@@ -2583,6 +2583,10 @@ button.memo-tag:active {
   font-weight: 700;
   transform: translateX(-50%);
   animation: toast-in 0.45s var(--ease-pop) both;
+  /* Own snapshot group (lifted in the view-transition section): flattened
+     into the root snapshot, the toast slid UNDER the topbar-action pill
+     whenever a view switch ran while it was up. */
+  view-transition-name: toast;
 }
 .toast.is-leaving { animation: toast-out 0.3s var(--ease) both; }
 .toast.is-error { color: var(--danger); }
@@ -2596,6 +2600,12 @@ button.memo-tag:active {
    result lists therefore produce no visible motion. Browsers without the
    API keep the instant swap.
    ========================================================================= */
+/* The snapshot tree covers the viewport and, by default, swallows every
+   pointer event while a transition runs — the second click on a freshly
+   armed Empty Trash pill (its arming morph is a transition) landed on the
+   overlay instead of the button. The live DOM already sits in its final
+   layout underneath, so let clicks fall through. */
+::view-transition { pointer-events: none; }
 ::view-transition-group(*) { animation-duration: 0.45s; animation-timing-function: var(--ease-out); }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.25s; }
 /* Departing cards (deletion, filtered out) sink slightly as they fade, so a
@@ -2610,6 +2620,13 @@ button.memo-tag:active {
    the same pure glide with the labels cross-fading at natural size. */
 ::view-transition-old(topbar-action),
 ::view-transition-new(topbar-action) { inline-size: auto; block-size: 100%; }
+/* The toast is the app's topmost layer (z-index 200 over menus, overlays,
+   the drawer) — keep its snapshot above every other group too, so the
+   topbar-action pill can't glide over it mid-transition. Natural-size
+   snapshots keep back-to-back toasts of different widths from stretching. */
+::view-transition-group(toast) { z-index: 1; }
+::view-transition-old(toast),
+::view-transition-new(toast) { inline-size: auto; block-size: 100%; }
 
 /* =========================================================================
    Responsive — sidebar becomes an animated drawer

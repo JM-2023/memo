@@ -272,6 +272,10 @@ export default function App() {
   const [dialogBusy, setDialogBusy] = useState(false);
   // Two-step Empty Trash: first click arms the button, second click fires.
   const [confirmEmptyTrash, setConfirmEmptyTrash] = useState(false);
+  // While the delete request is in flight the pill must hold its armed look
+  // (blur/timeout disarms would snap it back to "Empty Trash" mid-flight),
+  // so the disarm paths and re-fires check this ref.
+  const emptyTrashBusyRef = useRef(false);
   // Parsed backup file waiting for the user's go-ahead.
   const [importTarget, setImportTarget] = useState<{ payload: BackupPayload; memoCount: number; imageCount: number } | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
@@ -985,13 +989,31 @@ export default function App() {
   }
 
   async function handleEmptyTrash() {
+    if (emptyTrashBusyRef.current) return;
+    emptyTrashBusyRef.current = true;
     try {
       const result = await guard(() => emptyTrash());
-      if (!result) return;
-      applyRemoval([], result.purged);
+      if (!result) {
+        setConfirmEmptyTrash(false);
+        return;
+      }
+      // Disarm inside the same transition that clears the cards: the red
+      // confirm pill holds through the request and leaves in one morph,
+      // never snapping back to a bare "Empty Trash" first.
+      withViewTransition(() =>
+        flushSync(() => {
+          setConfirmEmptyTrash(false);
+          applySyncChanges([], result.purged, []);
+        })
+      );
+      void runSync();
+      notifyPeers();
       showToast(tr("Trash emptied", "回收站已清空"));
     } catch (cause) {
+      setEmptyTrashArm(false);
       showToast(errorMessage(cause, "Couldn’t empty Trash", "清空失败"), "error");
+    } finally {
+      emptyTrashBusyRef.current = false;
     }
   }
 
@@ -1125,10 +1147,12 @@ export default function App() {
     withViewTransition(() => flushSync(() => setConfirmEmptyTrash(value)));
   }, []);
   // A primed Empty Trash button disarms on its own if the second click
-  // never lands.
+  // never lands (but not while the delete request is in flight).
   useEffect(() => {
     if (!confirmEmptyTrash) return;
-    const timer = window.setTimeout(() => setEmptyTrashArm(false), 4000);
+    const timer = window.setTimeout(() => {
+      if (!emptyTrashBusyRef.current) setEmptyTrashArm(false);
+    }, 4000);
     return () => window.clearTimeout(timer);
   }, [confirmEmptyTrash, setEmptyTrashArm]);
   useEffect(() => {
@@ -1537,10 +1561,11 @@ export default function App() {
                     setEmptyTrashArm(true);
                     return;
                   }
-                  setConfirmEmptyTrash(false);
                   void handleEmptyTrash();
                 }}
-                onBlur={() => setConfirmEmptyTrash(false)}
+                onBlur={() => {
+                  if (!emptyTrashBusyRef.current) setConfirmEmptyTrash(false);
+                }}
               >
                 <Trash2 size={14} aria-hidden="true" />
                 <span>
