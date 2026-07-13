@@ -106,6 +106,22 @@
   --chip-shadow: var(--shadow-xs);
   --chip-hover-shadow: var(--shadow-sm);
 
+  /* The statistics period thumb keeps the original Tier B glass recipe. */
+  --period-iris: conic-gradient(from var(--spin, 130deg) at 50% 50%,
+      rgba(124, 122, 255, 0.10), rgba(155, 138, 232, 0.085) 22%,
+      rgba(232, 155, 155, 0.07) 44%, rgba(253, 183, 119, 0.07) 66%,
+      rgba(255, 212, 163, 0.06) 84%, rgba(124, 122, 255, 0.10) 100%);
+  --period-thumb-fill:
+    var(--lg-specular),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.48)),
+    var(--period-iris);
+  --period-thumb-rim: rgba(20, 27, 45, 0.12);
+  --period-thumb-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    inset 0 -7px 15px -8px rgba(20, 27, 45, 0.06),
+    0 1px 2px rgba(20, 27, 45, 0.06),
+    0 3px 8px -3px rgba(20, 27, 45, 0.14);
+
   /* Brand marks use the established sage logo treatment. */
   --primary-fill: var(--leaf-logo);
   --primary-hover-fill: var(--leaf-logo);
@@ -208,6 +224,16 @@
     --chip-shadow: var(--shadow-xs);
     --chip-hover-shadow: var(--shadow-sm);
 
+    --period-thumb-fill:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.05)),
+      var(--period-iris);
+    --period-thumb-rim: rgba(255, 255, 255, 0.14);
+    --period-thumb-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+      inset 0 -1px 1px rgba(0, 0, 0, 0.3),
+      0 1px 2px rgba(0, 0, 0, 0.4),
+      0 3px 7px -3px rgba(0, 0, 0, 0.5);
+
     --primary-fill: var(--leaf-logo);
     --primary-hover-fill: var(--leaf-logo);
     --primary-rim: color-mix(in srgb, var(--primary) 35%, transparent);
@@ -299,6 +325,16 @@
   --chip-shadow: var(--shadow-xs);
   --chip-hover-shadow: var(--shadow-sm);
 
+  --period-thumb-fill:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.05)),
+    var(--period-iris);
+  --period-thumb-rim: rgba(255, 255, 255, 0.14);
+  --period-thumb-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.3),
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 3px 7px -3px rgba(0, 0, 0, 0.5);
+
   --primary-fill: var(--leaf-logo);
   --primary-hover-fill: var(--leaf-logo);
   --primary-rim: color-mix(in srgb, var(--primary) 35%, transparent);
@@ -378,9 +414,10 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 a { color: var(--primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* Shared low-cost sampling pass for the two remaining structural glass surfaces. */
+/* Shared low-cost sampling pass for the remaining glass surfaces. */
 .pin-pad,
-.topbar {
+.topbar,
+.period-seg {
   -webkit-backdrop-filter: var(--glass-sampling);
   backdrop-filter: var(--glass-sampling);
 }
@@ -898,6 +935,9 @@ a:hover { text-decoration: underline; }
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   padding: 3px;
+  --chip-fill: var(--period-thumb-fill);
+  --chip-rim: var(--period-thumb-rim);
+  --chip-shadow: var(--period-thumb-shadow);
   background: var(--surface-3);
   border-radius: var(--r-md);
 }
@@ -907,11 +947,11 @@ a:hover { text-decoration: underline; }
   bottom: 3px;
   left: 3px;
   width: calc((100% - 6px) / 3);
-  background: var(--primary-tint-strong);
-  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--line));
+  background: var(--chip-fill);
+  border: 1px solid var(--chip-rim);
   /* Concentric with the 3px-padded track. */
   border-radius: calc(var(--r-md) - 3px);
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--chip-shadow);
   transition: transform 0.34s var(--ease-spring);
 }
 .period-seg button {
@@ -926,7 +966,7 @@ a:hover { text-decoration: underline; }
 }
 @media (hover: hover) { .period-seg button:hover:not(.is-active) { color: var(--ink-soft); } }
 .period-seg button:active { transform: scale(0.95); }
-.period-seg button.is-active { color: var(--primary-dark); }
+.period-seg button.is-active { color: var(--ink); }
 .period-figures {
   display: flex;
   align-items: center;
