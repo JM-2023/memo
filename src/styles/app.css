@@ -1,10 +1,11 @@
 /* =========================================================================
    MEMO — private notebook interface
    --------------------------------------------------------------------------
-   Tiers: A — liquid glass + signature spring (send button, popovers, pin pad);
-   B — quiet glass (keypad, segmented chips); C — flat/transparent (icon
-   buttons, rows, inputs) with hover wash. Dark theme is a token swap layered
-   on prefers-color-scheme with a manual [data-theme] override.
+   Tiers: A — signature glass (send button, outer pin pad); B — opaque floating
+   surfaces (menus, dialogs, toasts); C — flat/neutral controls (keypad,
+   segmented chips, icon buttons, rows, inputs) with hover wash. Dark theme is
+   a token swap layered on prefers-color-scheme with a manual [data-theme]
+   override.
    ========================================================================= */
 
 :root {
@@ -80,10 +81,8 @@
   --lx: 26%;
   --ly: -8%;
   --glass-sampling: blur(2px) saturate(1.03);
-  --lg-iris: conic-gradient(from var(--spin, 130deg) at 50% 50%,
-      rgba(124, 122, 255, 0.10), rgba(155, 138, 232, 0.085) 22%,
-      rgba(232, 155, 155, 0.07) 44%, rgba(253, 183, 119, 0.07) 66%,
-      rgba(255, 212, 163, 0.06) 84%, rgba(124, 122, 255, 0.10) 100%);
+  --lg-iris: radial-gradient(180px 220px at 78% 18%,
+      color-mix(in srgb, var(--primary) 12%, transparent), transparent 72%);
   --lg-specular: radial-gradient(130px 160px at var(--lx) var(--ly),
       rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0) 62%);
 
@@ -97,45 +96,22 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.85),
     inset 0 -1px 1px rgba(20, 27, 45, 0.04);
 
-  --menu-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(248, 249, 251, 0.8));
+  --menu-fill: var(--surface);
   --menu-highlight: var(--glass-highlight);
 
-  --chip-fill:
-    var(--lg-specular),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.48)),
-    var(--lg-iris);
-  --chip-hover-fill:
-    var(--lg-specular),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.6)),
-    var(--lg-iris);
-  --chip-rim: rgba(20, 27, 45, 0.12);
-  /* Chips and keys sit on the page, they don't float: contact shadow only.
-     High elevation stays reserved for true overlays (menus, modals). */
-  --chip-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.92),
-    inset 0 -7px 15px -8px rgba(20, 27, 45, 0.06),
-    0 1px 2px rgba(20, 27, 45, 0.06),
-    0 3px 8px -3px rgba(20, 27, 45, 0.14);
-  --chip-hover-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 1),
-    inset 0 -7px 15px -8px rgba(20, 27, 45, 0.06),
-    0 1px 3px rgba(20, 27, 45, 0.07),
-    0 5px 12px -5px rgba(20, 27, 45, 0.18);
+  /* Keypad controls use neutral fills and compact contact shadows. */
+  --chip-fill: var(--surface);
+  --chip-hover-fill: var(--surface-2);
+  --chip-rim: var(--line-strong);
+  --chip-shadow: var(--shadow-xs);
+  --chip-hover-shadow: var(--shadow-sm);
 
-  /* PRIMARY (brand logos): richest, clearest liquid glass — transparent, not tinted. */
-  --primary-fill: var(--chip-fill);
-  --primary-hover-fill: var(--chip-hover-fill);
-  --primary-rim: rgba(20, 27, 45, 0.14);
-  --primary-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.96),
-    inset 0 -8px 18px -8px rgba(20, 27, 45, 0.07),
-    0 1px 3px rgba(20, 27, 45, 0.08),
-    0 4px 10px -4px rgba(20, 27, 45, 0.16);
-  --primary-hover-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 1),
-    inset 0 -8px 18px -8px rgba(20, 27, 45, 0.07),
-    0 2px 4px rgba(20, 27, 45, 0.09),
-    0 6px 14px -6px rgba(20, 27, 45, 0.2);
+  /* Brand marks use the established sage logo treatment. */
+  --primary-fill: var(--leaf-logo);
+  --primary-hover-fill: var(--leaf-logo);
+  --primary-rim: color-mix(in srgb, var(--primary) 35%, transparent);
+  --primary-shadow: var(--shadow-sm);
+  --primary-hover-shadow: var(--shadow);
 
   /* Send-button glass. Light = clear glass: specular highlight + translucent
      white tint + real frost (saturate(200%) blur(20px)) + deep shadows. */
@@ -223,40 +199,20 @@
       inset 0 1px 0 rgba(255, 255, 255, 0.1),
       inset 0 -1px 1px rgba(0, 0, 0, 0.3);
 
-    --menu-fill: linear-gradient(180deg, rgba(27, 30, 38, 0.82), rgba(22, 25, 31, 0.78));
+    --menu-fill: var(--surface);
     --menu-highlight: inset 0 -1px 1px rgba(0, 0, 0, 0.3);
 
-    --chip-fill:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.05)),
-      var(--lg-iris);
-    --chip-hover-fill:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.08)),
-      var(--lg-iris);
-    --chip-rim: rgba(255, 255, 255, 0.14);
-    --chip-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-      inset 0 -1px 1px rgba(0, 0, 0, 0.3),
-      0 1px 2px rgba(0, 0, 0, 0.4),
-      0 3px 7px -3px rgba(0, 0, 0, 0.5);
-    --chip-hover-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.07),
-      inset 0 -1px 1px rgba(0, 0, 0, 0.3),
-      0 1px 3px rgba(0, 0, 0, 0.45),
-      0 5px 11px -5px rgba(0, 0, 0, 0.55);
+    --chip-fill: var(--surface-2);
+    --chip-hover-fill: var(--surface-3);
+    --chip-rim: var(--line-strong);
+    --chip-shadow: var(--shadow-xs);
+    --chip-hover-shadow: var(--shadow-sm);
 
-    --primary-fill: var(--chip-fill);
-    --primary-hover-fill: var(--chip-hover-fill);
-    --primary-rim: rgba(255, 255, 255, 0.2);
-    --primary-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-      inset 0 -2px 4px rgba(0, 0, 0, 0.35),
-      0 1px 3px rgba(0, 0, 0, 0.4),
-      0 4px 10px -4px rgba(0, 0, 0, 0.55);
-    --primary-hover-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.07),
-      inset 0 -2px 4px rgba(0, 0, 0, 0.35),
-      0 2px 4px rgba(0, 0, 0, 0.45),
-      0 6px 14px -6px rgba(0, 0, 0, 0.6);
+    --primary-fill: var(--leaf-logo);
+    --primary-hover-fill: var(--leaf-logo);
+    --primary-rim: color-mix(in srgb, var(--primary) 35%, transparent);
+    --primary-shadow: var(--shadow-sm);
+    --primary-hover-shadow: var(--shadow);
 
     /* Send-button glass, dark: the reference's final render — transparent
        body, white rim, no frost pass. */
@@ -334,40 +290,20 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
     inset 0 -1px 1px rgba(0, 0, 0, 0.3);
 
-  --menu-fill: linear-gradient(180deg, rgba(27, 30, 38, 0.82), rgba(22, 25, 31, 0.78));
+  --menu-fill: var(--surface);
   --menu-highlight: inset 0 -1px 1px rgba(0, 0, 0, 0.3);
 
-  --chip-fill:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.05)),
-    var(--lg-iris);
-  --chip-hover-fill:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.08)),
-    var(--lg-iris);
-  --chip-rim: rgba(255, 255, 255, 0.14);
-  --chip-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-    inset 0 -1px 1px rgba(0, 0, 0, 0.3),
-    0 1px 2px rgba(0, 0, 0, 0.4),
-    0 3px 7px -3px rgba(0, 0, 0, 0.5);
-  --chip-hover-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.07),
-    inset 0 -1px 1px rgba(0, 0, 0, 0.3),
-    0 1px 3px rgba(0, 0, 0, 0.45),
-    0 5px 11px -5px rgba(0, 0, 0, 0.55);
+  --chip-fill: var(--surface-2);
+  --chip-hover-fill: var(--surface-3);
+  --chip-rim: var(--line-strong);
+  --chip-shadow: var(--shadow-xs);
+  --chip-hover-shadow: var(--shadow-sm);
 
-  --primary-fill: var(--chip-fill);
-  --primary-hover-fill: var(--chip-hover-fill);
-  --primary-rim: rgba(255, 255, 255, 0.2);
-  --primary-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-    inset 0 -2px 4px rgba(0, 0, 0, 0.35),
-    0 1px 3px rgba(0, 0, 0, 0.4),
-    0 4px 10px -4px rgba(0, 0, 0, 0.55);
-  --primary-hover-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.07),
-    inset 0 -2px 4px rgba(0, 0, 0, 0.35),
-    0 2px 4px rgba(0, 0, 0, 0.45),
-    0 6px 14px -6px rgba(0, 0, 0, 0.6);
+  --primary-fill: var(--leaf-logo);
+  --primary-hover-fill: var(--leaf-logo);
+  --primary-rim: color-mix(in srgb, var(--primary) 35%, transparent);
+  --primary-shadow: var(--shadow-sm);
+  --primary-hover-shadow: var(--shadow);
 
   /* Send-button glass, dark: the reference's final render — transparent
      body, white rim, no frost pass. */
@@ -442,15 +378,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 a { color: var(--primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* Shared low-cost sampling pass for actual glass surfaces. */
+/* Shared low-cost sampling pass for the two remaining structural glass surfaces. */
 .pin-pad,
-.pin-logo,
-.keypad button:not(.keypad-action),
-.action-menu,
-.topbar,
-.period-seg,
-.toast,
-.tag-suggest {
+.topbar {
   -webkit-backdrop-filter: var(--glass-sampling);
   backdrop-filter: var(--glass-sampling);
 }
@@ -630,7 +560,7 @@ a:hover { text-decoration: underline; }
 @media (hover: hover) { .danger-button:hover:not(:disabled) { filter: brightness(1.08); box-shadow: var(--shadow); } }
 .danger-button:active:not(:disabled) { transform: scale(0.96); }
 
-/* Popover action menu (Tier A floating glass; flat rows inside). */
+/* Popover action menu (opaque floating surface; flat rows inside). */
 .menu-root { position: relative; display: inline-grid; }
 .menu-root.is-open { z-index: 70; }
 .action-menu {
@@ -730,7 +660,7 @@ a:hover { text-decoration: underline; }
 }
 .action-menu__row > svg { flex: none; color: var(--muted); stroke-width: 1.75; }
 
-/* Mini segmented language switch — a sliding glass thumb picks the locale;
+/* Mini segmented language switch — a sliding sage thumb picks the locale;
    the menu stays open so the relabelling is part of the feedback. */
 .lang-seg {
   position: relative;
@@ -748,11 +678,11 @@ a:hover { text-decoration: underline; }
   bottom: 2px;
   left: 2px;
   width: calc((100% - 4px) / 2);
-  background: var(--chip-fill);
-  border: 1px solid var(--chip-rim);
+  background: var(--primary-tint-strong);
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--line));
   /* Concentric with the 2px-padded track. */
   border-radius: calc(var(--r-md) - 2px);
-  box-shadow: var(--chip-shadow);
+  box-shadow: var(--shadow-xs);
   transition: transform 0.38s var(--ease-spring);
 }
 .lang-seg[data-lang="zh-CN"] .lang-seg-thumb { transform: translateX(100%); }
@@ -769,7 +699,7 @@ a:hover { text-decoration: underline; }
   transition: color var(--t) var(--ease);
 }
 @media (hover: hover) { .lang-seg button:hover:not(.is-active) { color: var(--ink-soft); } }
-.lang-seg button.is-active { color: var(--ink); }
+.lang-seg button.is-active { color: var(--primary-dark); }
 
 /* =========================================================================
    Splash + login gate
@@ -786,7 +716,7 @@ a:hover { text-decoration: underline; }
   width: 58px;
   height: 58px;
   place-items: center;
-  color: var(--ink);
+  color: #f3f9f5;
   background: var(--primary-fill);
   border: 1px solid var(--primary-rim);
   border-radius: var(--r-lg);
@@ -821,7 +751,7 @@ a:hover { text-decoration: underline; }
   height: 58px;
   place-items: center;
   margin-bottom: 8px;
-  color: var(--ink);
+  color: #f3f9f5;
   background: var(--primary-fill);
   border: 1px solid var(--primary-rim);
   border-radius: var(--r-lg);
@@ -977,11 +907,11 @@ a:hover { text-decoration: underline; }
   bottom: 3px;
   left: 3px;
   width: calc((100% - 6px) / 3);
-  background: var(--chip-fill);
-  border: 1px solid var(--chip-rim);
+  background: var(--primary-tint-strong);
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--line));
   /* Concentric with the 3px-padded track. */
   border-radius: calc(var(--r-md) - 3px);
-  box-shadow: var(--chip-shadow);
+  box-shadow: var(--shadow-xs);
   transition: transform 0.34s var(--ease-spring);
 }
 .period-seg button {
@@ -996,7 +926,7 @@ a:hover { text-decoration: underline; }
 }
 @media (hover: hover) { .period-seg button:hover:not(.is-active) { color: var(--ink-soft); } }
 .period-seg button:active { transform: scale(0.95); }
-.period-seg button.is-active { color: var(--ink); }
+.period-seg button.is-active { color: var(--primary-dark); }
 .period-figures {
   display: flex;
   align-items: center;
@@ -2406,7 +2336,7 @@ button.memo-tag:active {
   width: 100%;
   height: auto;
   aspect-ratio: 1;
-  /* These sit straight on the modal's glass (no white card behind them since
+  /* These sit straight on the modal's shared surface (no white card behind them since
      the unboxing): an ink-relative wash plus a hairline inset ring keeps
      empty days legible in both themes and gives coloured cells a crisp edge. */
   background: color-mix(in srgb, var(--ink) 6%, transparent);

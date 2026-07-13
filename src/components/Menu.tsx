@@ -41,7 +41,7 @@ const PAGE_FOCUSABLE = [
 ].join(",");
 
 /**
- * Popover action menu (Tier A floating glass). Owns open state, closes on
+ * Popover action menu (opaque floating surface). Owns open state, closes on
  * outside pointer-down and Escape, and animates in via .action-menu CSS.
  * Closing holds the panel one beat in a "closing" phase so it can play the
  * reverse morph before unmounting.
