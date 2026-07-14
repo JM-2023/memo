@@ -709,8 +709,8 @@ a:hover { text-decoration: underline; }
 }
 .action-menu__row > svg { flex: none; color: var(--muted); stroke-width: 1.75; }
 
-/* Language switch — matched to project-manager-pwa's Settings SegControl:
-   inset neutral track, floating solid thumb, and the same damped spring. */
+/* Compact menu-sized variant of project-manager-pwa's Settings SegControl:
+   the same neutral material and spring, scaled to the 36px action row. */
 .lang-seg {
   position: relative;
   display: grid;
@@ -742,10 +742,10 @@ a:hover { text-decoration: underline; }
 .lang-seg button {
   position: relative;
   z-index: 1;
-  min-width: 0;
-  padding: 7px 14px;
+  min-width: 46px;
+  padding: 3px 10px;
   color: var(--seg-muted);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 700;
   text-align: center;
   background: transparent;

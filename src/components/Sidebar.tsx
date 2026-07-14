@@ -146,7 +146,7 @@ export function Sidebar(props: SidebarProps) {
                     aria-label={tr("English interface", "英文界面")}
                     onClick={() => setLanguage("en")}
                   >
-                    English
+                    EN
                   </button>
                   <button
                     type="button"
