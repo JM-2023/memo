@@ -69,6 +69,10 @@
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.3, 0.5, 1);
+  /* Segmented control — inset solid track, floating solid thumb. */
+  --seg-track: var(--surface-3);
+  --seg-thumb: var(--surface);
+  --seg-muted: #717a8a;
   /* Signature liquid swell — overshoots then settles. Tier A only. */
   --spring: cubic-bezier(0.175, 0.885, 0.32, 2.2);
   /* Micro overshoot for small pops — the curve provides the bounce, so the
@@ -203,6 +207,10 @@
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 6px 14px -6px rgba(0, 0, 0, 0.55);
     --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.5), 0 14px 30px -10px rgba(0, 0, 0, 0.62);
 
+    --seg-track: var(--field-bg);
+    --seg-thumb: var(--surface-3);
+    --seg-muted: #818aa0;
+
     --lg-specular: radial-gradient(220px 240px at var(--lx) var(--ly),
         rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05) 46%, rgba(255, 255, 255, 0) 72%);
     --glass-fill:
@@ -303,6 +311,10 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 6px 14px -6px rgba(0, 0, 0, 0.55);
   --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.5), 0 14px 30px -10px rgba(0, 0, 0, 0.62);
+
+  --seg-track: var(--field-bg);
+  --seg-thumb: var(--surface-3);
+  --seg-muted: #818aa0;
 
   --lg-specular: radial-gradient(220px 240px at var(--lx) var(--ly),
       rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05) 46%, rgba(255, 255, 255, 0) 72%);
@@ -697,16 +709,19 @@ a:hover { text-decoration: underline; }
 }
 .action-menu__row > svg { flex: none; color: var(--muted); stroke-width: 1.75; }
 
-/* Mini segmented language switch — a sliding sage thumb picks the locale;
-   the menu stays open so the relabelling is part of the feedback. */
+/* Language switch — matched to project-manager-pwa's Settings SegControl:
+   inset neutral track, floating solid thumb, and the same damped spring. */
 .lang-seg {
   position: relative;
   display: grid;
   flex: none;
-  grid-template-columns: repeat(2, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   margin-left: auto;
   padding: 2px;
-  background: var(--surface-3);
+  isolation: isolate;
+  background: var(--seg-track);
+  border: 1px solid var(--line);
   border-radius: var(--r-md);
 }
 .lang-seg-thumb {
@@ -715,28 +730,34 @@ a:hover { text-decoration: underline; }
   bottom: 2px;
   left: 2px;
   width: calc((100% - 4px) / 2);
-  background: var(--primary-tint-strong);
-  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--line));
+  background: var(--seg-thumb);
+  border: 1px solid var(--line-strong);
   /* Concentric with the 2px-padded track. */
   border-radius: calc(var(--r-md) - 2px);
   box-shadow: var(--shadow-xs);
+  transform: translateX(0);
   transition: transform 0.38s var(--ease-spring);
 }
 .lang-seg[data-lang="zh-CN"] .lang-seg-thumb { transform: translateX(100%); }
 .lang-seg button {
   position: relative;
   z-index: 1;
-  min-width: 46px;
-  padding: 3px 10px;
-  color: var(--muted);
-  font-size: 0.78rem;
+  min-width: 0;
+  padding: 7px 14px;
+  color: var(--seg-muted);
+  font-size: 0.82rem;
   font-weight: 700;
   text-align: center;
+  background: transparent;
+  border: 0;
   border-radius: calc(var(--r-md) - 2px);
-  transition: color var(--t) var(--ease);
+  transition: color var(--t) var(--ease), background var(--t) var(--ease), transform 0.12s var(--ease);
+  white-space: nowrap;
 }
 @media (hover: hover) { .lang-seg button:hover:not(.is-active) { color: var(--ink-soft); } }
-.lang-seg button.is-active { color: var(--primary-dark); }
+.lang-seg button:focus-visible { outline: none; background: var(--wash-strong); }
+.lang-seg button:active { transform: scale(0.96); }
+.lang-seg button.is-active { color: var(--ink); }
 
 /* =========================================================================
    Splash + login gate
