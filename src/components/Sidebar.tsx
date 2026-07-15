@@ -8,6 +8,7 @@ import type { ThemeChoice } from "../lib/theme";
 import { Heatmap } from "./Heatmap";
 import { Menu } from "./Menu";
 import { RollingText } from "./RollingText";
+import { SwapText } from "./SwapText";
 import { TagTree } from "./TagTree";
 import { useTip } from "./Tip";
 
@@ -105,6 +106,7 @@ export function Sidebar(props: SidebarProps) {
       <header className="sidebar-head">
         <Menu
           align="left"
+          panelClassName="settings-menu"
           trigger={(open) => (
             <button
               type="button"
@@ -115,7 +117,11 @@ export function Sidebar(props: SidebarProps) {
               <span className="user-logo" aria-hidden="true">
                 <NotebookPen size={15} />
               </span>
-              <span className="user-name">{tr("My MEMO", "我的 MEMO")}</span>
+              <span className="user-name">
+                <SwapText id={language} className="locale-swap">
+                  {tr("My MEMO", "我的 MEMO")}
+                </SwapText>
+              </span>
               <ChevronDown size={15} className="user-chevron" aria-hidden="true" />
             </button>
           )}
@@ -130,11 +136,15 @@ export function Sidebar(props: SidebarProps) {
                 }}
               >
                 <ThemeIcon size={16} aria-hidden="true" />
-                {tr(themeLabelEn, themeLabelZh)}
+                <SwapText id={language} className="locale-swap">
+                  {tr(themeLabelEn, themeLabelZh)}
+                </SwapText>
               </button>
               <div className="action-menu__row" role="group" aria-label={tr("Language", "语言")}>
                 <Languages size={16} aria-hidden="true" />
-                <span>{tr("Language", "语言")}</span>
+                <SwapText id={language} className="locale-swap">
+                  {tr("Language", "语言")}
+                </SwapText>
                 <span className="lang-seg" data-lang={language}>
                   <span className="lang-seg-thumb" aria-hidden="true" />
                   <button
@@ -170,7 +180,9 @@ export function Sidebar(props: SidebarProps) {
                 }}
               >
                 <KeyRound size={16} aria-hidden="true" />
-                {tr("Change passcode", "修改密码")}
+                <SwapText id={language} className="locale-swap">
+                  {tr("Change passcode", "修改密码")}
+                </SwapText>
               </button>
               <span className="action-menu__sep" />
               <button
@@ -182,7 +194,9 @@ export function Sidebar(props: SidebarProps) {
                 }}
               >
                 <Download size={16} aria-hidden="true" />
-                {tr("Export data", "导出数据")}
+                <SwapText id={language} className="locale-swap">
+                  {tr("Export data", "导出数据")}
+                </SwapText>
               </button>
               <button
                 type="button"
@@ -193,7 +207,9 @@ export function Sidebar(props: SidebarProps) {
                 }}
               >
                 <Upload size={16} aria-hidden="true" />
-                {tr("Import data", "导入数据")}
+                <SwapText id={language} className="locale-swap">
+                  {tr("Import data", "导入数据")}
+                </SwapText>
               </button>
               <span className="action-menu__sep" />
               <button
@@ -206,7 +222,9 @@ export function Sidebar(props: SidebarProps) {
                 }}
               >
                 <LogOut size={16} aria-hidden="true" />
-                {tr("Log out", "退出登录")}
+                <SwapText id={language} className="locale-swap">
+                  {tr("Log out", "退出登录")}
+                </SwapText>
               </button>
             </>
           )}

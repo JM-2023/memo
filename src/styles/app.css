@@ -632,6 +632,11 @@ a:hover { text-decoration: underline; }
   animation: menu-out 0.16s var(--ease) both;
   pointer-events: none;
 }
+.action-menu.settings-menu {
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  overflow: clip;
+}
 .action-menu.align-right { right: 0; }
 .action-menu.align-left { left: 0; transform-origin: top left; }
 /* Body-portaled panels (tag menus): fixed coords set inline; must clear the
@@ -1059,6 +1064,17 @@ a:hover { text-decoration: underline; }
 }
 .swap-old.dir-fwd { animation-name: swap-out-fwd; }
 .swap-old.dir-back { animation-name: swap-out-back; }
+
+/* Locale labels stay left-anchored while SwapText cross-fades their content
+   and tweens each label's intrinsic width. Because the settings popover is
+   content-sized, those coordinated child tweens also morph the menu itself
+   between its English and Chinese natural widths without hard-coding either. */
+.locale-swap { flex: none; justify-items: start; }
+.locale-swap .swap-cur.swap-anim { animation-duration: 0.32s; }
+.locale-swap .swap-old {
+  justify-content: flex-start;
+  animation-duration: 0.22s;
+}
 
 /* ---- Heatmap ----
    Horizontal in every period: week = one row of seven squares, month = a

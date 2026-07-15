@@ -28,6 +28,7 @@ export function SwapText({ id, dir = 0, className, children }: SwapTextProps) {
   const [old, setOld] = useState<OldLayer | null>(null);
   const boxRef = useRef<HTMLSpanElement>(null);
   const fromWidthRef = useRef<number | null>(null);
+  const widthAnimationRef = useRef<Animation | null>(null);
   const lastRef = useRef<{ id: string; node: ReactNode } | null>(null);
   const serialRef = useRef(0);
   // Frozen at swap time so a later `dir` prop change can't rename (and hence
@@ -37,8 +38,10 @@ export function SwapText({ id, dir = 0, className, children }: SwapTextProps) {
   const last = lastRef.current;
   if (last !== null && last.id !== id) {
     // Render-phase capture: the DOM still shows the outgoing content, so its
-    // width is the starting point of the width tween.
-    fromWidthRef.current = boxRef.current?.offsetWidth ?? null;
+    // current visual width is the starting point of the width tween. Using
+    // the rendered rect (rather than offsetWidth) lets a rapid second swap
+    // take over from the exact in-flight width without a snap.
+    fromWidthRef.current = boxRef.current?.getBoundingClientRect().width ?? null;
     serialRef.current += 1;
     enterDirRef.current = dir;
     setOld({ node: last.node, dir, serial: serialRef.current });
@@ -49,14 +52,32 @@ export function SwapText({ id, dir = 0, className, children }: SwapTextProps) {
     const el = boxRef.current;
     const from = fromWidthRef.current;
     fromWidthRef.current = null;
+    // Cancel after the outgoing visual width has been captured above. This
+    // reveals the new content's natural width for measurement and prevents
+    // multiple width effects from competing during quick repeated swaps.
+    widthAnimationRef.current?.cancel();
+    widthAnimationRef.current = null;
     if (!el || from === null) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const to = el.offsetWidth;
     if (Math.abs(to - from) < 1) return;
-    el.animate([{ width: `${from}px` }, { width: `${to}px` }], {
+    const animation = el.animate([{ width: `${from}px` }, { width: `${to}px` }], {
       duration: 320,
       easing: "cubic-bezier(0.16, 1, 0.3, 1)"
     });
+    widthAnimationRef.current = animation;
+    void animation.finished.then(
+      () => {
+        if (widthAnimationRef.current === animation) widthAnimationRef.current = null;
+      },
+      () => undefined
+    );
+
+    return () => {
+      if (widthAnimationRef.current !== animation) return;
+      animation.cancel();
+      widthAnimationRef.current = null;
+    };
   }, [id]);
 
   const entered = serialRef.current > 0;

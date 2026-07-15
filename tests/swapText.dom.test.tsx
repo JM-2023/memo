@@ -1,0 +1,106 @@
+// @vitest-environment jsdom
+
+import { cleanup, render } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SwapText } from "../src/components/SwapText";
+
+function rect(width: number): DOMRect {
+  return {
+    x: 0,
+    y: 0,
+    width,
+    height: 20,
+    top: 0,
+    right: width,
+    bottom: 20,
+    left: 0,
+    toJSON: () => ({})
+  } as DOMRect;
+}
+
+describe("SwapText width motion", () => {
+  let visualWidth: number;
+  let reduceMotion: boolean;
+  let animateMock: ReturnType<typeof vi.fn>;
+  let animations: { cancel: ReturnType<typeof vi.fn> }[];
+  let originalAnimate: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    visualWidth = 200;
+    reduceMotion = false;
+    animations = [];
+    originalAnimate = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "animate");
+
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query.includes("prefers-reduced-motion") && reduceMotion,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn()
+      }))
+    });
+
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => rect(visualWidth));
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function () {
+      const current = this.querySelector<HTMLElement>(".swap-cur")?.textContent;
+      return current === "Language" ? 200 : 80;
+    });
+
+    animateMock = vi.fn(() => {
+      const animation = { cancel: vi.fn() };
+      animations.push(animation);
+      return {
+        cancel: animation.cancel,
+        finished: new Promise<Animation>(() => undefined)
+      } as unknown as Animation;
+    });
+    Object.defineProperty(HTMLElement.prototype, "animate", {
+      configurable: true,
+      writable: true,
+      value: animateMock
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    if (originalAnimate) Object.defineProperty(HTMLElement.prototype, "animate", originalAnimate);
+    else delete (HTMLElement.prototype as Partial<HTMLElement>).animate;
+  });
+
+  it("takes over a rapid second swap from the current visual width", () => {
+    const { rerender } = render(<SwapText id="en">Language</SwapText>);
+
+    rerender(<SwapText id="zh">语言</SwapText>);
+    expect(animateMock).toHaveBeenNthCalledWith(
+      1,
+      [{ width: "200px" }, { width: "80px" }],
+      { duration: 320, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
+    );
+
+    visualWidth = 126.5;
+    rerender(<SwapText id="en">Language</SwapText>);
+
+    expect(animations[0].cancel).toHaveBeenCalledOnce();
+    expect(animateMock).toHaveBeenNthCalledWith(
+      2,
+      [{ width: "126.5px" }, { width: "200px" }],
+      { duration: 320, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
+    );
+  });
+
+  it("skips width motion when reduced motion is requested", () => {
+    reduceMotion = true;
+    const { rerender } = render(<SwapText id="en">Language</SwapText>);
+
+    rerender(<SwapText id="zh">语言</SwapText>);
+
+    expect(animateMock).not.toHaveBeenCalled();
+  });
+});
