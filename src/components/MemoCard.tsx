@@ -208,6 +208,17 @@ export function MemoCard(props: MemoCardProps) {
   // Media-set fingerprint for the stage's change detection.
   const mediaKey = useMemo(() => [...memo.images.map((image) => image.id), ...externalUrls].join("|"), [memo.images, externalUrls]);
 
+  function startEditFromDoubleClick(target: EventTarget) {
+    if (editing || selecting || inTrash) return;
+
+    // Preserve the behavior of controls embedded in a memo. A double-click on
+    // a tag, link, image or action button belongs to that control; the card's
+    // otherwise inert surface is the shortcut for entering edit mode.
+    if (target instanceof Element && target.closest("button, a, input, textarea, select, [contenteditable]")) return;
+
+    props.onStartEdit();
+  }
+
   function markBroken(url: string) {
     setBrokenUrls((value) => {
       const next = new Set(value);
@@ -397,6 +408,7 @@ export function MemoCard(props: MemoCardProps) {
       className={`memo-card${pinned && !inTrash ? " is-pinned" : ""}${inTrash ? " is-trash" : ""}${selecting ? " is-selecting" : ""}${
         selected ? " is-selected" : ""
       }`}
+      onDoubleClick={(event) => startEditFromDoubleClick(event.target)}
     >
       <MemoStage
         editing={editing}

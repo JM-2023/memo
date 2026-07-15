@@ -177,6 +177,35 @@ afterEach(() => {
 });
 
 describe("App editor lifecycle", () => {
+  it("opens a normal memo editor on a non-interactive double-click", async () => {
+    mocks.bootstrap.mockResolvedValue({
+      memos: [{ ...memo(0), content: "Double-click this memo" }],
+      tags: [],
+      cursor: 1,
+      syncEpoch: "epoch-a",
+      serverTime: memo(0).createdAt,
+      hasMore: false,
+      nextAfter: null
+    });
+
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    const content = await screen.findByText(/Double-click this memo/);
+    const card = content.closest("article");
+    if (!card) throw new Error("Memo card was not rendered");
+
+    fireEvent.doubleClick(within(card).getByRole("button", { name: "Memo actions" }));
+    expect(within(card).queryByRole("textbox")).toBeNull();
+
+    fireEvent.doubleClick(content);
+    const editor = await within(card).findByRole("textbox");
+    expect((editor as HTMLTextAreaElement).value).toBe("Double-click this memo");
+  });
+
   it("keeps the live draft mounted when the render cap grows and refuses to replace it with another editor", async () => {
     const user = userEvent.setup();
     render(

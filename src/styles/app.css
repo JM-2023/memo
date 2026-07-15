@@ -1329,6 +1329,15 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
      with the cards below, and the sticky band still spans the full column. */
   padding: 16px var(--content-inset) 12px;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
+  /* Own snapshot group during view transitions. Every memo carries its own
+     view-transition-name, so each card is lifted into a group that paints
+     ABOVE the root snapshot. When the feed is scrolled, the cards tucked
+     under this sticky frosted bar would then paint over it mid-transition —
+     deleting a memo made the whole header (frosted band + searchbox) blink
+     out while the "全部笔记" pill floated on, then return once the transition
+     ended. Lifting the bar into its own group (ordered above the cards in the
+     view-transition section) keeps it pinned on top throughout. */
+  view-transition-name: topbar;
 }
 .drawer-toggle { display: none; }
 
@@ -2645,11 +2654,22 @@ button.memo-tag:active {
    the same pure glide with the labels cross-fading at natural size. */
 ::view-transition-old(topbar-action),
 ::view-transition-new(topbar-action) { inline-size: auto; block-size: 100%; }
-/* The toast is the app's topmost layer (z-index 200 over menus, overlays,
-   the drawer) — keep its snapshot above every other group too, so the
-   topbar-action pill can't glide over it mid-transition. Natural-size
-   snapshots keep back-to-back toasts of different widths from stretching. */
-::view-transition-group(toast) { z-index: 1; }
+/* Snapshot stacking during transitions (higher = painted on top):
+     cards & feed          auto (0)
+     .topbar               1  — above the cards scrolled under the sticky bar,
+                                so the frosted header never blinks out
+     topbar controls       2  — the location / select / day pills and the
+                                crumb separator sit above their own band
+     .toast                3  — the app's topmost layer (z-index 200 live),
+                                so no pill can glide over it mid-transition
+   Natural-size snapshots on the pills/toast keep labels of different widths
+   from stretching as they morph. */
+::view-transition-group(topbar) { z-index: 1; }
+::view-transition-group(topbar-action),
+::view-transition-group(select-delete),
+::view-transition-group(day-filter-chip),
+::view-transition-group(loc-sep) { z-index: 2; }
+::view-transition-group(toast) { z-index: 3; }
 ::view-transition-old(toast),
 ::view-transition-new(toast) { inline-size: auto; block-size: 100%; }
 
