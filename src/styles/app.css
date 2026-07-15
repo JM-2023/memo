@@ -637,6 +637,7 @@ a:hover { text-decoration: underline; }
   max-width: calc(100vw - 16px);
   overflow: clip;
 }
+.action-menu.memo-action-menu { min-width: 220px; }
 .action-menu.align-right { right: 0; }
 .action-menu.align-left { left: 0; transform-origin: top left; }
 /* Body-portaled panels (tag menus): fixed coords set inline; must clear the
@@ -678,6 +679,18 @@ a:hover { text-decoration: underline; }
 .action-menu > button.is-selected { color: var(--primary-dark); }
 .action-menu .menu-check { margin-left: auto; color: var(--primary-dark); }
 .action-menu__sep { display: block; height: 1px; margin: 5px 8px; background: var(--glass-rim); }
+.memo-menu-meta {
+  display: grid;
+  gap: 2px;
+  padding: 4px 11px 5px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.memo-menu-meta time { white-space: nowrap; }
 /* Small section caption inside a menu (e.g. "排序方式" above the radios). */
 .action-menu__title {
   display: block;

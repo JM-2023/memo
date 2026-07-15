@@ -4,7 +4,9 @@ export interface MemoRow {
   id: string;
   content: string;
   content_format: string;
+  /** Immutable initial send time. */
   created_at: string;
+  /** Last content/attachment edit; pin/trash/restore leave it untouched. */
   updated_at: string;
   pinned_at: string | null;
   deleted_at: string | null;

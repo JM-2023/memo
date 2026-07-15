@@ -1,9 +1,10 @@
 import { Check, Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Trash2, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { externalImagesOf } from "../lib/content";
 import { formatTime } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { visualLinesOf } from "../lib/lineDiff";
+import { wordCountOf } from "../lib/stats";
 import type { LightboxItem, Memo, MemoImage, NewImagePayload } from "../lib/types";
 import { Editor } from "./Editor";
 import { MemoLine } from "./memoLines";
@@ -35,6 +36,7 @@ interface MemoCardProps {
 }
 
 interface MemoMenuBodyProps {
+  memo: Memo;
   close: () => void;
   inTrash: boolean;
   pinned: boolean;
@@ -52,12 +54,13 @@ interface MemoMenuBodyProps {
  * lives here (the panel unmounts on close), so a reopened menu always starts
  * back at the action list.
  */
-function MemoMenuBody({ close, inTrash, pinned, onTogglePin, onStartEdit, onCopy, onDelete, onRestore, onPurge }: MemoMenuBodyProps) {
-  const { tr } = useI18n();
+function MemoMenuBody({ memo, close, inTrash, pinned, onTogglePin, onStartEdit, onCopy, onDelete, onRestore, onPurge }: MemoMenuBodyProps) {
+  const { count, locale, tr } = useI18n();
   const [confirming, setConfirming] = useState(false);
 
+  let actions: ReactNode;
   if (confirming) {
-    return (
+    actions = (
       <>
         <span className="action-menu__prompt" role="presentation">
           {inTrash ? tr("Delete forever? This can’t be undone.", "彻底删除？此操作无法撤销") : tr("Delete this memo?", "删除这条笔记？")}
@@ -81,10 +84,8 @@ function MemoMenuBody({ close, inTrash, pinned, onTogglePin, onStartEdit, onCopy
         </button>
       </>
     );
-  }
-
-  if (inTrash) {
-    return (
+  } else if (inTrash) {
+    actions = (
       <>
         <button
           type="button"
@@ -115,48 +116,73 @@ function MemoMenuBody({ close, inTrash, pinned, onTogglePin, onStartEdit, onCopy
         </button>
       </>
     );
+  } else {
+    actions = (
+      <>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            close();
+            onTogglePin();
+          }}
+        >
+          {pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}
+          {pinned ? tr("Unpin", "取消置顶") : tr("Pin", "置顶")}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            close();
+            onStartEdit();
+          }}
+        >
+          <Pencil size={16} aria-hidden="true" />
+          {tr("Edit", "编辑")}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            close();
+            onCopy();
+          }}
+        >
+          <Copy size={16} aria-hidden="true" />
+          {tr("Copy content", "复制内容")}
+        </button>
+        <span className="action-menu__sep" />
+        <button type="button" role="menuitem" className="danger" onClick={() => setConfirming(true)}>
+          <Trash2 size={16} aria-hidden="true" />
+          {tr("Delete", "删除")}
+        </button>
+      </>
+    );
   }
 
   return (
     <>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          close();
-          onTogglePin();
-        }}
-      >
-        {pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}
-        {pinned ? tr("Unpin", "取消置顶") : tr("Pin", "置顶")}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          close();
-          onStartEdit();
-        }}
-      >
-        <Pencil size={16} aria-hidden="true" />
-        {tr("Edit", "编辑")}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          close();
-          onCopy();
-        }}
-      >
-        <Copy size={16} aria-hidden="true" />
-        {tr("Copy content", "复制内容")}
-      </button>
-      <span className="action-menu__sep" />
-      <button type="button" role="menuitem" className="danger" onClick={() => setConfirming(true)}>
-        <Trash2 size={16} aria-hidden="true" />
-        {tr("Delete", "删除")}
-      </button>
+      {actions}
+      {/* The confirm swap takes over the whole panel; a meta footer under a
+          destructive prompt just competes with it, so it retires while
+          confirming. */}
+      {!confirming ? (
+        <>
+          <span className="action-menu__sep" role="separator" />
+          <div className="memo-menu-meta" role="presentation">
+            <span>{count(wordCountOf(memo), "character")}</span>
+            {/* updatedAt equals createdAt until the first real edit — only then
+                is an "Edited" time worth showing (the card already carries the
+                send time). */}
+            {memo.updatedAt !== memo.createdAt ? (
+              <time dateTime={memo.updatedAt}>
+                {tr("Edited", "编辑于")} {formatTime(memo.updatedAt, locale)}
+              </time>
+            ) : null}
+          </div>
+        </>
+      ) : null}
     </>
   );
 }
@@ -261,6 +287,7 @@ export function MemoCard(props: MemoCardProps) {
               select mode swaps them in place with zero layout shift. */}
           <div className="memo-tool-slot">
             <Menu
+              panelClassName="memo-action-menu"
               trigger={(open) => (
                 <button
                   type="button"
@@ -274,6 +301,7 @@ export function MemoCard(props: MemoCardProps) {
             >
               {(close) => (
                 <MemoMenuBody
+                  memo={memo}
                   close={close}
                   inTrash={inTrash}
                   pinned={pinned}

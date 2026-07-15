@@ -9,7 +9,9 @@ export interface MemoImage {
 export interface Memo {
   id: string;
   content: string;
+  /** Immutable initial send time; edits and memo actions never rewrite it. */
   createdAt: string;
+  /** Latest content/attachment edit, equal to createdAt until the first edit. */
   updatedAt: string;
   pinnedAt: string | null;
   /** Non-null = the memo sits in the recycle bin. */

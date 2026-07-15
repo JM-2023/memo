@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { Editor } from "../src/components/Editor";
 import { TipProvider } from "../src/components/Tip";
+import { formatTime } from "../src/lib/dates";
 import { LanguageProvider } from "../src/lib/i18n";
 import type { Memo, MemoImage, NewImagePayload } from "../src/lib/types";
 
@@ -213,6 +214,108 @@ describe("App editor lifecycle", () => {
     expect((draft as HTMLTextAreaElement).value).toBe("draft survives feed updates");
     expect(within(secondCard).queryByRole("textbox")).toBeNull();
     expect(await screen.findByText("Save or cancel the open edit before editing another memo.")).not.toBeNull();
+  });
+});
+
+describe("Memo menu metadata", () => {
+  it("keeps the original card time while showing the word count and latest edit time in the menu", async () => {
+    const user = userEvent.setup();
+    const createdAt = "2026-01-02T03:04:00.000Z";
+    const updatedAt = "2026-02-03T04:05:00.000Z";
+    mocks.bootstrap.mockResolvedValue({
+      memos: [
+        {
+          ...memo(0),
+          content: "hello world https://example.com",
+          createdAt,
+          updatedAt
+        }
+      ],
+      tags: [],
+      cursor: 1,
+      syncEpoch: "epoch-a",
+      serverTime: updatedAt,
+      hasMore: false,
+      nextAfter: null
+    });
+
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    const content = await screen.findByText(/hello world/);
+    const card = content.closest("article");
+    if (!card) throw new Error("Memo card was not rendered");
+    expect(within(card).getByText(formatTime(createdAt, "en-US"))).not.toBeNull();
+
+    await user.click(within(card).getByRole("button", { name: "Memo actions" }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByText("10 characters")).not.toBeNull();
+    const edited = within(menu).getByText(`Edited ${formatTime(updatedAt, "en-US")}`);
+    expect(edited.getAttribute("datetime")).toBe(updatedAt);
+    expect(within(card).getByText(formatTime(createdAt, "en-US"))).not.toBeNull();
+  });
+
+  it("shows the word count but no edited time for a memo that was never edited", async () => {
+    const user = userEvent.setup();
+    const sentAt = "2026-01-02T03:04:00.000Z";
+    mocks.bootstrap.mockResolvedValue({
+      memos: [{ ...memo(0), content: "hello world https://example.com", createdAt: sentAt, updatedAt: sentAt }],
+      tags: [],
+      cursor: 1,
+      syncEpoch: "epoch-a",
+      serverTime: sentAt,
+      hasMore: false,
+      nextAfter: null
+    });
+
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    const content = await screen.findByText(/hello world/);
+    const card = content.closest("article");
+    if (!card) throw new Error("Memo card was not rendered");
+
+    await user.click(within(card).getByRole("button", { name: "Memo actions" }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByText("10 characters")).not.toBeNull();
+    expect(within(menu).queryByText(/^Edited/)).toBeNull();
+  });
+
+  it("retires the meta footer while a delete confirmation is showing", async () => {
+    const user = userEvent.setup();
+    mocks.bootstrap.mockResolvedValue({
+      memos: [{ ...memo(0), content: "hello world" }],
+      tags: [],
+      cursor: 1,
+      syncEpoch: "epoch-a",
+      serverTime: memo(0).createdAt,
+      hasMore: false,
+      nextAfter: null
+    });
+
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    const content = await screen.findByText(/hello world/);
+    const card = content.closest("article");
+    if (!card) throw new Error("Memo card was not rendered");
+
+    await user.click(within(card).getByRole("button", { name: "Memo actions" }));
+    expect(within(screen.getByRole("menu")).getByText("10 characters")).not.toBeNull();
+
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Delete" }));
+    const confirmMenu = screen.getByRole("menu");
+    expect(within(confirmMenu).getByText("Delete this memo?")).not.toBeNull();
+    expect(within(confirmMenu).queryByText("10 characters")).toBeNull();
   });
 });
 
