@@ -107,7 +107,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
       setPhase("closed");
       return;
     }
-    const timer = window.setTimeout(() => setPhase("closed"), 170);
+    const timer = window.setTimeout(() => setPhase("closed"), 130);
     return () => window.clearTimeout(timer);
   }, [phase, reducedMotion]);
 

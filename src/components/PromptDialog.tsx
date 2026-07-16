@@ -54,7 +54,7 @@ export function PromptDialog({
       return;
     }
     setClosing(true);
-    closeTimer.current = window.setTimeout(() => cancelRef.current(), 240);
+    closeTimer.current = window.setTimeout(() => cancelRef.current(), 170);
   }
 
   const overlayRef = useModalA11y<HTMLDivElement>({

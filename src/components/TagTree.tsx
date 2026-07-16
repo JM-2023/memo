@@ -219,7 +219,7 @@ export function TagTree({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRe
       if (Math.abs(delta) > 1) {
         row.animate([{ transform: `translateY(${delta}px)` }, { transform: "none" }], {
           id: "flip",
-          duration: 340,
+          duration: 220,
           easing: "cubic-bezier(0.22, 0.9, 0.24, 1)"
         });
       }
