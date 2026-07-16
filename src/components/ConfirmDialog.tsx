@@ -29,7 +29,7 @@ export function ConfirmDialog({ title, body, confirmLabel, busyLabel, busy, onCa
       return;
     }
     setClosing(true);
-    closeTimer.current = window.setTimeout(() => cancelRef.current(), 170);
+    closeTimer.current = window.setTimeout(() => cancelRef.current(), 240);
   }
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, escapeDisabled: Boolean(busy) });

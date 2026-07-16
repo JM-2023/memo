@@ -62,7 +62,7 @@ export function SwapText({ id, dir = 0, className, children }: SwapTextProps) {
     const to = el.offsetWidth;
     if (Math.abs(to - from) < 1) return;
     const animation = el.animate([{ width: `${from}px` }, { width: `${to}px` }], {
-      duration: 220,
+      duration: 320,
       easing: "cubic-bezier(0.16, 1, 0.3, 1)"
     });
     widthAnimationRef.current = animation;

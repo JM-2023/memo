@@ -29,7 +29,7 @@ export function Lightbox({ items, index, onClose }: LightboxProps) {
       return;
     }
     setClosing(true);
-    closeTimer.current = window.setTimeout(() => closeRef.current(), 170);
+    closeTimer.current = window.setTimeout(() => closeRef.current(), 240);
   }
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });

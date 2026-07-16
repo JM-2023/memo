@@ -44,9 +44,9 @@ function BarChart({ label, values, max, labels, tips }: BarChartProps) {
               style={
                 {
                   height: value > 0 ? `${(value / max) * 100}%` : "4px",
-                  animationDelay: `${Math.min(index, 6) * 0.008}s`,
+                  animationDelay: `${index * 0.025}s`,
                   // Year switches resize the bars in a left-to-right ripple.
-                  "--bar-d": `${Math.min(index, 6) * 0.008}s`
+                  "--bar-d": `${index * 0.014}s`
                 } as CSSProperties
               }
             />
@@ -70,7 +70,7 @@ interface LeavingTag {
   serial: number;
 }
 
-const TAG_GLIDE: KeyframeAnimationOptions = { duration: 220, easing: "cubic-bezier(0.24, 1.1, 0.32, 1)" };
+const TAG_GLIDE: KeyframeAnimationOptions = { duration: 480, easing: "cubic-bezier(0.24, 1.1, 0.32, 1)" };
 
 /**
  * Ranked tag bars keyed by tag name. Switching years FLIP-glides surviving
@@ -158,7 +158,7 @@ function TagRows({ tags, emptyLabel }: { tags: [string, number][]; emptyLabel: s
             else rowsRef.current.delete(name);
           }}
           className={`stats-tag-row${enteringRef.current.has(name) ? " is-entering" : ""}`}
-          style={enteringRef.current.has(name) ? { animationDelay: `${index * 0.02}s` } : undefined}
+          style={enteringRef.current.has(name) ? { animationDelay: `${index * 0.035}s` } : undefined}
         >
           <span className="stats-tag-name-box">
             <span className="stats-tag-name">#{name}</span>
@@ -295,7 +295,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
       return;
     }
     setClosing(true);
-    closeTimer.current = window.setTimeout(() => closeRef.current(), 170);
+    closeTimer.current = window.setTimeout(() => closeRef.current(), 240);
   }
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
@@ -431,7 +431,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
             </div>
           </section>
 
-          <section className="stats-section" style={{ animationDelay: "0.02s" }}>
+          <section className="stats-section" style={{ animationDelay: "0.06s" }}>
             <h3 className="stats-section-title">{tr("Daily activity", "每日活跃")}</h3>
             <div className="months-grid">
               {yearData.months.map(({ month, count: memoCount, heat }) => (
@@ -491,7 +491,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
             </div>
           </section>
 
-          <section className="stats-section" style={{ animationDelay: "0.04s" }}>
+          <section className="stats-section" style={{ animationDelay: "0.12s" }}>
             <h3 className="stats-section-title">{tr("Memos by month", "每月笔记")}</h3>
             <BarChart
               label={tr("Memos by month", "每月笔记")}
@@ -502,7 +502,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
             />
           </section>
 
-          <section className="stats-section stats-chart-row" style={{ animationDelay: "0.06s" }}>
+          <section className="stats-section stats-chart-row" style={{ animationDelay: "0.18s" }}>
             <div className="stats-chart">
               <h3 className="stats-section-title">{tr("Distribution by weekday", "星期分布")}</h3>
               <BarChart
@@ -526,7 +526,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
           </section>
 
           {uniqueTagCount > 0 ? (
-            <section className="stats-section" style={{ animationDelay: "0.08s" }}>
+            <section className="stats-section" style={{ animationDelay: "0.24s" }}>
               <h3 className="stats-section-title">{tr("Top tags", "常用标签")}</h3>
               {/* Kept mounted across tagless years (the empty note takes the
                   rows' place), so the section never pops in or out. */}
@@ -534,7 +534,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
             </section>
           ) : null}
 
-          <section className="stats-section" style={{ animationDelay: "0.08s" }}>
+          <section className="stats-section" style={{ animationDelay: uniqueTagCount > 0 ? "0.3s" : "0.24s" }}>
             <h3 className="stats-section-title">{tr("All time", "全部时间")}</h3>
             <div className="stats-facts">
               {facts.map((fact) => (

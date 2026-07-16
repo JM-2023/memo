@@ -313,7 +313,7 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
     const to = el.offsetHeight;
     if (Math.abs(to - from) < 1) return;
     el.animate([{ height: `${from}px` }, { height: `${to}px` }], {
-      duration: 220,
+      duration: 400,
       easing: "cubic-bezier(0.16, 1, 0.3, 1)"
     });
   }, [gridKey]);

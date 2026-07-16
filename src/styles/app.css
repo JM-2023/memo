@@ -63,9 +63,9 @@
   --r-xl: 16px;
 
   /* Motion */
-  --t-fast: 0.1s;
-  --t: 0.15s;
-  --t-slow: 0.22s;
+  --t-fast: 0.12s;
+  --t: 0.18s;
+  --t-slow: 0.3s;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.3, 0.5, 1);
@@ -554,7 +554,7 @@ a:hover { text-decoration: underline; }
 /* Select-mode checkbox entrance; exit is the base transition back to 0. */
 @keyframes select-box-in { from { opacity: 0; transform: scale(0.4); } }
 
-.spin { animation: spin 0.8s linear infinite; }
+.spin { animation: spin 1s linear infinite; }
 
 /* Floating tooltip — one per app, portaled to <body> (see Tip.tsx), so it
    always paints above heat cells, cards and modals. The outer element carries
@@ -567,11 +567,11 @@ a:hover { text-decoration: underline; }
   z-index: 220;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.12s var(--ease), transform 0.16s var(--ease-out);
+  transition: opacity 0.14s var(--ease), transform 0.2s var(--ease-out);
 }
 .tip.is-show { opacity: 1; }
 /* First reveal: appear in place instead of sliding in from the last spot. */
-.tip.is-snap { transition: opacity 0.12s var(--ease); }
+.tip.is-snap { transition: opacity 0.14s var(--ease); }
 .tip-bubble {
   display: inline-flex;
   align-items: baseline;
@@ -648,10 +648,10 @@ a:hover { text-decoration: underline; }
   border-radius: var(--r-lg);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
   transform-origin: top right;
-  animation: menu-morph 0.18s var(--ease-spring) both;
+  animation: menu-morph 0.26s var(--ease-spring) both;
 }
 .action-menu.is-closing {
-  animation: menu-out 0.12s var(--ease) both;
+  animation: menu-out 0.16s var(--ease) both;
   pointer-events: none;
 }
 .action-menu.settings-menu {
@@ -681,17 +681,17 @@ a:hover { text-decoration: underline; }
   transition: background 0.16s ease, color 0.16s ease, transform var(--t-fast) var(--ease);
 }
 /* Every row (buttons, group rows, separators) joins the entrance cascade. */
-.action-menu > * { animation: menu-item 0.12s var(--ease) both; }
-.action-menu > :nth-child(1) { animation-delay: 0.02s; }
-.action-menu > :nth-child(2) { animation-delay: 0.04s; }
-.action-menu > :nth-child(3) { animation-delay: 0.06s; }
-.action-menu > :nth-child(4) { animation-delay: 0.08s; }
-.action-menu > :nth-child(5) { animation-delay: 0.1s; }
-.action-menu > :nth-child(6) { animation-delay: 0.12s; }
-.action-menu > :nth-child(7) { animation-delay: 0.14s; }
-.action-menu > :nth-child(8) { animation-delay: 0.16s; }
+.action-menu > * { animation: menu-item 0.24s var(--ease) both; }
+.action-menu > :nth-child(1) { animation-delay: 0.035s; }
+.action-menu > :nth-child(2) { animation-delay: 0.065s; }
+.action-menu > :nth-child(3) { animation-delay: 0.095s; }
+.action-menu > :nth-child(4) { animation-delay: 0.125s; }
+.action-menu > :nth-child(5) { animation-delay: 0.155s; }
+.action-menu > :nth-child(6) { animation-delay: 0.185s; }
+.action-menu > :nth-child(7) { animation-delay: 0.215s; }
+.action-menu > :nth-child(8) { animation-delay: 0.245s; }
 /* Longer panels (search filters): the tail arrives as one settled beat. */
-.action-menu > :nth-child(n+9) { animation-delay: 0.16s; }
+.action-menu > :nth-child(n+9) { animation-delay: 0.27s; }
 .action-menu > button svg { flex: none; color: var(--muted); stroke-width: 1.75; transition: color 0.16s ease; }
 @media (hover: hover) {
   .action-menu > button:hover { background: var(--wash-strong); color: var(--ink); }
@@ -778,7 +778,7 @@ a:hover { text-decoration: underline; }
   border-radius: calc(var(--r-md) - 2px);
   box-shadow: var(--shadow-xs);
   transform: translateX(0);
-  transition: transform 0.22s var(--ease-spring);
+  transition: transform 0.38s var(--ease-spring);
 }
 .lang-seg[data-lang="zh-CN"] .lang-seg-thumb { transform: translateX(100%); }
 .lang-seg button {
@@ -821,7 +821,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--primary-rim);
   border-radius: var(--r-lg);
   box-shadow: var(--primary-shadow);
-  animation: pop-in 0.24s var(--ease-pop) both;
+  animation: pop-in 0.5s var(--ease-pop) both;
 }
 .splash-spinner { color: var(--muted); }
 
@@ -841,9 +841,9 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--glass-rim);
   border-radius: var(--r-xl);
   box-shadow: var(--glass-highlight), var(--shadow-lg);
-  animation: scale-in 0.24s var(--ease-out) both;
+  animation: scale-in 0.5s var(--ease-out) both;
 }
-.pin-pad.shake { animation: shake 0.28s var(--ease); }
+.pin-pad.shake { animation: shake 0.42s var(--ease); }
 .pin-brand { display: grid; justify-items: center; gap: 5px; text-align: center; }
 .pin-logo {
   display: grid;
@@ -856,7 +856,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--primary-rim);
   border-radius: var(--r-lg);
   box-shadow: var(--primary-shadow);
-  animation: pop-in 0.24s var(--ease-pop) both;
+  animation: pop-in 0.5s var(--ease-pop) both;
 }
 .pin-brand h1 { margin: 0; font-size: 1.42rem; font-weight: 800; letter-spacing: -0.02em; }
 .pin-brand p { margin: 0; color: var(--muted); font-size: 0.88rem; font-weight: 500; transition: color var(--t) var(--ease); }
@@ -872,7 +872,7 @@ a:hover { text-decoration: underline; }
   aspect-ratio: 1;
   border-radius: 50%;
   background: var(--primary);
-  animation: pop-in 0.14s var(--ease-pop);
+  animation: pop-in 0.3s var(--ease-pop);
 }
 .pin-dots.error span { background: var(--danger); }
 
@@ -920,7 +920,7 @@ a:hover { text-decoration: underline; }
    instead of hugging the left edge of a 4K monitor. */
 .app-shell { display: flex; min-height: 100vh; max-width: 1720px; margin-inline: auto; }
 .first-reveal .main-column,
-.first-reveal .sidebar-inner { animation: ink-reveal 0.28s var(--ease); }
+.first-reveal .sidebar-inner { animation: ink-reveal 0.7s var(--ease); }
 
 .sidebar {
   flex: none;
@@ -989,7 +989,7 @@ a:hover { text-decoration: underline; }
 }
 @media (hover: hover) { .stat-cell:hover { background: var(--wash); } }
 .stat-cell:active { transform: scale(0.94); }
-.stat-number { font-size: 1.42rem; font-weight: 800; letter-spacing: -0.02em; animation: fade-up 0.2s var(--ease) both; }
+.stat-number { font-size: 1.42rem; font-weight: 800; letter-spacing: -0.02em; animation: fade-up 0.35s var(--ease) both; }
 .stat-label { color: var(--muted); font-size: 0.78rem; font-weight: 600; }
 
 .period-panel { display: grid; gap: 8px; }
@@ -1015,7 +1015,7 @@ a:hover { text-decoration: underline; }
   /* Concentric with the 3px-padded track. */
   border-radius: calc(var(--r-md) - 3px);
   box-shadow: var(--chip-shadow);
-  transition: transform 0.2s var(--ease-spring);
+  transition: transform 0.34s var(--ease-spring);
 }
 .period-seg button {
   position: relative;
@@ -1037,7 +1037,7 @@ a:hover { text-decoration: underline; }
   gap: 10px;
   color: var(--muted);
   font-size: 0.82rem;
-  animation: fade-up 0.18s var(--ease) both;
+  animation: fade-up 0.3s var(--ease) both;
 }
 .period-figures strong { color: var(--ink); font-size: 0.95rem; font-weight: 800; }
 .period-sep { width: 1px; height: 12px; background: var(--line-strong); }
@@ -1054,7 +1054,7 @@ a:hover { text-decoration: underline; }
 .roll-slot {
   display: inline-grid;
   grid-template-columns: 1fr;
-  transition: grid-template-columns 0.22s var(--ease-out) calc(var(--ri) * 0.01s);
+  transition: grid-template-columns 0.5s var(--ease-out) calc(var(--ri) * 0.03s);
 }
 .roll-slot.is-collapse { grid-template-columns: 0fr; }
 @starting-style {
@@ -1071,7 +1071,7 @@ a:hover { text-decoration: underline; }
 }
 .roll-char { grid-area: 1 / 1; white-space: pre; backface-visibility: hidden; }
 .roll-char-in,
-.roll-char-out { animation: roll-char-in-up 0.22s var(--ease-drum) both; animation-delay: calc(var(--ri) * 0.01s); }
+.roll-char-out { animation: roll-char-in-up 0.56s var(--ease-drum) both; animation-delay: calc(var(--ri) * 0.03s); }
 .roll-char-out { animation-name: roll-char-out-up; pointer-events: none; }
 .roll-char-in.is-down { animation-name: roll-char-in-down; }
 .roll-char-out.is-down { animation-name: roll-char-out-down; }
@@ -1087,7 +1087,7 @@ a:hover { text-decoration: underline; }
   overflow: clip;
 }
 .swap-cur { grid-area: 1 / 1; min-width: 0; }
-.swap-cur.swap-anim { animation: swap-in-fade 0.22s var(--ease-out) both; }
+.swap-cur.swap-anim { animation: swap-in-fade 0.42s var(--ease-out) both; }
 .swap-cur.swap-anim.dir-fwd { animation-name: swap-in-fwd; }
 .swap-cur.swap-anim.dir-back { animation-name: swap-in-back; }
 .swap-old {
@@ -1097,7 +1097,7 @@ a:hover { text-decoration: underline; }
   align-items: baseline;
   justify-content: center;
   pointer-events: none;
-  animation: swap-out-fade 0.14s var(--ease) both;
+  animation: swap-out-fade 0.26s var(--ease) both;
 }
 .swap-old.dir-fwd { animation-name: swap-out-fwd; }
 .swap-old.dir-back { animation-name: swap-out-back; }
@@ -1107,10 +1107,10 @@ a:hover { text-decoration: underline; }
    content-sized, those coordinated child tweens also morph the menu itself
    between its English and Chinese natural widths without hard-coding either. */
 .locale-swap { flex: none; justify-items: start; }
-.locale-swap .swap-cur.swap-anim { animation-duration: 0.2s; }
+.locale-swap .swap-cur.swap-anim { animation-duration: 0.32s; }
 .locale-swap .swap-old {
   justify-content: flex-start;
-  animation-duration: 0.13s;
+  animation-duration: 0.22s;
 }
 
 /* ---- Heatmap ----
@@ -1151,12 +1151,12 @@ a:hover { text-decoration: underline; }
 .heat-viewport { position: relative; min-width: 0; max-width: 100%; overflow: clip; overflow-clip-margin: 8px; }
 .heat-current { min-width: 0; max-width: 100%; }
 .heat-leaving { position: absolute; inset: 0 0 auto 0; pointer-events: none; }
-.heat-leaving.leave-left { animation: heat-leave-left 0.16s var(--ease) both; }
-.heat-leaving.leave-right { animation: heat-leave-right 0.16s var(--ease) both; }
-.heat-leaving.leave-fade { animation: heat-leave-fade 0.14s var(--ease) both; }
-.heatmap .slide-left { animation: heat-slide-left 0.22s var(--ease-out) both; }
-.heatmap .slide-right { animation: heat-slide-right 0.22s var(--ease-out) both; }
-.heat-current.heat-arrive { animation: heat-arrive 0.2s var(--ease-out) both; }
+.heat-leaving.leave-left { animation: heat-leave-left 0.3s var(--ease) both; }
+.heat-leaving.leave-right { animation: heat-leave-right 0.3s var(--ease) both; }
+.heat-leaving.leave-fade { animation: heat-leave-fade 0.26s var(--ease) both; }
+.heatmap .slide-left { animation: heat-slide-left 0.45s var(--ease-out) both; }
+.heatmap .slide-right { animation: heat-slide-right 0.45s var(--ease-out) both; }
+.heat-current.heat-arrive { animation: heat-arrive 0.4s var(--ease-out) both; }
 .heat-colhead {
   display: grid;
   place-items: center;
@@ -1292,7 +1292,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 }
 @media (hover: hover) { .tag-label:hover { color: var(--ink); } }
 .tag-label:active { transform: scale(0.98); }
-.tag-pin-mark { flex: none; margin-right: 3px; color: var(--leaf); animation: pop-in 0.18s var(--ease-pop) both; }
+.tag-pin-mark { flex: none; margin-right: 3px; color: var(--leaf); animation: pop-in 0.34s var(--ease-pop) both; }
 .tag-count { color: var(--muted); font-size: 0.76rem; font-weight: 700; }
 /* Row action menu trigger — surfaces on row hover / focus / touch. */
 .tag-more {
@@ -1314,7 +1314,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 @media (hover: none) { .tag-more { opacity: 1; } }
 .tag-more.is-open { background: var(--wash-strong); color: var(--ink); }
 /* Animated expand: grid-rows 0fr -> 1fr glides open without measuring. */
-.tag-children { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 0.18s var(--ease), opacity 0.14s var(--ease); }
+.tag-children { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 0.26s var(--ease), opacity 0.22s var(--ease); }
 .tag-children > ul { overflow: hidden; min-height: 0; }
 .tag-children.is-open { grid-template-rows: 1fr; opacity: 1; }
 
@@ -1402,7 +1402,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   overflow: hidden;
   text-overflow: ellipsis;
   border-radius: var(--r-sm);
-  animation: crumb-in 0.18s var(--ease-out) both;
+  animation: crumb-in 0.55s var(--ease-out) both;
   transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
 .crumb.is-current { color: var(--ink); }
@@ -1414,12 +1414,12 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   button.crumb:hover { background: var(--wash); color: var(--ink); }
 }
 button.crumb:active { background: var(--wash-strong); }
-.crumb-sep { flex: none; color: var(--line-strong); animation: crumb-in 0.18s var(--ease-out) both; }
+.crumb-sep { flex: none; color: var(--line-strong); animation: crumb-in 0.55s var(--ease-out) both; }
 /* Going up a level: the dropped segments fold back toward their parent. */
-.crumb.is-leaving, .crumb-sep.is-leaving { animation: crumb-out 0.14s var(--ease) both; pointer-events: none; }
+.crumb.is-leaving, .crumb-sep.is-leaving { animation: crumb-out 0.26s var(--ease) both; pointer-events: none; }
 /* Drilled one level in: the crumb the pill just vacated resolves in place,
    a beat late so the pill visibly slides off it first. */
-.crumb.is-settling, .crumb-sep.is-settling { animation: crumb-settle 0.18s var(--ease) 0.03s both; }
+.crumb.is-settling, .crumb-sep.is-settling { animation: crumb-settle 0.42s var(--ease) 0.06s both; }
 /* The current segment's separator glides between layouts alongside the pill
    instead of snapping when the ancestor list changes width. */
 .loc-sep { view-transition-name: loc-sep; }
@@ -1492,7 +1492,7 @@ button.crumb:active { background: var(--wash-strong); }
 .loc-trigger:active { transform: scale(0.97); }
 .loc-trigger.is-open { background: var(--wash-strong); }
 .loc-label { min-width: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.loc-caret { flex: none; margin-top: 1px; color: var(--muted); transition: transform 0.18s var(--ease-pop), color var(--t) var(--ease); }
+.loc-caret { flex: none; margin-top: 1px; color: var(--muted); transition: transform 0.3s var(--ease-pop), color var(--t) var(--ease); }
 .loc-trigger.is-open .loc-caret { transform: rotate(180deg); color: var(--ink-soft); }
 .loc-panel { min-width: 214px; }
 
@@ -1525,7 +1525,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 700;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  animation: crumb-in 0.22s var(--ease-out) backwards;
+  animation: crumb-in 0.5s var(--ease-out) backwards;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .select-pill:hover:not(:disabled) { background: var(--wash); color: var(--ink); } }
@@ -1543,7 +1543,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 700;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  animation: crumb-in 0.22s var(--ease-out) backwards;
+  animation: crumb-in 0.5s var(--ease-out) backwards;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
   view-transition-name: select-delete;
 }
@@ -1552,9 +1552,9 @@ button.crumb:active { background: var(--wash-strong); }
 .select-delete.is-confirm { color: #fff; background: var(--danger); box-shadow: var(--shadow-sm); }
 @media (hover: hover) { .select-delete.is-confirm:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 88%, black); } }
 /* The pills trail in behind the morphing counter, breadcrumb-style. */
-.select-bar > :nth-child(2) { animation-delay: 0.025s; }
-.select-bar > :nth-child(3) { animation-delay: 0.05s; }
-.select-bar > :nth-child(4) { animation-delay: 0.075s; }
+.select-bar > :nth-child(2) { animation-delay: 0.05s; }
+.select-bar > :nth-child(3) { animation-delay: 0.09s; }
+.select-bar > :nth-child(4) { animation-delay: 0.13s; }
 
 /* Filter chips — the trail's refinement clause. The breadcrumb says WHERE
    (⌂ / tag / pill); the chips say THROUGH WHAT: each active lens (heatmap
@@ -1582,7 +1582,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: 0.84rem;
   font-weight: 700;
   white-space: nowrap;
-  animation: crumb-in 0.22s var(--ease-out) backwards;
+  animation: crumb-in 0.5s var(--ease-out) backwards;
   transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 /* Lens icon at the panel rows' quiet weight; it sharpens with hover ink. */
@@ -1619,7 +1619,7 @@ button.crumb:active { background: var(--wash-strong); }
   display: flex;
   align-items: center;
   width: 150px;
-  transition: width 0.18s var(--ease-out);
+  transition: width 0.28s var(--ease-out);
 }
 .searchbox.is-open { width: min(240px, 40vw); }
 .searchbox-icon { position: absolute; left: 10px; color: var(--muted); pointer-events: none; }
@@ -1798,7 +1798,7 @@ button.crumb:active { background: var(--wash-strong); }
    position:relative + z-index because its entrance animation leaves a
    stacking context behind — without the bump, the tag-suggest popover would
    paint underneath the first memo card. */
-.composer { position: relative; z-index: 30; width: calc(100% - var(--content-inset) * 2); margin: 20px 0 6px; animation: rise-in 0.28s var(--ease-out) both; }
+.composer { position: relative; z-index: 30; width: calc(100% - var(--content-inset) * 2); margin: 20px 0 6px; animation: rise-in 0.6s var(--ease-out) both; }
 
 .editor {
   position: relative;
@@ -1819,7 +1819,7 @@ button.crumb:active { background: var(--wash-strong); }
   background: var(--field-bg);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
-  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), height 0.12s var(--ease);
+  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), height 0.16s var(--ease);
 }
 .editor-edit textarea:focus { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring); }
 
@@ -1835,7 +1835,7 @@ button.crumb:active { background: var(--wash-strong); }
   overflow-wrap: break-word;
   outline: none;
   /* autoGrow sets height per input; easing it keeps typing from snapping. */
-  transition: height 0.12s var(--ease);
+  transition: height 0.16s var(--ease);
 }
 /* Pinned (not UA default) so the over-limit mirror reproduces the exact
    same line breaks. Create mode only: .editor-edit keeps its own padding,
@@ -1895,7 +1895,7 @@ button.crumb:active { background: var(--wash-strong); }
   border: 1px solid var(--glass-rim-strong);
   border-radius: var(--r-lg);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
-  animation: menu-morph 0.15s var(--ease-spring) both;
+  animation: menu-morph 0.18s var(--ease-spring) both;
 }
 .tag-suggest button {
   padding: 7px 10px;
@@ -1920,11 +1920,11 @@ button.crumb:active { background: var(--wash-strong); }
   overflow: hidden;
   border: 1px solid var(--line);
   box-shadow: var(--shadow-xs);
-  animation: pop-in 0.22s var(--ease-pop) both;
+  animation: pop-in 0.4s var(--ease-pop) both;
 }
 /* Exit before unmount: recede, then hand the row the freed width (the
    trailing negative margin swallows the flex gap so nothing snaps). */
-.attachment.is-removing { animation: attach-out 0.2s var(--ease) both; }
+.attachment.is-removing { animation: attach-out 0.34s var(--ease) both; }
 .attachment.is-removing .attachment-remove { pointer-events: none; }
 .attachment img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .attachment.is-busy { display: grid; place-items: center; color: var(--muted); background: var(--surface-2); }
@@ -1994,7 +1994,7 @@ button.crumb:active { background: var(--wash-strong); }
   display: grid;
   grid-template-rows: 0fr;
   opacity: 0;
-  transition: grid-template-rows 0.18s var(--ease), opacity 0.14s var(--ease);
+  transition: grid-template-rows 0.26s var(--ease), opacity 0.2s var(--ease);
 }
 .link-pop.is-open { grid-template-rows: 1fr; opacity: 1; }
 .link-pop-inner {
@@ -2065,16 +2065,16 @@ button.crumb:active { background: var(--wash-strong); }
     opacity 0.22s ease,
     background 0.18s ease,
     color 0.18s ease,
-    margin-right 0.22s var(--spring),
-    padding 0.22s var(--spring),
-    border-radius 0.22s var(--spring);
+    margin-right 0.4s var(--spring),
+    padding 0.4s var(--spring),
+    border-radius 0.4s var(--spring);
 }
 .send-button svg {
   width: 1.25rem;
   height: 1.25rem;
   stroke-width: 2.2;
   color: var(--primary-dark);
-  transition: transform 0.22s var(--spring);
+  transition: transform 0.4s var(--spring);
 }
 @media (hover: hover) {
   .send-button:hover:not(:disabled) {
@@ -2125,7 +2125,7 @@ button.crumb:active { background: var(--wash-strong); }
   position: relative;
   content-visibility: auto;
   contain-intrinsic-size: auto 240px;
-  animation: rise-in 0.24s var(--ease-out) both;
+  animation: rise-in 0.6s var(--ease-out) both;
 }
 /* Slots mounted by a filter swap: the view transition owns the motion. */
 .memo-slot.no-enter { animation: none; }
@@ -2238,11 +2238,11 @@ button.crumb:active { background: var(--wash-strong); }
 .memo-card.is-selecting .memo-select-box {
   opacity: 1;
   transform: none;
-  animation: select-box-in 0.2s var(--ease-pop) backwards;
+  animation: select-box-in 0.38s var(--ease-pop) backwards;
   animation-delay: var(--sbd, 0s);
 }
 .memo-card.is-selected .memo-select-box { background: var(--primary); border-color: var(--primary); }
-.memo-select-box svg { transform: scale(0); transition: transform 0.14s var(--ease-pop); }
+.memo-select-box svg { transform: scale(0); transition: transform 0.24s var(--ease-pop); }
 .memo-card.is-selected .memo-select-box svg { transform: none; }
 /* The ⋯ menu retires while selecting; visibility waits for the fade so the
    swap reads as a cross-morph, and focus can never land on the hidden button. */
@@ -2253,18 +2253,18 @@ button.crumb:active { background: var(--wash-strong); }
   transition: opacity 0.15s var(--ease), transform 0.15s var(--ease), visibility 0s 0.15s;
 }
 /* Checkbox entrance ripples down the first screenful of cards. */
-.memo-feed.is-select .memo-slot:nth-child(2) { --sbd: 0.015s; }
-.memo-feed.is-select .memo-slot:nth-child(3) { --sbd: 0.03s; }
-.memo-feed.is-select .memo-slot:nth-child(4) { --sbd: 0.045s; }
-.memo-feed.is-select .memo-slot:nth-child(5) { --sbd: 0.06s; }
-.memo-feed.is-select .memo-slot:nth-child(6) { --sbd: 0.075s; }
-.memo-feed.is-select .memo-slot:nth-child(7) { --sbd: 0.09s; }
-.memo-feed.is-select .memo-slot:nth-child(n + 8) { --sbd: 0.09s; }
+.memo-feed.is-select .memo-slot:nth-child(2) { --sbd: 0.035s; }
+.memo-feed.is-select .memo-slot:nth-child(3) { --sbd: 0.07s; }
+.memo-feed.is-select .memo-slot:nth-child(4) { --sbd: 0.105s; }
+.memo-feed.is-select .memo-slot:nth-child(5) { --sbd: 0.14s; }
+.memo-feed.is-select .memo-slot:nth-child(6) { --sbd: 0.175s; }
+.memo-feed.is-select .memo-slot:nth-child(7) { --sbd: 0.21s; }
+.memo-feed.is-select .memo-slot:nth-child(n + 8) { --sbd: 0.245s; }
 
 .memo-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; }
 .memo-time { color: var(--muted); font-size: 0.8rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 .memo-head-right { display: flex; align-items: center; gap: 4px; }
-.memo-pin-mark { color: var(--primary); animation: pop-in 0.18s var(--ease-pop) both; }
+.memo-pin-mark { color: var(--primary); animation: pop-in 0.34s var(--ease-pop) both; }
 .memo-menu-trigger { width: 26px; height: 26px; opacity: 0; }
 .memo-menu-trigger.is-open { opacity: 1; background: var(--wash); color: var(--ink); }
 .memo-card:hover .memo-menu-trigger, .memo-menu-trigger:focus-visible { opacity: 1; }
@@ -2401,7 +2401,7 @@ button.memo-tag:active {
 }
 /* One hover cue: the photo itself brightens a touch (the hairline border
    already separates it from the card). Press dims it back down. */
-.memo-image img { width: 100%; height: 100%; object-fit: cover; display: block; transition: filter 0.18s var(--ease); }
+.memo-image img { width: 100%; height: 100%; object-fit: cover; display: block; transition: filter 0.28s var(--ease); }
 @media (hover: hover) {
   .memo-image:hover img { filter: brightness(1.06); }
 }
@@ -2447,7 +2447,7 @@ button.memo-tag:active {
 .memo-card.is-trash .memo-content { color: var(--ink-soft); }
 .memo-card.is-trash .memo-time { color: var(--danger); opacity: 0.75; }
 
-.feed-empty { display: grid; justify-items: center; gap: 6px; padding: 56px 20px; color: var(--muted); text-align: center; animation: rise-in 0.26s var(--ease-out) both; view-transition-name: feed-empty; }
+.feed-empty { display: grid; justify-items: center; gap: 6px; padding: 56px 20px; color: var(--muted); text-align: center; animation: rise-in 0.6s var(--ease-out) both; view-transition-name: feed-empty; }
 .feed-empty p { margin: 0; }
 .feed-empty-title { color: var(--ink-soft); font-size: 1.05rem; font-weight: 700; }
 
@@ -2464,9 +2464,9 @@ button.memo-tag:active {
   background: rgba(10, 12, 18, 0.44);
   -webkit-backdrop-filter: blur(7px);
   backdrop-filter: blur(7px);
-  animation: fade-in 0.18s var(--ease) both;
+  animation: fade-in 0.3s var(--ease) both;
 }
-.overlay.is-closing { animation: fade-out 0.16s var(--ease) both; }
+.overlay.is-closing { animation: fade-out 0.26s var(--ease) both; }
 
 .confirm-card {
   display: grid;
@@ -2477,9 +2477,9 @@ button.memo-tag:active {
   border: 1px solid var(--glass-rim-strong);
   border-radius: var(--r-lg);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
-  animation: modal-in 0.24s var(--ease-out) both;
+  animation: modal-in 0.5s var(--ease-out) both;
 }
-.overlay.is-closing .confirm-card { animation: modal-out 0.16s var(--ease) both; }
+.overlay.is-closing .confirm-card { animation: modal-out 0.24s var(--ease) both; }
 .confirm-card h2 { margin: 0; font-size: 1.05rem; font-weight: 800; overflow-wrap: anywhere; }
 .confirm-card p { margin: 0 0 10px; color: var(--muted); font-size: 0.9rem; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
@@ -2518,7 +2518,7 @@ button.memo-tag:active {
   max-height: calc(100vh - 120px);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-lg);
-  animation: lightbox-zoom 0.22s var(--ease-out) both;
+  animation: lightbox-zoom 0.5s var(--ease-out) both;
 }
 .lightbox-close { position: absolute; top: 18px; right: 18px; width: 38px; height: 38px; color: #fff; background: rgba(255, 255, 255, 0.12); border-radius: 50%; }
 .lightbox-nav { position: absolute; top: 50%; width: 40px; height: 40px; color: #fff; background: rgba(255, 255, 255, 0.12); border-radius: 50%; transform: translateY(-50%); }
@@ -2572,9 +2572,9 @@ button.memo-tag:active {
   border-radius: var(--r-xl);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
   overflow: hidden;
-  animation: modal-in 0.24s var(--ease-out) both;
+  animation: modal-in 0.55s var(--ease-out) both;
 }
-.overlay.is-closing .stats-modal { animation: modal-out 0.16s var(--ease) both; }
+.overlay.is-closing .stats-modal { animation: modal-out 0.24s var(--ease) both; }
 .stats-head {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -2586,7 +2586,7 @@ button.memo-tag:active {
 .stats-head h2 { margin: 0; font-size: 1.08rem; font-weight: 800; letter-spacing: -0.01em; }
 .stats-year-nav { display: flex; align-items: center; gap: 4px; justify-self: center; }
 .stats-close { justify-self: end; }
-.stats-year { min-width: 76px; text-align: center; font-size: 0.98rem; font-weight: 800; font-variant-numeric: tabular-nums; animation: fade-up 0.18s var(--ease) both; }
+.stats-year { min-width: 76px; text-align: center; font-size: 0.98rem; font-weight: 800; font-variant-numeric: tabular-nums; animation: fade-up 0.3s var(--ease) both; }
 .stats-body {
   display: grid;
   gap: 18px;
@@ -2596,7 +2596,7 @@ button.memo-tag:active {
 }
 /* One entrance per section (staggered inline in the JSX), so the modal reads
    top-down — hero, calendar, charts, footnotes — instead of raining tiles. */
-.stats-section { display: grid; gap: 10px; animation: rise-in 0.2s var(--ease-out) both; }
+.stats-section { display: grid; gap: 10px; animation: rise-in 0.55s var(--ease-out) both; }
 .stats-section-title { margin: 0; color: var(--ink-soft); font-size: 0.85rem; font-weight: 750; }
 
 /* Tier 1: the year's headline figure, set in type — no card frame. The
@@ -2631,7 +2631,7 @@ button.memo-tag:active {
   outline-offset: 1px;
   /* Background and opacity included so switching years crossfades the whole
      grid — cells melting into or out of a month's edge fade, never pop. */
-  transition: outline-color var(--t) var(--ease), filter var(--t) var(--ease), background 0.22s var(--ease), box-shadow 0.22s var(--ease), opacity 0.22s var(--ease);
+  transition: outline-color var(--t) var(--ease), filter var(--t) var(--ease), background 0.45s var(--ease), box-shadow 0.45s var(--ease), opacity 0.45s var(--ease);
 }
 @media (hover: hover) {
   .mini-cell:not(.placeholder):hover { outline-color: color-mix(in srgb, var(--heat-3) 42%, transparent); filter: saturate(1.16) brightness(1.06); }
@@ -2651,10 +2651,10 @@ button.memo-tag:active {
   width: min(100%, 30px);
   background: linear-gradient(180deg, var(--heat-2), var(--heat-3));
   border-radius: 5px 5px 2px 2px;
-  animation: bar-rise 0.24s var(--ease-out) both;
+  animation: bar-rise 0.7s var(--ease-out) both;
   /* Height and fill included so switching years glides the bars to their new
      size in a left-to-right ripple (--bar-d, set inline per column). */
-  transition: filter var(--t) var(--ease), height 0.22s var(--ease-out) var(--bar-d, 0s), background 0.2s var(--ease) var(--bar-d, 0s);
+  transition: filter var(--t) var(--ease), height 0.55s var(--ease-out) var(--bar-d, 0s), background 0.5s var(--ease) var(--bar-d, 0s);
 }
 @media (hover: hover) { .stats-bar-col:hover .stats-bar:not(.is-zero) { filter: saturate(1.15) brightness(1.08); } }
 /* Two-stop gradient (not a flat color) so zero↔nonzero can crossfade. */
@@ -2679,20 +2679,20 @@ button.memo-tag:active {
    newcomers in, and rolls the counts — no slot ever teleports its contents. */
 .stats-tags { position: relative; display: grid; gap: 2px; }
 .stats-tag-row { display: flex; align-items: center; gap: 12px; padding: 4px 2px; }
-.stats-tag-row.is-entering { animation: tag-row-in 0.2s var(--ease-out) both; }
+.stats-tag-row.is-entering { animation: tag-row-in 0.46s var(--ease-out) both; }
 .stats-tag-row.is-leaving {
   position: absolute;
   left: 0;
   right: 0;
   pointer-events: none;
-  animation: tag-row-out 0.15s var(--ease) both;
+  animation: tag-row-out 0.3s var(--ease) both;
 }
 .stats-tag-name-box { flex: none; width: min(170px, 36%); min-width: 0; }
 .stats-tag-name { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--ink-soft); font-size: 0.85rem; font-weight: 650; }
 .stats-tag-track { flex: 1; height: 4px; background: var(--surface-3); border-radius: 2px; }
-.stats-tag-fill { display: block; height: 100%; max-width: 100%; background: var(--primary); border-radius: inherit; transition: width 0.22s var(--ease-out); }
+.stats-tag-fill { display: block; height: 100%; max-width: 100%; background: var(--primary); border-radius: inherit; transition: width 0.55s var(--ease-out); }
 .stats-tag-count { flex: none; min-width: 2em; color: var(--muted); font-size: 0.8rem; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
-.stats-tags-empty { margin: 0; padding: 5px 2px; color: var(--muted); font-size: 0.85rem; font-weight: 600; animation: fade-up 0.2s var(--ease-out) both; }
+.stats-tags-empty { margin: 0; padding: 5px 2px; color: var(--muted); font-size: 0.85rem; font-weight: 600; animation: fade-up 0.4s var(--ease-out) both; }
 
 /* Tier 4, all-time footnotes: a hairline ledger — rows, not boxes. */
 .stats-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); column-gap: 28px; }
@@ -2734,10 +2734,10 @@ button.memo-tag:active {
   pointer-events: auto;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .scroll-top-slot { transition: all 80ms var(--slot-ease); }
+  .scroll-top-slot { transition: all 100ms var(--slot-ease); }
   .scroll-top-slot.is-shown {
-    transition-duration: 180ms;
-    transition-delay: 80ms;
+    transition-duration: 300ms;
+    transition-delay: 300ms;
   }
 }
 /* The demo disc verbatim: 1px hairline outside 32px, 65% surface over a
@@ -2802,13 +2802,13 @@ button.memo-tag:active {
   font-size: 0.9rem;
   font-weight: 700;
   transform: translateX(-50%);
-  animation: toast-in 0.22s var(--ease-pop) both;
+  animation: toast-in 0.45s var(--ease-pop) both;
   /* Own snapshot group (lifted in the view-transition section): flattened
      into the root snapshot, the toast slid UNDER the topbar-action pill
      whenever a view switch ran while it was up. */
   view-transition-name: toast;
 }
-.toast.is-leaving { animation: toast-out 0.16s var(--ease) both; }
+.toast.is-leaving { animation: toast-out 0.3s var(--ease) both; }
 .toast.is-error { color: var(--danger); }
 
 /* =========================================================================
@@ -2826,12 +2826,12 @@ button.memo-tag:active {
    overlay instead of the button. The live DOM already sits in its final
    layout underneath, so let clicks fall through. */
 ::view-transition { pointer-events: none; }
-::view-transition-group(*) { animation-duration: 0.24s; animation-timing-function: var(--ease-out); }
-::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.18s; }
+::view-transition-group(*) { animation-duration: 0.45s; animation-timing-function: var(--ease-out); }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.25s; }
 /* Departing cards (deletion, filtered out) sink slightly as they fade, so a
    removal reads as the card receding while its neighbours glide up. */
-::view-transition-old(*):only-child { animation: card-depart 0.16s var(--ease) both; }
-::view-transition-new(*):only-child { animation: fade-in 0.2s var(--ease) 0.03s both; }
+::view-transition-old(*):only-child { animation: card-depart 0.26s var(--ease) both; }
+::view-transition-new(*):only-child { animation: fade-in 0.3s var(--ease) 0.08s both; }
 /* Removing a filter chip folds it back the way dropped crumbs leave the
    trail — without this the only-child fallback above would play card-depart,
    the cards' language, on a trail element. */
@@ -2840,7 +2840,7 @@ button.memo-tag:active {
 ::view-transition-old(facet-chip-noTags):only-child,
 ::view-transition-old(facet-chip-hasImage):only-child,
 ::view-transition-old(facet-chip-hasLink):only-child,
-::view-transition-old(facet-chip-hasOpenTask):only-child { animation: crumb-out 0.14s var(--ease) both; }
+::view-transition-old(facet-chip-hasOpenTask):only-child { animation: crumb-out 0.26s var(--ease) both; }
 /* The date chips morph between labels of different widths (repicking a
    heatmap day, a range growing a second date) — natural-size snapshots keep
    the old label from stretching to the interpolating group width, same as
@@ -2894,8 +2894,8 @@ button.memo-tag:active {
     transform: translateX(-102%);
     visibility: hidden;
   }
-  .sidebar.is-open { transform: none; visibility: visible; animation: drawer-in 0.22s var(--ease-out) both; }
-  .sidebar.is-open.is-closing { transform: translateX(-102%); transition: transform 0.16s var(--ease); animation: none; }
+  .sidebar.is-open { transform: none; visibility: visible; animation: drawer-in 0.3s var(--ease-out) both; }
+  .sidebar.is-open.is-closing { transform: translateX(-102%); transition: transform 0.24s var(--ease); animation: none; }
   .drawer-backdrop {
     position: fixed;
     inset: 0;
@@ -2903,9 +2903,9 @@ button.memo-tag:active {
     background: rgba(10, 12, 18, 0.4);
     -webkit-backdrop-filter: blur(3px);
     backdrop-filter: blur(3px);
-    animation: fade-in 0.18s var(--ease) both;
+    animation: fade-in 0.24s var(--ease) both;
   }
-  .drawer-backdrop.is-closing { animation: fade-out 0.16s var(--ease) both; }
+  .drawer-backdrop.is-closing { animation: fade-out 0.24s var(--ease) both; }
   .drawer-toggle { display: inline-grid; }
 }
 

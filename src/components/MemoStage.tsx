@@ -27,8 +27,8 @@ import type { MemoImage } from "../lib/types";
 
 const EASE = "cubic-bezier(0.22, 0.61, 0.36, 1)";
 const EASE_OUT = "cubic-bezier(0.16, 1, 0.3, 1)";
-const SWAP_HEIGHT_MS = 220;
-const REPLAY_HEIGHT_MS = 260;
+const SWAP_HEIGHT_MS = 360;
+const REPLAY_HEIGHT_MS = 540;
 /** Above this many combined visual lines the replay downgrades to a plain
     cross-fade — hundreds of clone layers would tax the compositor without
     telling a legible story. */
@@ -180,7 +180,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
               { transform: `translateY(${y + 1}px)`, opacity: 1, clipPath: "inset(-2px 0px -2px 0px)", offset: 0.22 },
               { transform: `translateY(${y + 4}px)`, opacity: 0, clipPath: "inset(48% 0px 52% 0px)" }
             ],
-            options: { duration: 180, delay: 30, easing: EASE, fill: "both" }
+            options: { duration: 330, delay: 90, easing: EASE, fill: "both" }
           });
         } else if (op.type === "keep") {
           const from = oldTops[op.oldIndex];
@@ -192,7 +192,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
               { transform: `translateY(${from}px)`, opacity: 1 },
               { transform: `translateY(${to}px)`, opacity: 1 }
             ],
-            options: { duration: 220, delay: 40, easing: EASE_OUT, fill: "both" }
+            options: { duration: 480, delay: 120, easing: EASE_OUT, fill: "both" }
           });
         } else {
           const to = newTops[op.newIndex];
@@ -203,7 +203,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
               { transform: `translateY(${to + 8}px)`, opacity: 0, clipPath: "inset(28% 0px 28% 0px)" },
               { transform: `translateY(${to}px)`, opacity: 1, clipPath: "inset(-2px 0px -2px 0px)" }
             ],
-            options: { duration: 180, delay: 70 + Math.min(addOrder, 5) * 8, easing: EASE_OUT, fill: "both" }
+            options: { duration: 360, delay: 230 + Math.min(addOrder, 5) * 26, easing: EASE_OUT, fill: "both" }
           });
           addOrder += 1;
         }
@@ -217,7 +217,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
               { transform: `translateY(${oldMediaTop}px)`, opacity: 1 },
               { transform: `translateY(${newMediaTop}px)`, opacity: 1 }
             ],
-            options: { duration: 220, delay: 40, easing: EASE_OUT, fill: "both" }
+            options: { duration: 480, delay: 120, easing: EASE_OUT, fill: "both" }
           });
         } else if (el.classList.contains("is-media-old") && oldMediaTop !== null) {
           cloneTracks.push({
@@ -226,7 +226,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
               { transform: `translateY(${oldMediaTop}px) scale(1)`, opacity: 1 },
               { transform: `translateY(${oldMediaTop + 3}px) scale(0.99)`, opacity: 0 }
             ],
-            options: { duration: 170, delay: 35, easing: EASE, fill: "both" }
+            options: { duration: 300, delay: 100, easing: EASE, fill: "both" }
           });
         } else if (el.classList.contains("is-media-new") && newMediaTop !== null) {
           cloneTracks.push({
@@ -235,7 +235,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
               { transform: `translateY(${newMediaTop + 10}px)`, opacity: 0 },
               { transform: `translateY(${newMediaTop}px)`, opacity: 1 }
             ],
-            options: { duration: 190, delay: 80, easing: EASE_OUT, fill: "both" }
+            options: { duration: 380, delay: 300, easing: EASE_OUT, fill: "both" }
           });
         }
       }
@@ -260,7 +260,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
           { opacity: 1, transform: "translateY(0)" },
           { opacity: 0, transform: plan.kind === "toEdit" ? "translateY(0)" : "translateY(-5px)" }
         ],
-        { duration: plan.kind === "replay" ? 130 : 120, easing: EASE, fill: "both" }
+        { duration: plan.kind === "replay" ? 160 : 150, easing: EASE, fill: "both" }
       )
     );
     if (plan.kind === "toEdit" || plan.kind === "swap") {
@@ -270,12 +270,12 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
             { opacity: 0, transform: `translateY(${plan.kind === "toEdit" ? 6 : 4}px)` },
             { opacity: 1, transform: "translateY(0)" }
           ],
-          { duration: 180, delay: 25, easing: EASE_OUT, fill: "both" }
+          { duration: 260, delay: 50, easing: EASE_OUT, fill: "both" }
         )
       );
     }
     if (headerEl) {
-      anims.push(headerEl.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, delay: 25, easing: EASE, fill: "both" }));
+      anims.push(headerEl.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 240, delay: 60, easing: EASE, fill: "both" }));
     }
     for (const track of cloneTracks) anims.push(track.el.animate(track.keyframes, track.options));
 
@@ -287,7 +287,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
       if (morphRef.current === plan) setMorph(null);
     };
     Promise.allSettled(anims.map((anim) => anim.finished)).then(settle);
-    const deadline = window.setTimeout(settle, (plan.kind === "replay" ? 340 : SWAP_HEIGHT_MS) + 260);
+    const deadline = window.setTimeout(settle, (plan.kind === "replay" ? 760 : SWAP_HEIGHT_MS) + 600);
     return () => window.clearTimeout(deadline);
   }, [morph]);
 

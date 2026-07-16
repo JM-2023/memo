@@ -316,7 +316,7 @@ export default function App() {
     setToast({ id: Date.now(), text, tone });
     toastTimer.current = window.setTimeout(() => {
       setToast((current) => (current ? { ...current, leaving: true } : current));
-      toastTimer.current = window.setTimeout(() => setToast(null), 170);
+      toastTimer.current = window.setTimeout(() => setToast(null), 280);
     }, 2400);
   }, []);
 
@@ -509,7 +509,7 @@ export default function App() {
       setPhase("ready");
       if (withReveal) {
         setReveal(true);
-        window.setTimeout(() => setReveal(false), 350);
+        window.setTimeout(() => setReveal(false), 900);
       }
     },
     [setCursor, setSyncEpoch]
@@ -729,7 +729,7 @@ export default function App() {
     if (drawerClosing) return;
     setDrawerClosing(true);
     window.clearTimeout(drawerCloseTimerRef.current);
-    const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 170;
+    const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 240;
     drawerCloseTimerRef.current = window.setTimeout(() => {
       setDrawerOpen(false);
       setDrawerClosing(false);
@@ -916,7 +916,7 @@ export default function App() {
   }, [filters, locale, tr]);
 
   // Filter-chip entrance choreography, Crumbs-style: chips new this commit
-  // cascade in behind the pill on a short capped ripple, while chips already in the trail sit
+  // cascade in behind the pill (0.05s apart), chips already in the trail sit
   // still. The identity list is by lens ("day", "range", facet keys) — the
   // day chip keeps its identity across repicks, so changing days morphs the
   // label in place instead of replaying an entrance. The previous list
@@ -935,7 +935,7 @@ export default function App() {
     prevChipsRef.current = chipKeys;
   }, [chipKeys]);
   let newChipCount = 0;
-  const chipDelay = (key: string) => (prevChips.includes(key) ? undefined : `${Math.min(newChipCount++, 3) * 0.02}s`);
+  const chipDelay = (key: string) => (prevChips.includes(key) ? undefined : `${(newChipCount++) * 0.05}s`);
 
   const openTrash = useCallback(() => {
     if (blockNavigationWhileEditing()) return;
@@ -1719,8 +1719,8 @@ export default function App() {
                 <button type="button" className="crumb crumb-home" onClick={showAll} aria-label={tr("All memos", "全部笔记")} style={{ animationDelay: "0s" }}>
                   <Home size={15} aria-hidden="true" />
                 </button>
-                <ChevronRight size={13} className="crumb-sep" aria-hidden="true" style={{ animationDelay: "0.015s" }} />
-                <span className="crumb crumb-trash is-current" aria-current="page" style={{ animationDelay: "0.035s" }}>
+                <ChevronRight size={13} className="crumb-sep" aria-hidden="true" style={{ animationDelay: "0.03s" }} />
+                <span className="crumb crumb-trash is-current" aria-current="page" style={{ animationDelay: "0.07s" }}>
                   <Trash2 size={13} aria-hidden="true" />
                   {tr("Trash", "回收站")}
                 </span>
@@ -1996,7 +1996,7 @@ export default function App() {
                 selected={selectMode && selected.has(memo.id)}
                 vtName={index < 32 ? `memo-${memo.id}` : undefined}
                 getEntering={getEntering}
-                delay={Math.min(index, 6) * 0.008}
+                delay={Math.min(index, 12) * 0.045}
                 handlers={feedHandlers}
               />
             ))

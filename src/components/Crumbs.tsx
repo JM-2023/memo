@@ -108,9 +108,9 @@ export function Crumbs({ path, onHome, onPick, children }: CrumbsProps) {
       const home = parts.length === 0;
       if (dropped.length > 0 || home) {
         setGhosts({ home, parts: dropped });
-        // Outlives the capped exit stagger without keeping invisible ghosts
-        // mounted after the fold has visibly finished.
-        const timer = window.setTimeout(() => setGhosts(null), 230);
+        // Outlives exit duration + the deepest stagger (fill: both holds the
+        // finished ghosts invisible until the sweep).
+        const timer = window.setTimeout(() => setGhosts(null), 600);
         return () => window.clearTimeout(timer);
       }
     }
@@ -119,7 +119,7 @@ export function Crumbs({ path, onHome, onPick, children }: CrumbsProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path]);
 
-  const enterDelay = (index: number, offset: number) => `${Math.min(Math.max(0, index - enterFrom), 4) * 0.02 + offset}s`;
+  const enterDelay = (index: number, offset: number) => `${Math.max(0, index - enterFrom) * 0.06 + offset}s`;
 
   return (
     <>
@@ -138,8 +138,8 @@ export function Crumbs({ path, onHome, onPick, children }: CrumbsProps) {
                   // Drilled exactly one level: this crumb is where the pill
                   // just was — resolve it in place instead of sliding it in.
                   settle={prefix === prevPath}
-                  sepDelay={enterDelay(index, 0.01)}
-                  crumbDelay={enterDelay(index, 0.025)}
+                  sepDelay={enterDelay(index, 0.03)}
+                  crumbDelay={enterDelay(index, 0.07)}
                   onPick={() => onPick(prefix)}
                 />
               );
@@ -162,14 +162,14 @@ export function Crumbs({ path, onHome, onPick, children }: CrumbsProps) {
         // arriving root pill.
         <span className={`crumb-ghosts${ghosts.home ? " is-home" : ""}`} aria-hidden="true">
           {ghosts.home ? (
-            <span className="crumb crumb-home is-leaving" style={{ animationDelay: `${Math.min(ghosts.parts.length, 4) * 0.02}s` }}>
+            <span className="crumb crumb-home is-leaving" style={{ animationDelay: `${ghosts.parts.length * 0.05}s` }}>
               <Home size={15} aria-hidden="true" />
             </span>
           ) : null}
           {ghosts.parts.map((part, ghostIndex) => {
             const prefix = [...parts, ...ghosts.parts.slice(0, ghostIndex + 1)].join("/");
             // Deepest ghost leaves first — the trail folds back into its parent.
-            const delay = `${Math.min(ghosts.parts.length - 1 - ghostIndex, 4) * 0.02}s`;
+            const delay = `${(ghosts.parts.length - 1 - ghostIndex) * 0.05}s`;
             return (
               <Fragment key={prefix}>
                 <ChevronRight size={13} className="crumb-sep is-leaving" aria-hidden="true" style={{ animationDelay: delay }} />

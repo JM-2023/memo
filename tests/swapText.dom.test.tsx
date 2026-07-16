@@ -81,7 +81,7 @@ describe("SwapText width motion", () => {
     expect(animateMock).toHaveBeenNthCalledWith(
       1,
       [{ width: "200px" }, { width: "80px" }],
-      { duration: 220, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
+      { duration: 320, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
     );
 
     visualWidth = 126.5;
@@ -91,7 +91,7 @@ describe("SwapText width motion", () => {
     expect(animateMock).toHaveBeenNthCalledWith(
       2,
       [{ width: "126.5px" }, { width: "200px" }],
-      { duration: 220, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
+      { duration: 320, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
     );
   });
 
