@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setTaskMark } from "../src/lib/markdownEdit";
 import { parseSavedFilters } from "../src/lib/savedFilters";
 import {
   EMPTY_FILTERS,
@@ -105,6 +106,17 @@ describe("memo facets", () => {
     expect(facetsOf(memoOf("- [x] done")).hasOpenTask).toBe(false);
     expect(facetsOf(memoOf("- [ ]tight is a bullet, not a task")).hasOpenTask).toBe(false);
     expect(facetsOf(memoOf("text with [ ] inline")).hasOpenTask).toBe(false);
+  });
+
+  it("tracks feed checkbox toggles: ticking the last open task drops the facet", () => {
+    const memo = memoOf("- [x] first\n- [ ] last");
+    expect(facetsOf(memo).hasOpenTask).toBe(true);
+    // Toggle commits deliver a fresh memo snapshot, so the facet cache
+    // re-derives — the open-task filter and the checkbox stay in step.
+    const allDone = memoOf(setTaskMark(memo.content, 1, true)!, { seq: 2 });
+    expect(facetsOf(allDone).hasOpenTask).toBe(false);
+    const reopened = memoOf(setTaskMark(allDone.content, 0, false)!, { seq: 3 });
+    expect(facetsOf(reopened).hasOpenTask).toBe(true);
   });
 });
 

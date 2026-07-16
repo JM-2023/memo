@@ -33,6 +33,10 @@ interface MemoCardProps {
   onPurge: () => void;
   onPickTag: (path: string) => void;
   onOpenImage: (items: LightboxItem[], index: number) => void;
+  /** Feed checkbox click; lineKey indexes memo.content.split("\n"). */
+  onToggleTask: (lineKey: number, checked: boolean) => void;
+  /** Optimistic per-line checkbox states while toggles are in flight. */
+  pendingTaskFlips?: ReadonlyMap<number, boolean>;
 }
 
 interface MemoMenuBodyProps {
@@ -365,6 +369,8 @@ export function MemoCard(props: MemoCardProps) {
               nextRaw={lines[index + 1]?.raw}
               tagMode={inTrash || selecting ? "static" : "button"}
               onPickTag={props.onPickTag}
+              onToggleTask={(checked) => props.onToggleTask(line.key, checked)}
+              taskCheckedOverride={props.pendingTaskFlips?.get(line.key)}
             />
           ))}
         </div>

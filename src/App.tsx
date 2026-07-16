@@ -44,10 +44,13 @@ import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, readSe
 import { dateKey, formatDayLabel } from "./lib/dates";
 import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow } from "./lib/feedSafety";
 import { useI18n } from "./lib/i18n";
+import { splitTaskLine } from "./lib/markdown";
+import { setTaskMark } from "./lib/markdownEdit";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
 import { SAVED_FILTERS_LIMIT, loadSavedFilters, persistSavedFilters, type SavedFilter } from "./lib/savedFilters";
 import {
   EMPTY_FILTERS,
+  facetsOf,
   filtersEqual,
   hasActiveFilters,
   memoMatchesFilters,
@@ -153,6 +156,7 @@ interface FeedHandlers {
   pickTag: (path: string) => void;
   openImage: (items: LightboxItem[], index: number) => void;
   toggleSelect: (memo: Memo) => void;
+  toggleTask: (memo: Memo, lineKey: number, checked: boolean) => void;
 }
 
 interface FeedItemProps {
@@ -164,6 +168,8 @@ interface FeedItemProps {
   editConflict: boolean;
   selecting: boolean;
   selected: boolean;
+  /** This memo's optimistic checkbox states (in-flight toggles), if any. */
+  taskFlips: ReadonlyMap<number, boolean> | undefined;
   vtName: string | undefined;
   /** Read once at mount; a stable getter keeps the memo comparison clean. */
   getEntering: () => boolean;
@@ -179,7 +185,7 @@ interface FeedItemProps {
  * deliberately left out of the equality check.
  */
 const FeedItem = reactMemo(
-  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, selecting, selected, vtName, getEntering, delay, handlers }: FeedItemProps) {
+  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, selecting, selected, taskFlips, vtName, getEntering, delay, handlers }: FeedItemProps) {
     return (
       <MemoSlot vtName={vtName} entering={getEntering()} delay={delay}>
         <MemoCard
@@ -191,6 +197,7 @@ const FeedItem = reactMemo(
           editConflict={editConflict}
           selecting={selecting}
           selected={selected}
+          pendingTaskFlips={taskFlips}
           onToggleSelect={() => handlers.toggleSelect(memo)}
           onStartEdit={() => handlers.startEdit(memo.id)}
           onCancelEdit={handlers.cancelEdit}
@@ -203,6 +210,7 @@ const FeedItem = reactMemo(
           onPurge={() => handlers.purge(memo)}
           onPickTag={handlers.pickTag}
           onOpenImage={handlers.openImage}
+          onToggleTask={(lineKey, checked) => handlers.toggleTask(memo, lineKey, checked)}
         />
       </MemoSlot>
     );
@@ -216,6 +224,7 @@ const FeedItem = reactMemo(
     prev.editConflict === next.editConflict &&
     prev.selecting === next.selecting &&
     prev.selected === next.selected &&
+    prev.taskFlips === next.taskFlips &&
     prev.vtName === next.vtName &&
     prev.handlers === next.handlers
 );
@@ -272,6 +281,52 @@ export default function App() {
   const editingBaseSeqRef = useRef<number | null>(null);
   const [editConflictId, setEditConflictId] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  // Feed checkbox toggles: an ephemeral optimistic layer (memoId → lineKey →
+  // desired checked state) that only skins the rendered box. syncState stays
+  // the server truth throughout, so snapshots and sync never persist a guess;
+  // a failed request clears the layer and the box snaps back.
+  const [pendingTaskFlips, setPendingTaskFlips] = useState<ReadonlyMap<string, ReadonlyMap<number, boolean>>>(() => new Map());
+  // Per-memo serial queue: flips arriving while a request is in flight are
+  // batched into the next one, computed against the then-latest seq/content —
+  // rapid ticking never races itself into a version conflict.
+  const taskFlipQueueRef = useRef(new Map<string, { running: boolean; flips: { lineKey: number; checked: boolean }[] }>());
+
+  const stampTaskFlip = useCallback((memoId: string, lineKey: number, checked: boolean) => {
+    setPendingTaskFlips((current) => {
+      const memoFlips = new Map(current.get(memoId));
+      memoFlips.set(lineKey, checked);
+      // Untouched memos keep their inner-map identity — FeedItem memoization
+      // re-renders only the card whose pending layer actually changed.
+      const next = new Map(current);
+      next.set(memoId, memoFlips);
+      return next;
+    });
+  }, []);
+
+  /**
+   * Drop the pending flips `content` now satisfies — or that lost their task
+   * line to a concurrent edit. null content (memo gone/trashed/failed
+   * request) clears the memo's whole layer, snapping boxes back to truth.
+   */
+  const settleTaskFlips = useCallback((memoId: string, content: string | null) => {
+    setPendingTaskFlips((current) => {
+      const memoFlips = current.get(memoId);
+      if (!memoFlips) return current;
+      let survivors: Map<number, boolean> | null = null;
+      if (content !== null) {
+        const lines = content.split("\n");
+        for (const [lineKey, checked] of memoFlips) {
+          const parts = lineKey < lines.length ? splitTaskLine(lines[lineKey]) : null;
+          if (parts && parts.checked !== checked) (survivors ??= new Map()).set(lineKey, checked);
+        }
+      }
+      if (survivors && survivors.size === memoFlips.size) return current;
+      const next = new Map(current);
+      if (survivors) next.set(memoId, survivors);
+      else next.delete(memoId);
+      return next;
+    });
+  }, []);
   // Multi-select mode: entered from the location dropdown, exits via 取消 /
   // Escape / view switches / a fully successful batch delete.
   const [selectMode, setSelectMode] = useState(false);
@@ -343,6 +398,8 @@ export default function App() {
     setEditingId(null);
     setEditConflictId(null);
     setSavingEdit(false);
+    setPendingTaskFlips(new Map());
+    taskFlipQueueRef.current.clear();
     setSelectMode(false);
     setSelected(new Set());
     setConfirmBatchDelete(false);
@@ -648,6 +705,19 @@ export default function App() {
     if (baseSeq !== null && current.seq > baseSeq) setEditConflictId(editingId);
   }, [editingId, syncState.memos, showToast, tr]);
 
+  // A sync delta can satisfy (or orphan) a pending checkbox flip — the same
+  // box ticked from another tab, or its task line edited away. Re-settle the
+  // optimistic layer against the fresh truth; settle is an idempotent prune,
+  // so keying on the memos map alone is enough.
+  useEffect(() => {
+    if (pendingTaskFlips.size === 0) return;
+    for (const memoId of pendingTaskFlips.keys()) {
+      const current = syncState.memos.get(memoId);
+      settleTaskFlips(memoId, current && !current.deletedAt ? current.content : null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-settle only when truth moves
+  }, [syncState.memos, settleTaskFlips]);
+
   const trimmedQuery = query.trim().toLowerCase();
   // Filtering follows the keystroke at deferred priority: the input never
   // waits for a big feed to re-render.
@@ -656,6 +726,11 @@ export default function App() {
   const parsedQuery = useMemo(() => parseSearchQuery(deferredQuery), [deferredQuery]);
   const structuredFiltersOn = hasActiveFilters(filters);
   const filtersActive = activeTag !== null || activeDay !== null || trimmedQuery.length > 0 || structuredFiltersOn;
+
+  // The live feed lenses, for async work that lands later (checkbox toggle
+  // batches read this at commit time instead of a render-stale capture).
+  const feedContextRef = useRef({ view, filters, sortKey, parsedQuery });
+  feedContextRef.current = { view, filters, sortKey, parsedQuery };
 
   const visibleMemos = useMemo(() => {
     let list = activeMemos;
@@ -1168,6 +1243,90 @@ export default function App() {
     }
   }
 
+  /**
+   * Feed checkbox click. The box flips optimistically (pending layer) while
+   * the flip queues behind the memo's in-flight batch, if any; each batch is
+   * one content edit through the normal updateMemo path, so it bumps
+   * updatedAt/seq — the toggle counts as an Edit everywhere an edit does
+   * (menu meta, Edited sorts, sync, version checks).
+   */
+  function handleToggleTask(memo: Memo, lineKey: number, checked: boolean) {
+    // The open editor owns that memo's content; its draft would just
+    // conflict with the flip. (The card shows the editor then anyway.)
+    if (editingIdRef.current === memo.id) return;
+    stampTaskFlip(memo.id, lineKey, checked);
+    let queue = taskFlipQueueRef.current.get(memo.id);
+    if (!queue) {
+      queue = { running: false, flips: [] };
+      taskFlipQueueRef.current.set(memo.id, queue);
+    }
+    queue.flips.push({ lineKey, checked });
+    if (!queue.running) void drainTaskFlips(memo.id, queue);
+  }
+
+  async function drainTaskFlips(memoId: string, queue: { running: boolean; flips: { lineKey: number; checked: boolean }[] }) {
+    queue.running = true;
+    try {
+      while (queue.flips.length > 0) {
+        const batch = queue.flips.splice(0);
+        const current = syncStateRef.current.memos.get(memoId);
+        if (!current || current.deletedAt) {
+          settleTaskFlips(memoId, null);
+          return;
+        }
+        let nextContent = current.content;
+        for (const flip of batch) {
+          // Stale flips (the line stopped being a task) drop silently; the
+          // settle below clears their pending marks.
+          nextContent = setTaskMark(nextContent, flip.lineKey, flip.checked) ?? nextContent;
+        }
+        if (nextContent === current.content) {
+          // Net-zero batch (e.g. tick + untick before the drain ran).
+          settleTaskFlips(memoId, current.content);
+          continue;
+        }
+        const result = await guard(() => updateMemo(memoId, { expectedSeq: current.seq, content: nextContent }));
+        if (!result?.memo) {
+          settleTaskFlips(memoId, null);
+          return;
+        }
+        commitTaskBatch(result.memo);
+      }
+    } catch (cause) {
+      queue.flips.length = 0;
+      settleTaskFlips(memoId, null);
+      if (!reconcileVersionConflict(cause)) {
+        showToast(errorMessage(cause, "Couldn’t update the task", "任务状态更新失败"), "error");
+      }
+    } finally {
+      queue.running = false;
+    }
+  }
+
+  /**
+   * Land one toggle batch. The feed glides (view transition) when the edit
+   * moves the card — Edited sorts reorder on the updatedAt bump, and ticking
+   * a memo's last open task drops it out of the open-task filter — and lands
+   * in place otherwise, leaving the motion to the checkbox's own transition.
+   */
+  function commitTaskBatch(nextMemo: Memo) {
+    const { view: liveView, filters: liveFilters, sortKey: liveSortKey, parsedQuery: liveQuery } = feedContextRef.current;
+    const leavesTaskFilter = liveFilters.hasOpenTask && !facetsOf(nextMemo).hasOpenTask;
+    const stillMatches = memoMatchesFilters(nextMemo, liveFilters) && memoMatchesQuery(nextMemo, liveQuery);
+    const animate = liveView === "memos" && (liveSortKey.startsWith("updated") || !stillMatches);
+    const apply = () => {
+      applySyncChanges([nextMemo], [], []);
+      settleTaskFlips(nextMemo.id, nextMemo.content);
+    };
+    if (animate) withViewTransition(() => flushSync(apply));
+    else apply();
+    void runSync();
+    notifyPeers();
+    if (liveView === "memos" && leavesTaskFilter) {
+      showToast(tr("All tasks done — hidden by the “With open tasks” filter", "任务已全部完成，已移出「含未完成任务」筛选"));
+    }
+  }
+
   async function handleCopy(memo: Memo) {
     try {
       await navigator.clipboard.writeText(memo.content);
@@ -1334,6 +1493,7 @@ export default function App() {
     trash: handleTrash,
     restore: handleRestore,
     purge: handlePurge,
+    toggleTask: handleToggleTask,
     acceptEditConflict: (id: string) => {
       const current = syncStateRef.current.memos.get(id);
       if (!current || current.deletedAt) return;
@@ -1361,6 +1521,7 @@ export default function App() {
     trash: handleTrash,
     restore: handleRestore,
     purge: handlePurge,
+    toggleTask: handleToggleTask,
     acceptEditConflict: (id: string) => {
       const current = syncStateRef.current.memos.get(id);
       if (!current || current.deletedAt) return;
@@ -1389,7 +1550,8 @@ export default function App() {
       purge: (memo) => void feedActionsRef.current.purge(memo),
       pickTag: (path) => feedActionsRef.current.pickTag(path),
       openImage: (items, index) => setLightbox({ items, index }),
-      toggleSelect: (memo) => feedActionsRef.current.toggleSelect(memo)
+      toggleSelect: (memo) => feedActionsRef.current.toggleSelect(memo),
+      toggleTask: (memo, lineKey, checked) => feedActionsRef.current.toggleTask(memo, lineKey, checked)
     }),
     []
   );
@@ -1994,6 +2156,7 @@ export default function App() {
                 editConflict={editingId === memo.id && editConflictId === memo.id}
                 selecting={selectMode && view === "memos"}
                 selected={selectMode && selected.has(memo.id)}
+                taskFlips={pendingTaskFlips.get(memo.id)}
                 vtName={index < 32 ? `memo-${memo.id}` : undefined}
                 getEntering={getEntering}
                 delay={Math.min(index, 6) * 0.008}

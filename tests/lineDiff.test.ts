@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffLines, lineRenders, visualLinesOf, type DiffOp } from "../src/lib/lineDiff";
+import { diffLines, isTaskMarkFlipOnly, lineRenders, visualLinesOf, type DiffOp } from "../src/lib/lineDiff";
 
 function script(ops: DiffOp[]): string {
   return ops.map((op) => (op.type === "keep" ? `=${op.raw}` : op.type === "del" ? `-${op.raw}` : `+${op.raw}`)).join("|");
@@ -101,5 +101,25 @@ describe("diffLines", () => {
     const { old, next } = replay(ops);
     expect(old).toEqual(oldLines);
     expect(next).toEqual(newLines);
+  });
+});
+
+describe("isTaskMarkFlipOnly", () => {
+  const flip = (oldLines: string[], newLines: string[]) => isTaskMarkFlipOnly(diffLines(oldLines, newLines));
+
+  it("accepts single and multiple pure mark flips", () => {
+    expect(flip(["- [ ] a"], ["- [x] a"])).toBe(true);
+    expect(flip(["- [x] a", "p", "- [ ] b"], ["- [ ] a", "p", "- [x] b"])).toBe(true);
+  });
+
+  it("rejects flips that also touch the line text", () => {
+    expect(flip(["- [ ] a"], ["- [x] b"])).toBe(false);
+  });
+
+  it("rejects non-task edits, additions, deletions and no-ops", () => {
+    expect(flip(["plain"], ["edited"])).toBe(false);
+    expect(flip(["- [ ] a"], ["- [ ] a", "new line"])).toBe(false);
+    expect(flip(["- [ ] a", "gone"], ["- [x] a"])).toBe(false);
+    expect(isTaskMarkFlipOnly(diffLines(["- [ ] a"], ["- [ ] a"]))).toBe(false);
   });
 });

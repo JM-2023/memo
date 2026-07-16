@@ -3,7 +3,7 @@
 // The prefix grammar mirrors parseBlock in lib/markdown; table rows reuse
 // its cell splitter directly so the two grammars cannot drift.
 
-import { isTableRule, parseTableCells } from "./markdown";
+import { isTableRule, parseTableCells, splitTaskLine } from "./markdown";
 
 export interface EditPatch {
   value: string;
@@ -86,6 +86,23 @@ export function continueListOnEnter(value: string, caret: number): EditPatch | n
   const inserted = `\n${prefix}`;
   const position = caret + inserted.length;
   return { value: value.slice(0, caret) + inserted + value.slice(caret), start: position, end: position };
+}
+
+/**
+ * Feed-side checkbox toggle: set the task mark on one content line.
+ * `lineIndex` indexes content.split("\n") — the same key visualLinesOf hands
+ * the card renderer, so a click maps straight back to its source line.
+ * Returns the content unchanged when the mark already matches, and null when
+ * that line is no longer a task (a stale index after a concurrent edit — the
+ * caller drops the flip instead of guessing).
+ */
+export function setTaskMark(content: string, lineIndex: number, checked: boolean): string | null {
+  const lines = content.split("\n");
+  const parts = lineIndex >= 0 && lineIndex < lines.length ? splitTaskLine(lines[lineIndex]) : null;
+  if (!parts) return null;
+  if (parts.checked === checked) return content;
+  lines[lineIndex] = parts.head + (checked ? "x" : " ") + parts.tail;
+  return lines.join("\n");
 }
 
 /**

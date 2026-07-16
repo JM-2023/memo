@@ -1,5 +1,6 @@
 import { Fragment, type CSSProperties, type ReactNode } from "react";
 import { tokenizeLine } from "../lib/content";
+import { useI18n } from "../lib/i18n";
 import { parseBlock, parseInline, type Inline } from "../lib/markdown";
 
 /**
@@ -22,6 +23,18 @@ interface MemoLineProps {
   nextRaw?: string;
   tagMode: TagMode;
   onPickTag?: (path: string) => void;
+  /**
+   * Live task checkbox: called with the desired checked state. Only honored
+   * in "button" tag mode — trash cards, ghosts and replay clones render the
+   * same-geometry inert box instead.
+   */
+  onToggleTask?: (checked: boolean) => void;
+  /**
+   * Optimistic checkbox override while a toggle is in flight. The raw line
+   * stays the server truth; only the rendered mark (and its done styling)
+   * follows the user's click ahead of the round trip.
+   */
+  taskCheckedOverride?: boolean;
 }
 
 function renderInline(nodes: Inline[], tagMode: TagMode, onPickTag?: (path: string) => void): ReactNode[] {
@@ -78,7 +91,8 @@ function renderInline(nodes: Inline[], tagMode: TagMode, onPickTag?: (path: stri
  * below stays on tokenizeLine — lineRenders() in lib/lineDiff mirrors it
  * exactly, and markdown only changes HOW a row renders, never WHETHER.
  */
-export function MemoLine({ raw, nextRaw, tagMode, onPickTag }: MemoLineProps) {
+export function MemoLine({ raw, nextRaw, tagMode, onPickTag, onToggleTask, taskCheckedOverride }: MemoLineProps) {
+  const { tr } = useI18n();
   if (!raw) return <p className="memo-blank" />;
   const tokens = tokenizeLine(raw);
   // Image tokens leave the text flow (they render in the media grid); a line
@@ -111,16 +125,38 @@ export function MemoLine({ raw, nextRaw, tagMode, onPickTag }: MemoLineProps) {
     case "quote":
       return <p className="md-quote">{inline}</p>;
     case "bullet":
-    case "ordered":
-    case "task": {
+    case "ordered": {
       // List markers live in ::before; the body span keeps the inline nodes
       // one wrapping flex item (bare text children would each become their
       // own flex item and stop wrapping as continuous text).
       const style = block.depth > 0 ? ({ "--md-depth": block.depth } as CSSProperties) : undefined;
-      const className =
-        block.kind === "bullet" ? "md-li md-bullet" : block.kind === "ordered" ? "md-li md-ordered" : `md-li md-task${block.checked ? " is-done" : ""}`;
       return (
-        <p className={className} style={style} data-ord={block.kind === "ordered" ? block.ordinal : undefined}>
+        <p className={block.kind === "bullet" ? "md-li md-bullet" : "md-li md-ordered"} style={style} data-ord={block.kind === "ordered" ? block.ordinal : undefined}>
+          <span className="md-body">{inline}</span>
+        </p>
+      );
+    }
+    case "task": {
+      const style = block.depth > 0 ? ({ "--md-depth": block.depth } as CSSProperties) : undefined;
+      const checked = taskCheckedOverride ?? block.checked;
+      const live = tagMode === "button" && onToggleTask !== undefined;
+      return (
+        <p className={`md-li md-task${checked ? " is-done" : ""}`} style={style}>
+          {/* One .md-task-box in every mode: the live feed gets the real
+              control, everything else (trash, ghosts, replay clones) gets a
+              pixel-identical inert span. */}
+          {live ? (
+            <button
+              type="button"
+              className="md-task-box"
+              role="checkbox"
+              aria-checked={checked}
+              aria-label={block.text || tr("Task", "任务")}
+              onClick={() => onToggleTask(!checked)}
+            />
+          ) : (
+            <span className="md-task-box" aria-hidden="true" />
+          )}
           <span className="md-body">{inline}</span>
         </p>
       );

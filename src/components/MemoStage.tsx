@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { diffLines, visualLinesOf, type DiffOp } from "../lib/lineDiff";
+import { diffLines, isTaskMarkFlipOnly, visualLinesOf, type DiffOp } from "../lib/lineDiff";
 import type { MemoImage } from "../lib/types";
 
 /**
@@ -75,7 +75,13 @@ function buildPlan(prev: Snap, next: Snap): MorphPlan | null {
   const oldLines = visualLinesOf(prev.content).map((line) => line.raw);
   const newLines = visualLinesOf(next.content).map((line) => line.raw);
   if (oldLines.length + newLines.length > REPLAY_LINE_BUDGET) return { kind: "swap", prev, ops: null };
-  return { kind: "replay", prev, ops: diffLines(oldLines, newLines) };
+  const ops = diffLines(oldLines, newLines);
+  // A view→view update that only flips checkbox marks lands with no morph at
+  // all: the row keeps its DOM node (stable line keys), so the box's own CSS
+  // transition tells the story — for the local toggle's confirmation the view
+  // already shows the flipped state, and a replay would re-narrate it.
+  if (!prev.editing && !next.editing && prev.mediaKey === next.mediaKey && isTaskMarkFlipOnly(ops)) return null;
+  return { kind: "replay", prev, ops };
 }
 
 export function MemoStage({ editing, content, mediaKey, images, view, editor, renderGhost, renderGhostMedia, renderLine }: MemoStageProps) {

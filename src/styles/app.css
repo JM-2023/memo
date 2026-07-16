@@ -2294,24 +2294,48 @@ button.crumb:active { background: var(--wash-strong); }
 /* line box ≈ 25.8px (0.95rem × 1.7) — margins center the fixed markers. */
 .md-bullet::before { content: ""; flex: none; width: 5px; height: 5px; margin-top: 10px; border-radius: 50%; background: var(--muted); }
 .md-ordered::before { content: attr(data-ord) "."; flex: none; min-width: 1.1em; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-.md-task::before {
-  content: "";
+/* The task box is a real element — a button in the live feed, the same-
+   geometry inert span in trash cards, ghosts and replay clones — so the
+   checkbox can be clicked, focused and CSS-transitioned. The tick paints in
+   ::after on its own layer (it fades/scales independently of the box fill);
+   ::before is an invisible hit-area extender around the 15px control. */
+.md-task-box {
+  position: relative;
   flex: none;
   width: 15px;
   height: 15px;
   margin-top: 5px;
+  padding: 0;
   border-radius: var(--r-xs);
   border: 1.5px solid var(--line-strong);
+  background: transparent;
+  transition: border-color 0.16s var(--ease), background-color 0.16s var(--ease), transform 0.12s var(--ease);
 }
-.md-task.is-done::before {
-  border-color: var(--primary);
-  background: var(--primary)
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='4.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+.md-task-box::before { content: ""; position: absolute; inset: -6px; }
+.md-task-box::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='4.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
     center / 9px 9px no-repeat;
+  opacity: 0;
+  transform: scale(0.4);
+  transition: opacity 0.16s var(--ease), transform 0.16s var(--ease);
+}
+.md-task.is-done .md-task-box { border-color: var(--primary); background-color: var(--primary); }
+.md-task.is-done .md-task-box::after { opacity: 1; transform: scale(1); }
+button.md-task-box { cursor: pointer; }
+button.md-task-box:hover { border-color: var(--primary); }
+button.md-task-box:active { transform: scale(0.88); }
+/* line-through is always on, transparent until done — so the strike fades
+   with the same transition as the box instead of snapping. */
+.md-task > .md-body {
+  text-decoration: line-through;
+  text-decoration-color: transparent;
+  transition: color 0.16s var(--ease), text-decoration-color 0.16s var(--ease);
 }
 .md-task.is-done > .md-body {
   color: var(--muted);
-  text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
 }
 
@@ -2358,7 +2382,7 @@ button.crumb:active { background: var(--wash-strong); }
 }
 /* Trash cards mute everything; sage accents step back to neutrals. */
 .memo-card.is-trash .md-quote { border-color: var(--line-strong); }
-.memo-card.is-trash .md-task.is-done::before { border-color: var(--muted); background-color: var(--muted); }
+.memo-card.is-trash .md-task.is-done .md-task-box { border-color: var(--muted); background-color: var(--muted); }
 
 .memo-tag {
   display: inline-block;

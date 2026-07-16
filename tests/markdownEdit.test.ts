@@ -2,11 +2,40 @@ import { describe, expect, it } from "vitest";
 import {
   continueListOnEnter,
   insertTableTemplate,
+  setTaskMark,
   shiftListIndent,
   tableTabStop,
   toggleBulletLine,
   toggleWrap
 } from "../src/lib/markdownEdit";
+
+describe("setTaskMark", () => {
+  it("flips only the targeted line's mark, byte-for-byte elsewhere", () => {
+    expect(setTaskMark("- [ ] a\n- [ ] b", 0, true)).toBe("- [x] a\n- [ ] b");
+    expect(setTaskMark("- [ ] a\n- [x] b", 1, false)).toBe("- [ ] a\n- [ ] b");
+  });
+
+  it("targets by absolute content line index, across blanks and prose", () => {
+    expect(setTaskMark("title\n\n- [ ] a", 2, true)).toBe("title\n\n- [x] a");
+  });
+
+  it("preserves indent, marker flavor and trailing text; X unchecks to a space", () => {
+    expect(setTaskMark("  * [ ] deep  spaced", 0, true)).toBe("  * [x] deep  spaced");
+    expect(setTaskMark("+ [X] caps", 0, false)).toBe("+ [ ] caps");
+  });
+
+  it("returns the content unchanged when the mark already matches", () => {
+    const content = "- [x] done";
+    expect(setTaskMark(content, 0, true)).toBe(content);
+  });
+
+  it("returns null off task lines and out of range", () => {
+    expect(setTaskMark("plain", 0, true)).toBeNull();
+    expect(setTaskMark("- bullet", 0, true)).toBeNull();
+    expect(setTaskMark("- [ ] a", 1, true)).toBeNull();
+    expect(setTaskMark("- [ ] a", -1, true)).toBeNull();
+  });
+});
 
 describe("continueListOnEnter", () => {
   it("continues bullet, task and quote prefixes", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseBlock, parseInline, type Inline } from "../src/lib/markdown";
+import { parseBlock, parseInline, splitTaskLine, type Inline } from "../src/lib/markdown";
 
 /** Compact one-line print of an inline tree for readable assertions. */
 function print(nodes: Inline[]): string {
@@ -86,6 +86,43 @@ describe("parseBlock", () => {
     expect(parseBlock("| alone")).toEqual({ kind: "p", text: "| alone" });
     expect(parseBlock("a | b")).toEqual({ kind: "p", text: "a | b" });
     expect(parseBlock("x || y 表示逻辑或")).toEqual({ kind: "p", text: "x || y 表示逻辑或" });
+  });
+});
+
+describe("splitTaskLine", () => {
+  it("agrees with parseBlock on what a task line is", () => {
+    const corpus = [
+      "- [ ] todo",
+      "- [x] done",
+      "* [X] caps",
+      "+ [ ]",
+      "- [ ] ",
+      "  - [x] nested",
+      "-\t[ ] tabbed",
+      "- [] not a task",
+      "- [y] not a task",
+      "-[ ] no marker space",
+      "- [ ]x glued text",
+      "1. [ ] ordered is a list, not a task",
+      "plain",
+      "# heading",
+      ""
+    ];
+    for (const raw of corpus) {
+      expect(splitTaskLine(raw) !== null, raw).toBe(parseBlock(raw).kind === "task");
+    }
+  });
+
+  it("splits into head + one mark char + tail, with parseBlock's checked state", () => {
+    for (const raw of ["- [ ] todo", "  * [X] caps", "+ [x]"]) {
+      const parts = splitTaskLine(raw)!;
+      const block = parseBlock(raw);
+      if (block.kind === "task") expect(parts.checked).toBe(block.checked);
+      else expect.fail(`${raw} should parse as a task`);
+      expect(raw.startsWith(parts.head)).toBe(true);
+      expect(raw.endsWith(parts.tail)).toBe(true);
+      expect(parts.head.length + 1 + parts.tail.length).toBe(raw.length);
+    }
   });
 });
 

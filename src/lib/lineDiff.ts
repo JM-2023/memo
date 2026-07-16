@@ -3,6 +3,7 @@
 // diff ops map 1:1 onto rendered <p> rows in .memo-content.
 
 import { tokenizeLine } from "./content";
+import { splitTaskLine } from "./markdown";
 
 export interface VisualLine {
   raw: string;
@@ -30,6 +31,28 @@ export function visualLinesOf(content: string): VisualLine[] {
     if (lineRenders(raw)) lines.push({ raw, key });
   });
   return lines;
+}
+
+/**
+ * True when an edit script only flips task checkbox marks: every change is a
+ * del/add pair over the same line text with a different [ ]/[x] mark. Flips
+ * never reorder lines, so pairing dels with adds in order is exact. The card
+ * stage uses this to let checkbox toggles land silently — the box's own CSS
+ * transition is the animation — instead of replaying a line morph.
+ */
+export function isTaskMarkFlipOnly(ops: readonly DiffOp[]): boolean {
+  const dels: string[] = [];
+  const adds: string[] = [];
+  for (const op of ops) {
+    if (op.type === "del") dels.push(op.raw);
+    else if (op.type === "add") adds.push(op.raw);
+  }
+  if (dels.length === 0 || dels.length !== adds.length) return false;
+  return dels.every((raw, index) => {
+    const oldParts = splitTaskLine(raw);
+    const newParts = splitTaskLine(adds[index]);
+    return oldParts !== null && newParts !== null && oldParts.head === newParts.head && oldParts.tail === newParts.tail;
+  });
 }
 
 export type DiffOp =

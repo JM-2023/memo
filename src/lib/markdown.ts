@@ -30,6 +30,10 @@ const HR_PATTERN = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
 // "# Heading" needs the space — "#tag" (no space) stays a tag.
 const HEADING_PATTERN = /^(#{1,6})\s+(\S.*)$/;
 const TASK_PATTERN = /^(\s*)[-*+]\s+\[([ xX])\](?:\s+(.*))?$/;
+// TASK_PATTERN's splitting twin: same grammar, but capturing the text around
+// the mark so the checkbox can be flipped in place. Tests hold the two to
+// agreement — a line the card renders as a task must always be splittable.
+const TASK_SPLIT_PATTERN = /^(\s*[-*+]\s+\[)([ xX])(\](?:\s+.*)?)$/;
 const BULLET_PATTERN = /^(\s*)[-*+]\s+(.*)$/;
 const ORDERED_PATTERN = /^(\s*)(\d{1,3})[.)]\s+(.*)$/;
 // Bare ">" or "> text" — a space is required so ">_<" style openers stay prose.
@@ -77,6 +81,20 @@ export function parseTableCells(raw: string): string[] | null {
 /** True when every cell is a "---" / ":--:" delimiter — the header rule row. */
 export function isTableRule(cells: string[]): boolean {
   return cells.every((cell) => TRULE_CELL.test(cell));
+}
+
+export interface TaskLineParts {
+  /** Everything before the mark, "- [" included. */
+  head: string;
+  checked: boolean;
+  /** Everything from the closing "]" on. */
+  tail: string;
+}
+
+/** Split a task line around its checkbox mark; null off task lines. */
+export function splitTaskLine(raw: string): TaskLineParts | null {
+  const match = TASK_SPLIT_PATTERN.exec(raw);
+  return match ? { head: match[1], checked: match[2] !== " ", tail: match[3] } : null;
 }
 
 export function parseBlock(raw: string): Block {
