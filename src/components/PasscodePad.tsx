@@ -34,6 +34,7 @@ export function PasscodePad({ icon, title, subtitle, error, busy, entryKey = 0, 
   const [value, setValue] = useState("");
   const valueRef = useRef(value);
   const busyRef = useRef(Boolean(busy));
+  const completingRef = useRef(false);
   const onInputRef = useRef(onInput);
   const onCompleteRef = useRef(onComplete);
 
@@ -45,8 +46,13 @@ export function PasscodePad({ icon, title, subtitle, error, busy, entryKey = 0, 
 
   useEffect(() => {
     valueRef.current = "";
+    completingRef.current = false;
     setValue("");
   }, [entryKey]);
+
+  useEffect(() => {
+    if (!busy) completingRef.current = false;
+  }, [busy]);
 
   function update(next: string) {
     valueRef.current = next;
@@ -56,11 +62,13 @@ export function PasscodePad({ icon, title, subtitle, error, busy, entryKey = 0, 
   function press(key: PadKey) {
     if (busyRef.current) return;
     if (key === "submit") {
-      if (valueRef.current.length < MIN_PIN_LENGTH) return;
+      if (valueRef.current.length < MIN_PIN_LENGTH || completingRef.current) return;
+      completingRef.current = true;
       onInputRef.current?.();
       onCompleteRef.current(valueRef.current);
       return;
     }
+    completingRef.current = false;
     onInputRef.current?.();
     if (key === "clear") {
       update("");
@@ -79,11 +87,17 @@ export function PasscodePad({ icon, title, subtitle, error, busy, entryKey = 0, 
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.isComposing) return;
       if (event.key >= "0" && event.key <= "9") {
         pressRef.current(event.key as PadKey);
       } else if (event.key === "Backspace") {
         pressRef.current("delete");
       } else if (event.key === "Enter") {
+        // A focused button receives its own native Enter-generated click. Let
+        // that one activation own the key instead of also submitting through
+        // this window shortcut (which would otherwise invoke onComplete twice).
+        const active = event.target instanceof Element ? event.target : document.activeElement;
+        if (active instanceof Element && active.closest("button")) return;
         pressRef.current("submit");
       } else if (event.key === "Escape") {
         pressRef.current("clear");
@@ -94,11 +108,13 @@ export function PasscodePad({ icon, title, subtitle, error, busy, entryKey = 0, 
   }, []);
 
   return (
-    <section className={`pin-pad${error ? " shake" : ""}`} aria-label={title}>
+    <section className={`pin-pad${error ? " shake" : ""}`} aria-label={title} aria-busy={busy || undefined}>
       <div className="pin-brand">
         <div className="pin-logo">{icon}</div>
         <h1>{title}</h1>
-        <p>{subtitle}</p>
+        <p role={error ? "alert" : "status"} aria-live={error ? "assertive" : "polite"} aria-atomic="true">
+          {subtitle}
+        </p>
       </div>
 
       <div className={`pin-dots${error ? " error" : ""}`} aria-hidden="true">

@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { addDays, dateKey, formatDayLabel, startOfWeek, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { buildHeatWeeks, type HeatCell, type PeriodKind } from "../lib/stats";
@@ -46,6 +46,41 @@ function rangeOf(period: PeriodKind, offset: number, now: Date): { start: Date; 
   return { start: new Date(now.getFullYear() + offset, 0, 1), end: new Date(now.getFullYear() + offset, 11, 31) };
 }
 
+/**
+ * A day-granularity clock for calendar semantics. The timeout handles an open
+ * foreground tab; focus/visibility refreshes cover sleeping or throttled tabs
+ * and local timezone changes before the old timeout gets a chance to fire.
+ */
+function useLocalToday(): Date {
+  const [today, setToday] = useState(() => new Date());
+
+  useEffect(() => {
+    let timer = 0;
+    const stamp = (date: Date) => `${dateKey(date)}:${date.getTimezoneOffset()}`;
+    const refresh = () => {
+      window.clearTimeout(timer);
+      const current = new Date();
+      setToday((previous) => (stamp(previous) === stamp(current) ? previous : current));
+      const nextMidnight = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1);
+      timer = window.setTimeout(refresh, Math.max(50, nextMidnight.getTime() - current.getTime() + 50));
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+
+    refresh();
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
+  return today;
+}
+
 function weekRangeLabel(start: Date, end: Date, locale: string): string {
   const formatter = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" });
   const withRange = formatter as Intl.DateTimeFormat & { formatRange?: (a: Date, b: Date) => string };
@@ -68,7 +103,8 @@ function weekRangeLabel(start: Date, end: Date, locale: string): string {
 export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: HeatmapProps) {
   const { count, locale, tr } = useI18n();
   const tip = useTip();
-  const now = new Date();
+  const now = useLocalToday();
+  const todayStamp = `${dateKey(now)}:${now.getTimezoneOffset()}`;
   // Paging within the selected period. Switching periods derives back to
   // offset 0 (no effect needed — `nav.period` going stale resets it).
   const [nav, setNav] = useState({ period, offset: 0, direction: 0 });
@@ -76,7 +112,7 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
   const direction = nav.period === period ? nav.direction : 0;
 
   const { start, end } = rangeOf(period, offset, now);
-  const weeks = useMemo(() => buildHeatWeeks(start, end, countsByDay, now), [period, offset, countsByDay]); // eslint-disable-line react-hooks/exhaustive-deps
+  const weeks = useMemo(() => buildHeatWeeks(start, end, countsByDay, now), [period, offset, countsByDay, todayStamp]); // eslint-disable-line react-hooks/exhaustive-deps
   const navigableCells = useMemo(
     () =>
       weeks.flatMap((week, weekIndex) =>
@@ -107,7 +143,7 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
     if (period === "week") return weekRangeLabel(start, end, locale);
     if (period === "month") return new Intl.DateTimeFormat(locale, { year: "numeric", month: "long" }).format(start);
     return new Intl.DateTimeFormat(locale, { year: "numeric" }).format(start);
-  }, [locale, period, offset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [locale, period, offset, todayStamp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const weekdayLabels = useMemo(() => {
     const formatter = new Intl.DateTimeFormat(locale, { weekday: "narrow" });
@@ -206,6 +242,7 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
           `${formatDayLabel(cell.key, locale)}, ${count(cell.count, "memo")}`,
           `${formatDayLabel(cell.key, locale)}，${count(cell.count, "memo")}`
         )}
+        aria-pressed={activeDay === cell.key}
         tabIndex={cell.key === rovingDay ? 0 : -1}
         onFocus={() => setFocusedDay(cell.key)}
         onKeyDown={(event) => moveCellFocus(event, cell.key)}

@@ -26,7 +26,9 @@ const CANONICAL_HOST = "notes.example";
 
 export async function onRequest(context: AppContext): Promise<Response> {
   const requestUrl = new URL(context.request.url);
-  if (requestUrl.hostname.endsWith(".pages.dev")) {
+  // Redirect only the production Pages hostname. Hash/branch preview hosts are
+  // intentionally left on their isolated preview bindings and secrets.
+  if (requestUrl.hostname === "project.pages.dev") {
     requestUrl.protocol = "https:";
     requestUrl.hostname = CANONICAL_HOST;
     requestUrl.port = "";

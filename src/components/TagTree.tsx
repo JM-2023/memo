@@ -117,7 +117,10 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
             type="button"
             className={`tag-expand${expanded ? " is-expanded" : ""}`}
             onClick={() => setExpanded((value) => !value)}
-            aria-label={expanded ? tr("Collapse", "收起") : tr("Expand", "展开")}
+            aria-expanded={expanded}
+            aria-label={
+              expanded ? tr(`Collapse tag ${node.path}`, `收起标签 ${node.path}`) : tr(`Expand tag ${node.path}`, `展开标签 ${node.path}`)
+            }
           >
             <ChevronRight size={13} aria-hidden="true" />
           </button>
@@ -126,7 +129,7 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
             <Hash size={12} aria-hidden="true" />
           </span>
         )}
-        <button type="button" className="tag-label" onClick={() => onPickTag(isActive ? null : node.path)}>
+        <button type="button" className="tag-label" aria-pressed={isActive} onClick={() => onPickTag(isActive ? null : node.path)}>
           {node.name}
         </button>
         {pinned ? <Pin size={12} className="tag-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}

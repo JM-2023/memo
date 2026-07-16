@@ -283,5 +283,9 @@ export async function requireAuth(context: AppContext): Promise<Response | null>
   } catch {
     return apiError(500, "INTERNAL_ERROR", "Authentication could not be verified.");
   }
-  return apiError(401, "AUTH_REQUIRED", "Authentication required");
+  const denied = apiError(401, "AUTH_REQUIRED", "Authentication required");
+  // A revoked/expired session is the other confidentiality boundary where a
+  // browser must discard legacy authenticated image cache entries.
+  denied.headers.set("Clear-Site-Data", '"cache"');
+  return denied;
 }

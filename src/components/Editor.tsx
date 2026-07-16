@@ -1,5 +1,5 @@
 import { Bold, Hash, Image as ImageIcon, ImagePlus, Link2, List, Loader2, Send, Table, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import { ApiError } from "../lib/api";
 import { ImageSlotLedger } from "../lib/imageSlots";
 import { compressImage } from "../lib/images";
@@ -89,6 +89,7 @@ export function Editor({
   const overflowRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const linkRef = useRef<HTMLInputElement>(null);
+  const suggestionListId = useId();
   // Stable across ambiguous network failures; rotate only after a confirmed
   // create so retrying the same draft remains idempotent.
   const draftIdRef = useRef(crypto.randomUUID());
@@ -388,6 +389,11 @@ export function Editor({
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (busy || submittingRef.current) return;
+    // Candidate navigation and confirmation belong to the IME while text is
+    // composing. Some WebKit versions clear isComposing on the final Enter
+    // keydown but retain the conventional 229 keyCode, so honor both signals
+    // before tag suggestions or markdown shortcuts see the event.
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
     if (suggestion) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -511,6 +517,12 @@ export function Editor({
       <div className="editor-field">
         <textarea
           ref={areaRef}
+          role="combobox"
+          aria-label={tr("Memo content", "笔记内容")}
+          aria-autocomplete="list"
+          aria-expanded={suggestion !== null}
+          aria-controls={suggestion ? suggestionListId : undefined}
+          aria-activedescendant={suggestion ? `${suggestionListId}-option-${suggestion.index}` : undefined}
           value={content}
           placeholder={tr("What’s on your mind…", "现在的想法是……")}
           rows={mode === "create" ? 2 : 3}
@@ -537,12 +549,14 @@ export function Editor({
       </div>
 
       {suggestion ? (
-        <div className="tag-suggest" role="listbox" aria-label={tr("Tag suggestions", "标签建议")}>
+        <div id={suggestionListId} className="tag-suggest" role="listbox" aria-label={tr("Tag suggestions", "标签建议")}>
           {suggestion.items.map((tag, index) => (
             <button
               key={tag}
+              id={`${suggestionListId}-option-${index}`}
               type="button"
               role="option"
+              tabIndex={-1}
               aria-selected={index === suggestion.index}
               className={index === suggestion.index ? "is-active" : ""}
               onMouseDown={(event) => {
@@ -651,7 +665,9 @@ export function Editor({
           {tr(`Remove images until no more than ${MAX_IMAGES} remain`, `请移除图片，最多保留 ${MAX_IMAGES} 张`)}
         </p>
       ) : error ? (
-        <p className="editor-error">{error}</p>
+        <p className="editor-error" role="alert">
+          {error}
+        </p>
       ) : null}
       {conflictMessage ? (
         <div className="editor-conflict" role="alert">

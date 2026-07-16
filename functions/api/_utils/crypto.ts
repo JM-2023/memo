@@ -145,27 +145,49 @@ const CACHE_KEY_SETTING = "client_cache_key";
 /**
  * The random key that encrypts the client's IndexedDB snapshot. It is only
  * ever handed out on authenticated responses, so a device that lost its
- * session holds an unreadable local cache. Created once, then stable — the
- * insert races benignly (DO NOTHING + re-read converge on one winner).
+ * session holds an unreadable local cache. Created once, then stable. Missing
+ * rows use insert-and-reread; malformed rows use compare-and-swap-and-reread,
+ * so concurrent initializers or repairs always converge on one winner.
  */
 export async function getOrCreateCacheKey(env: AppEnv): Promise<string> {
-  const read = async () => {
-    const row = await env.DB.prepare("SELECT value_json FROM app_settings WHERE key = ?").bind(CACHE_KEY_SETTING).first<{ value_json: string }>();
-    if (!row) return null;
+  const db = env.DB.withSession("first-primary");
+  const parseKey = (valueJson: string): string | null => {
     try {
-      const parsed = JSON.parse(row.value_json) as { key?: unknown };
-      return typeof parsed.key === "string" && parsed.key ? parsed.key : null;
+      const parsed = JSON.parse(valueJson) as { key?: unknown };
+      if (typeof parsed.key !== "string") return null;
+      const bytes = base64ToBytes(parsed.key);
+      return bytes.byteLength === 32 && bytesToBase64(bytes) === parsed.key ? parsed.key : null;
     } catch {
       return null;
     }
   };
+  const read = () =>
+    db.prepare("SELECT value_json FROM app_settings WHERE key = ?").bind(CACHE_KEY_SETTING).first<{ value_json: string }>();
+
   const existing = await read();
-  if (existing) return existing;
+  const existingKey = existing ? parseKey(existing.value_json) : null;
+  if (existingKey) return existingKey;
+
   const fresh = bytesToBase64(crypto.getRandomValues(new Uint8Array(32)));
-  await env.DB.prepare("INSERT INTO app_settings (key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING")
-    .bind(CACHE_KEY_SETTING, JSON.stringify({ key: fresh }), nowIso())
-    .run();
-  return (await read()) ?? fresh;
+  const valueJson = JSON.stringify({ key: fresh });
+  if (existing) {
+    // Compare-and-swap means only one repair wins when concurrent requests read
+    // the same malformed value. Every caller rereads that winner below.
+    await db
+      .prepare("UPDATE app_settings SET value_json = ?, updated_at = ? WHERE key = ? AND value_json = ?")
+      .bind(valueJson, nowIso(), CACHE_KEY_SETTING, existing.value_json)
+      .run();
+  } else {
+    await db
+      .prepare("INSERT INTO app_settings (key, value_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING")
+      .bind(CACHE_KEY_SETTING, valueJson, nowIso())
+      .run();
+  }
+
+  const persisted = await read();
+  const persistedKey = persisted ? parseKey(persisted.value_json) : null;
+  if (!persistedKey) throw new Error("The client cache key could not be initialized.");
+  return persistedKey;
 }
 
 let backfillScheduled = false;

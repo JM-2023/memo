@@ -122,6 +122,23 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     target?.focus({ preventScroll: true });
   }, [open, kind]);
 
+  // Some action menus replace their focused destructive item with an inline
+  // confirm/cancel branch. Removing that DOM node sends focus to <body>; put
+  // it back on the first item in the new branch (and again when cancelling)
+  // so the next Tab does not close the menu before confirmation is reachable.
+  useEffect(() => {
+    if (!open || kind !== "menu") return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const observer = new MutationObserver(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body && active.isConnected) return;
+      menuItems()[0]?.focus({ preventScroll: true });
+    });
+    observer.observe(panel, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [open, kind]);
+
   useEffect(() => {
     if (!open) return;
     function onPointerDown(event: PointerEvent) {

@@ -9,6 +9,7 @@ import {
   requireAuth
 } from "../functions/api/_utils/auth";
 import type { AppContext, AppEnv } from "../functions/api/_utils/types";
+import { onRequestPost as logout } from "../functions/api/auth/logout";
 import { onRequestPost as setupPasscode } from "../functions/api/auth/setup";
 import { onRequestGet as getImage } from "../functions/api/images/[id]";
 
@@ -220,6 +221,23 @@ describe("atomic authentication state", () => {
       context(new Request("https://memo.example/api/bootstrap", { headers: { Cookie: cookieHeader } }))
     );
     expect(denied?.status).toBe(401);
+    expect(denied?.headers.get("Clear-Site-Data")).toBe('"cache"');
+  });
+
+  it("clears legacy authenticated cache entries on logout", async () => {
+    const origin = "https://memo.example";
+    const response = await logout(
+      context(
+        new Request(`${origin}/api/auth/logout`, {
+          method: "POST",
+          headers: { Origin: origin }
+        })
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Clear-Site-Data")).toBe('"cache"');
+    expect(response.headers.get("Set-Cookie")).toContain("Max-Age=0");
   });
 
   it("serves an attachment while its memo is in Trash", async () => {
@@ -249,6 +267,7 @@ describe("atomic authentication state", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect([...new Uint8Array(await response.arrayBuffer())]).toEqual([1, 2, 3]);
   });
 });

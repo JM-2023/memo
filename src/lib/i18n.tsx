@@ -160,6 +160,8 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           );
         case "MEMO_TRASHED":
           return localized("Restore this memo before editing it.", "笔记在回收站中，请先恢复");
+        case "MEMO_NOT_TRASHED":
+          return localized("Move this memo to Trash before permanently deleting it.", "请先将笔记移入回收站，再彻底删除");
         case "VERSION_CONFLICT":
           return localized("This memo changed elsewhere. Review the latest version and try again.", "这条笔记已在别处更新，请确认最新版本后重试");
         case "DECRYPTION_FAILED":
@@ -169,6 +171,13 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           );
         case "MEMO_EMPTY":
           return localized("A memo must contain text or at least one image.", "笔记需要包含文字或至少一张图片");
+        case "MEMO_CONTENT_TOO_LONG": {
+          const rawMax = params?.max;
+          const max = typeof rawMax === "number" ? rawMax : typeof rawMax === "string" && rawMax.trim() ? Number(rawMax) : Number.NaN;
+          if (!Number.isFinite(max)) return localized("This memo is too long.", "这条笔记内容过长");
+          const formattedMax = numberFormatter.format(max);
+          return localized(`A memo can contain up to ${formattedMax} characters.`, `每条笔记最多可包含 ${formattedMax} 个字符。`);
+        }
         case "IMAGE_LIMIT_EXCEEDED": {
           const rawMax = params?.max;
           const max = typeof rawMax === "number" ? rawMax : typeof rawMax === "string" && rawMax.trim() ? Number(rawMax) : Number.NaN;
@@ -183,6 +192,10 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           return localized("The image is too large.", "图片过大");
         case "IMAGE_TYPE_UNSUPPORTED":
           return localized("This image format is not supported.", "不支持的图片格式");
+        case "BACKUP_MEMO_INVALID":
+          return localized("The backup contains an invalid memo. Nothing from this chunk was imported.", "备份中包含无效笔记，本批次未导入任何内容");
+        case "BACKUP_IMAGE_INVALID":
+          return localized("The backup contains an invalid image attachment. Nothing from this chunk was imported.", "备份中包含无效图片，本批次未导入任何内容");
         case "TAG_INVALID":
           return localized("The tag name is invalid.", "无效的标签名");
         case "TAG_NAME_UNCHANGED":

@@ -1,5 +1,5 @@
 import { Check, Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Trash2, X } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { externalImagesOf } from "../lib/content";
 import { formatTime } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
@@ -192,6 +192,29 @@ export function MemoCard(props: MemoCardProps) {
   const { memo, variant, editing, selecting, selected } = props;
   // External links that failed to load render as a compact fallback chip.
   const [brokenUrls, setBrokenUrls] = useState<Set<string>>(new Set());
+  const viewSurfaceRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const previousEditingRef = useRef(editing);
+
+  // The select overlay is the card's only control in selection mode. `inert`
+  // keeps the covered tag/image/link controls out of keyboard navigation,
+  // while aria-hidden removes the duplicate surface from virtual cursors.
+  useLayoutEffect(() => {
+    if (viewSurfaceRef.current) viewSurfaceRef.current.inert = selecting;
+  }, [selecting]);
+
+  // Cancel/save unmounts the focused editor. Once the steady card surface has
+  // committed, return focus to its action trigger instead of letting it fall
+  // back to <body> and restart the page's tab order.
+  useEffect(() => {
+    const wasEditing = previousEditingRef.current;
+    previousEditingRef.current = editing;
+    if (!wasEditing || editing) return;
+    // MemoStage deliberately keeps the outgoing editor connected during its
+    // exit morph, so connectivity cannot be used as a focus-restoration guard.
+    const frame = window.requestAnimationFrame(() => menuTriggerRef.current?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [editing]);
 
   const externalUrls = useMemo(() => externalImagesOf(memo.content), [memo.content]);
   const lightboxItems = useMemo<LightboxItem[]>(
@@ -288,105 +311,118 @@ export function MemoCard(props: MemoCardProps) {
 
   const viewBody = (
     <>
-      <header className="memo-head">
-        <time className="memo-time" dateTime={inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt}>
-          {timeLabel}
-        </time>
-        <div className="memo-head-right">
-          {pinned && !inTrash ? <Pin size={13} className="memo-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}
-          {/* The ⋯ menu and the select ring share one 26px cell: entering
-              select mode swaps them in place with zero layout shift. */}
-          <div className="memo-tool-slot">
-            <Menu
-              panelClassName="memo-action-menu"
-              trigger={(open) => (
-                <button
-                  type="button"
-                  className={`icon-button memo-menu-trigger${open ? " is-open" : ""}`}
-                  aria-label={tr("Memo actions", "操作菜单")}
-                  tabIndex={selecting ? -1 : 0}
-                >
-                  <MoreHorizontal size={17} aria-hidden="true" />
-                </button>
-              )}
-            >
-              {(close) => (
-                <MemoMenuBody
-                  memo={memo}
-                  close={close}
-                  inTrash={inTrash}
-                  pinned={pinned}
-                  onTogglePin={props.onTogglePin}
-                  onStartEdit={props.onStartEdit}
-                  onCopy={props.onCopy}
-                  onDelete={props.onDelete}
-                  onRestore={props.onRestore}
-                  onPurge={props.onPurge}
-                />
-              )}
-            </Menu>
-            <span className="memo-select-box" aria-hidden="true">
-              <Check size={13} strokeWidth={3.2} />
-            </span>
-          </div>
-        </div>
-      </header>
-
-      <div className="memo-content">
-        {visualLinesOf(memo.content).map((line, index, lines) => (
-          <MemoLine
-            key={line.key}
-            raw={line.raw}
-            nextRaw={lines[index + 1]?.raw}
-            tagMode={inTrash ? "static" : "button"}
-            onPickTag={props.onPickTag}
-          />
-        ))}
-      </div>
-
-      {mediaCount > 0 ? (
-        <div className={`memo-images count-${Math.min(mediaCount, 3)}`}>
-          {memo.images.map((image, index) => (
-            <button
-              key={image.id}
-              type="button"
-              className="memo-image"
-              onClick={() => props.onOpenImage(lightboxItems, index)}
-              aria-label={tr("View image", "查看图片")}
-            >
-              <img
-                src={`/api/images/${image.id}`}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                width={image.width || undefined}
-                height={image.height || undefined}
-              />
-            </button>
-          ))}
-          {externalUrls.map((url) =>
-            brokenUrls.has(url) ? (
-              <a key={url} className="memo-image-broken" href={url} target="_blank" rel="noreferrer noopener" title={url}>
-                <ImageOff size={16} aria-hidden="true" />
-                <span>{tr("Image link is unavailable", "图片链接已失效")}</span>
-              </a>
-            ) : (
-              <button
-                key={url}
-                type="button"
-                className="memo-image is-external"
-                onClick={() => props.onOpenImage(lightboxItems, Math.max(0, lightboxItems.findIndex((item) => item.src === url)))}
-                aria-label={tr("View external image", "查看外链图片")}
+      <div ref={viewSurfaceRef} className="memo-view-surface" aria-hidden={selecting || undefined}>
+        <header className="memo-head">
+          <time className="memo-time" dateTime={inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt}>
+            {timeLabel}
+          </time>
+          <div className="memo-head-right">
+            {pinned && !inTrash ? <Pin size={13} className="memo-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}
+            {/* The ⋯ menu and the select ring share one 26px cell: entering
+                select mode swaps them in place with zero layout shift. */}
+            <div className="memo-tool-slot">
+              <Menu
+                panelClassName="memo-action-menu"
+                trigger={(open) => (
+                  <button
+                    ref={menuTriggerRef}
+                    type="button"
+                    className={`icon-button memo-menu-trigger${open ? " is-open" : ""}`}
+                    aria-label={tr("Memo actions", "操作菜单")}
+                    tabIndex={selecting ? -1 : 0}
+                  >
+                    <MoreHorizontal size={17} aria-hidden="true" />
+                  </button>
+                )}
               >
-                <img src={url} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => markBroken(url)} />
-                <span className="ext-badge" aria-hidden="true">
-                  <Link2 size={11} />
-                </span>
-              </button>
-            )
-          )}
+                {(close) => (
+                  <MemoMenuBody
+                    memo={memo}
+                    close={close}
+                    inTrash={inTrash}
+                    pinned={pinned}
+                    onTogglePin={props.onTogglePin}
+                    onStartEdit={props.onStartEdit}
+                    onCopy={props.onCopy}
+                    onDelete={props.onDelete}
+                    onRestore={props.onRestore}
+                    onPurge={props.onPurge}
+                  />
+                )}
+              </Menu>
+              <span className="memo-select-box" aria-hidden="true">
+                <Check size={13} strokeWidth={3.2} />
+              </span>
+            </div>
+          </div>
+        </header>
+
+        <div className="memo-content">
+          {visualLinesOf(memo.content).map((line, index, lines) => (
+            <MemoLine
+              key={line.key}
+              raw={line.raw}
+              nextRaw={lines[index + 1]?.raw}
+              tagMode={inTrash || selecting ? "static" : "button"}
+              onPickTag={props.onPickTag}
+            />
+          ))}
         </div>
-      ) : null}
+
+        {mediaCount > 0 ? (
+          <div className={`memo-images count-${Math.min(mediaCount, 3)}`}>
+            {memo.images.map((image, index) => (
+              <button
+                key={image.id}
+                type="button"
+                className="memo-image"
+                tabIndex={selecting ? -1 : undefined}
+                onClick={() => props.onOpenImage(lightboxItems, index)}
+                aria-label={tr("View image", "查看图片")}
+              >
+                <img
+                  src={`/api/images/${image.id}`}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  width={image.width || undefined}
+                  height={image.height || undefined}
+                />
+              </button>
+            ))}
+            {externalUrls.map((url) =>
+              brokenUrls.has(url) ? (
+                <a
+                  key={url}
+                  className="memo-image-broken"
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  title={url}
+                  tabIndex={selecting ? -1 : undefined}
+                >
+                  <ImageOff size={16} aria-hidden="true" />
+                  <span>{tr("Image link is unavailable", "图片链接已失效")}</span>
+                </a>
+              ) : (
+                <button
+                  key={url}
+                  type="button"
+                  className="memo-image is-external"
+                  tabIndex={selecting ? -1 : undefined}
+                  onClick={() => props.onOpenImage(lightboxItems, Math.max(0, lightboxItems.findIndex((item) => item.src === url)))}
+                  aria-label={tr("View external image", "查看外链图片")}
+                >
+                  <img src={url} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => markBroken(url)} />
+                  <span className="ext-badge" aria-hidden="true">
+                    <Link2 size={11} />
+                  </span>
+                </button>
+              )
+            )}
+          </div>
+        ) : null}
+      </div>
 
       {selecting ? (
         // One interactive surface for the whole card: it sits above every

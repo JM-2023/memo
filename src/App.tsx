@@ -42,7 +42,7 @@ import {
 } from "./lib/api";
 import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, readSealedSnapshot, saveSnapshot } from "./lib/cache";
 import { dateKey, formatDayLabel } from "./lib/dates";
-import { filterPreservingId } from "./lib/feedSafety";
+import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow } from "./lib/feedSafety";
 import { useI18n } from "./lib/i18n";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
 import { SAVED_FILTERS_LIMIT, loadSavedFilters, persistSavedFilters, type SavedFilter } from "./lib/savedFilters";
@@ -685,11 +685,16 @@ export default function App() {
   // The feed renders in pages: the first FEED_PAGE rows immediately, more as
   // the sentinel scrolls near. Keeps first paint and filter swaps flat no
   // matter how many memos exist.
-  const [renderCap, setRenderCap] = useState(FEED_PAGE);
-  useEffect(() => {
-    if (editingId) return;
-    setRenderCap(FEED_PAGE);
-  }, [deferredQuery, filters, editingId]);
+  // Object identity is the generation token: revisiting an earlier query must
+  // still start a fresh window rather than reviving that query's old cap.
+  const feedWindowKey = useMemo(
+    () => ({}),
+    [view, activeTag, activeDay, deferredQuery, filters, sortKey]
+  );
+  const [renderWindow, setRenderWindow] = useState<FeedWindow<object>>({ key: {}, cap: FEED_PAGE });
+  // Resolve a stale generation synchronously during render. An effect would
+  // reconcile the previous, potentially huge window once before shrinking it.
+  const renderCap = feedWindowCap(renderWindow, feedWindowKey, FEED_PAGE);
   const renderedFeedMemos = useMemo(() => {
     const rendered = feedMemos.slice(0, renderCap);
     if (!editingId || rendered.some((memo) => memo.id === editingId)) return rendered;
@@ -706,14 +711,14 @@ export default function App() {
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
-          setRenderCap((cap) => cap + FEED_PAGE);
+          setRenderWindow((current) => advanceFeedWindow(current, feedWindowKey, FEED_PAGE));
         }
       },
       { rootMargin: "1200px 0px" }
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasMoreFeed, renderCap]);
+  }, [feedWindowKey, hasMoreFeed, renderCap]);
 
   function closeDrawer(afterClose?: () => void) {
     if (!drawerOpen) {
@@ -763,7 +768,7 @@ export default function App() {
         enterSuppressRef.current = true;
         try {
           flushSync(() => {
-            setRenderCap(FEED_PAGE);
+            setRenderWindow((current) => ({ ...current, cap: FEED_PAGE }));
             apply();
           });
         } finally {
@@ -1549,11 +1554,26 @@ export default function App() {
       // them in (and sibling tabs hear about it too).
       await runSync();
       notifyPeers();
-      showToast(
-        result.imported > 0
-          ? tr(`Imported ${count(result.imported, "memo")}`, `已导入 ${count(result.imported, "memo")}`)
-          : tr("Nothing new — every memo already exists", "没有新内容，笔记都已存在")
-      );
+      if (result.imported > 0) {
+        const imageLabel = `${result.images} image${result.images === 1 ? "" : "s"}`;
+        const skippedLabel = result.skipped > 0 ? `; skipped ${count(result.skipped, "memo")} that already existed` : "";
+        const skippedZh = result.skipped > 0 ? `；跳过 ${result.skipped} 条已存在的笔记` : "";
+        showToast(
+          tr(
+            `Imported ${count(result.imported, "memo")} with ${imageLabel}${skippedLabel}`,
+            `已导入 ${count(result.imported, "memo")}，包含 ${result.images} 张图片${skippedZh}`
+          )
+        );
+      } else if (result.skipped > 0) {
+        showToast(
+          tr(
+            `Nothing new — skipped ${count(result.skipped, "memo")} that already existed`,
+            `没有新内容，已跳过 ${result.skipped} 条已存在的笔记`
+          )
+        );
+      } else {
+        showToast(tr("Import completed; there were no new memos", "导入完成，没有新的笔记"));
+      }
     } catch (cause) {
       // Earlier chunks may already be committed; reconcile them and let a
       // retry safely skip their stable ids.

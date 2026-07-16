@@ -31,9 +31,9 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
   return new Response(base64ToBytes(row.data_base64), {
     headers: {
       "Content-Type": row.mime,
-      // Image bytes never change for a given id, so let the browser cache
-      // them for the session; private keeps shared caches out (auth-gated).
-      "Cache-Control": "private, max-age=31536000, immutable"
+      // Authentication and deletion must be rechecked on every request. A
+      // private browser cache can otherwise outlive logout or session rotation.
+      "Cache-Control": "no-store"
     }
   });
 }

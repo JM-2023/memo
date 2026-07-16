@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useI18n } from "../lib/i18n";
 
 /** Below this the page counts as "at the top" and the button hides. */
@@ -42,6 +42,11 @@ export function ScrollTopButton() {
   const programmaticRef = useRef(false);
   const flightFrameRef = useRef<number | null>(null);
   const detachInterruptsRef = useRef<(() => void) | null>(null);
+  const slotRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (slotRef.current) slotRef.current.inert = !shown;
+  }, [shown]);
 
   const endFlight = () => {
     if (flightFrameRef.current !== null) {
@@ -70,8 +75,8 @@ export function ScrollTopButton() {
       }
       if (programmaticRef.current) return;
       let composer = composerRef.current;
-      if (!composer || !composer.isConnected) {
-        composer = document.querySelector(".composer");
+      if (!composer || !composer.isConnected || (composer instanceof HTMLElement && composer.hidden)) {
+        composer = document.querySelector(".composer:not([hidden])");
         composerRef.current = composer;
       }
       setShown(composer ? composer.getBoundingClientRect().bottom < 0 : y > window.innerHeight);
@@ -139,7 +144,7 @@ export function ScrollTopButton() {
   };
 
   return (
-    <div className={`scroll-top-slot${shown ? " is-shown" : ""}`}>
+    <div ref={slotRef} className={`scroll-top-slot${shown ? " is-shown" : ""}`} aria-hidden={!shown}>
       <button type="button" className="scroll-top-btn" aria-label={tr("Back to top", "回到顶部")} tabIndex={shown ? 0 : -1} onClick={scrollToTop}>
         {/* The demo's arrow glyph, rotated to point up. */}
         <svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor" aria-hidden="true">

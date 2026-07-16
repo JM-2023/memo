@@ -4,15 +4,7 @@ import { claimSeq, claimedSeq, CURRENT_SEQ_SQL } from "./_utils/memos";
 import { validTagPath } from "./_utils/tagops";
 import { apiError, json, nowIso, readJson, requireSameOrigin } from "./_utils/response";
 import type { AppContext } from "./_utils/types";
-import { base64Bytes, MAX_CONTENT_CHARS, MAX_IMAGE_BASE64_CHARS, MAX_IMAGES_PER_MEMO } from "./memos/index";
-
-interface BackupImage {
-  id?: unknown;
-  mime?: unknown;
-  width?: unknown;
-  height?: unknown;
-  dataBase64?: unknown;
-}
+import { base64Bytes, MAX_CONTENT_CHARS, validateImages } from "./memos/index";
 
 interface BackupMemo {
   id?: unknown;
@@ -58,7 +50,6 @@ interface MemoResultIndexes {
   imageCount: number;
 }
 
-const ALLOWED_MIMES = new Set(["image/webp", "image/jpeg", "image/png", "image/gif"]);
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 // One legal memo may carry nine ~1.2MB base64 images; 14MB accepts that
 // worst-case single item while staying far below the old 95MB request buffer.
@@ -80,10 +71,6 @@ function isoOrNull(value: unknown): string | null {
 function imageDimension(value: unknown): number {
   const numeric = Number(value ?? 0);
   return Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : 0;
-}
-
-function validBase64(value: string): boolean {
-  return value.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(value);
 }
 
 function imageInsert(db: D1Database, memo: CleanMemo): D1PreparedStatement {
@@ -110,7 +97,7 @@ function imageInsert(db: D1Database, memo: CleanMemo): D1PreparedStatement {
   });
   return db
     .prepare(
-      `INSERT OR IGNORE INTO memo_images (id, memo_id, ord, mime, width, height, bytes, data_base64, created_at)
+      `INSERT INTO memo_images (id, memo_id, ord, mime, width, height, bytes, data_base64, created_at)
        ${selects.join("\n")}`
     )
     .bind(...bindings);
@@ -143,35 +130,44 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   let skipped = 0;
   for (const raw of body.memos as BackupMemo[]) {
     const id = typeof raw?.id === "string" ? raw.id : "";
-    const content = typeof raw?.content === "string" ? raw.content.slice(0, MAX_CONTENT_CHARS) : "";
-    if (!ID_PATTERN.test(id) || seenMemoIds.has(id)) {
-      skipped += 1;
-      continue;
+    if (!ID_PATTERN.test(id)) {
+      return apiError(400, "BACKUP_MEMO_INVALID", "Every backup memo must have a valid stable id.");
+    }
+    if (seenMemoIds.has(id)) {
+      return apiError(400, "BACKUP_MEMO_INVALID", "Memo ids must be unique within an import chunk.");
     }
     seenMemoIds.add(id);
+    if (typeof raw.content !== "string") {
+      return apiError(400, "BACKUP_MEMO_INVALID", "Every backup memo must contain text content.");
+    }
+    const content = raw.content;
+    if (content.length > MAX_CONTENT_CHARS) {
+      return apiError(400, "MEMO_CONTENT_TOO_LONG", `A memo can contain up to ${MAX_CONTENT_CHARS} characters.`, {
+        max: MAX_CONTENT_CHARS
+      });
+    }
+    if (!Array.isArray(raw.images)) {
+      return apiError(400, "BACKUP_IMAGE_INVALID", "Every backup memo must contain an image list.");
+    }
+    const validated = validateImages(raw.images, { requireStableFields: true });
+    if (validated.error) {
+      const code = validated.error.code === "INVALID_REQUEST_BODY" ? "BACKUP_IMAGE_INVALID" : validated.error.code;
+      return apiError(400, code, validated.error.error, validated.error.params);
+    }
     const images: CleanImage[] = [];
-    if (Array.isArray(raw.images)) {
-      for (const image of (raw.images as BackupImage[]).slice(0, MAX_IMAGES_PER_MEMO)) {
-        const imageId = typeof image?.id === "string" && ID_PATTERN.test(image.id) ? image.id : "";
-        const data = typeof image?.dataBase64 === "string" ? image.dataBase64 : "";
-        const mime = typeof image?.mime === "string" ? image.mime : "";
-        if (
-          !imageId ||
-          seenImageIds.has(imageId) ||
-          !data ||
-          data.length > MAX_IMAGE_BASE64_CHARS ||
-          !validBase64(data) ||
-          !ALLOWED_MIMES.has(mime)
-        ) {
-          continue;
-        }
-        seenImageIds.add(imageId);
-        images.push({ id: imageId, mime, width: imageDimension(image.width), height: imageDimension(image.height), dataBase64: data });
+    for (const image of validated.images) {
+      if (seenImageIds.has(image.id)) {
+        return apiError(400, "BACKUP_IMAGE_INVALID", "Image ids must be unique across the backup.");
       }
+      seenImageIds.add(image.id);
+      images.push({
+        ...image,
+        width: imageDimension(image.width),
+        height: imageDimension(image.height)
+      });
     }
     if (!content.trim() && images.length === 0) {
-      skipped += 1;
-      continue;
+      return apiError(400, "BACKUP_MEMO_INVALID", "A backup memo must contain text or at least one image.");
     }
     rawMemos.push({
       id,
@@ -201,13 +197,38 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
     return apiError(413, "INVALID_REQUEST_BODY", "This import chunk is too large. Split it into smaller chunks and retry.");
   }
 
+  const db = context.env.DB;
+  let pendingMemos = rawMemos;
+  if (rawMemos.length > 0) {
+    const memoPlaceholders = rawMemos.map(() => "?").join(", ");
+    const existingResult = await db
+      .prepare(`SELECT id FROM memos WHERE id IN (${memoPlaceholders})`)
+      .bind(...rawMemos.map((memo) => memo.id))
+      .all<{ id: string }>();
+    const existingIds = new Set((existingResult.results ?? []).map((row) => row.id));
+    skipped += existingIds.size;
+    pendingMemos = rawMemos.filter((memo) => !existingIds.has(memo.id));
+  }
+
+  const pendingImageIds = pendingMemos.flatMap((memo) => memo.images.map((image) => image.id));
+  if (pendingImageIds.length > 0) {
+    const imagePlaceholders = pendingImageIds.map(() => "?").join(", ");
+    const collision = await db
+      .prepare(`SELECT id FROM memo_images WHERE id IN (${imagePlaceholders}) LIMIT 1`)
+      .bind(...pendingImageIds)
+      .first<{ id: string }>();
+    if (collision) {
+      return apiError(409, "BACKUP_IMAGE_INVALID", "An imported image id already belongs to another memo.");
+    }
+  }
+
   const key = await contentKeyOf(context.env);
-  const memos = new Array<CleanMemo>(rawMemos.length);
+  const memos = new Array<CleanMemo>(pendingMemos.length);
   let sealCursor = 0;
-  const sealers = Array.from({ length: Math.min(4, rawMemos.length) }, async () => {
-    while (sealCursor < rawMemos.length) {
+  const sealers = Array.from({ length: Math.min(4, pendingMemos.length) }, async () => {
+    while (sealCursor < pendingMemos.length) {
       const index = sealCursor++;
-      const memo = rawMemos[index];
+      const memo = pendingMemos[index];
       memos[index] = {
         ...memo,
         stored: key ? await sealContent(key, memo.content) : memo.content,
@@ -218,7 +239,6 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   });
   await Promise.all(sealers);
 
-  const db = context.env.DB;
   const statements: D1PreparedStatement[] = [];
   const memoIndexes: MemoResultIndexes[] = [];
   for (const memo of memos) {
@@ -269,7 +289,19 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
     );
   }
 
-  const results = statements.length > 0 ? await db.batch(statements) : [];
+  let results: D1Result<unknown>[];
+  try {
+    results = statements.length > 0 ? await db.batch(statements) : [];
+  } catch (error) {
+    // The preflight above gives normal conflicts a useful 409. A plain INSERT
+    // remains the transactional race guard: if another request claims an image
+    // id after preflight, D1 rolls the batch back instead of silently dropping
+    // that attachment as INSERT OR IGNORE did.
+    if (error instanceof Error && /UNIQUE constraint failed:\s*memo_images\.id/i.test(error.message)) {
+      return apiError(409, "BACKUP_IMAGE_INVALID", "An imported image id already belongs to another memo.");
+    }
+    throw error;
+  }
   let imported = 0;
   let importedImages = 0;
   memoIndexes.forEach((indexes) => {

@@ -199,10 +199,10 @@ describe("App editor lifecycle", () => {
     if (!card) throw new Error("Memo card was not rendered");
 
     fireEvent.doubleClick(within(card).getByRole("button", { name: "Memo actions" }));
-    expect(within(card).queryByRole("textbox")).toBeNull();
+    expect(within(card).queryByRole("combobox")).toBeNull();
 
     fireEvent.doubleClick(content);
-    const editor = await within(card).findByRole("textbox");
+    const editor = await within(card).findByRole("combobox");
     expect((editor as HTMLTextAreaElement).value).toBe("Double-click this memo");
   });
 
@@ -220,7 +220,7 @@ describe("App editor lifecycle", () => {
     await user.click(within(firstCard).getByRole("button", { name: "Memo actions" }));
     await user.click(screen.getByRole("menuitem", { name: "Edit" }));
 
-    const draft = await within(firstCard).findByRole("textbox");
+    const draft = await within(firstCard).findByRole("combobox");
     await user.clear(draft);
     await user.type(draft, "draft survives feed updates");
 
@@ -230,7 +230,7 @@ describe("App editor lifecycle", () => {
       for (const observer of intersectionObservers) observer.trigger();
     });
     await screen.findByText("memo-0 original");
-    expect(within(firstCard).getByRole("textbox")).toBe(draft);
+    expect(within(firstCard).getByRole("combobox")).toBe(draft);
     expect((draft as HTMLTextAreaElement).value).toBe("draft survives feed updates");
 
     const secondContent = screen.getByText("memo-80 original");
@@ -239,9 +239,9 @@ describe("App editor lifecycle", () => {
     await user.click(within(secondCard).getByRole("button", { name: "Memo actions" }));
     await user.click(screen.getByRole("menuitem", { name: "Edit" }));
 
-    expect(within(firstCard).getByRole("textbox")).toBe(draft);
+    expect(within(firstCard).getByRole("combobox")).toBe(draft);
     expect((draft as HTMLTextAreaElement).value).toBe("draft survives feed updates");
-    expect(within(secondCard).queryByRole("textbox")).toBeNull();
+    expect(within(secondCard).queryByRole("combobox")).toBeNull();
     expect(await screen.findByText("Save or cancel the open edit before editing another memo.")).not.toBeNull();
   });
 });

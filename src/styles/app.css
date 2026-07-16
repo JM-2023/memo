@@ -1525,7 +1525,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 700;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  animation: crumb-in 0.5s var(--ease-out) both;
+  animation: crumb-in 0.5s var(--ease-out) backwards;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .select-pill:hover:not(:disabled) { background: var(--wash); color: var(--ink); } }
@@ -1543,7 +1543,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 700;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  animation: crumb-in 0.5s var(--ease-out) both;
+  animation: crumb-in 0.5s var(--ease-out) backwards;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
   view-transition-name: select-delete;
 }
@@ -1582,7 +1582,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: 0.84rem;
   font-weight: 700;
   white-space: nowrap;
-  animation: crumb-in 0.5s var(--ease-out) both;
+  animation: crumb-in 0.5s var(--ease-out) backwards;
   transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 /* Lens icon at the panel rows' quiet weight; it sharpens with hover ink. */
@@ -1590,13 +1590,13 @@ button.crumb:active { background: var(--wash-strong); }
 .filter-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* The remove cue: a quiet round nub that inks in as the chip is hovered —
    the chip is the button, the nub just names the verb. */
-.filter-chip-x {
+.filter-chip > .filter-chip-x {
   flex: none;
   box-sizing: content-box;
   padding: 2px;
   color: color-mix(in srgb, var(--primary-dark) 60%, transparent);
   border-radius: 50%;
-  transition: background var(--t) var(--ease), color var(--t) var(--ease);
+  transition: opacity var(--t) var(--ease), background var(--t) var(--ease), color var(--t) var(--ease);
 }
 @media (hover: hover) {
   .filter-chip:hover {
@@ -2160,6 +2160,7 @@ button.crumb:active { background: var(--wash-strong); }
 /* Scenes replicate the card's own grid, so a lone scene is layout-identical
    to the pre-stage card body. */
 .stage-scene { display: grid; gap: 8px; }
+.memo-view-surface { display: contents; }
 /* Outgoing scene: floats above the incoming one and fades out; its surface
    background masks the target until the cross-fade reveals it. */
 .stage-scene.is-out {
@@ -2937,7 +2938,7 @@ button.memo-tag:active {
 
 /* At phone widths the search gets its own row. This preserves the date
    filter's clear control and keeps the drawer trigger on the first row. */
-@media (max-width: 400px) {
+@media (max-width: 440px) {
   .topbar { flex-wrap: wrap; gap: 8px; }
   .breadcrumb { flex: 0 0 calc(100% - 40px); }
   .breadcrumb:has(.filter-chip) .crumbs { flex: 1; }
@@ -2951,7 +2952,9 @@ button.memo-tag:active {
     flex: 1 1 auto;
     width: auto;
   }
+}
 
+@media (max-width: 400px) {
   .stats-overlay { padding: 8px; }
   .stats-modal { max-height: calc(100dvh - 16px); }
   .stats-head {

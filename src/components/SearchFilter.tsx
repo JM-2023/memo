@@ -127,6 +127,7 @@ export function SearchFilter(props: SearchFilterProps) {
                 <div key={item.id} className="saved-row">
                   <button
                     type="button"
+                    aria-pressed={item.id === props.activeSavedId}
                     className={item.id === props.activeSavedId ? "is-selected" : ""}
                     onClick={() => {
                       close();

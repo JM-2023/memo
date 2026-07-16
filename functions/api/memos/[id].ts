@@ -150,7 +150,12 @@ export async function onRequestPut(context: AppContext): Promise<Response> {
     return apiError(400, "IMAGE_LIMIT_EXCEEDED", `A memo can contain up to ${MAX_IMAGES_PER_MEMO} images.`, { max: MAX_IMAGES_PER_MEMO });
   }
 
-  const nextContent = body.content === undefined ? memo.content : String(body.content).slice(0, MAX_CONTENT_CHARS);
+  const nextContent = body.content === undefined ? memo.content : String(body.content);
+  if (nextContent.length > MAX_CONTENT_CHARS) {
+    return apiError(400, "MEMO_CONTENT_TOO_LONG", `A memo can contain up to ${MAX_CONTENT_CHARS} characters.`, {
+      max: MAX_CONTENT_CHARS
+    });
+  }
   if (!nextContent.trim() && surviving.length + addImages.length === 0) {
     return apiError(400, "MEMO_EMPTY", "A memo must contain text or at least one image.");
   }
@@ -268,20 +273,23 @@ export async function onRequestDelete(context: AppContext): Promise<Response> {
 
   const db = context.env.DB;
   if (permanent) {
-    const predicate = "EXISTS (SELECT 1 FROM memos WHERE id = ? AND seq = ?)";
+    if (memo.deleted_at === null) {
+      return apiError(409, "MEMO_NOT_TRASHED", "Move the memo to Trash before permanently deleting it.");
+    }
+    const predicate = "EXISTS (SELECT 1 FROM memos WHERE id = ? AND seq = ? AND deleted_at IS NOT NULL)";
     const results = await db.batch([
       claimSeq(db, predicate, [id, expectedSeq]),
       db
         .prepare(
           `INSERT OR REPLACE INTO tombstones (id, seq)
-           SELECT ?, ${CURRENT_SEQ_SQL} WHERE EXISTS (SELECT 1 FROM memos WHERE id = ? AND seq = ?)
+           SELECT ?, ${CURRENT_SEQ_SQL} WHERE EXISTS (SELECT 1 FROM memos WHERE id = ? AND seq = ? AND deleted_at IS NOT NULL)
            RETURNING id, seq`
         )
         .bind(id, id, expectedSeq),
       db
-        .prepare("DELETE FROM memo_images WHERE memo_id = ? AND EXISTS (SELECT 1 FROM memos WHERE id = ? AND seq = ?)")
+        .prepare("DELETE FROM memo_images WHERE memo_id = ? AND EXISTS (SELECT 1 FROM memos WHERE id = ? AND seq = ? AND deleted_at IS NOT NULL)")
         .bind(id, id, expectedSeq),
-      db.prepare("DELETE FROM memos WHERE id = ? AND seq = ?").bind(id, expectedSeq)
+      db.prepare("DELETE FROM memos WHERE id = ? AND seq = ? AND deleted_at IS NOT NULL").bind(id, expectedSeq)
     ]);
     const seq = claimedSeq(results[0]);
     if (seq === null) return versionConflict(await currentMemoJson(context, id));

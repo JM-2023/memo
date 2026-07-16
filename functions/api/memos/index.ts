@@ -50,7 +50,12 @@ export interface ValidatedImage {
   height: number;
 }
 
-export function validateImages(images: ImagePayload[] | undefined): { error: ImageValidationError | null; images: ValidatedImage[] } {
+interface ImageValidationOptions {
+  /** Backup imports must preserve their stable attachment fields exactly. */
+  requireStableFields?: boolean;
+}
+
+export function validateImages(images: unknown, options: ImageValidationOptions = {}): { error: ImageValidationError | null; images: ValidatedImage[] } {
   const list = Array.isArray(images) ? images : [];
   if (list.length > MAX_IMAGES_PER_MEMO) {
     return {
@@ -64,7 +69,21 @@ export function validateImages(images: ImagePayload[] | undefined): { error: Ima
   }
   const cleaned: ValidatedImage[] = [];
   const ids = new Set<string>();
-  for (const image of list) {
+  for (const candidate of list) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      return { error: { code: "INVALID_REQUEST_BODY", error: "Each image must be an object." }, images: [] };
+    }
+    const image = candidate as ImagePayload;
+    if (
+      options.requireStableFields &&
+      (typeof image.id !== "string" ||
+        typeof image.dataBase64 !== "string" ||
+        typeof image.mime !== "string" ||
+        typeof image.width !== "number" ||
+        typeof image.height !== "number")
+    ) {
+      return { error: { code: "INVALID_REQUEST_BODY", error: "Every imported image must have valid stable fields." }, images: [] };
+    }
     const id = image.id === undefined ? crypto.randomUUID() : String(image.id);
     const data = String(image.dataBase64 ?? "");
     const mime = String(image.mime ?? "");
@@ -72,7 +91,10 @@ export function validateImages(images: ImagePayload[] | undefined): { error: Ima
       return { error: { code: "INVALID_REQUEST_BODY", error: "Image ids must be unique stable identifiers." }, images: [] };
     }
     ids.add(id);
-    if (!data || data.length > MAX_IMAGE_BASE64_CHARS) {
+    if (!data) {
+      return { error: { code: "INVALID_REQUEST_BODY", error: "The image payload is missing." }, images: [] };
+    }
+    if (data.length > MAX_IMAGE_BASE64_CHARS) {
       return { error: { code: "IMAGE_TOO_LARGE", error: "The image is too large." }, images: [] };
     }
     if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) {
@@ -137,7 +159,12 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   if (!VALID_ENTITY_ID.test(memoId)) {
     return apiError(400, "INVALID_REQUEST_BODY", "Memo id is invalid.");
   }
-  const content = String(body.content ?? "").slice(0, MAX_CONTENT_CHARS);
+  const content = String(body.content ?? "");
+  if (content.length > MAX_CONTENT_CHARS) {
+    return apiError(400, "MEMO_CONTENT_TOO_LONG", `A memo can contain up to ${MAX_CONTENT_CHARS} characters.`, {
+      max: MAX_CONTENT_CHARS
+    });
+  }
   const { error, images } = validateImages(body.images);
   if (error) {
     return apiError(400, error.code, error.error, error.params);

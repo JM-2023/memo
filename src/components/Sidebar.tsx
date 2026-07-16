@@ -330,14 +330,24 @@ export function Sidebar(props: SidebarProps) {
       </section>
 
       <nav className="sidebar-nav">
-        <button type="button" className={`nav-item${view === "memos" && !filtersActive ? " is-active" : ""}`} onClick={props.onShowAll}>
+        <button
+          type="button"
+          className={`nav-item${view === "memos" && !filtersActive ? " is-active" : ""}`}
+          aria-current={view === "memos" && !filtersActive ? "page" : undefined}
+          onClick={props.onShowAll}
+        >
           <Inbox size={16} aria-hidden="true" />
           {tr("All memos", "全部笔记")}
           <span className="nav-count">
             <RollingText value={totals.memoCount} />
           </span>
         </button>
-        <button type="button" className={`nav-item${view === "trash" ? " is-active" : ""}`} onClick={props.onOpenTrash}>
+        <button
+          type="button"
+          className={`nav-item${view === "trash" ? " is-active" : ""}`}
+          aria-current={view === "trash" ? "page" : undefined}
+          onClick={props.onOpenTrash}
+        >
           <Trash2 size={16} aria-hidden="true" />
           {tr("Trash", "回收站")}
           <span className="nav-count">
