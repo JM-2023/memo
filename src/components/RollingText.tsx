@@ -114,7 +114,7 @@ export function RollingText({ value, text, align = "right", className }: Rolling
             }
           : state
       );
-    }, 1200);
+    }, 400);
     return () => window.clearTimeout(timer);
   }, [st.serial]);
 

@@ -14,9 +14,9 @@ const SPRING_STEP = 8;
 const INTERRUPTS: (keyof WindowEventMap)[] = ["wheel", "touchstart", "mousedown", "keydown"];
 
 /** Nominal settle time: grows with the log of the distance, capped so even a
- * mile-long feed lands in about a second. */
+ * mile-long feed still lands within the UI timing budget. */
 const flightMs = (distance: number) =>
-  Math.min(1050, Math.max(500, 380 + 240 * Math.log10(Math.max(1, distance / 100))));
+  Math.min(300, Math.max(180, 150 + 70 * Math.log10(Math.max(1, distance / 100))));
 
 /**
  * Back-to-top disc — the ChatGPT scroll-to-bottom button mirrored: same
