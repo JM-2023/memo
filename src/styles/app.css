@@ -1556,38 +1556,63 @@ button.crumb:active { background: var(--wash-strong); }
 .select-bar > :nth-child(3) { animation-delay: 0.09s; }
 .select-bar > :nth-child(4) { animation-delay: 0.13s; }
 
-/* Day filter chip. At most one renders at a time, so the view-transition-name
-   stays unique: it glides along when the breadcrumb before it changes width
-   and gets a proper depart/arrive instead of blinking in the root fade. */
+/* Filter chips — the trail's refinement clause. The breadcrumb says WHERE
+   (⌂ / tag / pill); the chips say THROUGH WHAT: each active lens (heatmap
+   day, date range, panel facet) rides behind the pill as the compact echo of
+   its source row — same icon, same label — in the memo-tag's sage token
+   material (borderless tint; the hairline only surfaces on hover, as an
+   inset so nothing shifts). That material change, not a separator, is what
+   marks where the trail ends and the lenses begin. The whole chip is one
+   button whose single action is removing the lens — one large target instead
+   of a 12px ×, with the × glyph kept as the affordance cue. Motion speaks
+   the trail's language: crumb-in on entry (staggered when a preset lands
+   several at once — see App's chipDelay), a crumb-style fold-back on removal
+   (see the view-transition section), never a pop — filters join the trail,
+   they don't badge it. Each chip's unique view-transition-name arrives
+   inline from React. */
 .filter-chip {
-  display: inline-grid;
-  grid-template-columns: minmax(0, 1fr) 18px;
+  display: inline-flex;
   align-items: center;
   gap: 5px;
   max-width: 200px;
-  padding: 4px 6px 4px 10px;
+  padding: 5px 7px 5px 9px;
   color: var(--primary-dark);
   background: var(--primary-tint);
-  border: 1px solid var(--primary-tint-strong);
   border-radius: var(--r-sm);
   font-size: 0.84rem;
   font-weight: 700;
   white-space: nowrap;
-  overflow: hidden;
-  animation: pop-in 0.34s var(--ease-pop) both;
-  view-transition-name: day-filter-chip;
+  animation: crumb-in 0.5s var(--ease-out) both;
+  transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
-.filter-chip button {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  color: var(--primary-dark);
+/* Lens icon at the panel rows' quiet weight; it sharpens with hover ink. */
+.filter-chip > svg { flex: none; stroke-width: 1.75; opacity: 0.75; transition: opacity var(--t) var(--ease); }
+.filter-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The remove cue: a quiet round nub that inks in as the chip is hovered —
+   the chip is the button, the nub just names the verb. */
+.filter-chip-x {
+  flex: none;
+  box-sizing: content-box;
+  padding: 2px;
+  color: color-mix(in srgb, var(--primary-dark) 60%, transparent);
   border-radius: 50%;
-  transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
-@media (hover: hover) { .filter-chip button:hover { background: var(--primary-tint-strong); } }
-.filter-chip button:active { transform: scale(0.85); }
+@media (hover: hover) {
+  .filter-chip:hover {
+    background: var(--primary-tint-strong);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
+  }
+  .filter-chip:hover > svg { opacity: 1; }
+  .filter-chip:hover .filter-chip-x {
+    color: var(--primary-dark);
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+  }
+}
+.filter-chip:active {
+  background: color-mix(in srgb, var(--primary) 15%, var(--primary-tint));
+  transform: scale(0.96);
+}
 
 .searchbox {
   position: relative;
@@ -2806,6 +2831,23 @@ button.memo-tag:active {
    removal reads as the card receding while its neighbours glide up. */
 ::view-transition-old(*):only-child { animation: card-depart 0.26s var(--ease) both; }
 ::view-transition-new(*):only-child { animation: fade-in 0.3s var(--ease) 0.08s both; }
+/* Removing a filter chip folds it back the way dropped crumbs leave the
+   trail — without this the only-child fallback above would play card-depart,
+   the cards' language, on a trail element. */
+::view-transition-old(day-filter-chip):only-child,
+::view-transition-old(range-filter-chip):only-child,
+::view-transition-old(facet-chip-noTags):only-child,
+::view-transition-old(facet-chip-hasImage):only-child,
+::view-transition-old(facet-chip-hasLink):only-child,
+::view-transition-old(facet-chip-hasOpenTask):only-child { animation: crumb-out 0.26s var(--ease) both; }
+/* The date chips morph between labels of different widths (repicking a
+   heatmap day, a range growing a second date) — natural-size snapshots keep
+   the old label from stretching to the interpolating group width, same as
+   the topbar-action pin below. */
+::view-transition-old(day-filter-chip),
+::view-transition-new(day-filter-chip),
+::view-transition-old(range-filter-chip),
+::view-transition-new(range-filter-chip) { inline-size: auto; block-size: 100%; }
 /* The topbar-action pill morphs between labels of very different widths (a
    short tag ↔ 全部笔记 ↔ 已选 N 条). Snapshots default to inline-size:100%/
    block-size:auto, so the old label stretches to the interpolating group

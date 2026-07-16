@@ -1,10 +1,11 @@
-import { Check, ChevronDown, ChevronRight, Home, ListChecks, Loader2, Menu as MenuIcon, NotebookPen, Search, Trash2, X } from "lucide-react";
-import { memo as reactMemo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Calendar, CalendarRange, Check, ChevronDown, ChevronRight, Home, ListChecks, Loader2, Menu as MenuIcon, NotebookPen, Search, Trash2, X } from "lucide-react";
+import { memo as reactMemo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { ChangePasscode } from "./components/ChangePasscode";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Crumbs } from "./components/Crumbs";
 import { Editor } from "./components/Editor";
+import { FilterChip } from "./components/FilterChip";
 import { Lightbox } from "./components/Lightbox";
 import { LoginScreen } from "./components/LoginScreen";
 import { MemoCard } from "./components/MemoCard";
@@ -908,6 +909,28 @@ export default function App() {
     if (dateTo !== null) return tr(`Until ${formatDayLabel(dateTo, locale)}`, `${formatDayLabel(dateTo, locale)} 止`);
     return null;
   }, [filters, locale, tr]);
+
+  // Filter-chip entrance choreography, Crumbs-style: chips new this commit
+  // cascade in behind the pill (0.05s apart), chips already in the trail sit
+  // still. The identity list is by lens ("day", "range", facet keys) — the
+  // day chip keeps its identity across repicks, so changing days morphs the
+  // label in place instead of replaying an entrance. The previous list
+  // updates in a layout effect, after the render that compared against it.
+  const chipKeys = useMemo(() => {
+    if (view !== "memos" || selectMode) return [];
+    const keys: string[] = [];
+    if (activeDay) keys.push("day");
+    if (rangeChipLabel) keys.push("range");
+    for (const row of FACET_ROWS) if (filters[row.key]) keys.push(row.key);
+    return keys;
+  }, [view, selectMode, activeDay, rangeChipLabel, filters]);
+  const prevChipsRef = useRef<string[]>([]);
+  const prevChips = prevChipsRef.current;
+  useLayoutEffect(() => {
+    prevChipsRef.current = chipKeys;
+  }, [chipKeys]);
+  let newChipCount = 0;
+  const chipDelay = (key: string) => (prevChips.includes(key) ? undefined : `${(newChipCount++) * 0.05}s`);
 
   const openTrash = useCallback(() => {
     if (blockNavigationWhileEditing()) return;
@@ -1823,35 +1846,44 @@ export default function App() {
               </button>
             ) : null}
             {view === "memos" && !selectMode ? (
-              // Active-filter chips ride beside the location trail — the
-              // breadcrumb IS the "what am I looking at" display. Each chip
-              // carries its own view-transition-name so feed morphs glide it
-              // (and its departure) instead of blinking it through the root
-              // cross-fade.
+              // Active-lens chips — the trail's refinement clause: the
+              // breadcrumb says WHERE, the chips say THROUGH WHAT. Each is
+              // the compact echo of its source control (heatmap day, panel
+              // facet row: same icon, same label) and a single remove
+              // button. Unique view-transition-names give each one a glide
+              // when the breadcrumb resizes, an in-place morph when its
+              // label changes, and a crumb-style fold-back on removal.
               <>
                 {activeDay ? (
-                  <span key={`day-${activeDay}`} className="filter-chip">
-                    {formatDayLabel(activeDay, locale)}
-                    <button type="button" onClick={() => pickDay(null)} aria-label={tr("Clear date filter", "清除日期筛选")}>
-                      <X size={12} aria-hidden="true" />
-                    </button>
-                  </span>
+                  <FilterChip
+                    icon={Calendar}
+                    label={formatDayLabel(activeDay, locale)}
+                    clearLabel={tr(`Clear date filter: ${formatDayLabel(activeDay, locale)}`, `清除日期筛选：${formatDayLabel(activeDay, locale)}`)}
+                    transitionName="day-filter-chip"
+                    delay={chipDelay("day")}
+                    onClear={() => pickDay(null)}
+                  />
                 ) : null}
                 {rangeChipLabel ? (
-                  <span className="filter-chip" style={{ viewTransitionName: "range-filter-chip" }}>
-                    {rangeChipLabel}
-                    <button type="button" onClick={clearDateRange} aria-label={tr("Clear date range", "清除日期范围")}>
-                      <X size={12} aria-hidden="true" />
-                    </button>
-                  </span>
+                  <FilterChip
+                    icon={CalendarRange}
+                    label={rangeChipLabel}
+                    clearLabel={tr(`Clear date range: ${rangeChipLabel}`, `清除日期范围：${rangeChipLabel}`)}
+                    transitionName="range-filter-chip"
+                    delay={chipDelay("range")}
+                    onClear={clearDateRange}
+                  />
                 ) : null}
                 {FACET_ROWS.filter((row) => filters[row.key]).map((row) => (
-                  <span key={row.key} className="filter-chip" style={{ viewTransitionName: `facet-chip-${row.key}` }}>
-                    {tr(row.en, row.zh)}
-                    <button type="button" onClick={() => toggleFacet(row.key)} aria-label={tr(`Clear “${row.en}” filter`, `清除「${row.zh}」筛选`)}>
-                      <X size={12} aria-hidden="true" />
-                    </button>
-                  </span>
+                  <FilterChip
+                    key={row.key}
+                    icon={row.icon}
+                    label={tr(row.en, row.zh)}
+                    clearLabel={tr(`Clear “${row.en}” filter`, `清除「${row.zh}」筛选`)}
+                    transitionName={`facet-chip-${row.key}`}
+                    delay={chipDelay(row.key)}
+                    onClear={() => toggleFacet(row.key)}
+                  />
                 ))}
               </>
             ) : null}
