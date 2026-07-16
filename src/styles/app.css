@@ -140,12 +140,22 @@
     radial-gradient(180px 260px at 50% 0%, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0) 60%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.28));
   --dl-sampling: saturate(200%) blur(20px);
+  /* Every --dl-*-shadow state mirrors this three-layer structure — inset rim
+     light, then two drops — because a shadow list only interpolates when the
+     inset keyword matches per layer; a lone-drop state would make the
+     box-shadow transition a hard, discrete switch. */
   --dl-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.2),
     0 8px 24px rgba(0, 0, 0, 0.18),
     0 2px 6px rgba(0, 0, 0, 0.12);
-  --dl-hover-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
-  --dl-active-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+  --dl-hover-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 10px 28px rgba(0, 0, 0, 0.18),
+    0 3px 8px rgba(0, 0, 0, 0.1);
+  --dl-active-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 8px 18px rgba(0, 0, 0, 0.18),
+    0 1px 3px rgba(0, 0, 0, 0.12);
 
   /* Tier C wash (hover for transparent controls) */
   --wash: rgba(20, 27, 45, 0.05);
@@ -257,8 +267,14 @@
       inset 0 1px 0 rgba(255, 255, 255, 0.2),
       0 8px 24px rgba(0, 0, 0, 0.18),
       0 2px 6px rgba(0, 0, 0, 0.12);
-    --dl-hover-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
-    --dl-active-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+    --dl-hover-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 10px 28px rgba(0, 0, 0, 0.18),
+      0 3px 8px rgba(0, 0, 0, 0.1);
+    --dl-active-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 8px 18px rgba(0, 0, 0, 0.18),
+      0 1px 3px rgba(0, 0, 0, 0.12);
 
     --wash: rgba(255, 255, 255, 0.06);
     --wash-strong: rgba(255, 255, 255, 0.1);
@@ -362,8 +378,14 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.2),
     0 8px 24px rgba(0, 0, 0, 0.18),
     0 2px 6px rgba(0, 0, 0, 0.12);
-  --dl-hover-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
-  --dl-active-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+  --dl-hover-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 10px 28px rgba(0, 0, 0, 0.18),
+    0 3px 8px rgba(0, 0, 0, 0.1);
+  --dl-active-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 8px 18px rgba(0, 0, 0, 0.18),
+    0 1px 3px rgba(0, 0, 0, 0.12);
 
   --wash: rgba(255, 255, 255, 0.06);
   --wash-strong: rgba(255, 255, 255, 0.1);
@@ -668,6 +690,8 @@ a:hover { text-decoration: underline; }
 .action-menu > :nth-child(6) { animation-delay: 0.185s; }
 .action-menu > :nth-child(7) { animation-delay: 0.215s; }
 .action-menu > :nth-child(8) { animation-delay: 0.245s; }
+/* Longer panels (search filters): the tail arrives as one settled beat. */
+.action-menu > :nth-child(n+9) { animation-delay: 0.27s; }
 .action-menu > button svg { flex: none; color: var(--muted); stroke-width: 1.75; transition: color 0.16s ease; }
 @media (hover: hover) {
   .action-menu > button:hover { background: var(--wash-strong); color: var(--ink); }
@@ -1348,7 +1372,9 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
    column boundary. A fixed row height also keeps every view's topbar equally
    tall (the searchbox is memos-only), so the topbar-action pill morphs home
    along one baseline instead of a diagonal. */
-.breadcrumb { --breadcrumb-gap: 8px; position: relative; display: flex; flex: 1; min-width: 0; min-height: 44px; align-items: center; gap: var(--breadcrumb-gap); }
+/* flex-wrap: several filter chips can ride beside the trail; they fold onto
+   a second row (the sticky band grows) instead of overflowing the topbar. */
+.breadcrumb { --breadcrumb-gap: 8px; position: relative; display: flex; flex: 1; flex-wrap: wrap; min-width: 0; min-height: 44px; align-items: center; gap: var(--breadcrumb-gap); row-gap: 4px; }
 
 /* Tag drilldown breadcrumb: ⌂ / 欢迎 / [简介 ⌄] — every ancestor clickable,
    the current segment fused with the view-options dropdown (see
@@ -1600,6 +1626,116 @@ button.crumb:active { background: var(--wash-strong); }
 }
 @media (hover: hover) { .searchbox-clear:hover { background: var(--wash-strong); color: var(--ink); } }
 .searchbox-clear:active { transform: scale(0.85); }
+
+/* ---- Search filter popover (structured filters + saved presets) ---- */
+.search-tools { display: flex; flex: none; align-items: center; gap: 6px; }
+.filter-toggle.is-open { background: var(--wash-strong); color: var(--ink); }
+/* Any structured filter active: the trigger holds a quiet primary tint —
+   the searchbox corner keeps saying "the feed is filtered" even when the
+   chips have scrolled away with the breadcrumb. */
+.filter-toggle.is-active { color: var(--primary-dark); background: var(--primary-tint); }
+@media (hover: hover) {
+  .filter-toggle.is-active:hover:not(:disabled) { background: var(--primary-tint-strong); color: var(--primary-dark); }
+}
+
+.filter-panel {
+  width: min(296px, calc(100vw - 24px));
+  max-height: min(540px, calc(100dvh - 132px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Native date inputs carry a wide intrinsic min-content; without this the
+   grid column would stretch past the panel and clip the date row. */
+.filter-panel > * { min-width: 0; }
+/* Section caption with a trailing inline action (date-range 清除). */
+.filter-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-right: 5px; }
+.filter-mini-clear {
+  padding: 2px 7px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  border-radius: var(--r-xs);
+  animation: fade-in 0.2s var(--ease) both;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+@media (hover: hover) { .filter-mini-clear:hover { background: var(--wash); color: var(--ink); } }
+.filter-mini-clear:active { transform: scale(0.94); }
+
+.filter-dates { display: flex; align-items: center; gap: 6px; padding: 2px 9px 6px 11px; }
+.filter-dates input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 7px;
+  color: var(--ink);
+  background: var(--field-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
+}
+@media (hover: hover) { .filter-dates input:hover { border-color: var(--line-strong); } }
+.filter-dates input:focus { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring); }
+.filter-dates-sep { flex: none; color: var(--muted); font-size: 0.82rem; }
+
+/* Saved preset row: apply button + hover-revealed delete in one grid, so a
+   long name ellipsizes instead of colliding with the ×. The apply button
+   mirrors the .action-menu > button recipe it can't inherit from here. */
+.saved-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.saved-row > button:first-child {
+  display: flex;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 11px;
+  color: var(--ink-soft);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-align: left;
+  white-space: nowrap;
+  border-radius: var(--r-sm);
+  transition: background 0.16s ease, color 0.16s ease, transform var(--t-fast) var(--ease);
+}
+.saved-row > button:first-child svg { flex: none; color: var(--muted); stroke-width: 1.75; transition: color 0.16s ease; }
+@media (hover: hover) {
+  .saved-row > button:first-child:hover { background: var(--wash-strong); color: var(--ink); }
+  .saved-row > button:first-child:hover svg { color: var(--ink); }
+}
+.saved-row > button:first-child:active { transform: scale(0.985); }
+.saved-row > button:first-child.is-selected { color: var(--primary-dark); }
+.saved-row > button:first-child .menu-check { color: var(--primary-dark); }
+.saved-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.saved-delete {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: 0 3px 0 1px;
+  color: var(--muted);
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity var(--t) var(--ease), background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+.saved-row:hover .saved-delete,
+.saved-delete:focus-visible { opacity: 1; }
+@media (hover: none) { .saved-delete { opacity: 1; } }
+@media (hover: hover) { .saved-delete:hover { background: var(--danger-tint); color: var(--danger); } }
+.saved-delete:active { transform: scale(0.85); }
+
+/* Search-syntax footnote. */
+.filter-hint {
+  display: block;
+  padding: 4px 11px 3px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.55;
+  white-space: normal;
+  user-select: none;
+}
 
 /* Empty Trash — the trash view's counterpart of the location pill: identical
    ghost geometry, danger-tinted. It carries the shared topbar-action
@@ -2692,6 +2828,11 @@ button.memo-tag:active {
 ::view-transition-group(topbar-action),
 ::view-transition-group(select-delete),
 ::view-transition-group(day-filter-chip),
+::view-transition-group(range-filter-chip),
+::view-transition-group(facet-chip-noTags),
+::view-transition-group(facet-chip-hasImage),
+::view-transition-group(facet-chip-hasLink),
+::view-transition-group(facet-chip-hasOpenTask),
 ::view-transition-group(loc-sep) { z-index: 2; }
 ::view-transition-group(toast) { z-index: 3; }
 ::view-transition-old(toast),
@@ -2747,7 +2888,7 @@ button.memo-tag:active {
   .crumb { max-width: 6.5em; padding: 5px 7px; }
   .loc-label { max-width: 6.5em; }
   /* Selection mode needs the row for its pills — search yields the corner. */
-  .topbar:has(.select-bar) .searchbox { display: none; }
+  .topbar:has(.select-bar) .search-tools { display: none; }
   .select-delete span { display: none; }
   .select-delete.is-confirm span { display: inline; }
 }
@@ -2759,11 +2900,14 @@ button.memo-tag:active {
   .breadcrumb { flex: 0 0 calc(100% - 40px); }
   .breadcrumb:has(.filter-chip) .crumbs { flex: 1; }
   .filter-chip { flex: none; max-width: min(132px, 48%); }
+  .search-tools {
+    flex: 0 0 calc(100% - 40px);
+    margin-left: 40px;
+  }
   .searchbox,
   .searchbox.is-open {
-    flex: 0 0 calc(100% - 40px);
-    width: calc(100% - 40px);
-    margin-left: 40px;
+    flex: 1 1 auto;
+    width: auto;
   }
 
   .stats-overlay { padding: 8px; }

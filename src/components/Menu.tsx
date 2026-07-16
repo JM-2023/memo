@@ -9,6 +9,15 @@ interface MenuProps {
   children: (close: () => void) => ReactNode;
   align?: "left" | "right";
   className?: string;
+  /**
+   * "menu" (default) is a menuitem list: arrow-key roving focus, Tab closes.
+   * "panel" is a small non-modal dialog for mixed controls (toggles, date
+   * inputs): Tab moves naturally, arrow keys stay with the focused control.
+   * Both share the same surface, phases and dismissal behavior.
+   */
+  kind?: "menu" | "panel";
+  /** Accessible name for the panel — required with kind="panel". */
+  panelLabel?: string;
   /** Extra class on the floating panel itself — the only way to style a
       portaled panel, which renders outside `.menu-root`. */
   panelClassName?: string;
@@ -46,7 +55,7 @@ const PAGE_FOCUSABLE = [
  * Closing holds the panel one beat in a "closing" phase so it can play the
  * reverse morph before unmounting.
  */
-export function Menu({ trigger, children, align = "right", className, panelClassName, portal = false }: MenuProps) {
+export function Menu({ trigger, children, align = "right", className, panelClassName, portal = false, kind = "menu", panelLabel }: MenuProps) {
   const [phase, setPhase] = useState<"closed" | "open" | "closing">("closed");
   const [pos, setPos] = useState<PortalPos | null>(null);
   const reducedMotion = useReducedMotion();
@@ -104,10 +113,14 @@ export function Menu({ trigger, children, align = "right", className, panelClass
 
   useLayoutEffect(() => {
     if (!open) return;
+    if (kind === "panel") {
+      panelRef.current?.querySelector<HTMLElement>(PAGE_FOCUSABLE)?.focus({ preventScroll: true });
+      return;
+    }
     const items = menuItems();
     const target = focusEdgeRef.current === "last" ? items.at(-1) : items[0];
     target?.focus({ preventScroll: true });
-  }, [open]);
+  }, [open, kind]);
 
   useEffect(() => {
     if (!open) return;
@@ -123,6 +136,9 @@ export function Menu({ trigger, children, align = "right", className, panelClass
         requestClose(true);
         return;
       }
+      // Panels keep native keyboarding: Tab walks the controls in order and
+      // arrows stay with whatever is focused (date-input segments need them).
+      if (kind === "panel") return;
       if (event.key === "Tab") {
         event.preventDefault();
         requestClose(false);
@@ -148,7 +164,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
       window.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKey, true);
     };
-  }, [open]);
+  }, [open, kind]);
 
   // Portal mode: measure, then place — the layout effect runs before paint,
   // so the panel never flashes at a wrong position.
@@ -210,8 +226,9 @@ export function Menu({ trigger, children, align = "right", className, panelClass
         ref={panelRef}
         className={`action-menu align-${align}${portal ? " is-portal" : ""}${phase === "closing" ? " is-closing" : ""}${panelClassName ? ` ${panelClassName}` : ""}`}
         style={panelStyle}
-        role="menu"
-        aria-orientation="vertical"
+        role={kind === "panel" ? "dialog" : "menu"}
+        aria-label={panelLabel}
+        aria-orientation={kind === "panel" ? undefined : "vertical"}
       >
         {children(() => requestClose(true))}
       </div>
@@ -223,7 +240,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
         className="menu-trigger-slot"
         onClick={() => (open ? requestClose(true) : requestOpen("first"))}
         onKeyDown={(event) => {
-          if (open || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
+          if (kind === "panel" || open || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
           event.preventDefault();
           requestOpen(event.key === "ArrowUp" ? "last" : "first");
         }}

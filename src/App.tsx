@@ -12,6 +12,7 @@ import { Menu } from "./components/Menu";
 import { PromptDialog } from "./components/PromptDialog";
 import { RollingText } from "./components/RollingText";
 import { ScrollTopButton } from "./components/ScrollTopButton";
+import { FACET_ROWS, SearchFilter } from "./components/SearchFilter";
 import { Sidebar } from "./components/Sidebar";
 import { StatsModal } from "./components/StatsModal";
 import { SwapText } from "./components/SwapText";
@@ -43,6 +44,18 @@ import { dateKey, formatDayLabel } from "./lib/dates";
 import { filterPreservingId } from "./lib/feedSafety";
 import { useI18n } from "./lib/i18n";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
+import { SAVED_FILTERS_LIMIT, loadSavedFilters, persistSavedFilters, type SavedFilter } from "./lib/savedFilters";
+import {
+  EMPTY_FILTERS,
+  filtersEqual,
+  hasActiveFilters,
+  memoMatchesFilters,
+  memoMatchesQuery,
+  parseSearchQuery,
+  queryIsEmpty,
+  type FacetKey,
+  type FeedFilters
+} from "./lib/search";
 import { selectionWithinVisibleIds } from "./lib/selection";
 import { countsByDay, dayKeyOf } from "./lib/stats";
 import { applySyncDelta, createSyncState, memosOf, purgedOf, tagsOfState, type PurgedMemo } from "./lib/syncState";
@@ -65,16 +78,6 @@ interface ToastState {
 
 const SORT_KEYS: SortKey[] = ["created-desc", "created-asc", "updated-desc", "updated-asc"];
 const EMPTY_TAGS: string[] = [];
-const searchTextCache = new WeakMap<Memo, string>();
-
-function searchableText(memo: Memo): string {
-  let value = searchTextCache.get(memo);
-  if (value === undefined) {
-    value = memo.content.toLowerCase();
-    searchTextCache.set(memo, value);
-  }
-  return value;
-}
 
 async function mapSettledWithLimit<T, R>(items: readonly T[], limit: number, worker: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
   const results = new Array<PromiseSettledResult<R>>(items.length);
@@ -256,6 +259,10 @@ export default function App() {
   const [activeDay, setActiveDay] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [filters, setFilters] = useState<FeedFilters>(EMPTY_FILTERS);
+  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>(loadSavedFilters);
+  // Names the current filter combination via PromptDialog.
+  const [savingFilter, setSavingFilter] = useState(false);
 
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -328,6 +335,8 @@ export default function App() {
     setActiveDay(null);
     setQuery("");
     setSearchOpen(false);
+    setFilters(EMPTY_FILTERS);
+    setSavingFilter(false);
     setView("memos");
     setCreating(false);
     setEditingId(null);
@@ -363,6 +372,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("memo-sort", sortKey);
   }, [sortKey]);
+
+  useEffect(() => {
+    persistSavedFilters(savedFilters);
+  }, [savedFilters]);
 
   const applySyncChanges = useCallback((changed: readonly Memo[], purged: readonly PurgedMemo[], tags: readonly TagMeta[], cursor?: number) => {
     setSyncState((current) => applySyncDelta(current, { memos: changed, purged, tags }));
@@ -638,7 +651,10 @@ export default function App() {
   // Filtering follows the keystroke at deferred priority: the input never
   // waits for a big feed to re-render.
   const deferredQuery = useDeferredValue(trimmedQuery);
-  const filtersActive = activeTag !== null || activeDay !== null || trimmedQuery.length > 0;
+  // Keywords AND together; "quoted" runs must match as whole phrases.
+  const parsedQuery = useMemo(() => parseSearchQuery(deferredQuery), [deferredQuery]);
+  const structuredFiltersOn = hasActiveFilters(filters);
+  const filtersActive = activeTag !== null || activeDay !== null || trimmedQuery.length > 0 || structuredFiltersOn;
 
   const visibleMemos = useMemo(() => {
     let list = activeMemos;
@@ -648,15 +664,18 @@ export default function App() {
     if (activeDay) {
       list = filterPreservingId(list, editingId, (memo) => dayKeyOf(memo) === activeDay);
     }
-    if (deferredQuery) {
-      list = filterPreservingId(list, editingId, (memo) => searchableText(memo).includes(deferredQuery));
+    if (hasActiveFilters(filters)) {
+      list = filterPreservingId(list, editingId, (memo) => memoMatchesFilters(memo, filters));
+    }
+    if (!queryIsEmpty(parsedQuery)) {
+      list = filterPreservingId(list, editingId, (memo) => memoMatchesQuery(memo, parsedQuery));
     }
     const compare = SORT_COMPARATORS[sortKey];
     return [...list].sort((a, b) => {
       if (Boolean(a.pinnedAt) !== Boolean(b.pinnedAt)) return a.pinnedAt ? -1 : 1;
       return compare(a, b);
     });
-  }, [activeMemos, activeTag, activeDay, deferredQuery, editingId, sortKey]);
+  }, [activeMemos, activeTag, activeDay, filters, parsedQuery, editingId, sortKey]);
 
   const feedMemos = view === "trash" ? trashedMemos : visibleMemos;
   const visibleFeedIds = useMemo(() => feedMemos.map((memo) => memo.id), [feedMemos]);
@@ -669,7 +688,7 @@ export default function App() {
   useEffect(() => {
     if (editingId) return;
     setRenderCap(FEED_PAGE);
-  }, [deferredQuery, editingId]);
+  }, [deferredQuery, filters, editingId]);
   const renderedFeedMemos = useMemo(() => {
     const rendered = feedMemos.slice(0, renderCap);
     if (!editingId || rendered.some((memo) => memo.id === editingId)) return rendered;
@@ -793,16 +812,102 @@ export default function App() {
 
   const showAll = useCallback(() => {
     if (blockNavigationWhileEditing()) return;
-    if (view === "memos" && activeTag === null && activeDay === null && query.length === 0) {
+    if (view === "memos" && activeTag === null && activeDay === null && query.length === 0 && !hasActiveFilters(filters)) {
       return;
     }
     changeFeed(() => {
       setActiveTag(null);
       setActiveDay(null);
       setQuery("");
+      setFilters(EMPTY_FILTERS);
       setView("memos");
     });
-  }, [view, activeTag, activeDay, query, changeFeed, blockNavigationWhileEditing]);
+  }, [view, activeTag, activeDay, query, filters, changeFeed, blockNavigationWhileEditing]);
+
+  /** Facet on/off is a discrete choice — it rides the same feed morph as a
+      tag or sort change, whether it comes from the panel or a chip's ×. */
+  const toggleFacet = useCallback(
+    (key: FacetKey) => {
+      if (blockNavigationWhileEditing()) return;
+      changeFeed(() => setFilters((current) => ({ ...current, [key]: !current[key] })));
+    },
+    [changeFeed, blockNavigationWhileEditing]
+  );
+
+  // Date edits arrive segment-by-segment from the native inputs — update in
+  // place like search keystrokes instead of morphing per keypress.
+  const patchDateRange = useCallback(
+    (patch: Partial<Pick<FeedFilters, "dateFrom" | "dateTo">>) => {
+      if (blockNavigationWhileEditing()) return;
+      setFilters((current) => ({ ...current, ...patch }));
+    },
+    [blockNavigationWhileEditing]
+  );
+
+  const clearDateRange = useCallback(() => {
+    if (blockNavigationWhileEditing()) return;
+    changeFeed(() => setFilters((current) => ({ ...current, dateFrom: null, dateTo: null })));
+  }, [changeFeed, blockNavigationWhileEditing]);
+
+  /** A preset restores the whole feed context in one morph. */
+  const applySavedFilter = useCallback(
+    (item: SavedFilter) => {
+      if (blockNavigationWhileEditing()) return;
+      changeFeed(() => {
+        setView("memos");
+        setActiveTag(item.tag);
+        setActiveDay(item.day);
+        setQuery(item.query);
+        setFilters(item.filters);
+      });
+    },
+    [changeFeed, blockNavigationWhileEditing]
+  );
+
+  const deleteSavedFilter = useCallback(
+    (item: SavedFilter) => {
+      setSavedFilters((current) => current.filter((entry) => entry.id !== item.id));
+      showToast(tr("Saved filter removed", "已删除保存的筛选"));
+    },
+    [showToast, tr]
+  );
+
+  function handleSaveFilterConfirmed(name: string) {
+    const snapshot = { name, query: query.trim(), tag: activeTag, day: activeDay, filters };
+    setSavedFilters((current) => {
+      const existing = current.find((entry) => entry.name === name);
+      if (existing) return current.map((entry) => (entry.id === existing.id ? { ...snapshot, id: existing.id } : entry));
+      return [...current, { ...snapshot, id: crypto.randomUUID() }];
+    });
+    setSavingFilter(false);
+    showToast(tr("Filter saved", "筛选已保存"));
+  }
+
+  // The preset whose snapshot equals the live feed state — its row gets the
+  // check mark, mirroring the sort menu's radio language.
+  const activeSavedId = useMemo(() => {
+    const match = savedFilters.find(
+      (item) =>
+        item.tag === activeTag &&
+        item.day === activeDay &&
+        item.query.trim().toLowerCase() === trimmedQuery &&
+        filtersEqual(item.filters, filters)
+    );
+    return match?.id ?? null;
+  }, [savedFilters, activeTag, activeDay, trimmedQuery, filters]);
+
+  // Breadcrumb chip text for the date range; reversed ends still read as the
+  // span between them (the predicate normalizes the same way).
+  const rangeChipLabel = useMemo(() => {
+    const { dateFrom, dateTo } = filters;
+    if (dateFrom !== null && dateTo !== null) {
+      const [lo, hi] = dateFrom <= dateTo ? [dateFrom, dateTo] : [dateTo, dateFrom];
+      return lo === hi ? formatDayLabel(lo, locale) : `${formatDayLabel(lo, locale)} – ${formatDayLabel(hi, locale)}`;
+    }
+    if (dateFrom !== null) return tr(`From ${formatDayLabel(dateFrom, locale)}`, `${formatDayLabel(dateFrom, locale)} 起`);
+    if (dateTo !== null) return tr(`Until ${formatDayLabel(dateTo, locale)}`, `${formatDayLabel(dateTo, locale)} 止`);
+    return null;
+  }, [filters, locale, tr]);
 
   const openTrash = useCallback(() => {
     if (blockNavigationWhileEditing()) return;
@@ -1717,42 +1822,83 @@ export default function App() {
                 </span>
               </button>
             ) : null}
-            {view === "memos" && !selectMode && activeDay ? (
-              <span key={`day-${activeDay}`} className="filter-chip">
-                {formatDayLabel(activeDay, locale)}
-                <button type="button" onClick={() => pickDay(null)} aria-label={tr("Clear date filter", "清除日期筛选")}>
-                  <X size={12} aria-hidden="true" />
-                </button>
-              </span>
+            {view === "memos" && !selectMode ? (
+              // Active-filter chips ride beside the location trail — the
+              // breadcrumb IS the "what am I looking at" display. Each chip
+              // carries its own view-transition-name so feed morphs glide it
+              // (and its departure) instead of blinking it through the root
+              // cross-fade.
+              <>
+                {activeDay ? (
+                  <span key={`day-${activeDay}`} className="filter-chip">
+                    {formatDayLabel(activeDay, locale)}
+                    <button type="button" onClick={() => pickDay(null)} aria-label={tr("Clear date filter", "清除日期筛选")}>
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  </span>
+                ) : null}
+                {rangeChipLabel ? (
+                  <span className="filter-chip" style={{ viewTransitionName: "range-filter-chip" }}>
+                    {rangeChipLabel}
+                    <button type="button" onClick={clearDateRange} aria-label={tr("Clear date range", "清除日期范围")}>
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  </span>
+                ) : null}
+                {FACET_ROWS.filter((row) => filters[row.key]).map((row) => (
+                  <span key={row.key} className="filter-chip" style={{ viewTransitionName: `facet-chip-${row.key}` }}>
+                    {tr(row.en, row.zh)}
+                    <button type="button" onClick={() => toggleFacet(row.key)} aria-label={tr(`Clear “${row.en}” filter`, `清除「${row.zh}」筛选`)}>
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  </span>
+                ))}
+              </>
             ) : null}
           </div>
           {view === "memos" ? (
-            <div className={`searchbox${searchOpen || query ? " is-open" : ""}`}>
-              <Search size={15} className="searchbox-icon" aria-hidden="true" />
-              <input
-                ref={searchRef}
-                value={query}
-                placeholder={tr("Search memos", "搜索笔记")}
-                disabled={editingId !== null}
-                onChange={(event) => setQuery(event.target.value)}
-                onFocus={() => setSearchOpen(true)}
-                onBlur={() => setSearchOpen(false)}
-              />
-              {query ? (
-                <button
-                  type="button"
-                  className="searchbox-clear"
-                  aria-label={tr("Clear search", "清空搜索")}
+            <div className="search-tools">
+              <div className={`searchbox${searchOpen || query ? " is-open" : ""}`}>
+                <Search size={15} className="searchbox-icon" aria-hidden="true" />
+                <input
+                  ref={searchRef}
+                  value={query}
+                  placeholder={tr("Search memos", "搜索笔记")}
+                  title={tr("Space separates keywords; “quotes” match an exact phrase", "空格分隔多个关键词；“引号”匹配完整短语")}
                   disabled={editingId !== null}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    setQuery("");
-                    searchRef.current?.focus();
-                  }}
-                >
-                  <X size={13} aria-hidden="true" />
-                </button>
-              ) : null}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onFocus={() => setSearchOpen(true)}
+                  onBlur={() => setSearchOpen(false)}
+                />
+                {query ? (
+                  <button
+                    type="button"
+                    className="searchbox-clear"
+                    aria-label={tr("Clear search", "清空搜索")}
+                    disabled={editingId !== null}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setQuery("");
+                      searchRef.current?.focus();
+                    }}
+                  >
+                    <X size={13} aria-hidden="true" />
+                  </button>
+                ) : null}
+              </div>
+              <SearchFilter
+                filters={filters}
+                saved={savedFilters}
+                activeSavedId={activeSavedId}
+                canSave={filtersActive}
+                disabled={editingId !== null}
+                onToggleFacet={toggleFacet}
+                onDateChange={patchDateRange}
+                onClearDates={clearDateRange}
+                onApplySaved={applySavedFilter}
+                onDeleteSaved={deleteSavedFilter}
+                onSaveCurrent={() => setSavingFilter(true)}
+              />
             </div>
           ) : null}
         </div>
@@ -1867,6 +2013,32 @@ export default function App() {
             if (!dialogBusy) setRenameTagTarget(null);
           }}
           onConfirm={(value) => void handleRenameTagConfirmed(value)}
+        />
+      ) : null}
+      {savingFilter ? (
+        <PromptDialog
+          title={tr("Save current filters", "保存当前筛选")}
+          body={tr(
+            "Keeps this combination of search, tag, date and filters one tap away.",
+            "把当前的搜索词、标签、日期与筛选组合保存下来，之后一键套用。"
+          )}
+          initialValue=""
+          placeholder={tr("Filter name", "筛选名称")}
+          confirmLabel={tr("Save", "保存")}
+          validate={(value) => {
+            if (value.length > 40) return tr("Use a shorter name (40 characters max)", "名称最长 40 个字符");
+            if (savedFilters.length >= SAVED_FILTERS_LIMIT && !savedFilters.some((item) => item.name === value)) {
+              return tr(`You can keep up to ${SAVED_FILTERS_LIMIT} saved filters`, `最多保存 ${SAVED_FILTERS_LIMIT} 个筛选`);
+            }
+            return null;
+          }}
+          hint={(value) =>
+            savedFilters.some((item) => item.name === value)
+              ? tr("A filter with this name exists and will be replaced.", "同名筛选已存在，保存后将覆盖")
+              : null
+          }
+          onCancel={() => setSavingFilter(false)}
+          onConfirm={handleSaveFilterConfirmed}
         />
       ) : null}
       {changingPasscode ? (
