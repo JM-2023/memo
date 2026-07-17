@@ -15,14 +15,15 @@ import shareCardCss from "../styles/shareCard.css?raw";
 type CardLayout = "portrait" | "landscape";
 
 /** The artifact's fixed layout widths; the preview scales, the PNG never.
-    Portrait is a single measure, landscape the two-column spread. */
-const CARD_WIDTHS: Record<CardLayout, number> = { portrait: 400, landscape: 700 };
+    Portrait is a phone-reading measure, landscape a desktop one — the same
+    sheet cut wider, not smaller type. */
+const CARD_WIDTHS: Record<CardLayout, number> = { portrait: 400, landscape: 640 };
 /** Dialog width per layout — mirrored by .share-modal / .share-modal.is-wide. */
-const MODAL_WIDTHS: Record<CardLayout, number> = { portrait: 478, landscape: 750 };
+const MODAL_WIDTHS: Record<CardLayout, number> = { portrait: 478, landscape: 690 };
 /** Between dialog edge and card space: 1px modal borders + 24px stage padding
     per side — mirror .share-modal / .share-stage. */
 const MODAL_CHROME = 50;
-/** 400/700 CSS px → 1000/1750 px PNG: crisp in feeds without absurd payloads. */
+/** 400/640 CSS px → 1000/1600 px PNG: crisp in feeds without absurd payloads. */
 const EXPORT_SCALE = 2.5;
 
 const LAYOUT_KEY = "memo:share-layout";
@@ -234,11 +235,17 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
       });
     };
     measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(overlay);
-    observer.observe(card);
-    return () => observer.disconnect();
+    // The window listener re-measures on viewport changes (drag-resize,
+    // rotation); the observer catches the card's own height changes (an
+    // external image dropping out). Both funnel into the same math.
+    window.addEventListener("resize", measure);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(overlay);
+    observer?.observe(card);
+    return () => {
+      window.removeEventListener("resize", measure);
+      observer?.disconnect();
+    };
   }, [layout]);
 
   const lines = useMemo(() => {

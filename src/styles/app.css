@@ -2755,9 +2755,9 @@ button.memo-tag:active {
   animation: modal-in 0.24s var(--ease-out) both;
   transition: width 0.3s var(--ease-out);
 }
-/* Landscape spread: the dialog itself breathes wider around the turned
-   sheet. Width numbers mirror MODAL_WIDTHS in ShareDialog. */
-.share-modal.is-wide { width: min(750px, 100%); }
+/* Landscape: the dialog itself breathes wider around the wider sheet.
+   Width numbers mirror MODAL_WIDTHS in ShareDialog. */
+.share-modal.is-wide { width: min(690px, 100%); }
 .overlay.is-closing .share-modal { animation: modal-out 0.16s var(--ease) both; }
 .share-head {
   display: flex;

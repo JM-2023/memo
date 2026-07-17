@@ -169,30 +169,13 @@
 }
 
 /* =========================================================================
-   Landscape — the same sheet turned sideways. Long entries set as a
-   two-column spread (an open book, not a scroll): the text balances across
-   both columns, so the artifact grows wide instead of endlessly tall. Media
-   and the footer keep the full measure beneath the columns.
+   Landscape — the same sheet cut wider, read the way a screen reads: one
+   column at a desktop measure. 560px ≈ 33 CJK chars (~68 Latin) at 17px —
+   the far edge of reading comfort, so "wide" never turns into long lines.
+   Long entries settle toward screen proportions instead of a tall scroll,
+   and the wider page carries a touch more margin, as wider pages do.
    ========================================================================= */
-.share-card.is-landscape { width: 700px; }
-.share-card.is-landscape .sc-body {
-  display: block;
-  column-count: 2;
-  column-gap: 32px;
+.share-card.is-landscape {
+  width: 640px;
+  padding: 30px 40px 22px;
 }
-/* Column flow has no grid gap: bottom margins recreate the 4px rhythm
-   (collapsing keeps sums identical), and orphans/widows keep a wrapped
-   paragraph from stranding a lone line at a column edge. */
-.share-card.is-landscape .sc-body > * {
-  margin-bottom: 4px;
-  orphans: 2;
-  widows: 2;
-}
-.share-card.is-landscape .sc-hr { margin: 15px 0; }
-/* Print discipline at the column break: headings stay with their text,
-   list markers with their lines, table rows whole. */
-.share-card.is-landscape .sc-h1,
-.share-card.is-landscape .sc-h2,
-.share-card.is-landscape .sc-h3 { break-after: avoid; }
-.share-card.is-landscape .sc-li,
-.share-card.is-landscape .sc-tr { break-inside: avoid; }
