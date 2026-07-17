@@ -329,7 +329,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
               <footer className="sc-foot">
                 <span className="sc-brand">MEMO</span>
                 <span className="sc-seal" aria-hidden="true">
-                  {language === "zh-CN" ? "记" : <NotebookPen size={12} strokeWidth={2.4} />}
+                  <NotebookPen size={12} strokeWidth={2.4} />
                 </span>
               </footer>
             </div>
