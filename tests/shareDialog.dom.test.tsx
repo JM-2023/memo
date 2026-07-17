@@ -54,6 +54,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  localStorage.clear();
 });
 
 describe("share dialog", () => {
@@ -84,6 +85,31 @@ describe("share dialog", () => {
 
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("switches to the landscape spread and remembers the pick", async () => {
+    const user = userEvent.setup();
+    const { view } = renderDialog();
+
+    const group = screen.getByRole("group", { name: "Card layout" });
+    const landscape = screen.getByRole("button", { name: "Landscape card" });
+    expect(view.container.querySelector(".share-card")?.className).not.toContain("is-landscape");
+
+    await user.click(landscape);
+
+    expect(landscape.getAttribute("aria-pressed")).toBe("true");
+    expect(group.getAttribute("data-layout")).toBe("landscape");
+    expect(view.container.querySelector(".share-card")?.className).toContain("is-landscape");
+    expect(view.container.querySelector(".share-modal")?.className).toContain("is-wide");
+    expect(localStorage.getItem("memo:share-layout")).toBe("landscape");
+  });
+
+  it("opens with the stored layout", () => {
+    localStorage.setItem("memo:share-layout", "landscape");
+    const { view } = renderDialog();
+
+    expect(view.container.querySelector(".share-card")?.className).toContain("is-landscape");
+    expect(screen.getByRole("button", { name: "Landscape card" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("drops external images that fail to load and says so", async () => {

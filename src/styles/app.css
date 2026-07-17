@@ -558,6 +558,9 @@ a:hover { text-decoration: underline; }
    is the element's resting rotate(-3deg); the pop curve supplies the
    press-past-and-settle. */
 @keyframes seal-stamp { from { opacity: 0; transform: scale(2.1) rotate(-15deg); } }
+/* Share card layout swap: the fresh sheet appears through a plain fade —
+   the frame's width morph carries all the motion. */
+@keyframes sheet-in { from { opacity: 0; } }
 
 .spin { animation: spin 0.8s linear infinite; }
 
@@ -2750,7 +2753,11 @@ button.memo-tag:active {
   box-shadow: var(--menu-highlight), var(--shadow-lg);
   overflow: hidden;
   animation: modal-in 0.24s var(--ease-out) both;
+  transition: width 0.3s var(--ease-out);
 }
+/* Landscape spread: the dialog itself breathes wider around the turned
+   sheet. Width numbers mirror MODAL_WIDTHS in ShareDialog. */
+.share-modal.is-wide { width: min(750px, 100%); }
 .overlay.is-closing .share-modal { animation: modal-out 0.16s var(--ease) both; }
 .share-head {
   display: flex;
@@ -2769,16 +2776,28 @@ button.memo-tag:active {
   justify-items: center;
   align-content: safe center;
   min-height: 0;
+  /* Clip the sheet horizontally while the frame is still mid-glide. */
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 24px;
   background: var(--bg);
   border-bottom: 1px solid var(--glass-rim);
   scrollbar-width: thin;
 }
-/* The artifact arrives a beat after the frame settles. */
-.share-fit { animation: rise-in 0.26s var(--ease-out) 0.05s both; }
-/* Preview-only elevation; the artifact itself carries just its hairline. */
-.share-stage .share-card { box-shadow: var(--shadow); }
+/* The artifact arrives a beat after the frame settles; on a layout swap its
+   explicit size glides in step with the dialog's width morph. */
+.share-fit {
+  animation: rise-in 0.26s var(--ease-out) 0.05s both;
+  transition: width 0.3s var(--ease-out), height 0.3s var(--ease-out);
+}
+/* Preview-only elevation; the artifact itself carries just its hairline.
+   The sheet-in fade replays on the layout swap's keyed remount, and the
+   transform transition lets the fit scale follow window resizes softly. */
+.share-stage .share-card {
+  box-shadow: var(--shadow);
+  animation: sheet-in 0.22s var(--ease-out) both;
+  transition: transform 0.3s var(--ease-out);
+}
 /* …and once the page has landed, the seal is pressed on. One flourish. */
 .share-stage .sc-seal { animation: seal-stamp 0.3s var(--ease-pop) 0.3s backwards; }
 .share-note {
@@ -2790,11 +2809,58 @@ button.memo-tag:active {
 }
 .share-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 14px;
 }
 .share-actions > button { display: inline-flex; align-items: center; gap: 7px; }
+/* Layout switch — the sidebar segment idiom (track + sliding thumb) sized
+   for the actions row, set with glyphs only: the live card is the label. */
+.share-seg {
+  position: relative;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  flex: none;
+  margin-right: auto;
+  padding: 2px;
+  isolation: isolate;
+  background: var(--seg-track);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.share-seg-thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc((100% - 4px) / 2);
+  background: var(--seg-thumb);
+  border: 1px solid var(--line-strong);
+  /* Concentric with the 2px-padded track. */
+  border-radius: calc(var(--r-md) - 2px);
+  box-shadow: var(--shadow-xs);
+  transform: translateX(0);
+  transition: transform 0.22s var(--ease-spring);
+}
+.share-seg[data-layout="landscape"] .share-seg-thumb { transform: translateX(100%); }
+.share-seg button {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  min-width: 42px;
+  color: var(--seg-muted);
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--r-md) - 2px);
+  transition: color var(--t) var(--ease), transform 0.12s var(--ease), opacity var(--t) var(--ease);
+}
+@media (hover: hover) { .share-seg button:hover:not(:disabled):not(.is-active) { color: var(--ink-soft); } }
+.share-seg button:focus-visible { outline: none; background: var(--wash-strong); }
+.share-seg button:active:not(:disabled) { transform: scale(0.94); }
+.share-seg button.is-active { color: var(--ink); }
 
 /* =========================================================================
    Back-to-top — a frosted disc floating bottom-center over the feed. The

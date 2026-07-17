@@ -1,4 +1,4 @@
-import { Check, Copy, Download, Loader2, NotebookPen, X } from "lucide-react";
+import { Check, Copy, Download, Loader2, NotebookPen, RectangleHorizontal, RectangleVertical, X } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
@@ -12,10 +12,36 @@ import type { Memo } from "../lib/types";
 import "../styles/shareCard.css";
 import shareCardCss from "../styles/shareCard.css?raw";
 
-/** The artifact's fixed layout width; the preview scales, the PNG never. */
-const CARD_WIDTH = 400;
-/** 400 CSS px → 1000 px PNG: crisp in feeds without absurd payloads. */
+type CardLayout = "portrait" | "landscape";
+
+/** The artifact's fixed layout widths; the preview scales, the PNG never.
+    Portrait is a single measure, landscape the two-column spread. */
+const CARD_WIDTHS: Record<CardLayout, number> = { portrait: 400, landscape: 700 };
+/** Dialog width per layout — mirrored by .share-modal / .share-modal.is-wide. */
+const MODAL_WIDTHS: Record<CardLayout, number> = { portrait: 478, landscape: 750 };
+/** Between dialog edge and card space: 1px modal borders + 24px stage padding
+    per side — mirror .share-modal / .share-stage. */
+const MODAL_CHROME = 50;
+/** 400/700 CSS px → 1000/1750 px PNG: crisp in feeds without absurd payloads. */
 const EXPORT_SCALE = 2.5;
+
+const LAYOUT_KEY = "memo:share-layout";
+
+function loadLayout(): CardLayout {
+  try {
+    return localStorage.getItem(LAYOUT_KEY) === "landscape" ? "landscape" : "portrait";
+  } catch {
+    return "portrait";
+  }
+}
+
+function storeLayout(layout: CardLayout): void {
+  try {
+    localStorage.setItem(LAYOUT_KEY, layout);
+  } catch {
+    // private mode — the pick just won't persist
+  }
+}
 
 interface ShareDialogProps {
   memo: Memo;
@@ -151,6 +177,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   const { language, locale, tr } = useI18n();
   const [closing, setClosing] = useState(false);
   const [busy, setBusy] = useState<"save" | "copy" | null>(null);
+  const [layout, setLayout] = useState<CardLayout>(loadLayout);
   // External links that refused CORS can't be rasterized; they drop from the
   // preview too, so what you see is exactly what exports.
   const [brokenExternals, setBrokenExternals] = useState<ReadonlySet<string>>(() => new Set());
@@ -162,7 +189,6 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   closeRef.current = onClose;
   const busyRef = useRef(busy);
   busyRef.current = busy;
-  const stageRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const saveRef = useRef<HTMLButtonElement>(null);
 
@@ -188,16 +214,20 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
 
   useEffect(() => () => window.clearTimeout(closeTimer.current), []);
 
-  // The artifact keeps its true 400px layout; narrow dialogs show it through
-  // a wrapper scale. Height rides along so the stage scrolls the visual size.
+  // The artifact keeps its true layout width; narrow dialogs show it through
+  // a wrapper scale, and height rides along so the stage scrolls the visual
+  // size. Sizes derive from the overlay — which never animates — rather than
+  // the stage, so a layout swap sets the wrapper's final size in one step and
+  // its width/height transitions glide there in sync with the dialog's.
   useLayoutEffect(() => {
-    const stage = stageRef.current;
+    const overlay = overlayRef.current;
     const card = cardRef.current;
-    if (!stage || !card) return;
+    if (!overlay || !card) return;
     const measure = () => {
-      const styles = window.getComputedStyle(stage);
+      const styles = window.getComputedStyle(overlay);
       const inset = (Number.parseFloat(styles.paddingLeft) || 0) + (Number.parseFloat(styles.paddingRight) || 0);
-      const scale = Math.min(1, Math.max(0.1, (stage.clientWidth - inset) / CARD_WIDTH));
+      const room = Math.min(MODAL_WIDTHS[layout], overlay.clientWidth - inset) - MODAL_CHROME;
+      const scale = Math.min(1, Math.max(0.1, room / CARD_WIDTHS[layout]));
       setFit((current) => {
         const next = { scale, height: card.offsetHeight * scale };
         return current && current.scale === next.scale && current.height === next.height ? current : next;
@@ -206,10 +236,10 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
-    observer.observe(stage);
+    observer.observe(overlay);
     observer.observe(card);
     return () => observer.disconnect();
-  }, []);
+  }, [layout]);
 
   const lines = useMemo(() => {
     const all = visualLinesOf(memo.content);
@@ -240,6 +270,13 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
       next.add(url);
       return next;
     });
+  }
+
+  /** Swap the sheet's orientation; the pick is remembered across dialogs. */
+  function pickLayout(next: CardLayout) {
+    if (next === layout || busy) return;
+    setLayout(next);
+    storeLayout(next);
   }
 
   function renderPng(): Promise<Blob> {
@@ -288,7 +325,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
       tabIndex={-1}
       onClick={requestClose}
     >
-      <div className="share-modal" onClick={(event) => event.stopPropagation()}>
+      <div className={`share-modal${layout === "landscape" ? " is-wide" : ""}`} onClick={(event) => event.stopPropagation()}>
         <header className="share-head">
           <h2>{tr("Share as image", "分享为图片")}</h2>
           <button type="button" className="icon-button" onClick={requestClose} aria-label={tr("Close", "关闭")}>
@@ -296,11 +333,14 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
           </button>
         </header>
 
-        <div ref={stageRef} className="share-stage">
-          <div className="share-fit" style={fit ? { width: CARD_WIDTH * fit.scale, height: fit.height } : undefined}>
+        <div className="share-stage">
+          <div className="share-fit" style={fit ? { width: CARD_WIDTHS[layout] * fit.scale, height: fit.height } : undefined}>
+            {/* Keyed by layout: a swap lays a fresh sheet (fade + seal re-stamp)
+                while the persistent frame around it glides between sizes. */}
             <div
+              key={layout}
               ref={cardRef}
-              className="share-card"
+              className={`share-card${layout === "landscape" ? " is-landscape" : ""}`}
               lang={language}
               style={fit && fit.scale < 1 ? { transform: `scale(${fit.scale})`, transformOrigin: "top left" } : undefined}
             >
@@ -345,6 +385,31 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
         </div>
 
         <footer className="share-actions">
+          <span className="share-seg" role="group" aria-label={tr("Card layout", "卡片版式")} data-layout={layout}>
+            <span className="share-seg-thumb" aria-hidden="true" />
+            <button
+              type="button"
+              className={layout === "portrait" ? "is-active" : ""}
+              aria-pressed={layout === "portrait"}
+              aria-label={tr("Portrait card", "竖版卡片")}
+              title={tr("Portrait card", "竖版卡片")}
+              disabled={busy !== null}
+              onClick={() => pickLayout("portrait")}
+            >
+              <RectangleVertical size={15} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={layout === "landscape" ? "is-active" : ""}
+              aria-pressed={layout === "landscape"}
+              aria-label={tr("Landscape card", "横版卡片")}
+              title={tr("Landscape card", "横版卡片")}
+              disabled={busy !== null}
+              onClick={() => pickLayout("landscape")}
+            >
+              <RectangleHorizontal size={15} aria-hidden="true" />
+            </button>
+          </span>
           {supportsImageClipboard() ? (
             <button type="button" className="ghost-button" onClick={handleCopy} disabled={busy !== null}>
               {busy === "copy" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
