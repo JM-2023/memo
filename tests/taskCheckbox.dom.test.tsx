@@ -43,6 +43,7 @@ function renderCard(overrides: Partial<Parameters<typeof MemoCard>[0]> = {}) {
         onAcceptEditConflict={vi.fn()}
         onTogglePin={vi.fn()}
         onCopy={vi.fn()}
+        onShare={vi.fn()}
         onDelete={vi.fn()}
         onRestore={vi.fn()}
         onPurge={vi.fn()}

@@ -1,4 +1,4 @@
-import { Check, Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Trash2, X } from "lucide-react";
+import { Check, Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Share, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { externalImagesOf } from "../lib/content";
 import { formatTime } from "../lib/dates";
@@ -28,6 +28,7 @@ interface MemoCardProps {
   onAcceptEditConflict: () => void;
   onTogglePin: () => void;
   onCopy: () => void;
+  onShare: () => void;
   onDelete: () => void;
   onRestore: () => void;
   onPurge: () => void;
@@ -47,6 +48,7 @@ interface MemoMenuBodyProps {
   onTogglePin: () => void;
   onStartEdit: () => void;
   onCopy: () => void;
+  onShare: () => void;
   onDelete: () => void;
   onRestore: () => void;
   onPurge: () => void;
@@ -58,7 +60,7 @@ interface MemoMenuBodyProps {
  * lives here (the panel unmounts on close), so a reopened menu always starts
  * back at the action list.
  */
-function MemoMenuBody({ memo, close, inTrash, pinned, onTogglePin, onStartEdit, onCopy, onDelete, onRestore, onPurge }: MemoMenuBodyProps) {
+function MemoMenuBody({ memo, close, inTrash, pinned, onTogglePin, onStartEdit, onCopy, onShare, onDelete, onRestore, onPurge }: MemoMenuBodyProps) {
   const { count, locale, tr } = useI18n();
   const [confirming, setConfirming] = useState(false);
 
@@ -155,6 +157,17 @@ function MemoMenuBody({ memo, close, inTrash, pinned, onTogglePin, onStartEdit, 
         >
           <Copy size={16} aria-hidden="true" />
           {tr("Copy content", "复制内容")}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            close();
+            onShare();
+          }}
+        >
+          <Share size={16} aria-hidden="true" />
+          {tr("Share as image", "分享为图片")}
         </button>
         <span className="action-menu__sep" />
         <button type="button" role="menuitem" className="danger" onClick={() => setConfirming(true)}>
@@ -348,6 +361,7 @@ export function MemoCard(props: MemoCardProps) {
                     onTogglePin={props.onTogglePin}
                     onStartEdit={props.onStartEdit}
                     onCopy={props.onCopy}
+                    onShare={props.onShare}
                     onDelete={props.onDelete}
                     onRestore={props.onRestore}
                     onPurge={props.onPurge}

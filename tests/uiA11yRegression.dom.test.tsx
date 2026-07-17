@@ -88,6 +88,7 @@ function MemoFixture({ selecting = false }: { selecting?: boolean }) {
       onAcceptEditConflict={vi.fn()}
       onTogglePin={vi.fn()}
       onCopy={vi.fn()}
+      onShare={vi.fn()}
       onDelete={vi.fn()}
       onRestore={vi.fn()}
       onPurge={vi.fn()}

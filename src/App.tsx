@@ -15,6 +15,7 @@ import { RollingText } from "./components/RollingText";
 import { ScrollTopButton } from "./components/ScrollTopButton";
 import { FACET_ROWS, SearchFilter } from "./components/SearchFilter";
 import { Sidebar } from "./components/Sidebar";
+import { ShareDialog } from "./components/ShareDialog";
 import { StatsModal } from "./components/StatsModal";
 import { SwapText } from "./components/SwapText";
 import { useModalA11y } from "./hooks/useModalA11y";
@@ -150,6 +151,7 @@ interface FeedHandlers {
   acceptEditConflict: (id: string) => void;
   togglePin: (memo: Memo) => void;
   copy: (memo: Memo) => void;
+  share: (memo: Memo) => void;
   trash: (memo: Memo) => void;
   restore: (memo: Memo) => void;
   purge: (memo: Memo) => void;
@@ -205,6 +207,7 @@ const FeedItem = reactMemo(
           onAcceptEditConflict={() => handlers.acceptEditConflict(memo.id)}
           onTogglePin={() => handlers.togglePin(memo)}
           onCopy={() => handlers.copy(memo)}
+          onShare={() => handlers.share(memo)}
           onDelete={() => handlers.trash(memo)}
           onRestore={() => handlers.restore(memo)}
           onPurge={() => handlers.purge(memo)}
@@ -349,6 +352,8 @@ export default function App() {
   const importFileRef = useRef<HTMLInputElement>(null);
 
   const [lightbox, setLightbox] = useState<{ items: LightboxItem[]; index: number } | null>(null);
+  // Memo being shared as an image card; holds a snapshot until dismissed.
+  const [shareMemo, setShareMemo] = useState<Memo | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
   const [changingPasscode, setChangingPasscode] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -409,6 +414,7 @@ export default function App() {
     setConfirmEmptyTrash(false);
     setImportTarget(null);
     setLightbox(null);
+    setShareMemo(null);
     setStatsOpen(false);
     setChangingPasscode(false);
     setDrawerOpen(false);
@@ -1545,6 +1551,7 @@ export default function App() {
       acceptEditConflict: (id) => feedActionsRef.current.acceptEditConflict(id),
       togglePin: (memo) => void feedActionsRef.current.togglePin(memo),
       copy: (memo) => void feedActionsRef.current.copy(memo),
+      share: (memo) => setShareMemo(memo),
       trash: (memo) => void feedActionsRef.current.trash(memo),
       restore: (memo) => void feedActionsRef.current.restore(memo),
       purge: (memo) => void feedActionsRef.current.purge(memo),
@@ -2171,6 +2178,7 @@ export default function App() {
       </main>
 
       {lightbox ? <Lightbox items={lightbox.items} index={lightbox.index} onClose={() => setLightbox(null)} /> : null}
+      {shareMemo ? <ShareDialog memo={shareMemo} onToast={showToast} onClose={() => setShareMemo(null)} /> : null}
       {statsOpen ? <StatsModal memos={activeMemos} uniqueTagCount={uniqueTagCount} onClose={() => setStatsOpen(false)} /> : null}
       <input
         ref={importFileRef}

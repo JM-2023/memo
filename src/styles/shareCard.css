@@ -1,0 +1,172 @@
+/* =========================================================================
+   MEMO share card — the exported paper artifact.
+   --------------------------------------------------------------------------
+   Single source of truth for BOTH the live preview and the PNG: the dialog
+   imports this file normally, and the export engine embeds the same text
+   (?raw) inside the SVG it rasterizes. Keep it self-contained under
+   .share-card — px units only (the SVG document resolves rem against its own
+   root), no pseudo-elements (list markers are real nodes so the serialized
+   clone keeps them), no media queries, no motion, no app tokens. Anything
+   display-only (stage recess, preview shadow, entrance animation) belongs in
+   app.css, where the export can never see it.
+
+   Palette: the card is a page of one's own writing, so it reads as print —
+   warm cream paper, near-black ink, hierarchy from size/weight/whitespace
+   alone. The single accent is cinnabar, reserved for the seal: the stamp
+   traditionally pressed after a finished piece of writing. It is the only
+   saturated color on the page, and it colors nothing else.
+   ========================================================================= */
+.share-card {
+  --sc-paper: #f9f5ea;
+  --sc-ink: #2b2216;
+  --sc-soft: #5b5140;
+  --sc-faint: #8b7e66;
+  --sc-line: #e6dcc6;
+  --sc-line-strong: #d8ccb0;
+  --sc-accent: #a63d2a;
+
+  box-sizing: border-box;
+  width: 400px;
+  padding: 30px 32px 22px;
+  background: var(--sc-paper);
+  border: 1px solid rgba(58, 46, 28, 0.1);
+  border-radius: 16px;
+  color: var(--sc-ink);
+  font-family: Georgia, "Times New Roman", "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "SimSun", serif;
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1.9;
+  letter-spacing: 0.01em;
+  text-align: left;
+  overflow-wrap: anywhere;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.share-card * { box-sizing: border-box; margin: 0; }
+
+/* The entry's dateline — real information, quiet voice. */
+.sc-date {
+  display: block;
+  color: var(--sc-faint);
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+}
+
+.sc-body { display: grid; gap: 4px; margin-top: 14px; }
+.sc-blank { height: 9px; }
+
+/* Per-line markdown, print-set. Same grammar as the feed (parseBlock /
+   parseInline); only the shell differs. */
+.sc-h1 { font-size: 22px; line-height: 1.5; font-weight: 700; padding-top: 6px; }
+.sc-h2 { font-size: 19px; line-height: 1.6; font-weight: 700; padding-top: 4px; }
+.sc-h3 { font-weight: 700; }
+
+.sc-quote { padding-left: 14px; border-left: 2px solid var(--sc-line-strong); color: var(--sc-soft); }
+
+.sc-li { display: flex; gap: 10px; padding-left: calc(var(--sc-depth, 0) * 20px); }
+.sc-li .sc-text { flex: 1 1 auto; min-width: 0; }
+/* line box = 17px × 1.9 ≈ 32.3px — margins center the fixed markers. */
+.sc-dot { flex: none; width: 4.5px; height: 4.5px; margin-top: 14px; border-radius: 50%; background: var(--sc-faint); }
+.sc-ord { flex: none; min-width: 19px; text-align: right; color: var(--sc-faint); font-variant-numeric: tabular-nums; }
+.sc-box {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin-top: 8.5px;
+  color: var(--sc-paper);
+  border: 1.5px solid #b3a483;
+  border-radius: 4px;
+}
+.sc-task.is-done .sc-box { background: var(--sc-soft); border-color: var(--sc-soft); }
+.sc-task.is-done .sc-text {
+  color: var(--sc-faint);
+  text-decoration: line-through;
+  text-decoration-color: rgba(91, 81, 64, 0.5);
+}
+
+.sc-hr { height: 1px; margin: 15px 0; background: var(--sc-line); }
+
+.sc-tr {
+  display: grid;
+  grid-template-columns: repeat(var(--sc-cols, 1), minmax(0, 1fr));
+  column-gap: 12px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--sc-line);
+  font-variant-numeric: tabular-nums;
+}
+.sc-tr.is-th { font-weight: 700; border-bottom: none; }
+.sc-td { min-width: 0; }
+.sc-trule { height: 1px; margin: 3px 0 5px; background: var(--sc-line-strong); }
+
+.share-card strong { font-weight: 700; }
+.share-card del { color: var(--sc-faint); text-decoration-color: rgba(139, 126, 102, 0.6); }
+.sc-mark {
+  background: rgba(166, 61, 42, 0.12);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 3px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.sc-code {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  background: rgba(58, 46, 28, 0.07);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+/* Links can't be followed on paper: the label stays, set as quietly-underlined
+   ink; tags read as marginalia, not pills. */
+.sc-a { text-decoration: underline; text-decoration-color: rgba(58, 46, 28, 0.35); text-underline-offset: 3px; }
+/* inline-block: a tag drops to the next line whole instead of breaking
+   after its "#"; over-long tags still wrap internally via max-width. */
+.sc-tag { display: inline-block; max-width: 100%; color: var(--sc-faint); }
+
+.sc-media { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 16px; }
+.sc-media.count-1 { grid-template-columns: minmax(0, 240px); }
+.sc-media.count-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.sc-img {
+  display: block;
+  position: relative;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border: 1px solid rgba(58, 46, 28, 0.12);
+  border-radius: 6px;
+}
+.sc-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
+
+/* Provenance: wordmark left, seal right, held apart from the text by the
+   page's one hairline. */
+.sc-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 30px;
+  padding-top: 14px;
+  border-top: 1px solid var(--sc-line);
+}
+.sc-brand {
+  color: var(--sc-faint);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  line-height: 1;
+}
+.sc-seal {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  background: var(--sc-accent);
+  border-radius: 4px;
+  color: var(--sc-paper);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  transform: rotate(-3deg);
+}
