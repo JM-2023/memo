@@ -1,6 +1,6 @@
 {
   "name": "memo",
-  "version": "2.5.20",
+  "version": "2.5.21",
   "private": true,
   "type": "module",
   "engines": {
@@ -15,7 +15,6 @@
     "pages:dev": "vite build && wrangler pages dev dist --compatibility-date=2026-06-22",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
-    "db:migrate:preview": "wrangler d1 migrations apply DB --remote --env preview",
     "hash-password": "node scripts/hash-password.mjs",
     "deploy": "npm run build && wrangler pages deploy dist --project-name your-pages-project"
   },

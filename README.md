@@ -56,20 +56,18 @@ The Pages project must exist before Pages secrets can be added. For a new Cloudf
    npx wrangler login
    ```
 
-2. Create separate production and preview D1 databases:
+2. Create the production D1 database:
 
    ```bash
    npx wrangler d1 create your-d1-database
-   npx wrangler d1 create your-d1-database-preview
    ```
 
-   Copy the production `database_id` into the top-level `[[d1_databases]]` section of `wrangler.toml`, and copy the preview ID into `[[env.preview.d1_databases]]`. Keep both binding names as `DB`. This prevents preview deployments from reading or writing production notes.
+   Copy the `database_id` into the top-level `[[d1_databases]]` section of `wrangler.toml` and keep the binding name as `DB`.
 
 3. Apply the production migrations:
 
    ```bash
    npm run db:migrate:remote
-   npm run db:migrate:preview
    ```
 
 4. Create the Pages project. Skip this command if `memo` already exists in your account:
@@ -78,24 +76,21 @@ The Pages project must exist before Pages secrets can be added. For a new Cloudf
    npx wrangler pages project create your-pages-project --production-branch main
    ```
 
-5. Generate independent session secrets for production and preview. Run `openssl` before each Wrangler command, then paste that command's output when Wrangler prompts for the secret value:
+5. Generate the production session secret. Run `openssl`, then paste its output when Wrangler prompts for the secret value:
 
    ```bash
    openssl rand -hex 32
    npx wrangler pages secret put SESSION_SECRET --project-name your-pages-project
-   openssl rand -hex 32
-   npx wrangler pages secret put SESSION_SECRET --project-name your-pages-project --env preview
    ```
 
-6. Generate and store the initial passcode hash in both environments before their first public deployment:
+6. Generate and store the initial passcode hash before the first public deployment:
 
    ```bash
    npm run hash-password -- "1234"
    npx wrangler pages secret put APP_PASSWORD_HASH --project-name your-pages-project
-   npx wrangler pages secret put APP_PASSWORD_HASH --project-name your-pages-project --env preview
    ```
 
-   Paste the complete output of `hash-password` at both prompts. Production and preview use separate D1 databases, so later in-app passcode changes remain isolated.
+   Paste the complete output of `hash-password` at the prompt.
 
 7. Build and deploy the Pages application and its Functions:
 
@@ -103,7 +98,7 @@ The Pages project must exist before Pages secrets can be added. For a new Cloudf
    npm run deploy
    ```
 
-Subsequent releases only need both migration commands when new migration files exist, followed by `npm run deploy`.
+Subsequent releases only need the remote migration command when new migration files exist, followed by `npm run deploy`.
 
 ## Verification
 
