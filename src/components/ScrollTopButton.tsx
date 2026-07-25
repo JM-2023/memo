@@ -13,6 +13,14 @@ const SPRING_STEP = 8;
 /** User gestures that should cancel the glide and hand the wheel back. */
 const INTERRUPTS: (keyof WindowEventMap)[] = ["wheel", "touchstart", "mousedown", "keydown"];
 
+/** Longer flights teleport to this many viewports out and glide the rest.
+ * Sweeping the whole feed materializes every content-visibility card the
+ * flight passes (~2ms of style/layout each, measured) — a hundred-thousand-
+ * pixel run crams seconds of that into a 300ms flight, dropping frames and
+ * flashing blank, not-yet-painted cards. The eye only reads the last few
+ * screens of a glide anyway, so capping the swept distance looks identical. */
+const MAX_GLIDE_VIEWPORTS = 3;
+
 /** Nominal settle time: grows with the log of the distance, capped so even a
  * mile-long feed still lands within the UI timing budget. */
 const flightMs = (distance: number) =>
@@ -103,6 +111,12 @@ export function ScrollTopButton() {
     detachInterruptsRef.current = () => {
       for (const type of INTERRUPTS) window.removeEventListener(type, onInterrupt);
     };
+
+    // Skip the un-glidable middle first (programmatic, so the scroll handler
+    // above ignores it and no interrupt fires). The spring launches from the
+    // teleport target, and everything below reads the post-jump position.
+    const glideCap = MAX_GLIDE_VIEWPORTS * window.innerHeight;
+    if (window.scrollY > glideCap) window.scrollTo(0, glideCap);
 
     // Critically damped spring toward 0. The float position is ours — the
     // browser rounds scrollTo to device pixels, and re-reading that rounded

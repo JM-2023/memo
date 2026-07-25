@@ -88,12 +88,17 @@
   --glass-sampling: blur(2px) saturate(1.03);
   --lg-iris: radial-gradient(180px 220px at 78% 18%,
       color-mix(in srgb, var(--primary) 12%, transparent), transparent 72%);
-  --lg-specular: radial-gradient(130px 160px at var(--lx) var(--ly),
-      rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0) 62%);
+  /* The specular's literals live in their own variables so themes swap only
+     these, while .pin-pad re-declares the composed gradients verbatim to
+     re-anchor the var chain onto itself (see the sheen-drift rules). */
+  --sheen-shape: 130px 160px;
+  --sheen-stops: rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0) 62%;
+  --glass-sheet: linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.44));
+  --lg-specular: radial-gradient(var(--sheen-shape) at var(--lx) var(--ly), var(--sheen-stops));
 
   --glass-fill:
     var(--lg-specular),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.44)),
+    var(--glass-sheet),
     var(--lg-iris);
   --glass-rim: rgba(20, 27, 45, 0.1);
   --glass-rim-strong: rgba(20, 27, 45, 0.14);
@@ -222,12 +227,9 @@
     --seg-thumb: var(--surface-3);
     --seg-muted: #818aa0;
 
-    --lg-specular: radial-gradient(220px 240px at var(--lx) var(--ly),
-        rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05) 46%, rgba(255, 255, 255, 0) 72%);
-    --glass-fill:
-      var(--lg-specular),
-      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.035)),
-      var(--lg-iris);
+    --sheen-shape: 220px 240px;
+    --sheen-stops: rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05) 46%, rgba(255, 255, 255, 0) 72%;
+    --glass-sheet: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.035));
     --glass-rim: rgba(255, 255, 255, 0.1);
     --glass-rim-strong: rgba(255, 255, 255, 0.16);
     --glass-highlight:
@@ -333,12 +335,9 @@
   --seg-thumb: var(--surface-3);
   --seg-muted: #818aa0;
 
-  --lg-specular: radial-gradient(220px 240px at var(--lx) var(--ly),
-      rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05) 46%, rgba(255, 255, 255, 0) 72%);
-  --glass-fill:
-    var(--lg-specular),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.035)),
-    var(--lg-iris);
+  --sheen-shape: 220px 240px;
+  --sheen-stops: rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05) 46%, rgba(255, 255, 255, 0) 72%;
+  --glass-sheet: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.035));
   --glass-rim: rgba(255, 255, 255, 0.1);
   --glass-rim-strong: rgba(255, 255, 255, 0.16);
   --glass-highlight:
@@ -416,10 +415,25 @@
   50%  { --lx: 76%; --ly: 6%; }
   100% { --lx: 18%; --ly: -12%; }
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { animation: glass-sheen-drift 22s ease-in-out infinite; }
+/* The drift ticks on .pin-pad, not :root: animating an inherited custom
+   property on the root invalidates every element's style each frame (~7ms
+   of recalc with a long feed mounted — paid in every view, even idle), and
+   the dark-mode pin pad is the only surface whose fill animates. Scoped
+   here, the per-frame recalc stays inside the pad's ~40-element subtree.
+   Inherited custom properties substitute where they're declared, so the
+   gradient chain re-anchors onto the pad for its --lx/--ly to take effect. */
+.pin-pad {
+  --lg-specular: radial-gradient(var(--sheen-shape) at var(--lx) var(--ly), var(--sheen-stops));
+  --glass-fill: var(--lg-specular), var(--glass-sheet), var(--lg-iris);
 }
-:root[data-theme="dark"] { animation: glass-sheen-drift 22s ease-in-out infinite; }
+/* Sheen joins (never replaces) the pad's own entrance/shake: a name kept
+   across a list swap keeps running, so shake↔calm swaps leave it seamless. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .pin-pad { animation: scale-in 0.24s var(--ease-out) both, glass-sheen-drift 22s ease-in-out infinite; }
+  :root:not([data-theme="light"]) .pin-pad.shake { animation: shake 0.28s var(--ease), glass-sheen-drift 22s ease-in-out infinite; }
+}
+:root[data-theme="dark"] .pin-pad { animation: scale-in 0.24s var(--ease-out) both, glass-sheen-drift 22s ease-in-out infinite; }
+:root[data-theme="dark"] .pin-pad.shake { animation: shake 0.28s var(--ease), glass-sheen-drift 22s ease-in-out infinite; }
 
 /* =========================================================================
    Base
@@ -3427,8 +3441,9 @@ button.memo-tag:active {
     transition-delay: 0ms !important;
     scroll-behavior: auto !important;
   }
-  :root,
-  :root[data-theme="dark"] { animation: none !important; }
+  /* The sheen loop rides .pin-pad's animation list (see glass material). */
+  .pin-pad,
+  .pin-pad.shake { animation: none !important; }
   /* Belt and braces: the JS helper already skips startViewTransition. */
   ::view-transition-group(*),
   ::view-transition-old(*),

@@ -1,5 +1,5 @@
 import { Calendar, CalendarRange, Check, ChevronDown, ChevronRight, Home, ListChecks, Loader2, Menu as MenuIcon, NotebookPen, Search, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
-import { memo as reactMemo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo as reactMemo, startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { ChangePasscode } from "./components/ChangePasscode";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -848,7 +848,10 @@ export default function App() {
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
-          setRenderWindow((current) => advanceFeedWindow(current, feedWindowKey, FEED_PAGE));
+          // The appended page is pure lookahead (the sentinel fires ~1200px
+          // early), so it renders as a transition: clicks and keystrokes
+          // interrupt the 80-row reconcile instead of waiting behind it.
+          startTransition(() => setRenderWindow((current) => advanceFeedWindow(current, feedWindowKey, FEED_PAGE)));
         }
       },
       { rootMargin: "1200px 0px" }
