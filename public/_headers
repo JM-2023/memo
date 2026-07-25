@@ -1,8 +1,6 @@
 /*
   X-Robots-Tag: noindex, nofollow, noarchive, noimageindex
 
-# Vite fingerprints these files, so a new deployment always receives a new URL.
-# HTML keeps Cloudflare Pages' default revalidation behavior, and Pages
-# Functions attach their own headers because _headers does not apply to them.
-/assets/*
-  Cache-Control: public, max-age=31556952, immutable
+# Keep Pages' default ETag revalidation for /assets/*. A new deployment can
+# briefly return the SPA fallback before an asset reaches every edge, and an
+# immutable override would pin that HTML response to the asset URL.
