@@ -2225,6 +2225,8 @@ button.crumb:active { background: var(--wash-strong); }
   content-visibility: auto;
   contain-intrinsic-size: auto 240px;
   animation: rise-in 0.24s var(--ease-out) both;
+  /* Carries the selection ring (see the multi-select section). */
+  transition: box-shadow var(--t) var(--ease);
   /* Tags card snapshots so arrivals can rise instead of the generic calm
      fade (see the view-transition section). */
   view-transition-class: memo-card;
@@ -2307,6 +2309,16 @@ button.crumb:active { background: var(--wash-strong); }
 .memo-card.is-selected {
   border-color: color-mix(in srgb, var(--primary) 52%, var(--line));
   background: color-mix(in srgb, var(--primary) 3.5%, var(--surface));
+}
+/* The ring rides the slot, not the card. The slot's content-visibility paint
+   containment clips its descendants to a square, zero-radius box, so a ring
+   drawn on the card is sliced off along the flat edges and survives only as a
+   hard corner wedge — square corners against the card's --r-lg ones. An
+   element's own decoration escapes its own paint containment, and the slot's
+   box is the card's box exactly, so drawing the ring here keeps it concentric
+   with the corner it hugs. Matching the radius rounds the clip to suit. */
+.memo-slot:has(.memo-card.is-selected) {
+  border-radius: var(--r-lg);
   box-shadow: 0 0 0 3px var(--ring);
 }
 /* One transparent surface above everything in the card: any tap toggles. */
@@ -2975,7 +2987,7 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
   padding: 0 2px;
   overflow: hidden;
   border-radius: var(--r-sm);
-  transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
+  transition: background var(--t) var(--ease);
 }
 .stats-bar-col:disabled { opacity: 1; cursor: default; }
 .stats-bar-col:not(:disabled) { cursor: pointer; }
@@ -2987,14 +2999,17 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
   animation: bar-rise 0.24s var(--ease-out) both;
   /* Height and fill included so switching years glides the bars to their new
      size in a left-to-right ripple (--bar-d, set inline per column). */
-  transition: filter var(--t) var(--ease), translate var(--t) var(--ease-out), height 0.22s var(--ease-out) var(--bar-d, 0s), background 0.2s var(--ease) var(--bar-d, 0s);
+  transition: filter var(--t) var(--ease), height 0.22s var(--ease-out) var(--bar-d, 0s), background 0.2s var(--ease) var(--bar-d, 0s);
 }
+/* Hover = the tag rows' neutral column wash + the heat cells' saturation lift.
+   Bars are baseline-anchored, so nothing lifts, scales or moves: the pointer
+   only tints the column it is over and warms the bar inside it. */
 @media (hover: hover) {
-  .stats-bar-col:hover:not(:disabled) { background: color-mix(in srgb, var(--primary-tint) 55%, transparent); }
-  .stats-bar-col:hover:not(:disabled) .stats-bar { filter: saturate(1.15) brightness(1.08); translate: 0 -3px; }
+  .stats-bar-col:hover:not(:disabled) { background: var(--wash); }
+  .stats-bar-col:hover:not(:disabled) .stats-bar { filter: saturate(1.16) brightness(1.05); }
 }
-.stats-bar-col:focus-visible:not(:disabled) .stats-bar { filter: saturate(1.12) brightness(1.06); translate: 0 -3px; }
-.stats-bar-col:active:not(:disabled) { transform: scale(0.97); }
+.stats-bar-col:focus-visible:not(:disabled) .stats-bar { filter: saturate(1.16) brightness(1.05); }
+.stats-bar-col:active:not(:disabled) .stats-bar { filter: saturate(1.05) brightness(0.9); }
 /* Two-stop gradient (not a flat color) so zero↔nonzero can crossfade. */
 .stats-bar.is-zero { background: linear-gradient(180deg, var(--surface-3), var(--surface-3)); }
 .stats-bar-labels {
