@@ -1,4 +1,4 @@
-import { ChevronDown, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sun, Trash2, Upload } from "lucide-react";
+import { ChevronDown, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sparkles, Sun, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useI18n } from "../lib/i18n";
 import { dayKeyOf, periodStats, totalStats, type PeriodKind } from "../lib/stats";
@@ -20,7 +20,7 @@ interface SidebarProps {
   activeTag: string | null;
   activeDay: string | null;
   filtersActive: boolean;
-  view: "memos" | "trash";
+  view: "memos" | "trash" | "review";
   trashCount: number;
   theme: ThemeChoice;
   pinnedTags: Map<string, string>;
@@ -31,6 +31,8 @@ interface SidebarProps {
   onPickDay: (key: string | null) => void;
   onShowAll: () => void;
   onOpenTrash: () => void;
+  onOpenReview: () => void;
+  onOpenReviewSettings: () => void;
   onOpenStats: () => void;
   onCycleTheme: () => void;
   onChangePasscode: () => void;
@@ -171,6 +173,19 @@ export function Sidebar(props: SidebarProps) {
                   </button>
                 </span>
               </div>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  close();
+                  props.onOpenReviewSettings();
+                }}
+              >
+                <Sparkles size={16} aria-hidden="true" />
+                <SwapText id={language} className="locale-swap">
+                  {tr("Daily review settings", "每日回顾设置")}
+                </SwapText>
+              </button>
               <button
                 type="button"
                 role="menuitem"
@@ -341,6 +356,15 @@ export function Sidebar(props: SidebarProps) {
           <span className="nav-count">
             <RollingText value={totals.memoCount} />
           </span>
+        </button>
+        <button
+          type="button"
+          className={`nav-item${view === "review" ? " is-active" : ""}`}
+          aria-current={view === "review" ? "page" : undefined}
+          onClick={props.onOpenReview}
+        >
+          <Sparkles size={16} aria-hidden="true" />
+          {tr("Daily review", "每日回顾")}
         </button>
         <button
           type="button"

@@ -1,4 +1,4 @@
-import { Calendar, CalendarRange, Check, ChevronDown, ChevronRight, Home, ListChecks, Loader2, Menu as MenuIcon, NotebookPen, Search, Trash2, X } from "lucide-react";
+import { Calendar, CalendarRange, Check, ChevronDown, ChevronRight, Home, ListChecks, Loader2, Menu as MenuIcon, NotebookPen, Search, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import { memo as reactMemo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { ChangePasscode } from "./components/ChangePasscode";
@@ -11,6 +11,7 @@ import { LoginScreen } from "./components/LoginScreen";
 import { MemoCard } from "./components/MemoCard";
 import { Menu } from "./components/Menu";
 import { PromptDialog } from "./components/PromptDialog";
+import { ReviewSettingsModal } from "./components/ReviewSettingsModal";
 import { RollingText } from "./components/RollingText";
 import { ScrollTopButton } from "./components/ScrollTopButton";
 import { FACET_ROWS, SearchFilter } from "./components/SearchFilter";
@@ -48,6 +49,17 @@ import { useI18n } from "./lib/i18n";
 import { splitTaskLine } from "./lib/markdown";
 import { setTaskMark } from "./lib/markdownEdit";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
+import {
+  buildReviewDay,
+  clearReviewDay,
+  loadReviewDay,
+  loadReviewSettings,
+  persistReviewDay,
+  persistReviewSettings,
+  reviewDayValid,
+  type ReviewDay,
+  type ReviewSettings
+} from "./lib/review";
 import { SAVED_FILTERS_LIMIT, loadSavedFilters, persistSavedFilters, type SavedFilter } from "./lib/savedFilters";
 import {
   EMPTY_FILTERS,
@@ -71,7 +83,7 @@ import { useSync } from "./lib/useSync";
 import { withViewTransition } from "./lib/viewTransition";
 
 type Phase = "checking" | "error" | "login" | "ready";
-type View = "memos" | "trash";
+type View = "memos" | "trash" | "review";
 
 interface ToastState {
   id: number;
@@ -130,11 +142,33 @@ interface MemoSlotProps {
  * per-memo view-transition-name is what lets a filter change glide shared
  * cards to their new positions instead of replaying an entrance; identical
  * result lists therefore produce no motion at all.
+ *
+ * The entrance is unhooked once it finishes: a slot that kept `animation:
+ * rise-in` replays the whole entrance whenever React moves the node while
+ * reordering kept rows (insertBefore restarts CSS animations), stacking a
+ * second entrance on top of the view transition's glide.
+ *
+ * data-vt mirrors the view-transition-name so changeFeed can restore the
+ * inline name it strips from far-from-viewport slots before a swap: React
+ * bails out of re-rendering unchanged slots, so the stripped style would
+ * otherwise leak into the new state's capture.
  */
 function MemoSlot({ vtName, entering, delay, children }: MemoSlotProps) {
   const [intro] = useState(() => (entering ? { animationDelay: `${delay}s` } : null));
+  const [entered, setEntered] = useState(false);
   return (
-    <div className={`memo-slot${intro ? "" : " no-enter"}`} style={{ ...intro, viewTransitionName: vtName }}>
+    <div
+      className={`memo-slot${intro && !entered ? "" : " no-enter"}`}
+      style={{ ...intro, viewTransitionName: vtName }}
+      data-vt={vtName}
+      onAnimationEnd={
+        intro && !entered
+          ? (event) => {
+              if (event.target === event.currentTarget && event.animationName === "rise-in") setEntered(true);
+            }
+          : undefined
+      }
+    >
       {children}
     </div>
   );
@@ -277,6 +311,14 @@ export default function App() {
   // Names the current filter combination via PromptDialog.
   const [savingFilter, setSavingFilter] = useState(false);
 
+  // Daily review: settings and the day's frozen batch are workspace
+  // furniture (localStorage, like the sort key) — see lib/review.ts. The
+  // batch is drawn lazily, on the first visit to the review view of a local
+  // day, never ahead of time and never on the server.
+  const [reviewSettings, setReviewSettings] = useState<ReviewSettings>(loadReviewSettings);
+  const [reviewDay, setReviewDay] = useState<ReviewDay | null>(loadReviewDay);
+  const [reviewSettingsOpen, setReviewSettingsOpen] = useState(false);
+
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const editingIdRef = useRef(editingId);
@@ -416,6 +458,7 @@ export default function App() {
     setLightbox(null);
     setShareMemo(null);
     setStatsOpen(false);
+    setReviewSettingsOpen(false);
     setChangingPasscode(false);
     setDrawerOpen(false);
     setDrawerClosing(false);
@@ -759,7 +802,20 @@ export default function App() {
     });
   }, [activeMemos, activeTag, activeDay, filters, parsedQuery, editingId, sortKey]);
 
-  const feedMemos = view === "trash" ? trashedMemos : visibleMemos;
+  // The day's frozen batch, resolved against live truth: edits show through
+  // (ids point at whatever the memo says now), deletions drop out, and the
+  // draw order itself never reshuffles mid-day.
+  const reviewMemos = useMemo(() => {
+    if (!reviewDay) return [];
+    const list: Memo[] = [];
+    for (const id of reviewDay.ids) {
+      const memo = syncState.memos.get(id);
+      if (memo && !memo.deletedAt) list.push(memo);
+    }
+    return list;
+  }, [reviewDay, syncState.memos]);
+
+  const feedMemos = view === "trash" ? trashedMemos : view === "review" ? reviewMemos : visibleMemos;
   const visibleFeedIds = useMemo(() => feedMemos.map((memo) => memo.id), [feedMemos]);
   const visibleSelected = useMemo(() => selectionWithinVisibleIds(selected, visibleFeedIds), [selected, visibleFeedIds]);
 
@@ -839,9 +895,17 @@ export default function App() {
 
   /**
    * Feed filter changes run inside a view transition: shared cards glide to
-   * their new positions, departures/arrivals fade, and the scroll reset is
-   * masked by the transition. Skipped while the mobile drawer is open (its
-   * own closing animation would get double-captured).
+   * their new positions, departures fade back, arrivals rise, and the
+   * scroll reset is masked by the transition. Skipped while the mobile
+   * drawer is open (its own closing animation would get double-captured).
+   *
+   * Cards only morph when both endpoints sit near their viewports: the old
+   * capture drops the names of slots far from the current viewport, and the
+   * post-flush pass only restores names (from data-vt — React bails out of
+   * unchanged slots, so the stripped inline style would leak into the new
+   * capture) onto slots landing near the first screen. A shared card whose
+   * old or new spot is pages away would otherwise streak across the screen
+   * instead of entering or departing like its neighbours.
    */
   const changeFeed = useCallback(
     (apply: () => void) => {
@@ -855,10 +919,23 @@ export default function App() {
         } finally {
           enterSuppressRef.current = false;
         }
+        const margin = window.innerHeight / 2;
+        document.querySelectorAll<HTMLElement>(".memo-slot").forEach((slot) => {
+          // Document position, because the scroll reset below hasn't landed.
+          const docTop = slot.getBoundingClientRect().top + window.scrollY;
+          slot.style.viewTransitionName = docTop < window.innerHeight + margin ? (slot.dataset.vt ?? "") : "";
+        });
         window.scrollTo(0, 0);
       };
       if (drawerOpen) update();
-      else withViewTransition(update);
+      else {
+        const margin = window.innerHeight / 2;
+        document.querySelectorAll<HTMLElement>(".memo-slot").forEach((slot) => {
+          const rect = slot.getBoundingClientRect();
+          if (rect.bottom < -margin || rect.top > window.innerHeight + margin) slot.style.viewTransitionName = "";
+        });
+        withViewTransition(update);
+      }
     },
     [drawerOpen]
   );
@@ -1030,6 +1107,70 @@ export default function App() {
       setConfirmBatchDelete(false);
     });
   }, [view, changeFeed, blockNavigationWhileEditing]);
+
+  /**
+   * Opening 每日回顾 is what draws the batch: the first visit of a local day
+   * freezes today's picks (in state and localStorage) and every later visit
+   * replays them. Setting the batch inside the same flush as the view switch
+   * lets the view transition carry cards shared with the previous feed to
+   * their new positions instead of replaying entrances.
+   */
+  const openReview = useCallback(() => {
+    if (blockNavigationWhileEditing()) return;
+    let next = reviewDay;
+    if (!reviewDayValid(next, reviewSettings)) {
+      next = buildReviewDay(activeMemos, reviewSettings);
+      persistReviewDay(next);
+    }
+    // Re-clicking the nav item on a still-valid day is a no-op; on a rolled-
+    // over day it deals the new batch in place.
+    if (view === "review" && next === reviewDay) return;
+    changeFeed(() => {
+      if (next !== reviewDay) setReviewDay(next);
+      setView("review");
+      setSelectMode(false);
+      setSelected(new Set());
+      setConfirmBatchDelete(false);
+    });
+  }, [view, reviewDay, reviewSettings, activeMemos, changeFeed, blockNavigationWhileEditing]);
+
+  // Crossing midnight while the review view sits open: returning focus (or
+  // visibility) re-checks the frozen batch and deals the new day in a morph.
+  useEffect(() => {
+    if (phase !== "ready" || view !== "review") return;
+    function refresh() {
+      if (document.visibilityState === "hidden") return;
+      if (reviewDayValid(reviewDay, reviewSettings)) return;
+      const next = buildReviewDay(memosOf(syncStateRef.current), reviewSettings);
+      persistReviewDay(next);
+      withViewTransition(() => flushSync(() => setReviewDay(next)));
+    }
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [phase, view, reviewDay, reviewSettings]);
+
+  function handleSaveReviewSettings(next: ReviewSettings) {
+    setReviewSettings(next);
+    persistReviewSettings(next);
+    setReviewSettingsOpen(false);
+    showToast(tr("Daily review settings saved", "每日回顾设置已保存"));
+    if (reviewDayValid(reviewDay, next)) return;
+    if (view === "review") {
+      // Redraw immediately — after the dialog's exit has painted, so the
+      // feed's morph to the new batch reads as its own beat.
+      const nextDay = buildReviewDay(activeMemos, next);
+      persistReviewDay(nextDay);
+      window.requestAnimationFrame(() => withViewTransition(() => flushSync(() => setReviewDay(nextDay))));
+    } else {
+      // Invalidate; the next visit draws under the new settings.
+      clearReviewDay();
+      setReviewDay(null);
+    }
+  }
 
   /**
    * Select mode swaps the whole breadcrumb row for the selection toolbar; a
@@ -1853,6 +1994,11 @@ export default function App() {
             openTrash();
             closeDrawer();
           }}
+          onOpenReview={() => {
+            openReview();
+            closeDrawer();
+          }}
+          onOpenReviewSettings={() => closeDrawer(() => setReviewSettingsOpen(true))}
           onOpenStats={() => closeDrawer(() => setStatsOpen(true))}
           onCycleTheme={() => setTheme((value) => nextTheme(value))}
           onChangePasscode={() => {
@@ -1892,6 +2038,19 @@ export default function App() {
                 <span className="crumb crumb-trash is-current" aria-current="page" style={{ animationDelay: "0.035s" }}>
                   <Trash2 size={13} aria-hidden="true" />
                   {tr("Trash", "回收站")}
+                </span>
+              </nav>
+            ) : view === "review" ? (
+              // Daily review borrows the Trash breadcrumb language: ⌂ / ✦
+              // 每日回顾, same cascade-in, ⌂ steps back out to All memos.
+              <nav className="crumbs" aria-label={tr("Location", "当前位置")}>
+                <button type="button" className="crumb crumb-home" onClick={showAll} aria-label={tr("All memos", "全部笔记")} style={{ animationDelay: "0s" }}>
+                  <Home size={15} aria-hidden="true" />
+                </button>
+                <ChevronRight size={13} className="crumb-sep" aria-hidden="true" style={{ animationDelay: "0.015s" }} />
+                <span className="crumb crumb-review is-current" aria-current="page" style={{ animationDelay: "0.035s" }}>
+                  <Sparkles size={13} aria-hidden="true" />
+                  {tr("Daily review", "每日回顾")}
                 </span>
               </nav>
             ) : selectMode ? (
@@ -2034,6 +2193,19 @@ export default function App() {
                 </span>
               </button>
             ) : null}
+            {view === "review" ? (
+              // The review view's counterpart of Empty Trash: same slot, same
+              // topbar-action morph, neutral tint (it opens a dialog).
+              <button
+                type="button"
+                className="review-config-button"
+                aria-haspopup="dialog"
+                onClick={() => setReviewSettingsOpen(true)}
+              >
+                <SlidersHorizontal size={14} aria-hidden="true" />
+                <span>{tr("Review settings", "回顾设置")}</span>
+              </button>
+            ) : null}
             {view === "memos" && !selectMode ? (
               // Active-lens chips — the trail's refinement clause: the
               // breadcrumb says WHERE, the chips say THROUGH WHAT. Each is
@@ -2130,14 +2302,35 @@ export default function App() {
 
         <section
           className={`memo-feed${selectMode && view === "memos" ? " is-select" : ""}`}
-          aria-label={view === "trash" ? tr("Trash", "回收站") : tr("Memo list", "笔记列表")}
+          aria-label={view === "trash" ? tr("Trash", "回收站") : view === "review" ? tr("Daily review", "每日回顾") : tr("Memo list", "笔记列表")}
         >
+          {view === "review" && reviewDay && feedMemos.length > 0 ? (
+            // The day's masthead: date and batch size, fixed all day. Its own
+            // view-transition-name keeps it steady while a settings change
+            // morphs the cards beneath it.
+            <div className="review-banner">
+              <Sparkles size={14} aria-hidden="true" />
+              <span>
+                {formatDayLabel(reviewDay.day, locale)}
+                {tr(` · ${count(feedMemos.length, "memo")} to revisit`, ` · 回顾 ${count(feedMemos.length, "memo")}`)}
+              </span>
+            </div>
+          ) : null}
           {feedMemos.length === 0 ? (
             <div className="feed-empty">
               {view === "trash" ? (
                 <>
                   <p className="feed-empty-title">{tr("Trash is empty", "回收站是空的")}</p>
                   <p>{tr("Deleted memos appear here before you restore or permanently delete them.", "删除的笔记会先到这里，可以恢复或彻底删除")}</p>
+                </>
+              ) : view === "review" ? (
+                <>
+                  <p className="feed-empty-title">{tr("Nothing to review today", "今天没有可回顾的笔记")}</p>
+                  <p>{tr("Widen the scope or time range to draw more memos.", "试试放宽回顾范围或时间范围")}</p>
+                  <button type="button" className="ghost-button feed-empty-action" onClick={() => setReviewSettingsOpen(true)}>
+                    <SlidersHorizontal size={15} aria-hidden="true" />
+                    {tr("Review settings", "回顾设置")}
+                  </button>
                 </>
               ) : activeMemos.length === 0 ? (
                 <>
@@ -2180,6 +2373,15 @@ export default function App() {
       {lightbox ? <Lightbox items={lightbox.items} index={lightbox.index} onClose={() => setLightbox(null)} /> : null}
       {shareMemo ? <ShareDialog memo={shareMemo} onToast={showToast} onClose={() => setShareMemo(null)} /> : null}
       {statsOpen ? <StatsModal memos={activeMemos} uniqueTagCount={uniqueTagCount} onClose={() => setStatsOpen(false)} /> : null}
+      {reviewSettingsOpen ? (
+        <ReviewSettingsModal
+          settings={reviewSettings}
+          memos={activeMemos}
+          knownTags={knownTags}
+          onSave={handleSaveReviewSettings}
+          onClose={() => setReviewSettingsOpen(false)}
+        />
+      ) : null}
       <input
         ref={importFileRef}
         type="file"
