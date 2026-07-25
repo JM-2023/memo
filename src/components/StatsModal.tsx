@@ -1,10 +1,11 @@
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { dateKey, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { buildHeatMonth, computeStreaks, countsByDay, totalStats, wordCountOf, type HeatMonth } from "../lib/stats";
+import type { StatsDrilldown } from "../lib/statsDrilldown";
 import { tagsOf } from "../lib/tags";
 import type { Memo } from "../lib/types";
 import { RollingText } from "./RollingText";
@@ -14,6 +15,7 @@ interface StatsModalProps {
   memos: Memo[];
   uniqueTagCount: number;
   onClose: () => void;
+  onDrilldown: (filter: StatsDrilldown) => void;
 }
 
 interface BarChartProps {
@@ -22,22 +24,30 @@ interface BarChartProps {
   max: number;
   labels: string[];
   tips: string[];
+  onPick: (index: number) => void;
 }
 
-/** Baseline-anchored bars that rise in with a slight stagger. Info-only. */
-function BarChart({ label, values, max, labels, tips }: BarChartProps) {
+/** Baseline-anchored bars that rise in with a slight stagger and drill down. */
+function BarChart({ label, values, max, labels, tips, onPick }: BarChartProps) {
   const { count } = useI18n();
   const tip = useTip();
   const summary = `${label}. ${tips.map((item, index) => `${item}: ${count(values[index], "memo")}`).join("; ")}`;
+  const density = values.length >= 20 ? " is-dense" : values.length >= 10 ? " is-medium" : "";
   return (
-    <div className="bar-chart" role="img" tabIndex={0} aria-label={summary}>
-      <div className="stats-bars" aria-hidden="true">
+    <div className={`bar-chart${density}`} role="group" aria-label={summary}>
+      <div className="stats-bars">
         {values.map((value, index) => (
-          <div
+          <button
             key={index}
+            type="button"
             className="stats-bar-col"
+            disabled={value === 0}
+            aria-label={`${tips[index]}: ${count(value, "memo")}`}
+            onClick={() => onPick(index)}
             onMouseEnter={(event) => tip.show(event.currentTarget, { strong: count(value, "memo"), text: tips[index] })}
             onMouseLeave={tip.hide}
+            onFocus={(event) => tip.show(event.currentTarget, { strong: count(value, "memo"), text: tips[index] })}
+            onBlur={tip.hide}
           >
             <span
               className={`stats-bar${value > 0 ? "" : " is-zero"}`}
@@ -50,7 +60,7 @@ function BarChart({ label, values, max, labels, tips }: BarChartProps) {
                 } as CSSProperties
               }
             />
-          </div>
+          </button>
         ))}
       </div>
       <div className="stats-bar-labels" aria-hidden="true">
@@ -78,11 +88,11 @@ const TAG_GLIDE: KeyframeAnimationOptions = { duration: 220, easing: "cubic-bezi
  * in, and tweens the list height — a re-ranking reads as rows trading places
  * instead of five fixed slots teleporting their contents.
  */
-function TagRows({ tags, emptyLabel }: { tags: [string, number][]; emptyLabel: string }) {
-  const { formatNumber } = useI18n();
+function TagRows({ tags, emptyLabel, onPick }: { tags: [string, number][]; emptyLabel: string; onPick: (tag: string) => void }) {
+  const { count, formatNumber, tr } = useI18n();
   const max = tags[0]?.[1] ?? 1;
   const boxRef = useRef<HTMLDivElement>(null);
-  const rowsRef = useRef(new Map<string, HTMLDivElement>());
+  const rowsRef = useRef(new Map<string, HTMLButtonElement>());
   const flipsRef = useRef(new Map<string, Animation>());
   const boxAnimRef = useRef<Animation | null>(null);
   const lastRef = useRef<[string, number][] | null>(null);
@@ -151,14 +161,17 @@ function TagRows({ tags, emptyLabel }: { tags: [string, number][]; emptyLabel: s
   return (
     <div ref={boxRef} className="stats-tags">
       {tags.map(([name, tagCount], index) => (
-        <div
+        <button
           key={name}
+          type="button"
           ref={(el) => {
             if (el) rowsRef.current.set(name, el);
             else rowsRef.current.delete(name);
           }}
           className={`stats-tag-row${enteringRef.current.has(name) ? " is-entering" : ""}`}
           style={enteringRef.current.has(name) ? { animationDelay: `${index * 0.02}s` } : undefined}
+          aria-label={tr(`Show ${count(tagCount, "memo")} tagged ${name}`, `查看带有 #${name} 的 ${count(tagCount, "memo")}`)}
+          onClick={() => onPick(name)}
         >
           <span className="stats-tag-name-box">
             <span className="stats-tag-name">#{name}</span>
@@ -169,7 +182,7 @@ function TagRows({ tags, emptyLabel }: { tags: [string, number][]; emptyLabel: s
           <span className="stats-tag-count">
             <RollingText value={tagCount} />
           </span>
-        </div>
+        </button>
       ))}
       {tags.length === 0 ? <p className="stats-tags-empty">{emptyLabel}</p> : null}
       {leaving.map((ghost) => (
@@ -267,7 +280,7 @@ function buildYearData(memos: Memo[], byDay: Map<string, number>, year: number, 
  * all derived client-side from the already-loaded memos. Opens from the
  * sidebar stat tiles.
  */
-export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) {
+export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown }: StatsModalProps) {
   const { count, formatNumber, locale, tr } = useI18n();
   const tip = useTip();
   const now = useMemo(() => new Date(), []);
@@ -286,16 +299,27 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const closeTimer = useRef(0);
   const closeRef = useRef(onClose);
+  const drilldownRef = useRef(onDrilldown);
   closeRef.current = onClose;
+  drilldownRef.current = onDrilldown;
 
-  function requestClose() {
+  function leave(callback: () => void) {
     if (closing) return;
+    tip.hide();
     if (reducedMotion) {
-      closeRef.current();
+      callback();
       return;
     }
     setClosing(true);
-    closeTimer.current = window.setTimeout(() => closeRef.current(), 170);
+    closeTimer.current = window.setTimeout(callback, 170);
+  }
+
+  function requestClose() {
+    leave(() => closeRef.current());
+  }
+
+  function requestDrilldown(filter: StatsDrilldown) {
+    leave(() => drilldownRef.current(filter));
   }
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
@@ -306,6 +330,35 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
 
   const byDay = useMemo(() => countsByDay(memos), [memos]);
   const yearData = useMemo(() => buildYearData(memos, byDay, year, now), [memos, byDay, year, now]);
+  const activeHeatDays = useMemo(
+    () =>
+      yearData.months
+        .flatMap(({ heat }) => heat.weeks.flat())
+        .filter((cell) => cell.inRange && !cell.isFuture && cell.count > 0)
+        .map((cell) => cell.key)
+        .sort(),
+    [yearData]
+  );
+  const activeHeatDaySet = useMemo(() => new Set(activeHeatDays), [activeHeatDays]);
+  const [focusedHeatDay, setFocusedHeatDay] = useState<string | null>(null);
+  const heatDayRefs = useRef(new Map<string, HTMLButtonElement>());
+  const rovingHeatDay = focusedHeatDay && activeHeatDaySet.has(focusedHeatDay) ? focusedHeatDay : (activeHeatDays[0] ?? null);
+
+  function moveHeatDayFocus(event: ReactKeyboardEvent<HTMLButtonElement>, key: string) {
+    const current = activeHeatDays.indexOf(key);
+    if (current < 0) return;
+    let next = current;
+    if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = activeHeatDays.length - 1;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = Math.max(0, current - 1);
+    else if (event.key === "ArrowRight" || event.key === "ArrowDown") next = Math.min(activeHeatDays.length - 1, current + 1);
+    else return;
+    event.preventDefault();
+    const target = activeHeatDays[next];
+    setFocusedHeatDay(target);
+    heatDayRefs.current.get(target)?.focus({ preventScroll: true });
+  }
+
   const totals = useMemo(() => totalStats(memos, now), [memos, now]);
   const streaks = useMemo(() => computeStreaks(byDay, now), [byDay, now]);
   const allWords = useMemo(() => memos.reduce((sum, memo) => sum + wordCountOf(memo), 0), [memos]);
@@ -374,7 +427,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
               type="button"
               className="icon-button"
               onClick={() => setYear((value) => value - 1)}
-              disabled={year <= minYear}
+              disabled={closing || year <= minYear}
               aria-label={tr("Previous year", "上一年")}
             >
               <ChevronLeft size={16} aria-hidden="true" />
@@ -387,7 +440,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
               type="button"
               className="icon-button"
               onClick={() => setYear((value) => value + 1)}
-              disabled={year >= maxYear}
+              disabled={closing || year >= maxYear}
               aria-label={tr("Next year", "下一年")}
             >
               <ChevronRight size={16} aria-hidden="true" />
@@ -403,12 +456,19 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
               line, then progressively quieter sections — no two tiers share
               a treatment, and nothing wears a card frame. */}
           <section className="stats-section stats-hero">
-            <div className="stats-hero-main">
+            <button
+              type="button"
+              className="stats-hero-main"
+              disabled={yearData.memoCount === 0}
+              aria-label={tr(`Show ${count(yearData.memoCount, "memo")} from ${year}`, `查看 ${year} 年的 ${count(yearData.memoCount, "memo")}`)}
+              onClick={() => requestDrilldown({ kind: "year", year })}
+            >
               <span className="stats-hero-value">
                 <RollingText value={yearData.memoCount} />
               </span>
               <span className="stats-hero-unit">{tr(yearData.memoCount === 1 ? "memo" : "memos", "条笔记")}</span>
-            </div>
+              {yearData.memoCount > 0 ? <ChevronRight size={19} className="stats-drill-cue" aria-hidden="true" /> : null}
+            </button>
             <div className="stats-hero-figs">
               <span className="stats-fig">
                 {tr("", "活跃 ")}
@@ -435,26 +495,26 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
             <h3 className="stats-section-title">{tr("Daily activity", "每日活跃")}</h3>
             <div className="months-grid">
               {yearData.months.map(({ month, count: memoCount, heat }) => (
-                <div
-                  key={month}
-                  className="mini-month"
-                  role="img"
-                  tabIndex={0}
-                  aria-label={`${monthFormatter.format(new Date(year, month, 1))}, ${count(memoCount, "memo")}. ${
-                    heat.weeks
-                      .flat()
-                      .filter((cell) => cell.inRange && !cell.isFuture && cell.count > 0)
-                      .map((cell) => `${formatDayLabel(cell.key, locale)}: ${count(cell.count, "memo")}`)
-                      .join("; ") || tr("No activity", "没有记录")
-                  }`}
-                >
-                  <div className="mini-month-head">
-                    <span className="mini-month-name">{monthFormatter.format(new Date(year, month, 1))}</span>
+                <div key={month} className="mini-month">
+                  <span className="mini-month-head">
+                    <button
+                      type="button"
+                      className="mini-month-pick"
+                      disabled={memoCount === 0}
+                      aria-label={tr(
+                        `Show ${count(memoCount, "memo")} from ${formatMonthYear(year, month, locale)}`,
+                        `查看 ${formatMonthYear(year, month, locale)}的 ${count(memoCount, "memo")}`
+                      )}
+                      onClick={() => requestDrilldown({ kind: "month", year, month })}
+                    >
+                      <span className="mini-month-name">{monthFormatter.format(new Date(year, month, 1))}</span>
+                      {memoCount > 0 ? <ChevronRight size={12} className="mini-month-cue" aria-hidden="true" /> : null}
+                    </button>
                     <span className="mini-month-count">
                       <RollingText value={memoCount} />
                     </span>
-                  </div>
-                  <div className="mini-grid">
+                  </span>
+                  <span className="mini-grid">
                     {/* Cells keyed by grid position, not date — switching years
                         mutates them in place so the colours crossfade. Every
                         month renders six week rows, so the calendar (and every
@@ -463,18 +523,39 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                     {Array.from({ length: 6 }, (_, weekIndex) =>
                       Array.from({ length: 7 }, (_, dayIndex) => {
                         const cell = heat.weeks[weekIndex]?.[dayIndex];
+                        if (cell && cell.inRange && !cell.isFuture && cell.count > 0) {
+                          return (
+                            <button
+                              key={`${weekIndex}-${dayIndex}`}
+                              ref={(element) => {
+                                if (element) heatDayRefs.current.set(cell.key, element);
+                                else heatDayRefs.current.delete(cell.key);
+                              }}
+                              type="button"
+                              className={`mini-cell level-${cell.level}${cell.isToday ? " is-today" : ""}`}
+                              aria-label={tr(
+                                `Show ${count(cell.count, "memo")} from ${dayFormatter.format(parseDayKey(cell.key))}`,
+                                `查看 ${dayFormatter.format(parseDayKey(cell.key))}的 ${count(cell.count, "memo")}`
+                              )}
+                              tabIndex={cell.key === rovingHeatDay ? 0 : -1}
+                              onFocus={() => setFocusedHeatDay(cell.key)}
+                              onKeyDown={(event) => moveHeatDayFocus(event, cell.key)}
+                              onMouseEnter={(event) =>
+                                tip.show(event.currentTarget, {
+                                  strong: count(cell.count, "memo"),
+                                  text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
+                                })
+                              }
+                              onMouseLeave={tip.hide}
+                              onClick={() => requestDrilldown({ kind: "day", day: cell.key })}
+                            />
+                          );
+                        }
                         return cell && cell.inRange && !cell.isFuture ? (
                           <span
                             key={`${weekIndex}-${dayIndex}`}
                             className={`mini-cell level-${cell.level}${cell.isToday ? " is-today" : ""}`}
                             aria-hidden="true"
-                            onMouseEnter={(event) =>
-                              tip.show(event.currentTarget, {
-                                strong: count(cell.count, "memo"),
-                                text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
-                              })
-                            }
-                            onMouseLeave={tip.hide}
                           />
                         ) : (
                           <span
@@ -485,7 +566,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                         );
                       })
                     )}
-                  </div>
+                  </span>
                 </div>
               ))}
             </div>
@@ -499,6 +580,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
               max={yearData.monthMax}
               labels={yearData.months.map(({ month }) => monthFormatter.format(new Date(year, month, 1)))}
               tips={yearData.months.map(({ month }) => formatMonthYear(year, month, locale))}
+              onPick={(month) => requestDrilldown({ kind: "month", year, month })}
             />
           </section>
 
@@ -511,6 +593,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                 max={yearData.weekdayMax}
                 labels={weekdaysNarrow}
                 tips={weekdaysFull}
+                onPick={(weekday) => requestDrilldown({ kind: "weekday", year, weekday })}
               />
             </div>
             <div className="stats-chart">
@@ -521,6 +604,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
                 max={yearData.hourMax}
                 labels={yearData.hourCounts.map((_, index) => (index % 6 === 0 ? formatHour(index, locale) : ""))}
                 tips={yearData.hourCounts.map((_, index) => formatHourRange(index, locale))}
+                onPick={(hour) => requestDrilldown({ kind: "hour", year, hour })}
               />
             </div>
           </section>
@@ -530,7 +614,11 @@ export function StatsModal({ memos, uniqueTagCount, onClose }: StatsModalProps) 
               <h3 className="stats-section-title">{tr("Top tags", "常用标签")}</h3>
               {/* Kept mounted across tagless years (the empty note takes the
                   rows' place), so the section never pops in or out. */}
-              <TagRows tags={topTags} emptyLabel={tr("No tags this year", "这一年还没有用过标签")} />
+              <TagRows
+                tags={topTags}
+                emptyLabel={tr("No tags this year", "这一年还没有用过标签")}
+                onPick={(tag) => requestDrilldown({ kind: "tag", year, tag })}
+              />
             </section>
           ) : null}
 

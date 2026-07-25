@@ -1,7 +1,8 @@
 // Saved filter presets — named snapshots of the whole feed context (search
 // text, tag, heatmap day, structured filters). They live in localStorage
 // beside the sort key: presets are workspace furniture, not notebook data,
-// so they stay out of the encrypted sync pipeline and survive logout.
+// so they stay out of the encrypted sync pipeline. Ordinary logout clears
+// them together with every other MEMO-owned local record.
 
 import type { FeedFilters } from "./search";
 

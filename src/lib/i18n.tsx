@@ -101,7 +101,11 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     document.documentElement.lang = language;
     try {
-      localStorage.setItem(STORAGE_KEY, language);
+      // English is the default and needs no durable record. This also keeps a
+      // logout clear stable across tabs: a storage event resets peers to
+      // English, whose effect removes the key instead of writing it back.
+      if (language === "en") localStorage.removeItem(STORAGE_KEY);
+      else localStorage.setItem(STORAGE_KEY, language);
     } catch {
       // Private browsing or disabled storage: retain the in-memory choice.
     }

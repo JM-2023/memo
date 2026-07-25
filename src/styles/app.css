@@ -1541,7 +1541,7 @@ button.crumb:active { background: var(--wash-strong); }
   white-space: nowrap;
   view-transition-name: topbar-action;
 }
-.select-count-num { font-weight: 800; }
+.select-count-num { flex: none; min-width: 0.62em; font-weight: 800; }
 .select-pill {
   flex: none;
   padding: 5px 11px;
@@ -1555,6 +1555,18 @@ button.crumb:active { background: var(--wash-strong); }
 }
 @media (hover: hover) { .select-pill:hover:not(:disabled) { background: var(--wash); color: var(--ink); } }
 .select-pill:active:not(:disabled) { transform: scale(0.95); }
+.select-all { display: inline-flex; align-items: center; gap: 5px; }
+.select-all-icon { display: none; }
+.select-exit { display: inline-flex; align-items: center; justify-content: center; }
+.select-exit-icon { display: none; }
+.select-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--primary-dark);
+}
+.select-tag svg { transition: transform var(--t) var(--ease-pop); }
+@media (hover: hover) { .select-tag:hover:not(:disabled) svg { transform: rotate(-7deg) scale(1.08); } }
 /* Batch delete — the select-mode twin of Empty Trash: same ghost pill, same
    two-step arm, its own view-transition-name so arming morphs the width. */
 .select-delete {
@@ -1580,6 +1592,7 @@ button.crumb:active { background: var(--wash-strong); }
 .select-bar > :nth-child(2) { animation-delay: 0.025s; }
 .select-bar > :nth-child(3) { animation-delay: 0.05s; }
 .select-bar > :nth-child(4) { animation-delay: 0.075s; }
+.select-bar > :nth-child(5) { animation-delay: 0.1s; }
 
 /* Filter chips — the trail's refinement clause. The breadcrumb says WHERE
    (⌂ / tag / pill); the chips say THROUGH WHAT: each active lens (heatmap
@@ -1891,6 +1904,27 @@ button.crumb:active { background: var(--wash-strong); }
    and this rule is source-ordered after it. */
 .editor-create textarea { padding: 2px; }
 .editor textarea::placeholder { color: var(--muted); }
+.editor-context-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 4px;
+  max-width: min(100%, 24rem);
+  padding: 3px 7px;
+  color: var(--primary-dark);
+  background: var(--primary-tint);
+  border-radius: var(--r-xs);
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.25;
+  view-transition-name: composer-context-tag;
+}
+.editor-context-tag span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Over-limit ink: a pointer-transparent mirror of the textarea stacked on
    top of it. Its text is invisible — only the <mark> background paints, so
@@ -2610,6 +2644,132 @@ button.memo-tag:active {
 @media (hover: hover) { .accent-button:hover:not(:disabled) { filter: brightness(1.06); box-shadow: var(--shadow); } }
 .accent-button:active:not(:disabled) { transform: scale(0.96); }
 
+/* Bulk tag picker — one compact sheet, paced as a two-beat operation:
+   the picker exits first, then the feed owns the structural transition. */
+.bulk-tag-overlay.is-closing { pointer-events: none; }
+.bulk-tag-card {
+  gap: 0;
+  width: min(440px, 100%);
+  padding: 0;
+  overflow: hidden;
+}
+.bulk-tag-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 11px;
+  padding: 16px 14px 14px 16px;
+  border-bottom: 1px solid var(--glass-rim);
+}
+.bulk-tag-mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--primary-dark);
+  background: var(--primary-tint);
+  border-radius: var(--r-md);
+  animation: pop-in 0.2s var(--ease-pop) 0.03s both;
+}
+.bulk-tag-head h2 { margin: 1px 0 2px; font-size: 1.04rem; font-weight: 800; letter-spacing: -0.01em; }
+.bulk-tag-head p { margin: 0; color: var(--muted); font-size: 0.84rem; line-height: 1.45; }
+.bulk-tag-close { margin-top: -2px; }
+.bulk-tag-form {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px 15px;
+}
+.bulk-tag-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  color: var(--muted);
+  background: var(--field-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), color var(--t) var(--ease);
+}
+.bulk-tag-field:focus-within {
+  color: var(--primary-dark);
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
+  box-shadow: 0 0 0 3px var(--ring);
+}
+.bulk-tag-field.is-error { border-color: color-mix(in srgb, var(--danger) 58%, var(--line)); }
+.bulk-tag-field input {
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+.bulk-tag-field input::placeholder { color: var(--muted); }
+.bulk-tag-note {
+  min-height: 1.35em;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.bulk-tag-note > span { display: inline-block; animation: fade-up 0.16s var(--ease) both; }
+.bulk-tag-note strong { color: var(--primary-dark); font-weight: 750; overflow-wrap: anywhere; }
+.bulk-tag-note .is-error { color: var(--danger); }
+.bulk-tag-suggestions-shell {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-block: -5px;
+  opacity: 0;
+  transition: grid-template-rows var(--t) var(--ease), margin var(--t) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.bulk-tag-suggestions-shell.is-open {
+  grid-template-rows: 1fr;
+  margin-block: 0;
+  opacity: 1;
+}
+.bulk-tag-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 0;
+  max-height: 116px;
+  overflow-y: auto;
+  padding: 1px 1px 3px;
+  scrollbar-width: thin;
+}
+.bulk-tag-suggestions button {
+  max-width: 100%;
+  padding: 5px 8px;
+  overflow: hidden;
+  color: var(--ink-soft);
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+  font-size: 0.78rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: tag-row-in 0.18s var(--ease-out) both;
+  transition: color var(--t) var(--ease), background var(--t) var(--ease), scale var(--t-fast) var(--ease);
+}
+@media (hover: hover) {
+  .bulk-tag-suggestions button:hover:not(:disabled) { color: var(--primary-dark); background: var(--primary-tint); }
+}
+.bulk-tag-suggestions button:active:not(:disabled) { scale: 0.96; }
+.bulk-tag-suggestions button.is-active { color: var(--primary-dark); background: var(--primary-tint-strong); }
+.bulk-tag-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+.bulk-tag-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 108px;
+}
+
 .lightbox { padding: 40px; }
 .lightbox-image {
   max-width: min(1080px, 100%);
@@ -2672,6 +2832,7 @@ button.memo-tag:active {
   overflow: hidden;
   animation: modal-in 0.24s var(--ease-out) both;
 }
+.stats-overlay.is-closing { pointer-events: none; }
 .overlay.is-closing .stats-modal { animation: modal-out 0.16s var(--ease) both; }
 .stats-head {
   display: grid;
@@ -2700,9 +2861,33 @@ button.memo-tag:active {
 /* Tier 1: the year's headline figure, set in type — no card frame. The
    supporting figures share one muted line beneath it. */
 .stats-hero { gap: 3px; padding-top: 2px; }
-.stats-hero-main { display: flex; align-items: baseline; gap: 10px; }
+.stats-hero-main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: max-content;
+  max-width: 100%;
+  margin-left: -6px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  transition: color var(--t) var(--ease), background var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+.stats-hero-main:disabled { opacity: 1; }
+@media (hover: hover) { .stats-hero-main:hover:not(:disabled) { color: var(--primary-dark); background: var(--wash); } }
+.stats-hero-main:active:not(:disabled) { transform: scale(0.985); }
 .stats-hero-value { font-size: 2.6rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1.15; font-variant-numeric: tabular-nums; }
 .stats-hero-unit { color: var(--ink-soft); font-size: 1rem; font-weight: 700; }
+.stats-drill-cue {
+  flex: none;
+  align-self: center;
+  color: var(--primary-dark);
+  opacity: 0.48;
+  transform: translateX(-3px);
+  transition: opacity var(--t) var(--ease), transform var(--t) var(--ease-out);
+}
+@media (hover: hover) {
+  .stats-hero-main:hover:not(:disabled) .stats-drill-cue { opacity: 0.9; transform: translateX(0); }
+}
 .stats-hero-figs { display: flex; flex-wrap: wrap; gap: 4px 18px; color: var(--muted); font-size: 0.86rem; font-weight: 600; }
 .stats-fig { white-space: nowrap; }
 .stats-fig .roll { color: var(--ink-soft); font-weight: 750; font-variant-numeric: tabular-nums; }
@@ -2710,8 +2895,42 @@ button.memo-tag:active {
 .months-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 14px 18px; }
 /* Tier 2: twelve bare calendar textures on the section's shared surface —
    whitespace separates the months, not twelve identical card frames. */
-.mini-month { display: grid; gap: 6px; align-content: start; }
+.mini-month {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  margin: -4px;
+  padding: 4px;
+  border-radius: var(--r-sm);
+  transition: background var(--t) var(--ease);
+}
 .mini-month-head { display: flex; align-items: baseline; justify-content: space-between; font-size: 0.76rem; font-weight: 700; }
+.mini-month-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  margin: -3px 0 -3px -4px;
+  padding: 3px 4px;
+  text-align: left;
+  border-radius: var(--r-xs);
+  transition: color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+.mini-month-pick:disabled { opacity: 1; }
+.mini-month-cue {
+  flex: none;
+  color: var(--primary-dark);
+  opacity: 0;
+  transform: translateX(-3px);
+  transition: opacity var(--t) var(--ease), transform var(--t) var(--ease-out);
+}
+@media (hover: hover) {
+  .mini-month:has(.mini-month-pick:hover:not(:disabled)) { background: color-mix(in srgb, var(--primary-tint) 42%, transparent); }
+  .mini-month-pick:hover:not(:disabled) { color: var(--primary-dark); }
+  .mini-month-pick:hover:not(:disabled) .mini-month-cue { opacity: 0.8; transform: translateX(0); }
+}
+.mini-month-pick:focus-visible .mini-month-cue { opacity: 0.8; transform: translateX(0); }
+.mini-month-pick:active:not(:disabled) { transform: scale(0.96); }
 .mini-month-name { color: var(--ink-soft); }
 .mini-month-count { color: var(--muted); font-variant-numeric: tabular-nums; }
 .mini-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
@@ -2719,6 +2938,7 @@ button.memo-tag:active {
   width: 100%;
   height: auto;
   aspect-ratio: 1;
+  padding: 0;
   /* These sit straight on the modal's shared surface (no white card behind them since
      the unboxing): an ink-relative wash plus a hairline inset ring keeps
      empty days legible in both themes and gives coloured cells a crisp edge. */
@@ -2732,8 +2952,11 @@ button.memo-tag:active {
   transition: outline-color var(--t) var(--ease), filter var(--t) var(--ease), background 0.22s var(--ease), box-shadow 0.22s var(--ease), opacity 0.22s var(--ease);
 }
 @media (hover: hover) {
-  .mini-cell:not(.placeholder):hover { outline-color: color-mix(in srgb, var(--heat-3) 42%, transparent); filter: saturate(1.16) brightness(1.06); }
+  button.mini-cell:hover { outline-color: color-mix(in srgb, var(--heat-3) 42%, transparent); filter: saturate(1.16) brightness(1.06); }
 }
+button.mini-cell { cursor: pointer; }
+button.mini-cell:focus-visible { outline-color: color-mix(in srgb, var(--heat-3) 62%, transparent); }
+button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
 .mini-cell.placeholder { opacity: 0; pointer-events: none; }
 .mini-cell.placeholder.future { opacity: 1; background: color-mix(in srgb, var(--ink) 3%, transparent); box-shadow: none; }
 .mini-cell.level-1 { background: var(--heat-1); }
@@ -2744,7 +2967,19 @@ button.memo-tag:active {
 
 .bar-chart { display: grid; gap: 6px; }
 .stats-bars { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; align-items: end; height: 120px; }
-.stats-bar-col { display: flex; align-items: flex-end; justify-content: center; height: 100%; overflow: hidden; cursor: default; }
+.stats-bar-col {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  height: 100%;
+  padding: 0 2px;
+  overflow: hidden;
+  border-radius: var(--r-sm);
+  transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+.stats-bar-col:disabled { opacity: 1; cursor: default; }
+.stats-bar-col:not(:disabled) { cursor: pointer; }
+.stats-bar-col:focus-visible { outline-offset: -2px; }
 .stats-bar {
   width: min(100%, 30px);
   background: linear-gradient(180deg, var(--heat-2), var(--heat-3));
@@ -2752,9 +2987,14 @@ button.memo-tag:active {
   animation: bar-rise 0.24s var(--ease-out) both;
   /* Height and fill included so switching years glides the bars to their new
      size in a left-to-right ripple (--bar-d, set inline per column). */
-  transition: filter var(--t) var(--ease), height 0.22s var(--ease-out) var(--bar-d, 0s), background 0.2s var(--ease) var(--bar-d, 0s);
+  transition: filter var(--t) var(--ease), translate var(--t) var(--ease-out), height 0.22s var(--ease-out) var(--bar-d, 0s), background 0.2s var(--ease) var(--bar-d, 0s);
 }
-@media (hover: hover) { .stats-bar-col:hover .stats-bar:not(.is-zero) { filter: saturate(1.15) brightness(1.08); } }
+@media (hover: hover) {
+  .stats-bar-col:hover:not(:disabled) { background: color-mix(in srgb, var(--primary-tint) 55%, transparent); }
+  .stats-bar-col:hover:not(:disabled) .stats-bar { filter: saturate(1.15) brightness(1.08); translate: 0 -3px; }
+}
+.stats-bar-col:focus-visible:not(:disabled) .stats-bar { filter: saturate(1.12) brightness(1.06); translate: 0 -3px; }
+.stats-bar-col:active:not(:disabled) { transform: scale(0.97); }
 /* Two-stop gradient (not a flat color) so zero↔nonzero can crossfade. */
 .stats-bar.is-zero { background: linear-gradient(180deg, var(--surface-3), var(--surface-3)); }
 .stats-bar-labels {
@@ -2768,7 +3008,7 @@ button.memo-tag:active {
   text-align: center;
 }
 .stats-chart-row { display: grid; grid-template-columns: 2fr 3fr; gap: 18px; align-items: start; }
-.stats-chart { display: grid; gap: 10px; }
+.stats-chart { display: grid; min-width: 0; gap: 10px; }
 .stats-chart .stats-bars { height: 96px; }
 
 /* Top tags of the year: quiet ranked bars — name, share, count. Rows are
@@ -2776,7 +3016,18 @@ button.memo-tag:active {
    rank (TagRows), sinks the dropped rows out on an absolute layer, raises
    newcomers in, and rolls the counts — no slot ever teleports its contents. */
 .stats-tags { position: relative; display: grid; gap: 2px; }
-.stats-tag-row { display: flex; align-items: center; gap: 12px; padding: 4px 2px; }
+.stats-tag-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 5px 6px;
+  text-align: left;
+  border-radius: var(--r-sm);
+  transition: background var(--t) var(--ease), scale var(--t-fast) var(--ease);
+}
+@media (hover: hover) { button.stats-tag-row:hover { background: var(--wash); } }
+button.stats-tag-row:active { scale: 0.992; }
 .stats-tag-row.is-entering { animation: tag-row-in 0.2s var(--ease-out) both; }
 .stats-tag-row.is-leaving {
   position: absolute;
@@ -3257,19 +3508,28 @@ button.memo-tag:active {
    trail — without this the only-child fallback above would play card-depart,
    the cards' language, on a trail element. */
 ::view-transition-old(day-filter-chip):only-child,
+::view-transition-old(stats-filter-chip):only-child,
 ::view-transition-old(range-filter-chip):only-child,
 ::view-transition-old(facet-chip-noTags):only-child,
 ::view-transition-old(facet-chip-hasImage):only-child,
 ::view-transition-old(facet-chip-hasLink):only-child,
 ::view-transition-old(facet-chip-hasOpenTask):only-child { animation: crumb-out 0.14s var(--ease) both; }
+::view-transition-old(composer-context-tag):only-child { animation: crumb-out 0.14s var(--ease) both; }
+::view-transition-new(composer-context-tag):only-child { animation: crumb-in 0.18s var(--ease-out) both; }
 /* The date chips morph between labels of different widths (repicking a
    heatmap day, a range growing a second date) — natural-size snapshots keep
    the old label from stretching to the interpolating group width, same as
    the topbar-action pin below. */
 ::view-transition-old(day-filter-chip),
 ::view-transition-new(day-filter-chip),
+::view-transition-old(stats-filter-chip),
+::view-transition-new(stats-filter-chip),
 ::view-transition-old(range-filter-chip),
-::view-transition-new(range-filter-chip) { inline-size: auto; block-size: 100%; }
+::view-transition-new(range-filter-chip),
+::view-transition-old(composer-context-tag),
+::view-transition-new(composer-context-tag),
+::view-transition-old(select-delete),
+::view-transition-new(select-delete) { inline-size: auto; block-size: 100%; }
 /* The topbar-action pill morphs between labels of very different widths (a
    short tag ↔ 全部笔记 ↔ 已选 N 条). Snapshots default to inline-size:100%/
    block-size:auto, so the old label stretches to the interpolating group
@@ -3292,6 +3552,7 @@ button.memo-tag:active {
 ::view-transition-group(topbar-action),
 ::view-transition-group(select-delete),
 ::view-transition-group(day-filter-chip),
+::view-transition-group(stats-filter-chip),
 ::view-transition-group(range-filter-chip),
 ::view-transition-group(facet-chip-noTags),
 ::view-transition-group(facet-chip-hasImage),
@@ -3337,6 +3598,19 @@ button.memo-tag:active {
   .stats-hero-value { font-size: 2.15rem; }
   .stats-bars { gap: 3px; }
   .stats-bar-labels { gap: 3px; }
+  .bar-chart.is-medium,
+  .bar-chart.is-dense {
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    padding-bottom: 4px;
+    scrollbar-width: thin;
+  }
+  .bar-chart.is-medium .stats-bars,
+  .bar-chart.is-medium .stats-bar-labels { min-width: 561px; }
+  /* 24 hourly buckets keep a real touch target and scroll as one aligned
+     chart instead of collapsing into hairline columns on a phone. */
+  .bar-chart.is-dense .stats-bars,
+  .bar-chart.is-dense .stats-bar-labels { min-width: 1125px; }
 }
 
 @media (max-width: 560px) {
@@ -3354,8 +3628,36 @@ button.memo-tag:active {
   .loc-label { max-width: 6.5em; }
   /* Selection mode needs the row for its pills — search yields the corner. */
   .topbar:has(.select-bar) .search-tools { display: none; }
+  .select-bar { gap: 4px; }
+  .select-count { padding-inline: 8px; }
+  .select-pill { padding-inline: 8px; }
+  .select-tag,
+  .select-delete {
+    justify-content: center;
+    width: 40px;
+    min-height: 40px;
+    padding-inline: 5px;
+  }
+  .select-tag span { display: none; }
   .select-delete span { display: none; }
-  .select-delete.is-confirm span { display: inline; }
+}
+
+@media (max-width: 360px) {
+  .select-all {
+    justify-content: center;
+    width: 40px;
+    min-height: 40px;
+    padding-inline: 4px;
+  }
+  .select-all-icon { display: block; }
+  .select-all-label { display: none; }
+  .select-exit {
+    width: 40px;
+    min-height: 40px;
+    padding-inline: 4px;
+  }
+  .select-exit-icon { display: block; }
+  .select-exit-label { display: none; }
 }
 
 /* At phone widths the search gets its own row. This preserves the date
@@ -3392,6 +3694,9 @@ button.memo-tag:active {
   .stats-head h2 { grid-area: title; }
   .stats-year-nav { grid-area: year; }
   .stats-close { grid-area: close; }
+  .bulk-tag-overlay { padding: 10px; }
+  .bulk-tag-head { padding: 14px 12px 12px; }
+  .bulk-tag-form { padding: 12px; }
 
   .editor,
   .editor-field,
@@ -3400,6 +3705,14 @@ button.memo-tag:active {
   .editor-actions { min-width: 0; }
   .editor-bar { flex-wrap: wrap; }
   .editor-actions { margin-left: auto; }
+
+  .select-bar { gap: 3px; }
+  .select-count { padding-inline: 7px; font-size: 0.8rem; }
+  .select-pill,
+  .select-delete { font-size: 0.79rem; }
+  .select-pill { padding-inline: 6px; }
+  .select-tag,
+  .select-delete { width: 40px; padding-inline: 4px; }
 }
 
 /* Short phones need the keypad to scroll as one surface, with the action

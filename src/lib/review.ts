@@ -6,7 +6,7 @@
 // makes it reproducible — clearing storage and re-drawing the same day over
 // the same notebook yields the same batch. Like the sort key and saved
 // filters, settings and the frozen batch are workspace furniture: per-device,
-// outside the encrypted sync pipeline, surviving logout.
+// outside the encrypted sync pipeline and cleared by ordinary logout.
 
 import { dateKey } from "./dates";
 import { tagMatches, tagsOf } from "./tags";

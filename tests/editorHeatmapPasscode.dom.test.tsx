@@ -102,6 +102,26 @@ describe("Editor accessibility and composition", () => {
 
     expect((await screen.findByRole("alert")).textContent).toBe("Save failed");
   });
+
+  it("counts an inherited context tag before allowing a near-limit create", () => {
+    render(
+      <Providers>
+        <Editor mode="create" contextTag="work" knownTags={["work"]} busy={false} onSubmit={vi.fn(async () => true)} />
+      </Providers>
+    );
+
+    const editor = screen.getByRole("combobox", { name: "Memo content" });
+    const inherited = screen.getByLabelText("Inherited tag: work");
+    expect(editor.getAttribute("aria-describedby")).toBe(inherited.id);
+
+    // "\n#work" adds six characters to the trimmed payload.
+    fireEvent.change(editor, { target: { value: "x".repeat(39_994), selectionStart: 39_994 } });
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.change(editor, { target: { value: "x".repeat(39_995), selectionStart: 39_995 } });
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("40,001 / 40,000").className).toContain("is-over");
+  });
 });
 
 describe("Heatmap day state", () => {

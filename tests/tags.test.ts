@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidTagPath, renameTagInContent, tagMatches, tagRenamePathsOverlap } from "../src/lib/tags";
+import { appendTagToContent, inheritTagContext, isValidTagPath, renameTagInContent, tagMatches, tagRenamePathsOverlap } from "../src/lib/tags";
 
 describe("tag path protocol", () => {
   it.each(["work", "工作", "work_2026", "parent/child", "领域/项目·甲", "a-b/子_项"])("accepts %s", (path) => {
@@ -38,6 +38,17 @@ describe("tag path protocol", () => {
 });
 
 describe("tag content rewriting", () => {
+  it("appends a missing tag on a new line and stays idempotent", () => {
+    expect(appendTagToContent("A thought", "work/project")).toBe("A thought\n#work/project");
+    expect(appendTagToContent("A thought\n#work/project", "work/project")).toBe("A thought\n#work/project");
+    expect(appendTagToContent("", "work")).toBe("#work");
+  });
+
+  it("treats a descendant tag as satisfying its active parent context", () => {
+    expect(inheritTagContext("A thought #work/project", "work")).toBe("A thought #work/project");
+    expect(inheritTagContext("A thought #personal", "work")).toBe("A thought #personal\n#work");
+  });
+
   it("renames exact and descendant tags while leaving sibling prefixes alone", () => {
     expect(renameTagInContent("#work #work/project #workshop", "work", "life")).toBe("#life #life/project #workshop");
   });

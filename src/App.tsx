@@ -1,7 +1,26 @@
-import { Calendar, CalendarRange, Check, ChevronDown, ChevronRight, Home, ListChecks, Loader2, Menu as MenuIcon, NotebookPen, Search, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
+import {
+  Calendar,
+  CalendarRange,
+  ChartNoAxesColumn,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Home,
+  ListChecks,
+  Loader2,
+  Menu as MenuIcon,
+  NotebookPen,
+  Search,
+  SlidersHorizontal,
+  Sparkles,
+  Tags,
+  Trash2,
+  X
+} from "lucide-react";
 import { memo as reactMemo, startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { ChangePasscode } from "./components/ChangePasscode";
+import { BulkTagDialog } from "./components/BulkTagDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Crumbs } from "./components/Crumbs";
 import { Editor } from "./components/Editor";
@@ -42,16 +61,18 @@ import {
   updateMemo,
   type BackupPayload
 } from "./lib/api";
-import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, readSealedSnapshot, saveSnapshot } from "./lib/cache";
+import { adoptCacheKey, invalidateSnapshot, openSnapshot, readSealedSnapshot, saveSnapshot } from "./lib/cache";
 import { dateKey, formatDayLabel } from "./lib/dates";
 import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow } from "./lib/feedSafety";
 import { useI18n } from "./lib/i18n";
+import { clearLocalDeviceData } from "./lib/logoutCleanup";
 import { splitTaskLine } from "./lib/markdown";
 import { setTaskMark } from "./lib/markdownEdit";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
 import {
   buildReviewDay,
   clearReviewDay,
+  DEFAULT_REVIEW_SETTINGS,
   loadReviewDay,
   loadReviewSettings,
   persistReviewDay,
@@ -75,8 +96,9 @@ import {
 } from "./lib/search";
 import { selectionWithinVisibleIds } from "./lib/selection";
 import { countsByDay, dayKeyOf } from "./lib/stats";
+import { memoMatchesStatsDrilldown, statsDrilldownLabel, type StatsDrilldown } from "./lib/statsDrilldown";
 import { applySyncDelta, createSyncState, memosOf, purgedOf, tagsOfState, type PurgedMemo } from "./lib/syncState";
-import { buildTagTree, isValidTagPath, tagMatches, tagRenamePathsOverlap, tagsOf } from "./lib/tags";
+import { appendTagToContent, buildTagTree, inheritTagContext, isValidTagPath, tagMatches, tagRenamePathsOverlap, tagsOf } from "./lib/tags";
 import { applyTheme, loadTheme, nextTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, NewImagePayload, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
@@ -91,6 +113,17 @@ interface ToastState {
   tone: "info" | "error";
   /** Plays the exit animation before the node unmounts. */
   leaving?: boolean;
+}
+
+interface PendingBatchTag {
+  tag: string;
+  changed: Memo[];
+  refreshed: Memo[];
+  retryIds: string[];
+  failedCount: number;
+  firstFailure: string | null;
+  alreadyTagged: number;
+  targetCount: number;
 }
 
 const SORT_KEYS: SortKey[] = ["created-desc", "created-asc", "updated-desc", "updated-asc"];
@@ -267,7 +300,7 @@ const FeedItem = reactMemo(
 );
 
 export default function App() {
-  const { count, errorMessage, language, locale, tr } = useI18n();
+  const { count, errorMessage, language, locale, setLanguage, tr } = useI18n();
   const sortOptions: { key: SortKey; label: string }[] = useMemo(
     () => [
       { key: "created-desc", label: tr("Created · Newest first", "创建时间 · 从新到旧") },
@@ -307,6 +340,7 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [filters, setFilters] = useState<FeedFilters>(EMPTY_FILTERS);
+  const [statsDrilldown, setStatsDrilldown] = useState<StatsDrilldown | null>(null);
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>(loadSavedFilters);
   // Names the current filter combination via PromptDialog.
   const [savingFilter, setSavingFilter] = useState(false);
@@ -376,11 +410,14 @@ export default function App() {
   // Escape / view switches / a fully successful batch delete.
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  const restoreLocationFocusRef = useRef(false);
   // Two-step batch delete, mirroring Empty Trash: arm, then fire.
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const confirmBatchDeleteRef = useRef(false);
   confirmBatchDeleteRef.current = confirmBatchDelete;
   const [batchBusy, setBatchBusy] = useState(false);
+  const [bulkTagOpen, setBulkTagOpen] = useState(false);
+  const pendingBatchTagRef = useRef<PendingBatchTag | null>(null);
   const [renameTagTarget, setRenameTagTarget] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   // Two-step Empty Trash: first click arms the button, second click fires.
@@ -423,6 +460,8 @@ export default function App() {
   }, []);
 
   const resetSessionUi = useCallback(() => {
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = 0;
     window.clearTimeout(drawerCloseTimerRef.current);
     window.cancelAnimationFrame(drawerCallbackFrameRef.current);
     drawerAfterCloseRef.current = [];
@@ -439,6 +478,7 @@ export default function App() {
     setQuery("");
     setSearchOpen(false);
     setFilters(EMPTY_FILTERS);
+    setStatsDrilldown(null);
     setSavingFilter(false);
     setView("memos");
     setCreating(false);
@@ -451,6 +491,8 @@ export default function App() {
     setSelected(new Set());
     setConfirmBatchDelete(false);
     setBatchBusy(false);
+    setBulkTagOpen(false);
+    pendingBatchTagRef.current = null;
     setRenameTagTarget(null);
     setDialogBusy(false);
     setConfirmEmptyTrash(false);
@@ -462,8 +504,18 @@ export default function App() {
     setChangingPasscode(false);
     setDrawerOpen(false);
     setDrawerClosing(false);
+    setToast(null);
     setReveal(false);
   }, []);
+
+  const resetLocalWorkspaceState = useCallback(() => {
+    setTheme("system");
+    setLanguage("en");
+    setSortKey("created-desc");
+    setSavedFilters([]);
+    setReviewSettings(DEFAULT_REVIEW_SETTINGS);
+    setReviewDay(null);
+  }, [setLanguage]);
 
   const drawerRef = useModalA11y<HTMLElement>({
     enabled: drawerOpen,
@@ -477,12 +529,14 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
+    if (phase !== "ready") return;
     localStorage.setItem("memo-sort", sortKey);
-  }, [sortKey]);
+  }, [phase, sortKey]);
 
   useEffect(() => {
+    if (phase !== "ready") return;
     persistSavedFilters(savedFilters);
-  }, [savedFilters]);
+  }, [phase, savedFilters]);
 
   const applySyncChanges = useCallback((changed: readonly Memo[], purged: readonly PurgedMemo[], tags: readonly TagMeta[], cursor?: number) => {
     setSyncState((current) => applySyncDelta(current, { memos: changed, purged, tags }));
@@ -491,20 +545,21 @@ export default function App() {
 
   const dropToLogin = useCallback(() => {
     sessionEpochRef.current += 1;
-    forgetCacheKey();
+    void clearLocalDeviceData();
     resetSessionUi();
+    resetLocalWorkspaceState();
     setPhase("login");
     showToast(tr("Your session expired. Enter your passcode again.", "登录已过期，请重新输入密码"), "error");
-  }, [resetSessionUi, showToast, tr]);
+  }, [resetLocalWorkspaceState, resetSessionUi, showToast, tr]);
 
   const handlePeerLogout = useCallback(() => {
     sessionEpochRef.current += 1;
-    void invalidateSnapshot();
-    forgetCacheKey();
+    void clearLocalDeviceData();
     resetSessionUi();
+    resetLocalWorkspaceState();
     setPhase("login");
     showToast(tr("Another tab logged out. Enter your passcode again.", "另一个标签页已退出，请重新输入密码"), "error");
-  }, [resetSessionUi, showToast, tr]);
+  }, [resetLocalWorkspaceState, resetSessionUi, showToast, tr]);
 
   const handleServerReset = useCallback(() => {
     sessionEpochRef.current += 1;
@@ -774,12 +829,12 @@ export default function App() {
   // Keywords AND together; "quoted" runs must match as whole phrases.
   const parsedQuery = useMemo(() => parseSearchQuery(deferredQuery), [deferredQuery]);
   const structuredFiltersOn = hasActiveFilters(filters);
-  const filtersActive = activeTag !== null || activeDay !== null || trimmedQuery.length > 0 || structuredFiltersOn;
+  const filtersActive = activeTag !== null || activeDay !== null || statsDrilldown !== null || trimmedQuery.length > 0 || structuredFiltersOn;
 
   // The live feed lenses, for async work that lands later (checkbox toggle
   // batches read this at commit time instead of a render-stale capture).
-  const feedContextRef = useRef({ view, filters, sortKey, parsedQuery });
-  feedContextRef.current = { view, filters, sortKey, parsedQuery };
+  const feedContextRef = useRef({ view, filters, statsDrilldown, sortKey, parsedQuery });
+  feedContextRef.current = { view, filters, statsDrilldown, sortKey, parsedQuery };
 
   const visibleMemos = useMemo(() => {
     let list = activeMemos;
@@ -789,10 +844,17 @@ export default function App() {
     if (activeDay) {
       list = filterPreservingId(list, editingId, (memo) => dayKeyOf(memo) === activeDay);
     }
+    if (statsDrilldown) {
+      list = filterPreservingId(list, editingId, (memo) => memoMatchesStatsDrilldown(memo, statsDrilldown));
+    }
     if (hasActiveFilters(filters)) {
       list = filterPreservingId(list, editingId, (memo) => memoMatchesFilters(memo, filters));
     }
-    if (!queryIsEmpty(parsedQuery)) {
+    // A stats bucket is an exclusive lens. `query` is cleared in the same
+    // transition that installs it, but useDeferredValue can retain the old
+    // parsed query for one render; skipping it here prevents a false
+    // "few, then more" second feed commit after the modal has closed.
+    if (!statsDrilldown && !queryIsEmpty(parsedQuery)) {
       list = filterPreservingId(list, editingId, (memo) => memoMatchesQuery(memo, parsedQuery));
     }
     const compare = SORT_COMPARATORS[sortKey];
@@ -800,7 +862,7 @@ export default function App() {
       if (Boolean(a.pinnedAt) !== Boolean(b.pinnedAt)) return a.pinnedAt ? -1 : 1;
       return compare(a, b);
     });
-  }, [activeMemos, activeTag, activeDay, filters, parsedQuery, editingId, sortKey]);
+  }, [activeMemos, activeTag, activeDay, statsDrilldown, filters, parsedQuery, editingId, sortKey]);
 
   // The day's frozen batch, resolved against live truth: edits show through
   // (ids point at whatever the memo says now), deletions drop out, and the
@@ -824,10 +886,8 @@ export default function App() {
   // matter how many memos exist.
   // Object identity is the generation token: revisiting an earlier query must
   // still start a fresh window rather than reviving that query's old cap.
-  const feedWindowKey = useMemo(
-    () => ({}),
-    [view, activeTag, activeDay, deferredQuery, filters, sortKey]
-  );
+  const feedQueryKey = statsDrilldown ? "" : deferredQuery;
+  const feedWindowKey = useMemo(() => ({}), [view, activeTag, activeDay, statsDrilldown, feedQueryKey, filters, sortKey]);
   const [renderWindow, setRenderWindow] = useState<FeedWindow<object>>({ key: {}, cap: FEED_PAGE });
   // Resolve a stale generation synchronously during render. An effect would
   // reconcile the previous, potentially huge window once before shrinking it.
@@ -957,6 +1017,7 @@ export default function App() {
       }
       changeFeed(() => {
         setActiveTag(path);
+        setStatsDrilldown(null);
         setView("memos");
       });
     },
@@ -971,6 +1032,7 @@ export default function App() {
       }
       changeFeed(() => {
         setActiveDay(key);
+        setStatsDrilldown(null);
         setView("memos");
       });
     },
@@ -979,17 +1041,18 @@ export default function App() {
 
   const showAll = useCallback(() => {
     if (blockNavigationWhileEditing()) return;
-    if (view === "memos" && activeTag === null && activeDay === null && query.length === 0 && !hasActiveFilters(filters)) {
+    if (view === "memos" && activeTag === null && activeDay === null && statsDrilldown === null && query.length === 0 && !hasActiveFilters(filters)) {
       return;
     }
     changeFeed(() => {
       setActiveTag(null);
       setActiveDay(null);
+      setStatsDrilldown(null);
       setQuery("");
       setFilters(EMPTY_FILTERS);
       setView("memos");
     });
-  }, [view, activeTag, activeDay, query, filters, changeFeed, blockNavigationWhileEditing]);
+  }, [view, activeTag, activeDay, statsDrilldown, query, filters, changeFeed, blockNavigationWhileEditing]);
 
   /** Facet on/off is a discrete choice — it rides the same feed morph as a
       tag or sort change, whether it comes from the panel or a chip's ×. */
@@ -1016,6 +1079,33 @@ export default function App() {
     changeFeed(() => setFilters((current) => ({ ...current, dateFrom: null, dateTo: null })));
   }, [changeFeed, blockNavigationWhileEditing]);
 
+  const clearStatsDrilldown = useCallback(() => {
+    if (blockNavigationWhileEditing()) return;
+    changeFeed(() => setStatsDrilldown(null));
+  }, [blockNavigationWhileEditing, changeFeed]);
+
+  const openStatsDrilldown = useCallback(
+    (drilldown: StatsDrilldown) => {
+      if (blockNavigationWhileEditing()) {
+        setStatsOpen(false);
+        return;
+      }
+      changeFeed(() => {
+        setStatsOpen(false);
+        setStatsDrilldown(drilldown);
+        setActiveTag(null);
+        setActiveDay(null);
+        setQuery("");
+        setFilters(EMPTY_FILTERS);
+        setView("memos");
+        setSelectMode(false);
+        setSelected(new Set());
+        setConfirmBatchDelete(false);
+      });
+    },
+    [blockNavigationWhileEditing, changeFeed]
+  );
+
   /** A preset restores the whole feed context in one morph. */
   const applySavedFilter = useCallback(
     (item: SavedFilter) => {
@@ -1024,6 +1114,7 @@ export default function App() {
         setView("memos");
         setActiveTag(item.tag);
         setActiveDay(item.day);
+        setStatsDrilldown(null);
         setQuery(item.query);
         setFilters(item.filters);
       });
@@ -1053,6 +1144,7 @@ export default function App() {
   // The preset whose snapshot equals the live feed state — its row gets the
   // check mark, mirroring the sort menu's radio language.
   const activeSavedId = useMemo(() => {
+    if (statsDrilldown) return null;
     const match = savedFilters.find(
       (item) =>
         item.tag === activeTag &&
@@ -1061,7 +1153,7 @@ export default function App() {
         filtersEqual(item.filters, filters)
     );
     return match?.id ?? null;
-  }, [savedFilters, activeTag, activeDay, trimmedQuery, filters]);
+  }, [savedFilters, activeTag, activeDay, statsDrilldown, trimmedQuery, filters]);
 
   // Breadcrumb chip text for the date range; reversed ends still read as the
   // span between them (the predicate normalizes the same way).
@@ -1075,6 +1167,7 @@ export default function App() {
     if (dateTo !== null) return tr(`Until ${formatDayLabel(dateTo, locale)}`, `${formatDayLabel(dateTo, locale)} 止`);
     return null;
   }, [filters, locale, tr]);
+  const statsChipLabel = useMemo(() => (statsDrilldown ? statsDrilldownLabel(statsDrilldown, locale) : null), [statsDrilldown, locale]);
 
   // Filter-chip entrance choreography, Crumbs-style: chips new this commit
   // cascade in behind the pill on a short capped ripple, while chips already in the trail sit
@@ -1086,10 +1179,11 @@ export default function App() {
     if (view !== "memos" || selectMode) return [];
     const keys: string[] = [];
     if (activeDay) keys.push("day");
+    if (statsChipLabel) keys.push("stats");
     if (rangeChipLabel) keys.push("range");
     for (const row of FACET_ROWS) if (filters[row.key]) keys.push(row.key);
     return keys;
-  }, [view, selectMode, activeDay, rangeChipLabel, filters]);
+  }, [view, selectMode, activeDay, statsChipLabel, rangeChipLabel, filters]);
   const prevChipsRef = useRef<string[]>([]);
   const prevChips = prevChipsRef.current;
   useLayoutEffect(() => {
@@ -1103,6 +1197,7 @@ export default function App() {
     if (view === "trash") return;
     changeFeed(() => {
       setView("trash");
+      setStatsDrilldown(null);
       // Same flush: the "已选 N 条" pill hands topbar-action to the Empty
       // Trash pill inside one morph instead of two competing transitions.
       setSelectMode(false);
@@ -1131,6 +1226,7 @@ export default function App() {
     changeFeed(() => {
       if (next !== reviewDay) setReviewDay(next);
       setView("review");
+      setStatsDrilldown(null);
       setSelectMode(false);
       setSelected(new Set());
       setConfirmBatchDelete(false);
@@ -1188,6 +1284,8 @@ export default function App() {
         setSelectMode(true);
         setSelected(new Set());
         setConfirmBatchDelete(false);
+        setBulkTagOpen(false);
+        pendingBatchTagRef.current = null;
       })
     );
   }, [blockNavigationWhileEditing]);
@@ -1198,6 +1296,8 @@ export default function App() {
         setSelectMode(false);
         setSelected(new Set());
         setConfirmBatchDelete(false);
+        setBulkTagOpen(false);
+        pendingBatchTagRef.current = null;
       })
     );
   }, []);
@@ -1277,21 +1377,18 @@ export default function App() {
 
     sessionEpochRef.current += 1;
     notifyLogout();
-    forgetCacheKey();
+    const localCleanup = clearLocalDeviceData();
     resetSessionUi();
+    resetLocalWorkspaceState();
     setPhase("login");
-    try {
-      await invalidateSnapshot();
-    } catch {
-      // The authenticated server session is already closed. A stale encrypted
-      // local snapshot cannot be opened after forgetCacheKey().
-    }
+    await localCleanup;
   }
 
   async function handleCreate(data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }): Promise<boolean> {
+    const content = activeTag ? inheritTagContext(data.content, activeTag) : data.content;
     setCreating(true);
     try {
-      const result = await guard(() => createMemo(data.clientId, data.content, data.newImages));
+      const result = await guard(() => createMemo(data.clientId, content, data.newImages));
       if (!result) return false;
       let saved = result.memo;
       if (result.idempotent) {
@@ -1303,7 +1400,7 @@ export default function App() {
         const resumed = await guard(() =>
           updateMemo(saved.id, {
             expectedSeq: saved.seq,
-            content: data.content,
+            content,
             addImages: data.newImages.filter((image) => !storedImageIds.has(image.id)),
             removeImageIds: saved.images.filter((image) => !draftImageIds.has(image.id)).map((image) => image.id)
           })
@@ -1317,7 +1414,7 @@ export default function App() {
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === "VERSION_CONFLICT") {
         if (cause.current) {
-          if (memoMatchesSubmittedDraft(cause.current, data.content, data.newImages.map((image) => image.id))) {
+          if (memoMatchesSubmittedDraft(cause.current, content, data.newImages.map((image) => image.id))) {
             // The recovery update itself committed but its response was lost.
             // The desired server value is authoritative success; clearing this
             // draft avoids rotating the id and creating a duplicate memo.
@@ -1460,9 +1557,12 @@ export default function App() {
    * in place otherwise, leaving the motion to the checkbox's own transition.
    */
   function commitTaskBatch(nextMemo: Memo) {
-    const { view: liveView, filters: liveFilters, sortKey: liveSortKey, parsedQuery: liveQuery } = feedContextRef.current;
+    const { view: liveView, filters: liveFilters, statsDrilldown: liveStatsDrilldown, sortKey: liveSortKey, parsedQuery: liveQuery } = feedContextRef.current;
     const leavesTaskFilter = liveFilters.hasOpenTask && !facetsOf(nextMemo).hasOpenTask;
-    const stillMatches = memoMatchesFilters(nextMemo, liveFilters) && memoMatchesQuery(nextMemo, liveQuery);
+    const stillMatches =
+      memoMatchesFilters(nextMemo, liveFilters) &&
+      (Boolean(liveStatsDrilldown) || memoMatchesQuery(nextMemo, liveQuery)) &&
+      (!liveStatsDrilldown || memoMatchesStatsDrilldown(nextMemo, liveStatsDrilldown));
     const animate = liveView === "memos" && (liveSortKey.startsWith("updated") || !stillMatches);
     const apply = () => {
       applySyncChanges([nextMemo], [], []);
@@ -1623,6 +1723,138 @@ export default function App() {
     }
   }
 
+  /**
+   * Resolve the server work while the tag sheet stays present. The visual
+   * commit is deliberately deferred: BulkTagDialog exits first, then
+   * finishBatchTag lets changed cards and the selection toolbar morph together.
+   */
+  async function prepareBatchTag(tag: string): Promise<boolean> {
+    const targets = [...visibleSelected]
+      .map((id) => syncStateRef.current.memos.get(id))
+      .filter((memo): memo is Memo => Boolean(memo && !memo.deletedAt));
+    if (targets.length === 0 || pendingBatchTagRef.current) return false;
+
+    const pendingTargets = targets.filter((memo) => !tagsOf(memo).includes(tag));
+    const sessionEpoch = sessionEpochRef.current;
+    try {
+      const results = await mapSettledWithLimit(pendingTargets, 4, (memo) =>
+        updateMemo(memo.id, { expectedSeq: memo.seq, content: appendTagToContent(memo.content, tag) })
+      );
+      if (sessionEpoch !== sessionEpochRef.current) return false;
+
+      const changed: Memo[] = [];
+      const refreshed: Memo[] = [];
+      const retryIds: string[] = [];
+      let failedCount = 0;
+      let firstFailure: string | null = null;
+      let authLost = false;
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled" && result.value.memo) {
+          changed.push(result.value.memo);
+          return;
+        }
+        const target = pendingTargets[index];
+        if (result.status === "fulfilled") {
+          failedCount += 1;
+          retryIds.push(target.id);
+          firstFailure ??= tr("The server did not return the updated memo.", "服务器未返回更新后的笔记。");
+          return;
+        }
+        if (result.reason instanceof AuthRequiredError) {
+          authLost = true;
+          return;
+        }
+        if (result.reason instanceof ApiError && result.reason.code === "VERSION_CONFLICT" && result.reason.current) {
+          const current = result.reason.current;
+          // A concurrent tab may have completed this exact operation first.
+          // Treat that server truth as idempotent success instead of asking
+          // the user to retry an already-applied tag.
+          if (!current.deletedAt && tagsOf(current).includes(tag)) {
+            changed.push(current);
+            return;
+          }
+          refreshed.push(current);
+          failedCount += 1;
+          if (!current.deletedAt) retryIds.push(current.id);
+          firstFailure ??= errorMessage(result.reason);
+          return;
+        }
+        failedCount += 1;
+        retryIds.push(target.id);
+        firstFailure ??= errorMessage(result.reason, "Couldn’t update a selected memo.", "无法更新其中一条所选笔记。");
+      });
+      if (authLost) {
+        dropToLogin();
+        return false;
+      }
+
+      // Even an all-failed batch has a settled result: close the sheet and
+      // retain precisely those failures so retrying is one action away.
+      pendingBatchTagRef.current = {
+        tag,
+        changed,
+        refreshed,
+        retryIds,
+        failedCount,
+        firstFailure,
+        alreadyTagged: targets.length - pendingTargets.length,
+        targetCount: targets.length
+      };
+      return true;
+    } catch (cause) {
+      showToast(errorMessage(cause, "Couldn’t add the tag", "添加标签失败"), "error");
+      return false;
+    }
+  }
+
+  function finishBatchTag() {
+    const result = pendingBatchTagRef.current;
+    pendingBatchTagRef.current = null;
+    if (!result) {
+      setBulkTagOpen(false);
+      return;
+    }
+
+    if (result.retryIds.length === 0) restoreLocationFocusRef.current = true;
+    withViewTransition(() =>
+      flushSync(() => {
+        setBulkTagOpen(false);
+        if (result.changed.length > 0 || result.refreshed.length > 0) {
+          applySyncChanges([...result.refreshed, ...result.changed], [], []);
+        }
+        if (result.retryIds.length === 0) {
+          setSelectMode(false);
+          setSelected(new Set());
+        } else {
+          setSelected(new Set(result.retryIds));
+        }
+        setConfirmBatchDelete(false);
+      })
+    );
+
+    if (result.changed.length > 0 || result.refreshed.length > 0 || result.failedCount > 0) {
+      void runSync();
+    }
+    if (result.changed.length > 0) {
+      notifyPeers();
+    }
+    if (result.failedCount > 0) {
+      const successful = result.targetCount - result.failedCount;
+      const detail = result.firstFailure ? ` · ${result.firstFailure}` : "";
+      showToast(
+        tr(
+          `#${result.tag} is now on ${count(successful, "memo")}; ${count(result.failedCount, "memo")} failed${detail}`,
+          `#${result.tag} 已存在于 ${count(successful, "memo")}；${count(result.failedCount, "memo")} 失败${detail}`
+        ),
+        "error"
+      );
+    } else if (result.alreadyTagged === result.targetCount) {
+      showToast(tr(`All selected memos already have #${result.tag}`, `所选笔记都已有 #${result.tag}`));
+    } else {
+      showToast(tr(`Added #${result.tag} to ${count(result.changed.length, "memo")}`, `已为 ${count(result.changed.length, "memo")} 添加 #${result.tag}`));
+    }
+  }
+
   // Latest closures behind one stable identity — FeedItem's memoization
   // survives every App re-render. (The handle* function declarations below
   // are hoisted, so assigning here each render is safe.)
@@ -1753,9 +1985,23 @@ export default function App() {
   // so a later batch action can never affect a card the user can no longer see.
   useEffect(() => {
     if (!selectMode) return;
-    setSelected((current) => selectionWithinVisibleIds(current, visibleFeedIds));
+    const next = selectionWithinVisibleIds(selected, visibleFeedIds);
+    const unchanged = next.size === selected.size && [...next].every((id) => selected.has(id));
+    if (!unchanged) setSelected(next);
+    // A sync can delete or filter away every failed retry target. Do not
+    // strand the toolbar in an inert "0 selected" state.
+    if (selected.size > 0 && next.size === 0) {
+      restoreLocationFocusRef.current = true;
+      setSelectMode(false);
+    }
     setConfirmBatchDelete(false);
-  }, [selectMode, visibleFeedIds]);
+  }, [selectMode, selected, visibleFeedIds]);
+
+  useLayoutEffect(() => {
+    if (selectMode || !restoreLocationFocusRef.current) return;
+    restoreLocationFocusRef.current = false;
+    document.querySelector<HTMLButtonElement>(".loc-trigger")?.focus({ preventScroll: true });
+  }, [selectMode]);
 
   async function handlePinTag(path: string, pinned: boolean) {
     try {
@@ -1786,6 +2032,9 @@ export default function App() {
       if (activeTag && tagMatches(activeTag, from)) {
         setActiveTag(to + activeTag.slice(from.length));
       }
+      setStatsDrilldown((current) =>
+        current?.kind === "tag" && tagMatches(current.tag, from) ? { ...current, tag: to + current.tag.slice(from.length) } : current
+      );
       void runSync();
       notifyPeers();
       showToast(tr(`Renamed to #${to}; updated ${count(result.updated, "memo")}`, `已重命名为 #${to}，更新了 ${count(result.updated, "memo")}`));
@@ -1811,6 +2060,7 @@ export default function App() {
           if (activeTag && tagMatches(activeTag, path)) {
             setActiveTag(null);
           }
+          setStatsDrilldown((current) => (current?.kind === "tag" && tagMatches(current.tag, path) ? null : current));
         })
       );
       void runSync();
@@ -2073,10 +2323,34 @@ export default function App() {
                     </>
                   )}
                 </span>
-                <button type="button" className="select-pill" disabled={feedMemos.length === 0} onClick={toggleSelectAll}>
-                  <SwapText id={allVisibleSelected ? "clear" : "all"}>
-                    {allVisibleSelected ? tr("Clear", "清除") : tr("Select all", "全选")}
-                  </SwapText>
+                <button
+                  type="button"
+                  className="select-pill select-all"
+                  disabled={feedMemos.length === 0}
+                  aria-label={allVisibleSelected ? tr("Clear selection", "清除选择") : tr("Select all memos", "全选笔记")}
+                  onClick={toggleSelectAll}
+                >
+                  <ListChecks size={14} className="select-all-icon" aria-hidden="true" />
+                  <span className="select-all-label">
+                    <SwapText id={allVisibleSelected ? "clear" : "all"}>
+                      {allVisibleSelected ? tr("Clear", "清除") : tr("Select all", "全选")}
+                    </SwapText>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="select-pill select-tag"
+                  disabled={visibleSelectedCount === 0 || batchBusy}
+                  aria-haspopup="dialog"
+                  aria-label={tr("Add a tag to selected memos", "为所选笔记添加标签")}
+                  onClick={() => {
+                    setConfirmBatchDelete(false);
+                    pendingBatchTagRef.current = null;
+                    setBulkTagOpen(true);
+                  }}
+                >
+                  <Tags size={14} aria-hidden="true" />
+                  <span>{tr("Add tag", "加标签")}</span>
                 </button>
                 <button
                   type="button"
@@ -2099,8 +2373,9 @@ export default function App() {
                         : tr("Delete", "删除")}
                   </span>
                 </button>
-                <button type="button" className="select-pill select-exit" onClick={exitSelectMode}>
-                  {tr("Cancel", "取消")}
+                <button type="button" className="select-pill select-exit" onClick={exitSelectMode} aria-label={tr("Cancel selection", "取消多选")}>
+                  <X size={14} className="select-exit-icon" aria-hidden="true" />
+                  <span className="select-exit-label">{tr("Cancel", "取消")}</span>
                 </button>
               </div>
             ) : (
@@ -2228,6 +2503,16 @@ export default function App() {
                     onClear={() => pickDay(null)}
                   />
                 ) : null}
+                {statsChipLabel ? (
+                  <FilterChip
+                    icon={ChartNoAxesColumn}
+                    label={statsChipLabel}
+                    clearLabel={tr(`Clear statistics filter: ${statsChipLabel}`, `清除统计筛选：${statsChipLabel}`)}
+                    transitionName="stats-filter-chip"
+                    delay={chipDelay("stats")}
+                    onClear={clearStatsDrilldown}
+                  />
+                ) : null}
                 {rangeChipLabel ? (
                   <FilterChip
                     icon={CalendarRange}
@@ -2286,7 +2571,7 @@ export default function App() {
                 filters={filters}
                 saved={savedFilters}
                 activeSavedId={activeSavedId}
-                canSave={filtersActive}
+                canSave={filtersActive && statsDrilldown === null}
                 disabled={editingId !== null}
                 onToggleFacet={toggleFacet}
                 onDateChange={patchDateRange}
@@ -2300,7 +2585,7 @@ export default function App() {
         </div>
 
         <div className="composer" hidden={view !== "memos"}>
-          <Editor mode="create" knownTags={knownTags} busy={creating} onSubmit={handleCreate} />
+          <Editor mode="create" knownTags={knownTags} contextTag={activeTag} busy={creating} onSubmit={handleCreate} />
         </div>
 
         <section
@@ -2375,7 +2660,21 @@ export default function App() {
 
       {lightbox ? <Lightbox items={lightbox.items} index={lightbox.index} onClose={() => setLightbox(null)} /> : null}
       {shareMemo ? <ShareDialog memo={shareMemo} onToast={showToast} onClose={() => setShareMemo(null)} /> : null}
-      {statsOpen ? <StatsModal memos={activeMemos} uniqueTagCount={uniqueTagCount} onClose={() => setStatsOpen(false)} /> : null}
+      {statsOpen ? (
+        <StatsModal memos={activeMemos} uniqueTagCount={uniqueTagCount} onClose={() => setStatsOpen(false)} onDrilldown={openStatsDrilldown} />
+      ) : null}
+      {bulkTagOpen ? (
+        <BulkTagDialog
+          selectedCount={visibleSelectedCount}
+          knownTags={knownTags}
+          onApply={prepareBatchTag}
+          onDismiss={() => {
+            pendingBatchTagRef.current = null;
+            setBulkTagOpen(false);
+          }}
+          onApplied={finishBatchTag}
+        />
+      ) : null}
       {reviewSettingsOpen ? (
         <ReviewSettingsModal
           settings={reviewSettings}

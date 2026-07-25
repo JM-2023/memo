@@ -4,6 +4,7 @@ import { ApiError } from "../lib/api";
 import { ImageSlotLedger } from "../lib/imageSlots";
 import { compressImage } from "../lib/images";
 import { useI18n } from "../lib/i18n";
+import { inheritTagContext } from "../lib/tags";
 import {
   continueListOnEnter,
   insertTableTemplate,
@@ -31,6 +32,8 @@ interface EditorProps {
   /** Edit mode: attachments already on the memo. */
   existingImages?: MemoImage[];
   knownTags: string[];
+  /** Create mode: the active feed tag that will be inherited on submit. */
+  contextTag?: string | null;
   busy: boolean;
   onSubmit: (data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
   onCancel?: () => void;
@@ -62,6 +65,7 @@ export function Editor({
   initialContent = "",
   existingImages = [],
   knownTags,
+  contextTag = null,
   busy,
   onSubmit,
   onCancel,
@@ -90,6 +94,7 @@ export function Editor({
   const fileRef = useRef<HTMLInputElement>(null);
   const linkRef = useRef<HTMLInputElement>(null);
   const suggestionListId = useId();
+  const contextTagDescriptionId = useId();
   // Stable across ambiguous network failures; rotate only after a confirmed
   // create so retrying the same draft remains idempotent.
   const draftIdRef = useRef(crypto.randomUUID());
@@ -115,9 +120,12 @@ export function Editor({
   const totalImages = keptExisting.length + newImages.length;
   const locked = busy || submitting;
   const imageLimitExceeded = totalImages > MAX_IMAGES;
-  const overLimit = content.length > MAX_CONTENT_CHARS;
+  const submittedContent = content.trim();
+  const effectiveContent = mode === "create" && contextTag ? inheritTagContext(submittedContent, contextTag) : submittedContent;
+  const effectiveContentLength = effectiveContent.length;
+  const overLimit = effectiveContentLength > MAX_CONTENT_CHARS;
   const canSubmit =
-    !locked && !conflictMessage && compressing === 0 && !overLimit && !imageLimitExceeded && (content.trim().length > 0 || totalImages > 0);
+    !locked && !conflictMessage && compressing === 0 && !overLimit && !imageLimitExceeded && (submittedContent.length > 0 || totalImages > 0);
 
   useLayoutEffect(() => {
     imageSlots.syncCommitted(totalImages);
@@ -514,11 +522,24 @@ export function Editor({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
+      {mode === "create" && contextTag ? (
+        <div
+          key={contextTag}
+          id={contextTagDescriptionId}
+          className="editor-context-tag"
+          aria-label={tr(`Inherited tag: ${contextTag}`, `自动继承标签：${contextTag}`)}
+        >
+          <Hash size={13} aria-hidden="true" />
+          <span>{contextTag}</span>
+        </div>
+      ) : null}
+
       <div className="editor-field">
         <textarea
           ref={areaRef}
           role="combobox"
           aria-label={tr("Memo content", "笔记内容")}
+          aria-describedby={mode === "create" && contextTag ? contextTagDescriptionId : undefined}
           aria-autocomplete="list"
           aria-expanded={suggestion !== null}
           aria-controls={suggestion ? suggestionListId : undefined}
@@ -774,14 +795,14 @@ export function Editor({
           />
         </div>
         <div className="editor-actions">
-          {content.length >= COUNTER_FROM ? (
-            <span
-              className={`editor-count${overLimit ? " is-over" : ""}`}
-              title={overLimit ? tr("Over the memo length limit", "已超出单条笔记字数上限") : undefined}
-            >
-              {content.length.toLocaleString()} / {MAX_CONTENT_CHARS.toLocaleString()}
-            </span>
-          ) : null}
+        {effectiveContentLength >= COUNTER_FROM ? (
+          <span
+            className={`editor-count${overLimit ? " is-over" : ""}`}
+            title={overLimit ? tr("Over the memo length limit", "已超出单条笔记字数上限") : undefined}
+          >
+              {effectiveContentLength.toLocaleString()} / {MAX_CONTENT_CHARS.toLocaleString()}
+          </span>
+        ) : null}
           {mode === "edit" && onCancel ? (
             <button type="button" className="ghost-button" onClick={onCancel} disabled={locked}>
               {tr("Cancel", "取消")}

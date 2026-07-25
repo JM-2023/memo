@@ -37,6 +37,26 @@ export function tagsOf(memo: Memo): string[] {
 }
 
 /**
+ * Append one exact tag on its own final line without disturbing the user's
+ * existing whitespace. Replaying the operation is idempotent.
+ */
+export function appendTagToContent(content: string, path: string): string {
+  if (extractTags(content).includes(path)) return content;
+  const separator = content.length === 0 || content.endsWith("\n") ? "" : "\n";
+  return `${content}${separator}#${path}`;
+}
+
+/**
+ * Keep a memo created inside a hierarchical tag view inside that view. A
+ * descendant already satisfies its parent context (`#work/project` remains in
+ * the `#work` feed), so avoid adding a redundant parent token.
+ */
+export function inheritTagContext(content: string, path: string): string {
+  if (extractTags(content).some((tag) => tagMatches(tag, path))) return content;
+  return appendTagToContent(content, path);
+}
+
+/**
  * Rewrite every `#from` (and descendant `#from/…`) tag token in `content` to
  * `to`; `to === null` removes the token instead (eating one adjacent space so
  * "a #tag b" tidies to "a b"). URL spans are protected — a fragment like
