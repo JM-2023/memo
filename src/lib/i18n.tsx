@@ -40,7 +40,7 @@ interface ErrorTranslation {
 }
 
 const KNOWN_ERRORS: Record<string, ErrorTranslation> = {
-  "Authentication required": { en: "Authentication required", zh: "需要重新登录" },
+  "Authentication required": { en: "Your session has expired. Enter your passcode again.", zh: "登录已过期，请重新输入密码" },
   "Invalid login": { en: "Incorrect passcode. Please try again.", zh: "密码错误，请重试" },
   "Wrong current passcode": { en: "The current passcode is incorrect. Please try again.", zh: "当前密码不正确，请重试" },
   "Passcode must be 4-18 digits": { en: "The passcode must contain 4 to 18 digits.", zh: "密码必须是 4-18 位数字" },
@@ -159,8 +159,8 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           return localized("Memo not found.", "笔记不存在");
         case "MEMO_ID_RETIRED":
           return localized(
-            "That memo was permanently deleted. Your draft is safe; save again to create it with a new id.",
-            "原笔记已被永久删除。草稿仍然保留；再次保存会使用新的编号创建。"
+            "That memo was permanently deleted. Your draft is safe — save again to create it with a new id.",
+            "原笔记已被永久删除，草稿仍然保留，再次保存会使用新的编号创建"
           );
         case "MEMO_TRASHED":
           return localized("Restore this memo before editing it.", "笔记在回收站中，请先恢复");
@@ -180,7 +180,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           const max = typeof rawMax === "number" ? rawMax : typeof rawMax === "string" && rawMax.trim() ? Number(rawMax) : Number.NaN;
           if (!Number.isFinite(max)) return localized("This memo is too long.", "这条笔记内容过长");
           const formattedMax = numberFormatter.format(max);
-          return localized(`A memo can contain up to ${formattedMax} characters.`, `每条笔记最多可包含 ${formattedMax} 个字符。`);
+          return localized(`A memo can contain up to ${formattedMax} characters.`, `每条笔记最多可包含 ${formattedMax} 个字符`);
         }
         case "IMAGE_LIMIT_EXCEEDED": {
           const rawMax = params?.max;
@@ -189,7 +189,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           const formattedMax = numberFormatter.format(max);
           return localized(
             `A memo can contain up to ${formattedMax} ${Math.abs(max) === 1 ? "image" : "images"}.`,
-            `每条笔记最多可包含 ${formattedMax} 张图片。`
+            `每条笔记最多可包含 ${formattedMax} 张图片`
           );
         }
         case "IMAGE_TOO_LARGE":

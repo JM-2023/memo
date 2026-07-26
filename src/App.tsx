@@ -556,7 +556,7 @@ export default function App() {
     resetSessionUi();
     resetLocalWorkspaceState();
     setPhase("login");
-    showToast(tr("Your session expired. Enter your passcode again.", "登录已过期，请重新输入密码"), "error");
+    showToast(tr("Your session has expired. Enter your passcode again.", "登录已过期，请重新输入密码"), "error");
   }, [resetLocalWorkspaceState, resetSessionUi, showToast, tr]);
 
   const handlePeerLogout = useCallback(() => {
@@ -809,7 +809,7 @@ export default function App() {
     if (!current || current.deletedAt) {
       setEditingId(null);
       setEditConflictId(null);
-      showToast(tr("This memo was removed elsewhere, so editing was closed.", "这条笔记已在别处删除，编辑已关闭"), "error");
+      showToast(tr("This memo was deleted elsewhere. Editing was closed.", "这条笔记已在别处删除，编辑已关闭"), "error");
       return;
     }
     const baseSeq = editingBaseSeqRef.current;
@@ -1129,7 +1129,7 @@ export default function App() {
   const deleteSavedFilter = useCallback(
     (item: SavedFilter) => {
       setSavedFilters((current) => current.filter((entry) => entry.id !== item.id));
-      showToast(tr("Saved filter removed", "已删除保存的筛选"));
+      showToast(tr("Filter deleted", "已删除筛选"));
     },
     [showToast, tr]
   );
@@ -1444,7 +1444,7 @@ export default function App() {
     if (preserveDraft && editingId) setEditConflictId(editingId);
     showToast(
       preserveDraft
-        ? tr("A newer version arrived. Your draft is safe; review it before saving again.", "远端已有新版本，草稿已保留；请确认后再次保存")
+        ? tr("A newer version arrived. Your draft is safe — review it before saving again.", "远端已有新版本，草稿已保留，请确认后再次保存")
         : tr("This memo changed elsewhere. The latest version is now shown.", "这条笔记已在别处更新，已显示最新版本"),
       "error"
     );
@@ -1490,7 +1490,7 @@ export default function App() {
       showToast(nextMemo.pinnedAt ? tr("Pinned", "已置顶") : tr("Unpinned", "已取消置顶"));
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
-      showToast(errorMessage(cause, "Couldn’t update the memo", "更新失败"), "error");
+      showToast(errorMessage(cause, "Couldn’t update the memo.", "更新笔记失败"), "error");
     }
   }
 
@@ -1556,7 +1556,7 @@ export default function App() {
       queue.flips.length = 0;
       settleTaskFlips(memoId, null);
       if (!reconcileVersionConflict(cause)) {
-        showToast(errorMessage(cause, "Couldn’t update the task", "任务状态更新失败"), "error");
+        showToast(errorMessage(cause, "Couldn’t update the task.", "任务状态更新失败"), "error");
       }
     } finally {
       queue.running = false;
@@ -1586,16 +1586,16 @@ export default function App() {
     void runSync();
     notifyPeers();
     if (liveView === "memos" && leavesTaskFilter) {
-      showToast(tr("All tasks done — hidden by the “With open tasks” filter", "任务已全部完成，已移出「含未完成任务」筛选"));
+      showToast(tr("All tasks done — this memo left the “With open tasks” filter", "任务已全部完成，已移出「含未完成任务」筛选"));
     }
   }
 
   async function handleCopy(memo: Memo) {
     try {
       await navigator.clipboard.writeText(memo.content);
-      showToast(tr("Content copied", "已复制内容"));
+      showToast(tr("Copied to clipboard", "已复制到剪贴板"));
     } catch {
-      showToast(tr("Couldn’t copy the content", "复制失败"), "error");
+      showToast(tr("Couldn’t copy to clipboard.", "复制到剪贴板失败"), "error");
     }
   }
 
@@ -1622,7 +1622,7 @@ export default function App() {
       showToast(tr("Moved to Trash", "已移入回收站"));
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
-      showToast(errorMessage(cause, "Couldn’t delete the memo", "删除失败"), "error");
+      showToast(errorMessage(cause, "Couldn’t delete the memo.", "删除笔记失败"), "error");
     }
   }
 
@@ -1634,7 +1634,7 @@ export default function App() {
       showToast(tr("Restored", "已恢复"));
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
-      showToast(errorMessage(cause, "Couldn’t restore the memo", "恢复失败"), "error");
+      showToast(errorMessage(cause, "Couldn’t restore the memo.", "恢复笔记失败"), "error");
     }
   }
 
@@ -1646,7 +1646,7 @@ export default function App() {
       showToast(tr("Permanently deleted", "已彻底删除"));
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
-      showToast(errorMessage(cause, "Couldn’t delete the memo", "删除失败"), "error");
+      showToast(errorMessage(cause, "Couldn’t delete the memo.", "删除笔记失败"), "error");
     }
   }
 
@@ -1673,7 +1673,7 @@ export default function App() {
       showToast(tr("Trash emptied", "回收站已清空"));
     } catch (cause) {
       setEmptyTrashArm(false);
-      showToast(errorMessage(cause, "Couldn’t empty Trash", "清空失败"), "error");
+      showToast(errorMessage(cause, "Couldn’t empty Trash.", "清空回收站失败"), "error");
     } finally {
       emptyTrashBusyRef.current = false;
     }
@@ -1727,9 +1727,9 @@ export default function App() {
         notifyPeers();
       }
       if (failedIds.length > 0) {
-        showToast(tr(`Couldn’t delete ${count(failedIds.length, "memo")}`, `有 ${count(failedIds.length, "memo")} 删除失败`), "error");
+        showToast(tr(`Couldn’t delete ${count(failedIds.length, "memo")}.`, `有 ${count(failedIds.length, "memo")}删除失败`), "error");
       } else {
-        showToast(tr(`Moved ${count(changed.length, "memo")} to Trash`, `已将 ${count(changed.length, "memo")} 移入回收站`));
+        showToast(tr(`Moved ${count(changed.length, "memo")} to Trash`, `已将 ${count(changed.length, "memo")}移入回收站`));
       }
     } finally {
       setBatchBusy(false);
@@ -1770,7 +1770,7 @@ export default function App() {
         if (result.status === "fulfilled") {
           failedCount += 1;
           retryIds.push(target.id);
-          firstFailure ??= tr("The server did not return the updated memo.", "服务器未返回更新后的笔记。");
+          firstFailure ??= tr("The server did not return the updated memo.", "服务器未返回更新后的笔记");
           return;
         }
         if (result.reason instanceof AuthRequiredError) {
@@ -1794,7 +1794,7 @@ export default function App() {
         }
         failedCount += 1;
         retryIds.push(target.id);
-        firstFailure ??= errorMessage(result.reason, "Couldn’t update a selected memo.", "无法更新其中一条所选笔记。");
+        firstFailure ??= errorMessage(result.reason, "Couldn’t update a selected memo.", "无法更新其中一条所选笔记");
       });
       if (authLost) {
         dropToLogin();
@@ -1815,7 +1815,7 @@ export default function App() {
       };
       return true;
     } catch (cause) {
-      showToast(errorMessage(cause, "Couldn’t add the tag", "添加标签失败"), "error");
+      showToast(errorMessage(cause, "Couldn’t add the tag.", "添加标签失败"), "error");
       return false;
     }
   }
@@ -1853,18 +1853,19 @@ export default function App() {
     }
     if (result.failedCount > 0) {
       const successful = result.targetCount - result.failedCount;
-      const detail = result.firstFailure ? ` · ${result.firstFailure}` : "";
+      const detail = result.firstFailure ? ` ${result.firstFailure}` : "";
+      const detailZh = result.firstFailure ? `，${result.firstFailure}` : "";
       showToast(
         tr(
-          `#${result.tag} is now on ${count(successful, "memo")}; ${count(result.failedCount, "memo")} failed${detail}`,
-          `#${result.tag} 已存在于 ${count(successful, "memo")}；${count(result.failedCount, "memo")} 失败${detail}`
+          `Added #${result.tag} to ${successful} of ${count(result.targetCount, "memo")}.${detail}`,
+          `已为 ${result.targetCount} 条笔记中的 ${successful} 条添加 #${result.tag}${detailZh}`
         ),
         "error"
       );
     } else if (result.alreadyTagged === result.targetCount) {
       showToast(tr(`All selected memos already have #${result.tag}`, `所选笔记都已有 #${result.tag}`));
     } else {
-      showToast(tr(`Added #${result.tag} to ${count(result.changed.length, "memo")}`, `已为 ${count(result.changed.length, "memo")} 添加 #${result.tag}`));
+      showToast(tr(`Added #${result.tag} to ${count(result.changed.length, "memo")}`, `已为 ${count(result.changed.length, "memo")}添加 #${result.tag}`));
     }
   }
 
@@ -1894,7 +1895,7 @@ export default function App() {
       if (!current || current.deletedAt) return;
       editingBaseSeqRef.current = current.seq;
       setEditConflictId(null);
-      showToast(tr("Your draft is still here. Saving now will use the latest version as its base.", "草稿仍在；再次保存将以最新版本为基线"));
+      showToast(tr("Your draft is still here. Saving now will use the latest version as its base.", "草稿仍在，再次保存将以最新版本为基线"));
     },
     pickTag,
     toggleSelect
@@ -1922,7 +1923,7 @@ export default function App() {
       if (!current || current.deletedAt) return;
       editingBaseSeqRef.current = current.seq;
       setEditConflictId(null);
-      showToast(tr("Your draft is still here. Saving now will use the latest version as its base.", "草稿仍在；再次保存将以最新版本为基线"));
+      showToast(tr("Your draft is still here. Saving now will use the latest version as its base.", "草稿仍在，再次保存将以最新版本为基线"));
     },
     pickTag,
     toggleSelect
@@ -2023,9 +2024,9 @@ export default function App() {
       applySyncChanges([], [], [result.tag]);
       void runSync();
       notifyPeers();
-      showToast(pinned ? tr("Tag pinned", "标签已置顶") : tr("Tag unpinned", "已取消置顶"));
+      showToast(pinned ? tr("Tag pinned", "标签已置顶") : tr("Tag unpinned", "标签已取消置顶"));
     } catch (cause) {
-      showToast(errorMessage(cause, "Couldn’t complete the action", "操作失败"), "error");
+      showToast(errorMessage(cause, "Couldn’t complete the action.", "操作失败"), "error");
     }
   }
 
@@ -2051,11 +2052,11 @@ export default function App() {
       );
       void runSync();
       notifyPeers();
-      showToast(tr(`Renamed to #${to}; updated ${count(result.updated, "memo")}`, `已重命名为 #${to}，更新了 ${count(result.updated, "memo")}`));
+      showToast(tr(`Tag renamed to #${to} in ${count(result.updated, "memo")}`, `标签已重命名为 #${to}，更新了 ${count(result.updated, "memo")}`));
     } catch (cause) {
       void runSync();
       notifyPeers();
-      showToast(errorMessage(cause, "Couldn’t rename the tag", "重命名失败"), "error");
+      showToast(errorMessage(cause, "Couldn’t rename the tag.", "重命名标签失败"), "error");
     } finally {
       setDialogBusy(false);
     }
@@ -2080,11 +2081,11 @@ export default function App() {
       );
       void runSync();
       notifyPeers();
-      showToast(tr(`Tag removed; updated ${count(result.updated, "memo")}`, `已移除标签，更新了 ${count(result.updated, "memo")}`));
+      showToast(tr(`Tag removed from ${count(result.updated, "memo")}`, `已从 ${count(result.updated, "memo")}中移除标签`));
     } catch (cause) {
       void runSync();
       notifyPeers();
-      showToast(errorMessage(cause, "Couldn’t remove the tag", "移除失败"), "error");
+      showToast(errorMessage(cause, "Couldn’t remove the tag.", "移除标签失败"), "error");
     }
   }
 
@@ -2102,7 +2103,7 @@ export default function App() {
       window.setTimeout(() => URL.revokeObjectURL(url), 4000);
       showToast(tr("Backup exported", "备份已导出"));
     } catch (cause) {
-      showToast(errorMessage(cause, "Couldn’t export your data", "导出失败"), "error");
+      showToast(errorMessage(cause, "Couldn’t export the backup.", "导出备份失败"), "error");
     }
   }
 
@@ -2110,13 +2111,13 @@ export default function App() {
     try {
       const payload = JSON.parse(await file.text()) as BackupPayload;
       if (!payload || payload.format !== "memo-backup" || payload.version !== 1 || !Array.isArray(payload.memos)) {
-        showToast(tr("This isn’t a memo backup file", "这不是有效的备份文件"), "error");
+        showToast(tr("This isn’t a memo backup file.", "这不是有效的备份文件"), "error");
         return;
       }
       const imageCount = payload.memos.reduce((sum, memo) => sum + (Array.isArray(memo.images) ? memo.images.length : 0), 0);
       setImportTarget({ payload, memoCount: payload.memos.length, imageCount });
     } catch {
-      showToast(tr("Couldn’t read the backup file", "无法读取备份文件"), "error");
+      showToast(tr("Couldn’t read the backup file.", "无法读取备份文件"), "error");
     }
   }
 
@@ -2133,31 +2134,30 @@ export default function App() {
       await runSync();
       notifyPeers();
       if (result.imported > 0) {
-        const imageLabel = `${result.images} image${result.images === 1 ? "" : "s"}`;
-        const skippedLabel = result.skipped > 0 ? `; skipped ${count(result.skipped, "memo")} that already existed` : "";
-        const skippedZh = result.skipped > 0 ? `；跳过 ${result.skipped} 条已存在的笔记` : "";
+        const skippedLabel = result.skipped > 0 ? ` — skipped ${result.skipped} that already existed` : "";
+        const skippedZh = result.skipped > 0 ? `，跳过 ${result.skipped} 条已存在的笔记` : "";
         showToast(
           tr(
-            `Imported ${count(result.imported, "memo")} with ${imageLabel}${skippedLabel}`,
-            `已导入 ${count(result.imported, "memo")}，包含 ${result.images} 张图片${skippedZh}`
+            `Imported ${count(result.imported, "memo")} with ${count(result.images, "image")}${skippedLabel}`,
+            `已导入 ${count(result.imported, "memo")}和 ${count(result.images, "image")}${skippedZh}`
           )
         );
       } else if (result.skipped > 0) {
         showToast(
           tr(
-            `Nothing new — skipped ${count(result.skipped, "memo")} that already existed`,
-            `没有新内容，已跳过 ${result.skipped} 条已存在的笔记`
+            `Nothing new to import — ${count(result.skipped, "memo")} already existed`,
+            `没有可导入的新内容，${result.skipped} 条笔记已存在`
           )
         );
       } else {
-        showToast(tr("Import completed; there were no new memos", "导入完成，没有新的笔记"));
+        showToast(tr("Import complete — no new memos", "导入完成，没有新的笔记"));
       }
     } catch (cause) {
       // Earlier chunks may already be committed; reconcile them and let a
       // retry safely skip their stable ids.
       void runSync();
       notifyPeers();
-      showToast(errorMessage(cause, "Couldn’t import the backup", "导入失败"), "error");
+      showToast(errorMessage(cause, "Couldn’t import the backup.", "导入备份失败"), "error");
     } finally {
       setDialogBusy(false);
     }

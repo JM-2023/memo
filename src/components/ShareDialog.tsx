@@ -303,7 +303,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
       beginClose();
     } catch {
       setBusy(null);
-      onToast(tr("Couldn’t create the image", "图片生成失败"), "error");
+      onToast(tr("Couldn’t create the image.", "生成图片失败"), "error");
     }
   }
 
@@ -317,7 +317,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
       beginClose();
     } catch {
       setBusy(null);
-      onToast(tr("Couldn’t copy the image", "复制图片失败"), "error");
+      onToast(tr("Couldn’t copy the image.", "复制图片失败"), "error");
     }
   }
 
