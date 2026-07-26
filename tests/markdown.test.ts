@@ -150,7 +150,10 @@ describe("parseInline", () => {
   it("protects code spans from every other rule", () => {
     expect(print(parseInline("run `npm **install**` now"))).toBe("run code(npm **install**) now");
     expect(print(parseInline("`#not-a-tag`"))).toBe("code(#not-a-tag)");
+    expect(print(parseInline("``#not-a-tag`` #tag"))).toBe("`code(#not-a-tag)` tag(tag)");
+    expect(print(parseInline("```#not-a-tag``` #tag"))).toBe("``code(#not-a-tag)`` tag(tag)");
     expect(print(parseInline("un`closed"))).toBe("un`closed");
+    expect(print(parseInline("`#unclosed"))).toBe("`tag(unclosed)");
   });
 
   it("parses tags, bare urls and labelled links", () => {

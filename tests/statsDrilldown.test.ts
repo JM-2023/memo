@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { memoMatchesStatsDrilldown, statsDrilldownLabel, type StatsDrilldown } from "../src/lib/statsDrilldown";
+import { feedQueryForStatsDrilldown, memoMatchesStatsDrilldown, statsDrilldownLabel, type StatsDrilldown } from "../src/lib/statsDrilldown";
 import type { Memo } from "../src/lib/types";
 
 function memoAt(id: string, localCreatedAt: Date, content = ""): Memo {
@@ -59,6 +59,18 @@ describe("stats drilldown matching", () => {
         { kind: "year", year: 2026 }
       )
     ).toBe(false);
+  });
+});
+
+describe("stats drilldown search handoff", () => {
+  it("uses the deferred query in the ordinary feed", () => {
+    expect(feedQueryForStatsDrilldown(null, "new input", "deferred input")).toBe("deferred input");
+  });
+
+  it("drops a stale deferred query on entry and uses new drilldown input immediately", () => {
+    const drilldown: StatsDrilldown = { kind: "year", year: 2026 };
+    expect(feedQueryForStatsDrilldown(drilldown, "", "old feed query")).toBe("");
+    expect(feedQueryForStatsDrilldown(drilldown, "new drilldown query", "")).toBe("new drilldown query");
   });
 });
 

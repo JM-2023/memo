@@ -1,6 +1,5 @@
 /*
   X-Robots-Tag: noindex, nofollow, noarchive, noimageindex
 
-# Keep Pages' default ETag revalidation for /assets/*. A new deployment can
-# briefly return the SPA fallback before an asset reaches every edge, and an
-# immutable override would pin that HTML response to the asset URL.
+# Keep Pages' status-specific cache headers. /assets/404.html makes asset
+# misses real 404 responses while preserving the root SPA fallback.

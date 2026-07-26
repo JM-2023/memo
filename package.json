@@ -1,6 +1,6 @@
 {
   "name": "memo",
-  "version": "2.5.28",
+  "version": "2.5.29",
   "private": true,
   "type": "module",
   "engines": {
@@ -11,10 +11,11 @@
     "test": "npm run test:unit && npm run test:workers",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:workers": "vitest run --config vitest.workers.config.ts",
-    "build": "tsc --noEmit && vite build",
-    "pages:dev": "vite build && wrangler pages dev dist --compatibility-date=2026-06-22",
+    "build": "tsc --noEmit && vite build && npm run verify:pages-output",
+    "pages:dev": "npm run build && wrangler pages dev dist --compatibility-date=2026-06-22",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "verify:pages-output": "node scripts/verify-pages-output.mjs",
     "hash-password": "node scripts/hash-password.mjs",
     "deploy": "npm run build && wrangler pages deploy dist --project-name your-pages-project"
   },

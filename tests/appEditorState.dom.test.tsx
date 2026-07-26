@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { Editor } from "../src/components/Editor";
 import { TipProvider } from "../src/components/Tip";
+import { ApiError } from "../src/lib/api";
 import { formatTime } from "../src/lib/dates";
 import { LanguageProvider } from "../src/lib/i18n";
 import type { Memo, MemoImage, NewImagePayload } from "../src/lib/types";
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   getAuthStatus: vi.fn(),
   bootstrap: vi.fn(),
   syncSince: vi.fn(),
+  updateMemo: vi.fn(),
   compressImage: vi.fn(),
   syncApi: {
     setCursor: vi.fn(),
@@ -31,7 +33,8 @@ vi.mock("../src/lib/api", async () => {
     ...actual,
     getAuthStatus: mocks.getAuthStatus,
     bootstrap: mocks.bootstrap,
-    syncSince: mocks.syncSince
+    syncSince: mocks.syncSince,
+    updateMemo: mocks.updateMemo
   };
 });
 
@@ -109,6 +112,7 @@ function deferred<T>() {
 beforeEach(() => {
   localStorage.clear();
   intersectionObservers = [];
+  mocks.updateMemo.mockReset();
   mocks.getAuthStatus.mockResolvedValue({ needsSetup: false });
   mocks.bootstrap.mockResolvedValue({
     memos: Array.from({ length: 82 }, (_, index) => memo(index)),
@@ -243,6 +247,127 @@ describe("App editor lifecycle", () => {
     expect((draft as HTMLTextAreaElement).value).toBe("draft survives feed updates");
     expect(within(secondCard).queryByRole("combobox")).toBeNull();
     expect(await screen.findByText("Save or cancel the open edit before editing another memo.")).not.toBeNull();
+  });
+});
+
+describe("App task flip queue", () => {
+  it("bases a queued second batch on the first response before React commits a render", async () => {
+    const user = userEvent.setup();
+    const initial = { ...memo(0), content: "- [ ] alpha\n- [ ] beta", seq: 1 };
+    const firstResult = { ...initial, content: "- [x] alpha\n- [ ] beta", seq: 2, updatedAt: "2026-01-01T00:00:10.000Z" };
+    const secondResult = { ...firstResult, content: "- [x] alpha\n- [x] beta", seq: 3, updatedAt: "2026-01-01T00:00:11.000Z" };
+    const firstRequest = deferred<{ memo: Memo }>();
+    mocks.bootstrap.mockResolvedValue({
+      memos: [initial],
+      tags: [],
+      cursor: 1,
+      syncEpoch: "epoch-a",
+      serverTime: initial.createdAt,
+      hasMore: false,
+      nextAfter: null
+    });
+    mocks.updateMemo.mockImplementationOnce(() => firstRequest.promise).mockResolvedValueOnce({ memo: secondResult });
+
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    await user.click(await screen.findByRole("checkbox", { name: "alpha" }));
+    await waitFor(() =>
+      expect(mocks.updateMemo).toHaveBeenNthCalledWith(1, initial.id, {
+        expectedSeq: 1,
+        content: "- [x] alpha\n- [ ] beta"
+      })
+    );
+    await user.click(screen.getByRole("checkbox", { name: "beta" }));
+    expect(mocks.updateMemo).toHaveBeenCalledTimes(1);
+
+    await act(async () => firstRequest.resolve({ memo: firstResult }));
+
+    await waitFor(() =>
+      expect(mocks.updateMemo).toHaveBeenNthCalledWith(2, initial.id, {
+        expectedSeq: 2,
+        content: "- [x] alpha\n- [x] beta"
+      })
+    );
+  });
+
+  it("stops safely on a version conflict instead of replaying a stale line index", async () => {
+    const user = userEvent.setup();
+    const initial = { ...memo(0), content: "- [ ] alpha\nbase", seq: 1 };
+    const current = { ...initial, content: "- [ ] alpha\nremote edit", seq: 2, updatedAt: "2026-01-01T00:00:10.000Z" };
+    mocks.bootstrap.mockResolvedValue({
+      memos: [initial],
+      tags: [],
+      cursor: 1,
+      syncEpoch: "epoch-a",
+      serverTime: initial.createdAt,
+      hasMore: false,
+      nextAfter: null
+    });
+    mocks.updateMemo.mockRejectedValueOnce(new ApiError("VERSION_CONFLICT", 409, "changed", undefined, current));
+
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    await user.click(await screen.findByRole("checkbox", { name: "alpha" }));
+
+    await screen.findByText("remote edit");
+    expect(mocks.updateMemo).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("checkbox", { name: "alpha" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText("This memo changed elsewhere. The latest version is now shown.")).not.toBeNull();
+  });
+});
+
+describe("App stats drilldown search", () => {
+  it("drops the pre-drilldown query, resets an expanded feed for a new query, and filters by new input", async () => {
+    const user = userEvent.setup();
+    const year = new Date().getFullYear();
+    const many = Array.from({ length: 82 }, (_, index) => ({
+      ...memo(index),
+      content: index === 81 ? "shared target-only" : `shared memo-${index}`,
+      createdAt: new Date(year, 0, 1, 0, 0, index).toISOString(),
+      updatedAt: new Date(year, 0, 1, 0, 0, index).toISOString()
+    }));
+    mocks.bootstrap.mockResolvedValue({
+      memos: many,
+      tags: [],
+      cursor: 82,
+      syncEpoch: "epoch-a",
+      serverTime: many.at(-1)!.createdAt,
+      hasMore: false,
+      nextAfter: null
+    });
+
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    const search = await screen.findByPlaceholderText("Search memos");
+    await user.type(search, "target-only");
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(1));
+
+    const stats = screen.getByRole("region", { name: "Statistics" });
+    await user.click(within(stats).getAllByRole("button")[0]);
+    await user.click(await screen.findByRole("button", { name: `Show 82 memos from ${year}` }));
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(80));
+
+    act(() => intersectionObservers.at(-1)?.trigger());
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(82));
+
+    await user.type(screen.getByPlaceholderText("Search memos"), "shared");
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(80));
+
+    await user.type(screen.getByPlaceholderText("Search memos"), " target-only");
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(1));
+    expect(screen.getByText("shared target-only")).not.toBeNull();
   });
 });
 

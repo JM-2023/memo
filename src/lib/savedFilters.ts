@@ -5,6 +5,7 @@
 // them together with every other MEMO-owned local record.
 
 import type { FeedFilters } from "./search";
+import { tagMatches } from "./tags";
 
 export interface SavedFilter {
   id: string;
@@ -75,4 +76,18 @@ export function persistSavedFilters(items: readonly SavedFilter[]): void {
   } catch {
     // Storage full or blocked — presets are a convenience, never critical.
   }
+}
+
+/** Keep saved tag lenses attached to the same subtree after a rename. */
+export function renameSavedFilterTags(items: readonly SavedFilter[], from: string, to: string): SavedFilter[] {
+  return items.map((item) => (item.tag && tagMatches(item.tag, from) ? { ...item, tag: to + item.tag.slice(from.length) } : item));
+}
+
+/**
+ * A removed tag cannot be represented as a useful saved lens. Drop presets
+ * aimed at that subtree so applying one later cannot silently widen to all
+ * memos when App clears its now-missing active tag.
+ */
+export function removeSavedFiltersForTag(items: readonly SavedFilter[], path: string): SavedFilter[] {
+  return items.filter((item) => !item.tag || !tagMatches(item.tag, path));
 }

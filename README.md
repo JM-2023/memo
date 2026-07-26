@@ -100,6 +100,12 @@ The Pages project must exist before Pages secrets can be added. For a new Cloudf
 
 Subsequent releases only need the remote migration command when new migration files exist, followed by `npm run deploy`.
 
+### Pages static asset routing
+
+The build intentionally contains `assets/404.html` and no root `404.html`. Cloudflare Pages therefore returns a real `404` for a missing `/assets/*` file while retaining its normal SPA fallback for application routes. `/assets/*` must remain in the `exclude` list in `public/_routes.json` so real hashed assets continue to be served directly by Pages rather than invoking Functions. Wrangler 4.110.0 currently serves this nested `404` with `Cache-Control: no-store`, but the repository deliberately leaves `Cache-Control` unset so Pages remains responsible for its status-specific cache policy.
+
+Keep Pages' default cache headers on both the `pages.dev` hostname and the custom domain. In the custom domain's zone, remove Cache Rules that force a browser time-to-live for this Pages project, or configure them to respect existing origin headers. A zone-level Cache Rule can override the repository's `_headers` behavior, so repository checks cannot make an externally forced cache policy safe.
+
 ## Verification
 
 Run the deterministic unit tests, the real Workers runtime + D1 migration tests, and the production build:

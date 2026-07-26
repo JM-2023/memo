@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { setTaskMark } from "../src/lib/markdownEdit";
-import { parseSavedFilters } from "../src/lib/savedFilters";
+import { parseSavedFilters, removeSavedFiltersForTag, renameSavedFilterTags, type SavedFilter } from "../src/lib/savedFilters";
 import {
   EMPTY_FILTERS,
   facetsOf,
@@ -201,5 +201,39 @@ describe("saved filter storage", () => {
   it("caps the list at the storage limit", () => {
     const many = Array.from({ length: 30 }, (_, index) => ({ ...valid, id: `f${index}`, name: `n${index}` }));
     expect(parseSavedFilters(JSON.stringify(many))).toHaveLength(20);
+  });
+
+  it("migrates exact and descendant tag lenses when a subtree is renamed", () => {
+    const saved = [
+      { ...valid, id: "exact", tag: "work" },
+      { ...valid, id: "child", tag: "work/client" },
+      { ...valid, id: "sibling", tag: "workshop" },
+      { ...valid, id: "untagged", tag: null }
+    ] satisfies SavedFilter[];
+
+    const renamed = renameSavedFilterTags(saved, "work", "archive");
+
+    expect(renamed.map(({ id, tag }) => ({ id, tag }))).toEqual([
+      { id: "exact", tag: "archive" },
+      { id: "child", tag: "archive/client" },
+      { id: "sibling", tag: "workshop" },
+      { id: "untagged", tag: null }
+    ]);
+    expect(renamed[2]).toBe(saved[2]);
+    expect(renamed[3]).toBe(saved[3]);
+  });
+
+  it("drops saved lenses aimed at a removed tag subtree instead of widening them", () => {
+    const saved = [
+      { ...valid, id: "exact", tag: "work" },
+      { ...valid, id: "child", tag: "work/client" },
+      { ...valid, id: "sibling", tag: "workshop" },
+      { ...valid, id: "untagged", tag: null }
+    ] satisfies SavedFilter[];
+
+    expect(removeSavedFiltersForTag(saved, "work").map(({ id, tag }) => ({ id, tag }))).toEqual([
+      { id: "sibling", tag: "workshop" },
+      { id: "untagged", tag: null }
+    ]);
   });
 });

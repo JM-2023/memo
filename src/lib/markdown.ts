@@ -10,7 +10,7 @@
 // WHETHER it renders — the collapse decision stays with tokenizeLine /
 // lineRenders.
 
-import { isImageUrl, splitTrailingPunct } from "./content";
+import { inlineCodeSpanEnd, isImageUrl, splitTrailingPunct } from "./content";
 
 export type Block =
   | { kind: "p"; text: string }
@@ -192,11 +192,11 @@ export function parseInline(text: string, depth = 0, plain = false): Inline[] {
 
     // Code span — protects everything inside, including markers and #tags.
     if (ch === "`") {
-      const close = text.indexOf("`", i + 1);
-      if (close > i + 1) {
+      const end = inlineCodeSpanEnd(text, i);
+      if (end !== -1) {
         flush();
-        out.push({ t: "code", text: text.slice(i + 1, close) });
-        i = close + 1;
+        out.push({ t: "code", text: text.slice(i + 1, end - 1) });
+        i = end;
         continue;
       }
       buffer += ch;

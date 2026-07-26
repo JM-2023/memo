@@ -11,6 +11,18 @@ const IMAGE_EXT_PATTERN = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
 // Punctuation that reads as sentence-trailing rather than part of the URL.
 const TRAILING_PUNCT_PATTERN = /[)）\]】》»"'.,;:!?、。，；：！？…]+$/;
 
+/**
+ * Return the exclusive end of the single-backtick code span opened at
+ * `opener`, or -1 when it stays literal. Callers pass one visual line: memo
+ * Markdown is deliberately line-stateless, so backticks never pair across a
+ * newline. A non-empty body is required, matching parseInline exactly.
+ */
+export function inlineCodeSpanEnd(line: string, opener: number): number {
+  if (line[opener] !== "`") return -1;
+  const closer = line.indexOf("`", opener + 1);
+  return closer > opener + 1 ? closer + 1 : -1;
+}
+
 export function splitTrailingPunct(raw: string): { url: string; trailing: string } {
   const match = raw.match(TRAILING_PUNCT_PATTERN);
   if (!match) return { url: raw, trailing: "" };

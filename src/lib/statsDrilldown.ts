@@ -15,6 +15,16 @@ export type StatsDrilldown =
   | { kind: "hour"; year: number; hour: number }
   | { kind: "tag"; year: number; tag: string };
 
+/**
+ * Stats entry clears the search synchronously, while useDeferredValue may
+ * still expose the previous feed query for one render. A live drilldown uses
+ * the immediate query instead: stale pre-drilldown text disappears at once,
+ * and any search typed inside the smaller stats subset participates at once.
+ */
+export function feedQueryForStatsDrilldown(drilldown: StatsDrilldown | null, immediateQuery: string, deferredQuery: string): string {
+  return drilldown ? immediateQuery : deferredQuery;
+}
+
 /** Match the local-time buckets used by StatsModal's selected-year charts. */
 export function memoMatchesStatsDrilldown(memo: Memo, drilldown: StatsDrilldown): boolean {
   const created = new Date(memo.createdAt);

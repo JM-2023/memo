@@ -1,10 +1,55 @@
-import { MD_IMAGE_PATTERN, stripLinks, URL_PATTERN } from "./content";
+import { inlineCodeSpanEnd, MD_IMAGE_PATTERN, URL_PATTERN } from "./content";
 import type { Memo } from "./types";
 
 // Tags can be flat (#标签) or hierarchical (#领域/子类). A tag runs until
 // whitespace/#/punctuation; interior "/" nests levels. URLs are blanked
 // first so a fragment like https://x.com/a#section never becomes a tag.
 const TAG_PATTERN = /#([\p{L}\p{N}_\-/·]+)/gu;
+
+type TextRange = [start: number, end: number];
+
+/**
+ * Spans whose `#...` text is literal rather than a memo tag. Code ranges are
+ * collected one line at a time because the renderer's Markdown grammar is
+ * line-stateless; an unmatched backtick therefore never shields another line.
+ */
+function protectedTagRanges(content: string): TextRange[] {
+  const ranges: TextRange[] = [];
+  for (const match of content.matchAll(MD_IMAGE_PATTERN)) {
+    ranges.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
+  }
+  for (const match of content.matchAll(URL_PATTERN)) {
+    ranges.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
+  }
+
+  let lineStart = 0;
+  while (lineStart <= content.length) {
+    const newline = content.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? content.length : newline;
+    const line = content.slice(lineStart, lineEnd);
+    let cursor = 0;
+    while (cursor < line.length) {
+      const opener = line.indexOf("`", cursor);
+      if (opener === -1) break;
+      const end = inlineCodeSpanEnd(line, opener);
+      if (end === -1) {
+        cursor = opener + 1;
+        continue;
+      }
+      ranges.push([lineStart + opener, lineStart + end]);
+      cursor = end;
+    }
+    if (newline === -1) break;
+    lineStart = newline + 1;
+  }
+
+  ranges.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  return ranges;
+}
+
+function rangeContains(ranges: TextRange[], index: number): boolean {
+  return ranges.some(([start, end]) => index >= start && index < end);
+}
 
 /** A well-formed tag path: charset segments joined by single slashes. */
 export function isValidTagPath(path: string): boolean {
@@ -13,7 +58,9 @@ export function isValidTagPath(path: string): boolean {
 
 export function extractTags(content: string): string[] {
   const tags = new Set<string>();
-  for (const match of stripLinks(content).matchAll(TAG_PATTERN)) {
+  const protectedRanges = protectedTagRanges(content);
+  for (const match of content.matchAll(TAG_PATTERN)) {
+    if (rangeContains(protectedRanges, match.index ?? 0)) continue;
     // Trim separators that only make sense mid-path.
     const tag = match[1].replace(/^[/·]+|[/·]+$/g, "");
     if (tag) tags.add(tag);
@@ -60,25 +107,19 @@ export function inheritTagContext(content: string, path: string): string {
  * Rewrite every `#from` (and descendant `#from/…`) tag token in `content` to
  * `to`; `to === null` removes the token instead (eating one adjacent space so
  * "a #tag b" tidies to "a b"). URL spans are protected — a fragment like
- * https://x.com/a#section is never touched. Shared by the server-side
- * rename/remove endpoints, so client and server agree on tag boundaries.
+ * https://x.com/a#section is never touched. Inline code spans are protected
+ * with the same rules as the renderer. Shared by the server-side rename/remove
+ * endpoints, so client and server agree on tag boundaries.
  */
 export function renameTagInContent(content: string, from: string, to: string | null): string {
-  const shielded: [number, number][] = [];
-  for (const match of content.matchAll(MD_IMAGE_PATTERN)) {
-    shielded.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
-  }
-  for (const match of content.matchAll(URL_PATTERN)) {
-    shielded.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
-  }
-  const isShielded = (index: number) => shielded.some(([start, end]) => index >= start && index < end);
+  const protectedRanges = protectedTagRanges(content);
 
   let result = "";
   let last = 0;
   for (const match of content.matchAll(TAG_PATTERN)) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
-    if (isShielded(start)) continue;
+    if (rangeContains(protectedRanges, start)) continue;
     const inner = match[1];
     // Mirror extractTags' trimming: separators only make sense mid-path.
     const lead = inner.match(/^[/·]+/)?.[0] ?? "";

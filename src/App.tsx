@@ -67,7 +67,6 @@ import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow }
 import { useI18n } from "./lib/i18n";
 import { clearLocalDeviceData } from "./lib/logoutCleanup";
 import { splitTaskLine } from "./lib/markdown";
-import { setTaskMark } from "./lib/markdownEdit";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
 import {
   buildReviewDay,
@@ -81,7 +80,14 @@ import {
   type ReviewDay,
   type ReviewSettings
 } from "./lib/review";
-import { SAVED_FILTERS_LIMIT, loadSavedFilters, persistSavedFilters, type SavedFilter } from "./lib/savedFilters";
+import {
+  SAVED_FILTERS_LIMIT,
+  loadSavedFilters,
+  persistSavedFilters,
+  removeSavedFiltersForTag,
+  renameSavedFilterTags,
+  type SavedFilter
+} from "./lib/savedFilters";
 import {
   EMPTY_FILTERS,
   facetsOf,
@@ -96,9 +102,10 @@ import {
 } from "./lib/search";
 import { selectionWithinVisibleIds } from "./lib/selection";
 import { countsByDay, dayKeyOf } from "./lib/stats";
-import { memoMatchesStatsDrilldown, statsDrilldownLabel, type StatsDrilldown } from "./lib/statsDrilldown";
+import { feedQueryForStatsDrilldown, memoMatchesStatsDrilldown, statsDrilldownLabel, type StatsDrilldown } from "./lib/statsDrilldown";
 import { applySyncDelta, createSyncState, memosOf, purgedOf, tagsOfState, type PurgedMemo } from "./lib/syncState";
 import { appendTagToContent, buildTagTree, inheritTagContext, isValidTagPath, tagMatches, tagRenamePathsOverlap, tagsOf } from "./lib/tags";
+import { applyTaskFlips, freshestTaskMemo, type TaskFlipQueue } from "./lib/taskFlips";
 import { applyTheme, loadTheme, nextTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, NewImagePayload, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
@@ -368,7 +375,7 @@ export default function App() {
   // Per-memo serial queue: flips arriving while a request is in flight are
   // batched into the next one, computed against the then-latest seq/content —
   // rapid ticking never races itself into a version conflict.
-  const taskFlipQueueRef = useRef(new Map<string, { running: boolean; flips: { lineKey: number; checked: boolean }[] }>());
+  const taskFlipQueueRef = useRef(new Map<string, TaskFlipQueue>());
 
   const stampTaskFlip = useCallback((memoId: string, lineKey: number, checked: boolean) => {
     setPendingTaskFlips((current) => {
@@ -826,8 +833,9 @@ export default function App() {
   // Filtering follows the keystroke at deferred priority: the input never
   // waits for a big feed to re-render.
   const deferredQuery = useDeferredValue(trimmedQuery);
+  const feedQuery = feedQueryForStatsDrilldown(statsDrilldown, trimmedQuery, deferredQuery);
   // Keywords AND together; "quoted" runs must match as whole phrases.
-  const parsedQuery = useMemo(() => parseSearchQuery(deferredQuery), [deferredQuery]);
+  const parsedQuery = useMemo(() => parseSearchQuery(feedQuery), [feedQuery]);
   const structuredFiltersOn = hasActiveFilters(filters);
   const filtersActive = activeTag !== null || activeDay !== null || statsDrilldown !== null || trimmedQuery.length > 0 || structuredFiltersOn;
 
@@ -850,11 +858,7 @@ export default function App() {
     if (hasActiveFilters(filters)) {
       list = filterPreservingId(list, editingId, (memo) => memoMatchesFilters(memo, filters));
     }
-    // A stats bucket is an exclusive lens. `query` is cleared in the same
-    // transition that installs it, but useDeferredValue can retain the old
-    // parsed query for one render; skipping it here prevents a false
-    // "few, then more" second feed commit after the modal has closed.
-    if (!statsDrilldown && !queryIsEmpty(parsedQuery)) {
+    if (!queryIsEmpty(parsedQuery)) {
       list = filterPreservingId(list, editingId, (memo) => memoMatchesQuery(memo, parsedQuery));
     }
     const compare = SORT_COMPARATORS[sortKey];
@@ -886,7 +890,7 @@ export default function App() {
   // matter how many memos exist.
   // Object identity is the generation token: revisiting an earlier query must
   // still start a fresh window rather than reviving that query's old cap.
-  const feedQueryKey = statsDrilldown ? "" : deferredQuery;
+  const feedQueryKey = feedQuery;
   const feedWindowKey = useMemo(() => ({}), [view, activeTag, activeDay, statsDrilldown, feedQueryKey, filters, sortKey]);
   const [renderWindow, setRenderWindow] = useState<FeedWindow<object>>({ key: {}, cap: FEED_PAGE });
   // Resolve a stale generation synchronously during render. An effect would
@@ -1504,31 +1508,37 @@ export default function App() {
     stampTaskFlip(memo.id, lineKey, checked);
     let queue = taskFlipQueueRef.current.get(memo.id);
     if (!queue) {
-      queue = { running: false, flips: [] };
+      queue = { running: false, flips: [], base: memo };
       taskFlipQueueRef.current.set(memo.id, queue);
+    } else {
+      queue.base = freshestTaskMemo(queue.base, memo);
     }
     queue.flips.push({ lineKey, checked });
     if (!queue.running) void drainTaskFlips(memo.id, queue);
   }
 
-  async function drainTaskFlips(memoId: string, queue: { running: boolean; flips: { lineKey: number; checked: boolean }[] }) {
+  async function drainTaskFlips(memoId: string, queue: TaskFlipQueue) {
     queue.running = true;
     try {
       while (queue.flips.length > 0) {
         const batch = queue.flips.splice(0);
-        const current = syncStateRef.current.memos.get(memoId);
-        if (!current || current.deletedAt) {
+        const synced = syncStateRef.current.memos.get(memoId);
+        if (!synced) {
           settleTaskFlips(memoId, null);
           return;
         }
-        let nextContent = current.content;
-        for (const flip of batch) {
-          // Stale flips (the line stopped being a task) drop silently; the
-          // settle below clears their pending marks.
-          nextContent = setTaskMark(nextContent, flip.lineKey, flip.checked) ?? nextContent;
+        const current = freshestTaskMemo(queue.base, synced);
+        queue.base = current;
+        if (current.deletedAt) {
+          settleTaskFlips(memoId, null);
+          return;
         }
+        // Stale flips (the line stopped being a task) drop silently; the
+        // settle below clears their pending marks.
+        const nextContent = applyTaskFlips(current.content, batch);
         if (nextContent === current.content) {
-          // Net-zero batch (e.g. tick + untick before the drain ran).
+          // Net-zero batch (e.g. tick + untick before the drain ran), or a
+          // concurrent edit already landed the requested state.
           settleTaskFlips(memoId, current.content);
           continue;
         }
@@ -1537,6 +1547,9 @@ export default function App() {
           settleTaskFlips(memoId, null);
           return;
         }
+        // Set this before touching React state: another queued batch can now
+        // continue from the response's seq/content in this microtask.
+        queue.base = freshestTaskMemo(queue.base, result.memo);
         commitTaskBatch(result.memo);
       }
     } catch (cause) {
@@ -1561,7 +1574,7 @@ export default function App() {
     const leavesTaskFilter = liveFilters.hasOpenTask && !facetsOf(nextMemo).hasOpenTask;
     const stillMatches =
       memoMatchesFilters(nextMemo, liveFilters) &&
-      (Boolean(liveStatsDrilldown) || memoMatchesQuery(nextMemo, liveQuery)) &&
+      memoMatchesQuery(nextMemo, liveQuery) &&
       (!liveStatsDrilldown || memoMatchesStatsDrilldown(nextMemo, liveStatsDrilldown));
     const animate = liveView === "memos" && (liveSortKey.startsWith("updated") || !stillMatches);
     const apply = () => {
@@ -2032,6 +2045,7 @@ export default function App() {
       if (activeTag && tagMatches(activeTag, from)) {
         setActiveTag(to + activeTag.slice(from.length));
       }
+      setSavedFilters((current) => renameSavedFilterTags(current, from, to));
       setStatsDrilldown((current) =>
         current?.kind === "tag" && tagMatches(current.tag, from) ? { ...current, tag: to + current.tag.slice(from.length) } : current
       );
@@ -2060,6 +2074,7 @@ export default function App() {
           if (activeTag && tagMatches(activeTag, path)) {
             setActiveTag(null);
           }
+          setSavedFilters((current) => removeSavedFiltersForTag(current, path));
           setStatsDrilldown((current) => (current?.kind === "tag" && tagMatches(current.tag, path) ? null : current));
         })
       );
