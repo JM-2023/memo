@@ -47,7 +47,19 @@ On the first local visit, the app asks you to create a passcode of 4–18 digits
 
 ## First deployment to Cloudflare
 
-The Pages project must exist before Pages secrets can be added. For a new Cloudflare deployment, use this order.
+The Pages project must exist before Pages secrets can be added. Deployment-specific
+identifiers stay in the local `wrangler.toml`, which is intentionally ignored by
+Git. Start by copying the public template and replacing every placeholder:
+
+```bash
+cp wrangler.example.toml wrangler.toml
+```
+
+Set a private Pages project name, D1 database name and D1 `database_id` in that
+file. Also set `CANONICAL_HOST` and `PRODUCTION_PAGES_HOST` to the deployment's
+real hostnames. Never commit the completed file.
+
+For a new Cloudflare deployment, use this order.
 
 1. Install dependencies and authenticate Wrangler:
 
@@ -59,10 +71,12 @@ The Pages project must exist before Pages secrets can be added. For a new Cloudf
 2. Create the production D1 database:
 
    ```bash
-   npx wrangler d1 create your-d1-database
+   npx wrangler d1 create <your-private-database-name>
    ```
 
-   Copy the `database_id` into the top-level `[[d1_databases]]` section of `wrangler.toml` and keep the binding name as `DB`.
+   Copy the returned `database_id` and database name into the top-level
+   `[[d1_databases]]` section of the ignored `wrangler.toml`. Keep the binding
+   name as `DB`.
 
 3. Apply the production migrations:
 
@@ -70,24 +84,25 @@ The Pages project must exist before Pages secrets can be added. For a new Cloudf
    npm run db:migrate:remote
    ```
 
-4. Create the Pages project. Skip this command if `memo` already exists in your account:
+4. Create the Pages project. Skip this command if the private project already
+   exists in your account:
 
    ```bash
-   npx wrangler pages project create your-pages-project --production-branch main
+   npx wrangler pages project create <your-private-project-name> --production-branch main
    ```
 
 5. Generate the production session secret. Run `openssl`, then paste its output when Wrangler prompts for the secret value:
 
    ```bash
    openssl rand -hex 32
-   npx wrangler pages secret put SESSION_SECRET --project-name your-pages-project
+   npx wrangler pages secret put SESSION_SECRET
    ```
 
 6. Generate and store the initial passcode hash before the first public deployment:
 
    ```bash
-   npm run hash-password -- "1234"
-   npx wrangler pages secret put APP_PASSWORD_HASH --project-name your-pages-project
+   npm run hash-password -- "<your-long-numeric-passcode>"
+   npx wrangler pages secret put APP_PASSWORD_HASH
    ```
 
    Paste the complete output of `hash-password` at the prompt.
@@ -128,6 +143,7 @@ npm run build
 - With `MEMO_ENC_KEY` set, memo content is encrypted at rest with AES-256-GCM (`enc1:` prefix in the `content` column) and decrypted only at the API boundary. The key lives in the deployment environment, so this protects the database layer (dumps, backups, the D1 console), not against someone who controls the Cloudflare account itself. Without the secret, the app runs in plaintext mode.
 - The per-device IndexedDB snapshot is sealed with a random server-held key delivered only on authenticated responses; only the numeric sync cursor and an opaque random cache epoch are stored in the clear. An expired session leaves the local cache unreadable, and an explicit logout deletes it.
 - `.dev.vars` contains secrets and is ignored by Git. Never commit it, session secrets, passcode hashes, or exported notebook data.
+- `wrangler.toml` contains deployment-specific project, database and hostname identifiers and is ignored by Git. Only the placeholder-only `wrangler.example.toml` belongs in the repository.
 - A numeric passcode is intended as a lightweight gate for a personal notebook. For a publicly discoverable or higher-risk deployment, add stronger edge access control such as Cloudflare Access or an equivalent authentication layer.
 
 ## Images and Cloudflare Free plan limits

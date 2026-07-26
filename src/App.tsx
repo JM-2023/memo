@@ -123,6 +123,8 @@ interface ToastState {
 }
 
 interface PendingBatchTag {
+  /** Which entry point armed it — the selection toolbar or one card's menu. */
+  scope: "selection" | "memo";
   tag: string;
   changed: Memo[];
   refreshed: Memo[];
@@ -224,6 +226,7 @@ interface FeedHandlers {
   saveEdit: (memo: Memo, data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
   acceptEditConflict: (id: string) => void;
   togglePin: (memo: Memo) => void;
+  addTag: (memo: Memo) => void;
   copy: (memo: Memo) => void;
   share: (memo: Memo) => void;
   trash: (memo: Memo) => void;
@@ -280,6 +283,7 @@ const FeedItem = reactMemo(
           onSaveEdit={(data) => handlers.saveEdit(memo, data)}
           onAcceptEditConflict={() => handlers.acceptEditConflict(memo.id)}
           onTogglePin={() => handlers.togglePin(memo)}
+          onAddTag={() => handlers.addTag(memo)}
           onCopy={() => handlers.copy(memo)}
           onShare={() => handlers.share(memo)}
           onDelete={() => handlers.trash(memo)}
@@ -424,6 +428,9 @@ export default function App() {
   confirmBatchDeleteRef.current = confirmBatchDelete;
   const [batchBusy, setBatchBusy] = useState(false);
   const [bulkTagOpen, setBulkTagOpen] = useState(false);
+  // The same sheet aimed at one card, opened from its ⋯ menu. Held by id so a
+  // sync that edits or deletes the memo mid-flight is reflected, not stale.
+  const [tagMemoId, setTagMemoId] = useState<string | null>(null);
   const pendingBatchTagRef = useRef<PendingBatchTag | null>(null);
   const [renameTagTarget, setRenameTagTarget] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
@@ -499,6 +506,7 @@ export default function App() {
     setConfirmBatchDelete(false);
     setBatchBusy(false);
     setBulkTagOpen(false);
+    setTagMemoId(null);
     pendingBatchTagRef.current = null;
     setRenameTagTarget(null);
     setDialogBusy(false);
@@ -884,6 +892,9 @@ export default function App() {
   const feedMemos = view === "trash" ? trashedMemos : view === "review" ? reviewMemos : visibleMemos;
   const visibleFeedIds = useMemo(() => feedMemos.map((memo) => memo.id), [feedMemos]);
   const visibleSelected = useMemo(() => selectionWithinVisibleIds(selected, visibleFeedIds), [selected, visibleFeedIds]);
+  // Resolved every render, so a sync that deletes the memo closes its sheet.
+  const tagMemoMatch = tagMemoId ? syncState.memos.get(tagMemoId) : null;
+  const tagMemo = tagMemoMatch && !tagMemoMatch.deletedAt ? tagMemoMatch : null;
 
   // The feed renders in pages: the first FEED_PAGE rows immediately, more as
   // the sentinel scrolls near. Keeps first paint and filter swaps flat no
@@ -1289,6 +1300,7 @@ export default function App() {
         setSelected(new Set());
         setConfirmBatchDelete(false);
         setBulkTagOpen(false);
+        setTagMemoId(null);
         pendingBatchTagRef.current = null;
       })
     );
@@ -1301,6 +1313,7 @@ export default function App() {
         setSelected(new Set());
         setConfirmBatchDelete(false);
         setBulkTagOpen(false);
+        setTagMemoId(null);
         pendingBatchTagRef.current = null;
       })
     );
@@ -1736,15 +1749,34 @@ export default function App() {
     }
   }
 
+  /** One card's ⋯ menu aims the tag sheet at that memo alone. */
+  function openMemoTagDialog(memo: Memo) {
+    if (memo.deletedAt) return;
+    pendingBatchTagRef.current = null;
+    setBulkTagOpen(false);
+    setTagMemoId(memo.id);
+  }
+
+  function selectionTagTargets(): Memo[] {
+    return [...visibleSelected]
+      .map((id) => syncStateRef.current.memos.get(id))
+      .filter((memo): memo is Memo => Boolean(memo && !memo.deletedAt));
+  }
+
+  function memoTagTargets(): Memo[] {
+    const memo = tagMemoId ? syncStateRef.current.memos.get(tagMemoId) : null;
+    return memo && !memo.deletedAt ? [memo] : [];
+  }
+
+  const prepareBatchTag = (tag: string) => prepareTagApply(selectionTagTargets(), tag, "selection");
+  const prepareMemoTag = (tag: string) => prepareTagApply(memoTagTargets(), tag, "memo");
+
   /**
    * Resolve the server work while the tag sheet stays present. The visual
    * commit is deliberately deferred: BulkTagDialog exits first, then
-   * finishBatchTag lets changed cards and the selection toolbar morph together.
+   * finishTagApply lets changed cards and the selection toolbar morph together.
    */
-  async function prepareBatchTag(tag: string): Promise<boolean> {
-    const targets = [...visibleSelected]
-      .map((id) => syncStateRef.current.memos.get(id))
-      .filter((memo): memo is Memo => Boolean(memo && !memo.deletedAt));
+  async function prepareTagApply(targets: Memo[], tag: string, scope: PendingBatchTag["scope"]): Promise<boolean> {
     if (targets.length === 0 || pendingBatchTagRef.current) return false;
 
     const pendingTargets = targets.filter((memo) => !tagsOf(memo).includes(tag));
@@ -1804,6 +1836,7 @@ export default function App() {
       // Even an all-failed batch has a settled result: close the sheet and
       // retain precisely those failures so retrying is one action away.
       pendingBatchTagRef.current = {
+        scope,
         tag,
         changed,
         refreshed,
@@ -1820,21 +1853,28 @@ export default function App() {
     }
   }
 
-  function finishBatchTag() {
+  function closeTagDialogs() {
+    setBulkTagOpen(false);
+    setTagMemoId(null);
+  }
+
+  function finishTagApply() {
     const result = pendingBatchTagRef.current;
     pendingBatchTagRef.current = null;
     if (!result) {
-      setBulkTagOpen(false);
+      closeTagDialogs();
       return;
     }
 
-    if (result.retryIds.length === 0) restoreLocationFocusRef.current = true;
+    const fromSelection = result.scope === "selection";
+    if (fromSelection && result.retryIds.length === 0) restoreLocationFocusRef.current = true;
     withViewTransition(() =>
       flushSync(() => {
-        setBulkTagOpen(false);
+        closeTagDialogs();
         if (result.changed.length > 0 || result.refreshed.length > 0) {
           applySyncChanges([...result.refreshed, ...result.changed], [], []);
         }
+        if (!fromSelection) return;
         if (result.retryIds.length === 0) {
           setSelectMode(false);
           setSelected(new Set());
@@ -1851,6 +1891,18 @@ export default function App() {
     if (result.changed.length > 0) {
       notifyPeers();
     }
+    if (!fromSelection) {
+      // One memo, so the batch counters collapse to a single outcome.
+      if (result.failedCount > 0) {
+        showToast(result.firstFailure ?? tr("Couldn’t add the tag.", "添加标签失败"), "error");
+      } else if (result.alreadyTagged === result.targetCount) {
+        showToast(tr(`This memo already has #${result.tag}`, `这条笔记已有 #${result.tag}`));
+      } else {
+        showToast(tr(`Added #${result.tag}`, `已添加 #${result.tag}`));
+      }
+      return;
+    }
+
     if (result.failedCount > 0) {
       const successful = result.targetCount - result.failedCount;
       const detail = result.firstFailure ? ` ${result.firstFailure}` : "";
@@ -1885,6 +1937,7 @@ export default function App() {
     },
     saveEdit: handleSaveEdit,
     togglePin: handleTogglePin,
+    addTag: openMemoTagDialog,
     copy: handleCopy,
     trash: handleTrash,
     restore: handleRestore,
@@ -1913,6 +1966,7 @@ export default function App() {
     },
     saveEdit: handleSaveEdit,
     togglePin: handleTogglePin,
+    addTag: openMemoTagDialog,
     copy: handleCopy,
     trash: handleTrash,
     restore: handleRestore,
@@ -1940,6 +1994,7 @@ export default function App() {
       saveEdit: (memo, data) => feedActionsRef.current.saveEdit(memo, data),
       acceptEditConflict: (id) => feedActionsRef.current.acceptEditConflict(id),
       togglePin: (memo) => void feedActionsRef.current.togglePin(memo),
+      addTag: (memo) => feedActionsRef.current.addTag(memo),
       copy: (memo) => void feedActionsRef.current.copy(memo),
       share: (memo) => setShareMemo(memo),
       trash: (memo) => void feedActionsRef.current.trash(memo),
@@ -2687,7 +2742,21 @@ export default function App() {
             pendingBatchTagRef.current = null;
             setBulkTagOpen(false);
           }}
-          onApplied={finishBatchTag}
+          onApplied={finishTagApply}
+        />
+      ) : null}
+      {tagMemo ? (
+        <BulkTagDialog
+          scope="memo"
+          selectedCount={1}
+          knownTags={knownTags}
+          ownedTags={tagsOf(tagMemo)}
+          onApply={prepareMemoTag}
+          onDismiss={() => {
+            pendingBatchTagRef.current = null;
+            setTagMemoId(null);
+          }}
+          onApplied={finishTagApply}
         />
       ) : null}
       {reviewSettingsOpen ? (

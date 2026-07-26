@@ -1,6 +1,6 @@
 {
   "name": "memo",
-  "version": "2.5.30",
+  "version": "2.5.31",
   "private": true,
   "type": "module",
   "engines": {
@@ -17,7 +17,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "verify:pages-output": "node scripts/verify-pages-output.mjs",
     "hash-password": "node scripts/hash-password.mjs",
-    "deploy": "npm run build && wrangler pages deploy dist --project-name your-pages-project"
+    "deploy": "npm run build && wrangler pages deploy dist"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

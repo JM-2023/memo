@@ -1,4 +1,4 @@
-import { Check, Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Share, Trash2, X } from "lucide-react";
+import { Check, Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Share, Tags, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { externalImagesOf } from "../lib/content";
 import { formatTime } from "../lib/dates";
@@ -27,6 +27,7 @@ interface MemoCardProps {
   onSaveEdit: (data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
   onAcceptEditConflict: () => void;
   onTogglePin: () => void;
+  onAddTag: () => void;
   onCopy: () => void;
   onShare: () => void;
   onDelete: () => void;
@@ -47,6 +48,7 @@ interface MemoMenuBodyProps {
   pinned: boolean;
   onTogglePin: () => void;
   onStartEdit: () => void;
+  onAddTag: () => void;
   onCopy: () => void;
   onShare: () => void;
   onDelete: () => void;
@@ -60,7 +62,7 @@ interface MemoMenuBodyProps {
  * lives here (the panel unmounts on close), so a reopened menu always starts
  * back at the action list.
  */
-function MemoMenuBody({ memo, close, inTrash, pinned, onTogglePin, onStartEdit, onCopy, onShare, onDelete, onRestore, onPurge }: MemoMenuBodyProps) {
+function MemoMenuBody({ memo, close, inTrash, pinned, onTogglePin, onStartEdit, onAddTag, onCopy, onShare, onDelete, onRestore, onPurge }: MemoMenuBodyProps) {
   const { count, locale, tr } = useI18n();
   const [confirming, setConfirming] = useState(false);
 
@@ -146,6 +148,18 @@ function MemoMenuBody({ memo, close, inTrash, pinned, onTogglePin, onStartEdit, 
         >
           <Pencil size={16} aria-hidden="true" />
           {tr("Edit", "编辑")}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          aria-haspopup="dialog"
+          onClick={() => {
+            close();
+            onAddTag();
+          }}
+        >
+          <Tags size={16} aria-hidden="true" />
+          {tr("Add tag", "添加标签")}
         </button>
         <button
           type="button"
@@ -360,6 +374,7 @@ export function MemoCard(props: MemoCardProps) {
                     pinned={pinned}
                     onTogglePin={props.onTogglePin}
                     onStartEdit={props.onStartEdit}
+                    onAddTag={props.onAddTag}
                     onCopy={props.onCopy}
                     onShare={props.onShare}
                     onDelete={props.onDelete}

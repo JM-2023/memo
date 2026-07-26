@@ -6,8 +6,13 @@ import { useI18n } from "../lib/i18n";
 import { isValidTagPath } from "../lib/tags";
 
 interface BulkTagDialogProps {
+  /** Memos the tag will land on; 0 keeps the sheet inert. */
   selectedCount: number;
+  /** "selection" is select mode's batch, "memo" one card's ⋯ menu. */
+  scope?: "selection" | "memo";
   knownTags: string[];
+  /** Tags the single target already carries — applying one would be a no-op. */
+  ownedTags?: string[];
   /** Performs the requests but defers the visual commit until the dialog exits. */
   onApply: (tag: string) => Promise<boolean>;
   /** Cancelled after the exit animation. */
@@ -16,16 +21,19 @@ interface BulkTagDialogProps {
   onApplied: () => void;
 }
 
+const NO_OWNED_TAGS: string[] = [];
+
 function normalizeTag(value: string): string {
   return value.trim().replace(/^#+/, "");
 }
 
 /**
- * A focused bulk-tag picker. Network work happens while the sheet is present;
- * the parent commits changed cards only after its exit has finished, giving the
- * feed transition a clean second beat instead of animating behind the overlay.
+ * A focused tag picker, shared by select mode's batch and a single card's ⋯
+ * menu. Network work happens while the sheet is present; the parent commits
+ * changed cards only after its exit has finished, giving the feed transition a
+ * clean second beat instead of animating behind the overlay.
  */
-export function BulkTagDialog({ selectedCount, knownTags, onApply, onDismiss, onApplied }: BulkTagDialogProps) {
+export function BulkTagDialog({ selectedCount, scope = "selection", knownTags, ownedTags = NO_OWNED_TAGS, onApply, onDismiss, onApplied }: BulkTagDialogProps) {
   const { count, tr } = useI18n();
   const [value, setValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -42,12 +50,22 @@ export function BulkTagDialog({ selectedCount, knownTags, onApply, onDismiss, on
   const tag = normalizeTag(value);
   const error = tag && !isValidTagPath(tag) ? tr("Use letters, numbers, _, -, · and / between levels.", "标签可使用文字、数字、_、-、·，层级之间用 /。") : null;
   const exact = knownTags.includes(tag);
+  const owned = useMemo(() => new Set(ownedTags), [ownedTags]);
+  // A tag the target already carries is worth neither a suggestion nor a
+  // request: appending it is a no-op the user would read as a failure.
+  const alreadyOwned = Boolean(tag) && owned.has(tag);
   const suggestions = useMemo(() => {
     const query = normalizeTag(value).toLocaleLowerCase();
-    return knownTags.filter((item) => !query || item.toLocaleLowerCase().includes(query)).slice(0, 8);
-  }, [knownTags, value]);
-  const canSubmit = selectedCount > 0 && Boolean(tag) && !error && !submitting && !closing;
-  const noteKey = error ? "validation-error" : applyError ? "apply-error" : tag ? `${exact ? "existing" : "new"}:${tag}` : "empty";
+    return knownTags.filter((item) => !owned.has(item) && (!query || item.toLocaleLowerCase().includes(query))).slice(0, 8);
+  }, [knownTags, owned, value]);
+  const canSubmit = selectedCount > 0 && Boolean(tag) && !error && !alreadyOwned && !submitting && !closing;
+  const noteKey = error
+    ? "validation-error"
+    : applyError
+      ? "apply-error"
+      : tag
+        ? `${alreadyOwned ? "owned" : exact ? "existing" : "new"}:${tag}`
+        : "empty";
 
   function leave(callback: () => void) {
     if (closing) return;
@@ -104,7 +122,7 @@ export function BulkTagDialog({ selectedCount, knownTags, onApply, onDismiss, on
       className={`overlay bulk-tag-overlay${closing ? " is-closing" : ""}`}
       role="dialog"
       aria-modal="true"
-      aria-label={tr("Add tag to selected memos", "为所选笔记添加标签")}
+      aria-label={scope === "memo" ? tr("Add tag to this memo", "为这条笔记添加标签") : tr("Add tag to selected memos", "为所选笔记添加标签")}
       aria-busy={submitting || undefined}
       tabIndex={-1}
       onClick={requestDismiss}
@@ -116,7 +134,11 @@ export function BulkTagDialog({ selectedCount, knownTags, onApply, onDismiss, on
           </span>
           <div>
             <h2>{tr("Add a tag", "添加标签")}</h2>
-            <p>{tr(`Apply one tag to ${count(selectedCount, "memo")}.`, `为已选的 ${count(selectedCount, "memo")} 添加同一个标签。`)}</p>
+            <p>
+              {scope === "memo"
+                ? tr("Apply one tag to this memo.", "为这条笔记添加一个标签。")
+                : tr(`Apply one tag to ${count(selectedCount, "memo")}.`, `为已选的 ${count(selectedCount, "memo")} 添加同一个标签。`)}
+            </p>
           </div>
           <button type="button" className="icon-button bulk-tag-close" onClick={requestDismiss} disabled={submitting} aria-label={tr("Close", "关闭")}>
             <X size={17} aria-hidden="true" />
@@ -156,6 +178,11 @@ export function BulkTagDialog({ selectedCount, knownTags, onApply, onDismiss, on
             ) : applyError ? (
               <span key={noteKey} className="is-error" role="alert">
                 {applyError}
+              </span>
+            ) : alreadyOwned ? (
+              // Only reachable with `ownedTags`, which today means memo scope.
+              <span key={noteKey}>
+                {tr("Already on this memo", "笔记中已有")} · <strong>#{tag}</strong>
               </span>
             ) : tag ? (
               <span key={noteKey}>

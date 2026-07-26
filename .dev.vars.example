@@ -1,7 +1,8 @@
 # Copy to .dev.vars for local development (wrangler pages dev).
 # SESSION_SECRET is required — any long random string.
 SESSION_SECRET=replace-with-a-long-random-secret
-# Optional: pre-seed the login passcode (npm run hash-password -- "1234").
+# Optional: pre-seed the login passcode.
+# Generate it with: npm run hash-password -- "<your-long-numeric-passcode>"
 # Without it, the first visit shows a create-passcode screen.
 # APP_PASSWORD_HASH=pbkdf2_sha256$100000$...
 
@@ -10,3 +11,8 @@ SESSION_SECRET=replace-with-a-long-random-secret
 # Set in production with: wrangler pages secret put MEMO_ENC_KEY
 # IMPORTANT: never change this once set - sealed rows only open with the same key.
 # MEMO_ENC_KEY=
+
+# Deployment-specific hostnames belong in the ignored wrangler.toml for
+# production. These synthetic values are sufficient for local development.
+CANONICAL_HOST=notes.example
+PRODUCTION_PAGES_HOST=your-pages-project.pages.dev

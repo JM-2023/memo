@@ -146,6 +146,8 @@ beforeEach(() => {
     }))
   });
   Object.defineProperty(window, "scrollTo", { configurable: true, value: vi.fn() });
+  // The sidebar tag list cancels in-flight FLIP animations on every commit.
+  Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: vi.fn(() => []) });
   vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([new DOMRect(0, 0, 20, 20)] as unknown as DOMRectList);
   vi.stubGlobal(
     "IntersectionObserver",
@@ -176,6 +178,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  delete (Element.prototype as Element & { getAnimations?: () => Animation[] }).getAnimations;
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -470,6 +473,108 @@ describe("Memo menu metadata", () => {
     const confirmMenu = screen.getByRole("menu");
     expect(within(confirmMenu).getByText("Delete this memo?")).not.toBeNull();
     expect(within(confirmMenu).queryByText("10 characters")).toBeNull();
+  });
+});
+
+describe("Memo menu tagging", () => {
+  it("appends the picked tag to that memo alone", async () => {
+    const user = userEvent.setup();
+    const tagged = { ...memo(0), id: "memo-tagged", content: "alpha memo #work" };
+    const target = { ...memo(1), id: "memo-target", content: "beta memo" };
+    const updated = { ...target, content: "beta memo\n#work", seq: 9, updatedAt: "2026-01-01T00:03:00.000Z" };
+    mocks.bootstrap.mockResolvedValue({
+      memos: [tagged, target],
+      tags: [],
+      cursor: 2,
+      syncEpoch: "epoch-a",
+      serverTime: target.createdAt,
+      hasMore: false,
+      nextAfter: null
+    });
+    mocks.updateMemo.mockResolvedValue({ memo: updated });
+
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    const card = (await screen.findByText("beta memo")).closest("article");
+    if (!card) throw new Error("Memo card was not rendered");
+    await user.click(within(card).getByRole("button", { name: "Memo actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Add tag" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Add tag to this memo" });
+    await user.click(within(dialog).getByRole("button", { name: "#work" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add tag" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add tag to this memo" })).toBeNull());
+    expect(mocks.updateMemo).toHaveBeenCalledTimes(1);
+    expect(mocks.updateMemo).toHaveBeenCalledWith("memo-target", { expectedSeq: target.seq, content: "beta memo\n#work" });
+    expect(within(card).getByRole("button", { name: "#work" })).not.toBeNull();
+    expect(await screen.findByText("Added #work")).not.toBeNull();
+  });
+
+  it("refuses a tag the memo already carries, before any request", async () => {
+    const user = userEvent.setup();
+    const tagged = { ...memo(0), id: "memo-tagged", content: "alpha memo #work #work/client" };
+    mocks.bootstrap.mockResolvedValue({
+      memos: [tagged],
+      tags: [],
+      cursor: 1,
+      syncEpoch: "epoch-a",
+      serverTime: tagged.createdAt,
+      hasMore: false,
+      nextAfter: null
+    });
+
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    const card = (await screen.findByText(/alpha memo/)).closest("article");
+    if (!card) throw new Error("Memo card was not rendered");
+    await user.click(within(card).getByRole("button", { name: "Memo actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Add tag" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Add tag to this memo" });
+    expect(within(dialog).queryByRole("button", { name: "#work" })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "#work/client" })).toBeNull();
+
+    await user.type(within(dialog).getByRole("textbox", { name: "Tag" }), "work");
+    expect(within(dialog).getByText(/Already on this memo/)).not.toBeNull();
+    expect((within(dialog).getByRole("button", { name: "Add tag" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(mocks.updateMemo).not.toHaveBeenCalled();
+  });
+
+  it("stays out of the trash menu", async () => {
+    const user = userEvent.setup();
+    mocks.bootstrap.mockResolvedValue({
+      memos: [{ ...memo(0), content: "deleted memo", deletedAt: "2026-01-01T00:05:00.000Z" }],
+      tags: [],
+      cursor: 1,
+      syncEpoch: "epoch-a",
+      serverTime: "2026-01-01T00:05:00.000Z",
+      hasMore: false,
+      nextAfter: null
+    });
+
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    await user.click(await screen.findByRole("button", { name: /^Trash/ }));
+    const card = (await screen.findByText("deleted memo")).closest("article");
+    if (!card) throw new Error("Trashed memo card was not rendered");
+
+    await user.click(within(card).getByRole("button", { name: "Memo actions" }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Restore" })).not.toBeNull();
+    expect(within(menu).queryByRole("menuitem", { name: "Add tag" })).toBeNull();
   });
 });
 

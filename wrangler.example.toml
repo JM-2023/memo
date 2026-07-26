@@ -1,0 +1,16 @@
+name = "your-pages-project"
+compatibility_date = "2026-06-22"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "your-d1-database"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[vars]
+CANONICAL_HOST = "notes.example"
+PRODUCTION_PAGES_HOST = "your-pages-project.pages.dev"
+
+[observability]
+enabled = true

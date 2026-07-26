@@ -22,16 +22,15 @@ const CONTENT_SECURITY_POLICY = [
   "frame-ancestors 'none'"
 ].join("; ");
 
-const CANONICAL_HOST = "notes.example";
-const PRODUCTION_PAGES_HOST = "project.pages.dev";
-
 export async function onRequest(context: AppContext): Promise<Response> {
   const requestUrl = new URL(context.request.url);
+  const canonicalHost = context.env.CANONICAL_HOST?.trim().toLowerCase();
+  const productionPagesHost = context.env.PRODUCTION_PAGES_HOST?.trim().toLowerCase();
   // Redirect only the production Pages hostname. Hash/branch preview hosts are
   // intentionally left on their isolated preview bindings and secrets.
-  if (requestUrl.hostname === PRODUCTION_PAGES_HOST) {
+  if (canonicalHost && productionPagesHost && requestUrl.hostname.toLowerCase() === productionPagesHost) {
     requestUrl.protocol = "https:";
-    requestUrl.hostname = CANONICAL_HOST;
+    requestUrl.hostname = canonicalHost;
     requestUrl.port = "";
     return Response.redirect(requestUrl.toString(), 301);
   }

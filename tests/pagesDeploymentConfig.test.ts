@@ -16,15 +16,18 @@ function tomlArrayBlock(source: string, name: string): string {
 }
 
 describe("Pages deployment configuration", () => {
-  it("binds the main deployment to the production D1 database only", () => {
-    const config = read("wrangler.toml");
-    const production = tomlArrayBlock(config, "d1_databases");
+  it("keeps deployment identifiers in an ignored local config", () => {
+    const config = read("wrangler.example.toml");
+    const ignore = read(".gitignore");
+    const database = tomlArrayBlock(config, "d1_databases");
 
-    expect(production).toContain('binding = "DB"');
-    expect(production).toContain('database_name = "your-d1-database"');
-    expect(production).toContain('database_id = "00000000-0000-0000-0000-000000000000"');
+    expect(ignore).toMatch(/^wrangler\.toml$/m);
+    expect(database).toContain('binding = "DB"');
+    expect(database).toContain('database_name = "your-d1-database"');
+    expect(database).toContain('database_id = "00000000-0000-0000-0000-000000000000"');
+    expect(config).toContain('CANONICAL_HOST = "notes.example"');
+    expect(config).toContain('PRODUCTION_PAGES_HOST = "your-pages-project.pages.dev"');
     expect(config).not.toContain("[[env.preview.d1_databases]]");
-    expect(config).not.toContain('database_name = "your-preview-d1-database"');
 
     const scripts = JSON.parse(read("package.json")).scripts;
     expect(scripts["db:migrate:preview"]).toBeUndefined();
