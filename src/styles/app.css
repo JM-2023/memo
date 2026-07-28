@@ -3758,7 +3758,7 @@ button.stats-tag-row:active { scale: 0.992; }
 }
 
 /* =========================================================================
-   Reduced motion — everything still works, nothing moves
+   Reduced motion — everything still works, nothing moves but status
    ========================================================================= */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -3769,6 +3769,11 @@ button.stats-tag-row:active { scale: 0.992; }
     transition-delay: 0ms !important;
     scroll-behavior: auto !important;
   }
+  /* Spinners are status, not decoration: the blanket reset above would run
+     the rotation out in 0.01ms and leave a dead icon exactly where the only
+     "still working" signal should be (the boot splash has nothing else).
+     Kept, slowed — the shorthand re-arms the three longhands forced above. */
+  .spin { animation: spin 1.4s linear infinite !important; }
   /* The sheen loop rides .pin-pad's animation list (see glass material). */
   .pin-pad,
   .pin-pad.shake { animation: none !important; }
