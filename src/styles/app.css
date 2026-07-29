@@ -2251,9 +2251,8 @@ button.crumb:active { background: var(--wash-strong); }
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-xs);
-  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), background var(--t-slow) var(--ease);
+  transition: border-color var(--t) var(--ease), background var(--t-slow) var(--ease);
 }
-.memo-card:hover { box-shadow: var(--shadow-sm); }
 .memo-card.is-pinned { border-color: color-mix(in srgb, var(--primary) 32%, var(--line)); }
 
 /* ---- Scene morph stage (view ↔ edit ↔ saved-diff replay) ----
