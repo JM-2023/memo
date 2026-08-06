@@ -32,9 +32,21 @@
   border: 1px solid rgba(58, 46, 28, 0.1);
   border-radius: 16px;
   color: var(--sc-ink);
+  /* The one serif in the product, and the one page that earns it: this is a
+     finished piece of writing set to be read, not an interface to be scanned.
+     Everything else — the feed, the editor, every dialog — is UI sans.
+
+     font-variant-numeric must be stated, not inherited. The app sets tabular
+     figures on :root, but app.css is not among the styles embedded in the
+     exported SVG, so an inherited value would give the preview lining figures
+     and the PNG Georgia's oldstyle ones. Declared here, both agree — and
+     oldstyle is what this page wants anyway: figures that sit in a sentence
+     like letters. The ordinals and table cells below opt back into tabular,
+     because a column still has to line up. */
   font-family: Georgia, "Times New Roman", "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "SimSun", serif;
   font-size: 17px;
   font-weight: 400;
+  font-variant-numeric: normal;
   line-height: 1.9;
   letter-spacing: 0.01em;
   text-align: left;
