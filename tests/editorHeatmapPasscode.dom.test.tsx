@@ -120,7 +120,8 @@ describe("Editor accessibility and composition", () => {
 
     fireEvent.change(editor, { target: { value: "x".repeat(39_995), selectionStart: 39_995 } });
     expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("40,001 / 40,000").className).toContain("is-over");
+    // Counts are set without group separators, so the digits keep their column.
+    expect(screen.getByText("40001 / 40000").className).toContain("is-over");
   });
 });
 

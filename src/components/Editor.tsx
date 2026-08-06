@@ -73,7 +73,7 @@ export function Editor({
   conflictMessage,
   onAcceptRemoteBase
 }: EditorProps) {
-  const { errorMessage, tr } = useI18n();
+  const { errorMessage, formatNumber, tr } = useI18n();
   const tip = useTip();
   const [content, setContent] = useState(initialContent);
   const [newImages, setNewImages] = useState<NewImagePayload[]>([]);
@@ -800,7 +800,7 @@ export function Editor({
             className={`editor-count${overLimit ? " is-over" : ""}`}
             title={overLimit ? tr("Over the memo length limit", "已超出单条笔记字数上限") : undefined}
           >
-              {effectiveContentLength.toLocaleString()} / {MAX_CONTENT_CHARS.toLocaleString()}
+              {formatNumber(effectiveContentLength)} / {formatNumber(MAX_CONTENT_CHARS)}
           </span>
         ) : null}
           {mode === "edit" && onCancel ? (

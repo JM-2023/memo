@@ -121,7 +121,13 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const tr = useCallback((en: string, zh: string) => (language === "zh-CN" ? zh : en), [language]);
-  const numberFormatter = useMemo(() => new Intl.NumberFormat(locale), [locale]);
+  /* No group separators. Every number this app shows is a tally — memos,
+     tags, active days, characters — read at a glance beside its label, never
+     summed or compared against a figure from somewhere else. A separator
+     buys nothing at that job and costs the digits their column: the counts
+     are set tabular so they line up down a list, and a comma appearing at
+     1,000 pushes the row out of the alignment the rest of the list holds. */
+  const numberFormatter = useMemo(() => new Intl.NumberFormat(locale, { useGrouping: false }), [locale]);
   const formatNumber = useCallback((value: number) => numberFormatter.format(value), [numberFormatter]);
 
   const count = useCallback(
