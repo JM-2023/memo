@@ -10,11 +10,28 @@
    display-only (stage recess, preview shadow, entrance animation) belongs in
    app.css, where the export can never see it.
 
-   Palette: the card is a page of one's own writing, so it reads as print —
-   warm cream paper, near-black ink, hierarchy from size/weight/whitespace
-   alone. The single accent is cinnabar, reserved for the seal: the stamp
-   traditionally pressed after a finished piece of writing. It is the only
-   saturated color on the page, and it colors nothing else.
+   Type: a shared image is read at thumbnail size in someone else's feed
+   before it is ever read at full size, so the card is set in the platform's
+   own UI sans — the face the reader's eye is already calibrated to, and the
+   one that holds together through a downscale — with tabular figures
+   throughout, so ordinals, table columns and dates keep their columns
+   instead of drifting a pixel per digit. Both have to be stated here rather
+   than inherited: app.css is not among the styles embedded in the exported
+   SVG, so an inherited value would give the preview one face and the PNG
+   another.
+
+   Hierarchy is carried by size and whitespace, not by a second face or a
+   heavier one: five rungs (12 / 16 / 17 / 20 / 24px) and a widening band of
+   air above each heading — 5× the space between body lines at h1. Weight is
+   the app's own ladder, three rungs of it (400 prose, 600 meta, 700
+   headings), so nothing here depends on a variable face being installed.
+
+   Palette: two stocks, one ink. Paper is warm cream; .is-gray is the same
+   page on neutral card stock, for an image that has to sit beside UI
+   screenshots or in a dark feed without reading as yellowed. The single
+   accent is cinnabar, reserved for the seal: the stamp traditionally pressed
+   after a finished piece of writing. It is the only saturated color on the
+   page, and it colors nothing else.
    ========================================================================= */
 .share-card {
   --sc-paper: #f9f5ea;
@@ -23,32 +40,32 @@
   --sc-faint: #8b7e66;
   --sc-line: #e6dcc6;
   --sc-line-strong: #d8ccb0;
+  /* Tinted neutrals, kept as alpha so they sit on whichever stock is under
+     them: the sheet's own edge, the code chip's fill, and the one hairline
+     every decoration is drawn with (link underline, strikethrough, task
+     box). */
+  --sc-rim: rgba(58, 46, 28, 0.1);
+  --sc-wash: rgba(58, 46, 28, 0.07);
+  --sc-hair: rgba(58, 46, 28, 0.38);
   --sc-accent: #a63d2a;
+  --sc-accent-wash: rgba(166, 61, 42, 0.12);
+  --sc-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
 
   box-sizing: border-box;
   width: 400px;
-  padding: 30px 32px 22px;
+  padding: 32px 32px 24px;
   background: var(--sc-paper);
-  border: 1px solid rgba(58, 46, 28, 0.1);
+  border: 1px solid var(--sc-rim);
   border-radius: 16px;
   color: var(--sc-ink);
-  /* The one serif in the product, and the one page that earns it: this is a
-     finished piece of writing set to be read, not an interface to be scanned.
-     Everything else — the feed, the editor, every dialog — is UI sans.
-
-     font-variant-numeric must be stated, not inherited. The app sets tabular
-     figures on :root, but app.css is not among the styles embedded in the
-     exported SVG, so an inherited value would give the preview lining figures
-     and the PNG Georgia's oldstyle ones. Declared here, both agree — and
-     oldstyle is what this page wants anyway: figures that sit in a sentence
-     like letters. The ordinals and table cells below opt back into tabular,
-     because a column still has to line up. */
-  font-family: Georgia, "Times New Roman", "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "SimSun", serif;
-  font-size: 17px;
+  font-family: var(--sc-sans);
+  font-size: 16px;
   font-weight: 400;
-  font-variant-numeric: normal;
-  line-height: 1.9;
-  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.75;
+  letter-spacing: 0;
   text-align: left;
   overflow-wrap: anywhere;
   -webkit-font-smoothing: antialiased;
@@ -56,47 +73,54 @@
 }
 .share-card * { box-sizing: border-box; margin: 0; }
 
-/* The entry's dateline — real information, quiet voice. */
+/* The entry's dateline — real information, quiet voice: the meta rung of the
+   scale, tracked out and set at label weight so it reads as a caption rather
+   than as a first line of text. */
 .sc-date {
   display: block;
   color: var(--sc-faint);
   font-size: 12px;
+  font-weight: 600;
   line-height: 1.5;
   letter-spacing: 0.04em;
 }
 
-.sc-body { display: grid; gap: 4px; margin-top: 14px; }
-.sc-blank { height: 9px; }
+.sc-body { display: grid; gap: 3px; margin-top: 16px; }
+.sc-blank { height: 10px; }
 
 /* Per-line markdown, print-set. Same grammar as the feed (parseBlock /
-   parseInline); only the shell differs. */
-.sc-h1 { font-size: 22px; line-height: 1.5; font-weight: 700; padding-top: 6px; }
-.sc-h2 { font-size: 19px; line-height: 1.6; font-weight: 700; padding-top: 4px; }
-.sc-h3 { font-weight: 700; }
+   parseInline); only the shell differs. Headings step up the scale and take
+   their room from the space above them — 12 / 10 / 6px against the 3px that
+   separates body lines. */
+.sc-h1 { font-size: 24px; line-height: 1.35; font-weight: 700; letter-spacing: -0.015em; padding-top: 12px; }
+.sc-h2 { font-size: 20px; line-height: 1.45; font-weight: 700; letter-spacing: -0.01em; padding-top: 10px; }
+.sc-h3 { font-size: 17px; line-height: 1.6; font-weight: 700; padding-top: 6px; }
 
 .sc-quote { padding-left: 14px; border-left: 2px solid var(--sc-line-strong); color: var(--sc-soft); }
 
 .sc-li { display: flex; gap: 10px; padding-left: calc(var(--sc-depth, 0) * 20px); }
 .sc-li .sc-text { flex: 1 1 auto; min-width: 0; }
-/* line box = 17px × 1.9 ≈ 32.3px — margins center the fixed markers. */
-.sc-dot { flex: none; width: 4.5px; height: 4.5px; margin-top: 14px; border-radius: 50%; background: var(--sc-faint); }
-.sc-ord { flex: none; min-width: 19px; text-align: right; color: var(--sc-faint); font-variant-numeric: tabular-nums; }
+/* line box = 16px × 1.75 = 28px — margins center the fixed markers. */
+.sc-dot { flex: none; width: 4.5px; height: 4.5px; margin-top: 11.75px; border-radius: 50%; background: var(--sc-faint); }
+/* Wide enough for two tabular digits and the period, so 9. and 10. hang off
+   the same right edge and their text starts on the same column. */
+.sc-ord { flex: none; min-width: 22px; text-align: right; color: var(--sc-faint); }
 .sc-box {
   display: grid;
   place-items: center;
   flex: none;
   width: 15px;
   height: 15px;
-  margin-top: 8.5px;
+  margin-top: 6.5px;
   color: var(--sc-paper);
-  border: 1.5px solid #b3a483;
+  border: 1.5px solid var(--sc-hair);
   border-radius: 4px;
 }
 .sc-task.is-done .sc-box { background: var(--sc-soft); border-color: var(--sc-soft); }
 .sc-task.is-done .sc-text {
   color: var(--sc-faint);
   text-decoration: line-through;
-  text-decoration-color: rgba(91, 81, 64, 0.5);
+  text-decoration-color: var(--sc-hair);
 }
 
 .sc-hr { height: 1px; margin: 15px 0; background: var(--sc-line); }
@@ -107,16 +131,15 @@
   column-gap: 12px;
   padding: 3px 0;
   border-bottom: 1px solid var(--sc-line);
-  font-variant-numeric: tabular-nums;
 }
 .sc-tr.is-th { font-weight: 700; border-bottom: none; }
 .sc-td { min-width: 0; }
 .sc-trule { height: 1px; margin: 3px 0 5px; background: var(--sc-line-strong); }
 
 .share-card strong { font-weight: 700; }
-.share-card del { color: var(--sc-faint); text-decoration-color: rgba(139, 126, 102, 0.6); }
+.share-card del { color: var(--sc-faint); text-decoration-color: var(--sc-hair); }
 .sc-mark {
-  background: rgba(166, 61, 42, 0.12);
+  background: var(--sc-accent-wash);
   color: inherit;
   border-radius: 3px;
   padding: 0 3px;
@@ -126,18 +149,18 @@
 .sc-code {
   font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 14px;
-  background: rgba(58, 46, 28, 0.07);
+  background: var(--sc-wash);
   border-radius: 4px;
   padding: 1px 5px;
 }
 /* Links can't be followed on paper: the label stays, set as quietly-underlined
    ink; tags read as marginalia, not pills. */
-.sc-a { text-decoration: underline; text-decoration-color: rgba(58, 46, 28, 0.35); text-underline-offset: 3px; }
+.sc-a { text-decoration: underline; text-decoration-color: var(--sc-hair); text-underline-offset: 3px; }
 /* inline-block: a tag drops to the next line whole instead of breaking
    after its "#"; over-long tags still wrap internally via max-width. */
 .sc-tag { display: inline-block; max-width: 100%; color: var(--sc-faint); }
 
-.sc-media { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 16px; }
+.sc-media { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 18px; }
 .sc-media.count-1 { grid-template-columns: minmax(0, 240px); }
 .sc-media.count-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .sc-img {
@@ -145,7 +168,7 @@
   position: relative;
   aspect-ratio: 1 / 1;
   overflow: hidden;
-  border: 1px solid rgba(58, 46, 28, 0.12);
+  border: 1px solid var(--sc-rim);
   border-radius: 6px;
 }
 .sc-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
@@ -162,7 +185,6 @@
 }
 .sc-brand {
   color: var(--sc-faint);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.18em;
@@ -181,13 +203,33 @@
 }
 
 /* =========================================================================
+   Neutral stock — the same page printed on gray card. Nothing moves and
+   nothing resizes; only the temperature changes, so the sheet can sit next
+   to UI screenshots, or on a dark timeline, without reading as yellowed.
+   The values are true neutrals (equal channels) — a gray that takes no side
+   between the warm and cool surfaces it will be posted among. Ink stays
+   near-black against it at ~15:1.
+   ========================================================================= */
+.share-card.is-gray {
+  --sc-paper: #e4e4e4;
+  --sc-ink: #1e1e1e;
+  --sc-soft: #4d4d4d;
+  --sc-faint: #757575;
+  --sc-line: #d3d3d3;
+  --sc-line-strong: #c0c0c0;
+  --sc-rim: rgba(0, 0, 0, 0.12);
+  --sc-wash: rgba(0, 0, 0, 0.06);
+  --sc-hair: rgba(0, 0, 0, 0.34);
+}
+
+/* =========================================================================
    Landscape — the same sheet cut wider, read the way a screen reads: one
-   column at a desktop measure. 560px ≈ 33 CJK chars (~68 Latin) at 17px —
+   column at a desktop measure. 560px ≈ 35 CJK chars (~70 Latin) at 16px —
    the far edge of reading comfort, so "wide" never turns into long lines.
    Long entries settle toward screen proportions instead of a tall scroll,
    and the wider page carries a touch more margin, as wider pages do.
    ========================================================================= */
 .share-card.is-landscape {
   width: 640px;
-  padding: 30px 40px 22px;
+  padding: 32px 40px 24px;
 }

@@ -16,8 +16,11 @@
      to) and its figures are tabular: counts, dates and streaks hold the same
      column from one row to the next, and a number that ticks up no longer
      shoves the text beside it. Running prose opts back out — see
-     .memo-content, the editor and .share-card — because inside a sentence
-     proportional figures set better than table figures.
+     .memo-content and the editor — because inside a sentence proportional
+     figures set better than table figures. The share card is the exception
+     that proves it: an exported image is scanned like the chrome, so it
+     declares tabular figures of its own (shareCard.css, which the PNG
+     embeds and this file never reaches).
 
      Hierarchy is carried by size and whitespace. Six rungs plus one display
      size; through the dense range (12–15px) a 1px step is the smallest gap
@@ -3365,7 +3368,15 @@ button.stats-tag-row:active { scale: 0.992; }
 .share-stage .share-card {
   box-shadow: var(--shadow);
   animation: sheet-in 0.22s var(--ease-out) both;
-  transition: transform 0.3s var(--ease-out);
+  transition: transform 0.3s var(--ease-out), background-color 0.24s var(--ease), border-color 0.24s var(--ease), color 0.24s var(--ease);
+}
+/* A stock swap keeps the same sheet in place (no remount), so the whole page
+   crossfades rather than cutting — every inherited color included, or the
+   ink would snap while the paper faded. Preview only: the PNG is rendered
+   from a settled card, and this file never reaches it. */
+.share-stage .share-card * {
+  transition: background-color 0.24s var(--ease), border-color 0.24s var(--ease), color 0.24s var(--ease),
+    text-decoration-color 0.24s var(--ease);
 }
 /* …and once the page has landed, the seal is pressed on. One flourish. */
 .share-stage .sc-seal { animation: seal-stamp 0.3s var(--ease-pop) 0.3s backwards; }
@@ -3383,16 +3394,22 @@ button.stats-tag-row:active { scale: 0.992; }
   gap: 8px;
   padding: 12px 14px;
 }
-.share-actions > button { display: inline-flex; align-items: center; gap: 7px; }
-/* Layout switch — the sidebar segment idiom (track + sliding thumb) sized
-   for the actions row, set with glyphs only: the live card is the label. */
+.share-buttons { display: flex; gap: 8px; }
+.share-buttons > button { display: inline-flex; align-items: center; gap: 7px; }
+/* The sheet controls hold the left end of the row together — what shape the
+   sheet is, what stock it's printed on, whether it's sealed — and take the
+   whole first line when the dialog is too narrow to seat them beside the
+   buttons. */
+.share-controls { display: flex; gap: 8px; margin-right: auto; }
+/* Layout and stock switches — the sidebar segment idiom (track + sliding
+   thumb) sized for the actions row, set with glyphs only: the live card is
+   the label. */
 .share-seg {
   position: relative;
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
   flex: none;
-  margin-right: auto;
   padding: 2px;
   isolation: isolate;
   background: var(--seg-track);
@@ -3413,13 +3430,26 @@ button.stats-tag-row:active { scale: 0.992; }
   transform: translateX(0);
   transition: transform 0.22s var(--ease-spring);
 }
-.share-seg[data-layout="landscape"] .share-seg-thumb { transform: translateX(100%); }
+.share-seg[data-layout="landscape"] .share-seg-thumb,
+.share-seg[data-tone="gray"] .share-seg-thumb { transform: translateX(100%); }
+/* The solo cell holds a switch rather than a choice, so its thumb doesn't
+   slide — it is pressed on or lifted off, the way the seal itself is. */
+.share-seg.is-solo .share-seg-thumb {
+  width: calc(100% - 4px);
+  transition: opacity 0.16s var(--ease), transform 0.22s var(--ease-spring);
+}
+.share-seg.is-solo:not(.is-on) .share-seg-thumb { opacity: 0; transform: scale(0.8); }
 .share-seg button {
   position: relative;
   z-index: 1;
   display: grid;
   place-items: center;
   min-width: 42px;
+  /* 27px inside the 2px track and its hairline is the 33px of the action
+     buttons beside it. Stated rather than stretched: once the row wraps the
+     controls onto their own line there is nothing left to stretch against,
+     and the segments would otherwise shrink to their glyphs. */
+  min-height: 27px;
   color: var(--seg-muted);
   background: transparent;
   border: 0;
@@ -3430,6 +3460,12 @@ button.stats-tag-row:active { scale: 0.992; }
 .share-seg button:focus-visible { outline: none; background: var(--wash-strong); }
 .share-seg button:active:not(:disabled) { transform: scale(0.94); }
 .share-seg button.is-active { color: var(--ink); }
+/* Sample chips of the two stocks, mirroring --sc-paper in shareCard.css.
+   Both are light in either theme, so their rim is a fixed ink alpha rather
+   than a token — a theme-flipping hairline would vanish on one of them. */
+.share-swatch { width: 16px; height: 16px; border: 1px solid rgba(0, 0, 0, 0.24); border-radius: 4px; }
+.share-swatch.is-paper { background: #f9f5ea; }
+.share-swatch.is-gray { background: #e4e4e4; }
 
 /* =========================================================================
    Back-to-top — a frosted disc floating bottom-center over the feed. The

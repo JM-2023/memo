@@ -13,6 +13,9 @@ import "../styles/shareCard.css";
 import shareCardCss from "../styles/shareCard.css?raw";
 
 type CardLayout = "portrait" | "landscape";
+/** The sheet's stock: warm cream, or the neutral gray for images that have
+    to sit beside UI screenshots. Both live in shareCard.css. */
+type CardTone = "paper" | "gray";
 
 /** The artifact's fixed layout widths; the preview scales, the PNG never.
     Portrait is a phone-reading measure, landscape a desktop one — the same
@@ -27,6 +30,8 @@ const MODAL_CHROME = 50;
 const EXPORT_SCALE = 2.5;
 
 const LAYOUT_KEY = "memo:share-layout";
+const TONE_KEY = "memo:share-tone";
+const SEAL_KEY = "memo:share-seal";
 
 function loadLayout(): CardLayout {
   try {
@@ -39,6 +44,40 @@ function loadLayout(): CardLayout {
 function storeLayout(layout: CardLayout): void {
   try {
     localStorage.setItem(LAYOUT_KEY, layout);
+  } catch {
+    // private mode — the pick just won't persist
+  }
+}
+
+function loadTone(): CardTone {
+  try {
+    return localStorage.getItem(TONE_KEY) === "gray" ? "gray" : "paper";
+  } catch {
+    return "paper";
+  }
+}
+
+function storeTone(tone: CardTone): void {
+  try {
+    localStorage.setItem(TONE_KEY, tone);
+  } catch {
+    // private mode — the pick just won't persist
+  }
+}
+
+/** The seal is stamped unless the reader has turned it off — an unmarked
+    sheet is the exception, so only "off" is ever written. */
+function loadSeal(): boolean {
+  try {
+    return localStorage.getItem(SEAL_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+function storeSeal(sealed: boolean): void {
+  try {
+    localStorage.setItem(SEAL_KEY, sealed ? "on" : "off");
   } catch {
     // private mode — the pick just won't persist
   }
@@ -179,6 +218,8 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   const [closing, setClosing] = useState(false);
   const [busy, setBusy] = useState<"save" | "copy" | null>(null);
   const [layout, setLayout] = useState<CardLayout>(loadLayout);
+  const [tone, setTone] = useState<CardTone>(loadTone);
+  const [sealed, setSealed] = useState<boolean>(loadSeal);
   // External links that refused CORS can't be rasterized; they drop from the
   // preview too, so what you see is exactly what exports.
   const [brokenExternals, setBrokenExternals] = useState<ReadonlySet<string>>(() => new Set());
@@ -286,6 +327,24 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
     storeLayout(next);
   }
 
+  /** Swap the stock the sheet is printed on — also remembered. Unlike the
+      layout it changes nothing about the card's geometry, so the same sheet
+      stays in place and only its color crossfades. */
+  function pickTone(next: CardTone) {
+    if (next === tone || busy) return;
+    setTone(next);
+    storeTone(next);
+  }
+
+  /** Press or lift the seal. Off leaves the wordmark alone on the footer
+      rule — a plain sheet, for anywhere a mark would read as a watermark. */
+  function toggleSeal() {
+    if (busy) return;
+    const next = !sealed;
+    setSealed(next);
+    storeSeal(next);
+  }
+
   function renderPng(): Promise<Blob> {
     const card = cardRef.current;
     if (!card) return Promise.reject(new Error("Card is not mounted"));
@@ -347,7 +406,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
             <div
               key={layout}
               ref={cardRef}
-              className={`share-card${layout === "landscape" ? " is-landscape" : ""}`}
+              className={`share-card${layout === "landscape" ? " is-landscape" : ""}${tone === "gray" ? " is-gray" : ""}`}
               lang={language}
               style={fit && fit.scale < 1 ? { transform: `scale(${fit.scale})`, transformOrigin: "top left" } : undefined}
             >
@@ -375,9 +434,11 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
               ) : null}
               <footer className="sc-foot">
                 <span className="sc-brand">MEMO</span>
-                <span className="sc-seal" aria-hidden="true">
-                  <NotebookPen size={12} strokeWidth={2.4} />
-                </span>
+                {sealed ? (
+                  <span className="sc-seal" aria-hidden="true">
+                    <NotebookPen size={12} strokeWidth={2.4} />
+                  </span>
+                ) : null}
               </footer>
             </div>
           </div>
@@ -392,41 +453,91 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
         </div>
 
         <footer className="share-actions">
-          <span className="share-seg" role="group" aria-label={tr("Card layout", "卡片版式")} data-layout={layout}>
-            <span className="share-seg-thumb" aria-hidden="true" />
-            <button
-              type="button"
-              className={layout === "portrait" ? "is-active" : ""}
-              aria-pressed={layout === "portrait"}
-              aria-label={tr("Portrait card", "竖版卡片")}
-              title={tr("Portrait card", "竖版卡片")}
-              disabled={busy !== null}
-              onClick={() => pickLayout("portrait")}
-            >
-              <RectangleVertical size={15} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className={layout === "landscape" ? "is-active" : ""}
-              aria-pressed={layout === "landscape"}
-              aria-label={tr("Landscape card", "横版卡片")}
-              title={tr("Landscape card", "横版卡片")}
-              disabled={busy !== null}
-              onClick={() => pickLayout("landscape")}
-            >
-              <RectangleHorizontal size={15} aria-hidden="true" />
+          <span className="share-controls">
+            <span className="share-seg" role="group" aria-label={tr("Card layout", "卡片版式")} data-layout={layout}>
+              <span className="share-seg-thumb" aria-hidden="true" />
+              <button
+                type="button"
+                className={layout === "portrait" ? "is-active" : ""}
+                aria-pressed={layout === "portrait"}
+                aria-label={tr("Portrait card", "竖版卡片")}
+                title={tr("Portrait card", "竖版卡片")}
+                disabled={busy !== null}
+                onClick={() => pickLayout("portrait")}
+              >
+                <RectangleVertical size={15} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className={layout === "landscape" ? "is-active" : ""}
+                aria-pressed={layout === "landscape"}
+                aria-label={tr("Landscape card", "横版卡片")}
+                title={tr("Landscape card", "横版卡片")}
+                disabled={busy !== null}
+                onClick={() => pickLayout("landscape")}
+              >
+                <RectangleHorizontal size={15} aria-hidden="true" />
+              </button>
+            </span>
+            {/* Stock picker. The swatches are the labels — each button shows
+                the paper it selects, so nothing has to be named. */}
+            <span className="share-seg" role="group" aria-label={tr("Card background", "卡片底色")} data-tone={tone}>
+              <span className="share-seg-thumb" aria-hidden="true" />
+              <button
+                type="button"
+                className={tone === "paper" ? "is-active" : ""}
+                aria-pressed={tone === "paper"}
+                aria-label={tr("Cream paper", "米白底")}
+                title={tr("Cream paper", "米白底")}
+                disabled={busy !== null}
+                onClick={() => pickTone("paper")}
+              >
+                <span className="share-swatch is-paper" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className={tone === "gray" ? "is-active" : ""}
+                aria-pressed={tone === "gray"}
+                aria-label={tr("Neutral gray", "中性灰底")}
+                title={tr("Neutral gray", "中性灰底")}
+                disabled={busy !== null}
+                onClick={() => pickTone("gray")}
+              >
+                <span className="share-swatch is-gray" aria-hidden="true" />
+              </button>
+            </span>
+            {/* Seal switch — one cell of the same track: the thumb is under
+                the glyph, or it isn't. */}
+            <span className={`share-seg is-solo${sealed ? " is-on" : ""}`}>
+              <span className="share-seg-thumb" aria-hidden="true" />
+              <button
+                type="button"
+                className={sealed ? "is-active" : ""}
+                aria-pressed={sealed}
+                aria-label={tr("Seal", "印章")}
+                title={tr("Seal", "印章")}
+                disabled={busy !== null}
+                onClick={toggleSeal}
+              >
+                <NotebookPen size={15} aria-hidden="true" />
+              </button>
+            </span>
+          </span>
+          {/* The two exits travel together: when the row runs out of width
+              the sheet controls take the first line and both buttons drop to
+              the second, rather than Save wrapping away from Copy. */}
+          <span className="share-buttons">
+            {supportsImageClipboard() ? (
+              <button type="button" className="ghost-button" onClick={handleCopy} disabled={busy !== null}>
+                {busy === "copy" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
+                {tr("Copy image", "复制图片")}
+              </button>
+            ) : null}
+            <button ref={saveRef} type="button" className="accent-button" onClick={handleSave} disabled={busy !== null}>
+              {busy === "save" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
+              {tr("Save image", "保存图片")}
             </button>
           </span>
-          {supportsImageClipboard() ? (
-            <button type="button" className="ghost-button" onClick={handleCopy} disabled={busy !== null}>
-              {busy === "copy" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
-              {tr("Copy image", "复制图片")}
-            </button>
-          ) : null}
-          <button ref={saveRef} type="button" className="accent-button" onClick={handleSave} disabled={busy !== null}>
-            {busy === "save" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
-            {tr("Save image", "保存图片")}
-          </button>
         </footer>
       </div>
     </div>

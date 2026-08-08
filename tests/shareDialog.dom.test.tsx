@@ -112,6 +112,57 @@ describe("share dialog", () => {
     expect(screen.getByRole("button", { name: "Landscape card" }).getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("prints on neutral gray stock and remembers the pick", async () => {
+    const user = userEvent.setup();
+    const { view } = renderDialog();
+
+    const group = screen.getByRole("group", { name: "Card background" });
+    expect(view.container.querySelector(".share-card")?.className).not.toContain("is-gray");
+
+    await user.click(screen.getByRole("button", { name: "Neutral gray" }));
+
+    expect(group.getAttribute("data-tone")).toBe("gray");
+    expect(view.container.querySelector(".share-card")?.className).toContain("is-gray");
+    expect(localStorage.getItem("memo:share-tone")).toBe("gray");
+  });
+
+  it("opens with the stored stock", () => {
+    localStorage.setItem("memo:share-tone", "gray");
+    const { view } = renderDialog();
+
+    expect(view.container.querySelector(".share-card")?.className).toContain("is-gray");
+    expect(screen.getByRole("button", { name: "Neutral gray" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("lifts the seal off the card and remembers it", async () => {
+    const user = userEvent.setup();
+    const { view } = renderDialog();
+
+    const seal = screen.getByRole("button", { name: "Seal" });
+    expect(seal.getAttribute("aria-pressed")).toBe("true");
+
+    await user.click(seal);
+
+    // Gone from the DOM, not merely hidden: the export serializes the card,
+    // so anything still in the tree would land in the PNG.
+    expect(view.container.querySelector(".sc-seal")).toBeNull();
+    expect(view.container.querySelector(".sc-brand")).not.toBeNull();
+    expect(seal.getAttribute("aria-pressed")).toBe("false");
+    expect(localStorage.getItem("memo:share-seal")).toBe("off");
+
+    await user.click(seal);
+    expect(view.container.querySelector(".sc-seal")).not.toBeNull();
+    expect(localStorage.getItem("memo:share-seal")).toBe("on");
+  });
+
+  it("opens unsealed when that was the last pick", () => {
+    localStorage.setItem("memo:share-seal", "off");
+    const { view } = renderDialog();
+
+    expect(view.container.querySelector(".sc-seal")).toBeNull();
+    expect(screen.getByRole("button", { name: "Seal" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("drops external images that fail to load and says so", async () => {
     const { view } = renderDialog({
       memo: { ...memo, content: "look\nhttps://example.com/pic.png" }
