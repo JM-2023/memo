@@ -611,9 +611,18 @@ a:hover { text-decoration: underline; }
    is the element's resting rotate(-3deg); the pop curve supplies the
    press-past-and-settle. */
 @keyframes seal-stamp { from { opacity: 0; transform: scale(2.1) rotate(-15deg); } }
+/* …and lifts straight back off the page it was pressed onto. */
+@keyframes seal-lift { to { opacity: 0; transform: scale(1.85) rotate(-14deg); } }
 /* Share card layout swap: the fresh sheet appears through a plain fade —
    the frame's width morph carries all the motion. */
 @keyframes sheet-in { from { opacity: 0; } }
+/* Sheet-setup cells. A glyph that has just become the answer arrives under
+   the thumb; --glyph-tilt is the element's own resting lean (0 for most,
+   the seal chip's -3deg for one), so the scale composes with it instead of
+   flattening it, and the implicit `to` lands back on it. */
+@keyframes seg-pop { from { transform: var(--glyph-tilt) scale(0.76); } }
+/* The seal chip presses on the way the seal does, one size down. */
+@keyframes seal-press { from { opacity: 0; transform: var(--glyph-tilt) scale(1.7) rotate(-12deg); } }
 
 .spin { animation: spin 0.8s linear infinite; }
 
@@ -3380,6 +3389,13 @@ button.stats-tag-row:active { scale: 0.992; }
 }
 /* …and once the page has landed, the seal is pressed on. One flourish. */
 .share-stage .sc-seal { animation: seal-stamp 0.3s var(--ease-pop) 0.3s backwards; }
+/* Pressed by hand rather than arriving with a fresh sheet: nothing to wait
+   for, so the stamp follows the finger. */
+.share-stage .sc-seal.is-quick { animation-delay: 0s; }
+/* Lifted off — the press run backwards. The mark outlives its own removal
+   by exactly this long (SEAL_LIFT_MS in ShareDialog); an export inside that
+   beat cuts it short rather than photographing a fading stamp. */
+.share-stage .sc-seal.is-lifting { animation: seal-lift 0.2s var(--ease) forwards; }
 .share-note {
   margin: 12px 0 0;
   color: var(--muted);
@@ -3387,41 +3403,58 @@ button.stats-tag-row:active { scale: 0.992; }
   font-weight: 600;
   text-align: center;
 }
-.share-actions {
+/* -------------------------------------------------------------------------
+   Sheet setup — the three things about the artifact you can change: its
+   shape, its stock, whether it carries the mark. They belong under the sheet
+   they describe, not mixed into the row you leave by, so they get their own
+   line between the stage and the actions; the footer below is then only the
+   two exits, right-aligned as dialog actions always are.
+
+   One track, not three capsules. Three free-floating pills of unequal width
+   read as clutter, their widths decided the wrap point of the actions row
+   (portrait wrapped, landscape didn't — the dialog changed shape when you
+   flipped the sheet), and a one-cell "segment" for the seal was a segmented
+   control that segmented nothing. Here the groups share a track and are
+   parted by the page's own hairline; each keeps its own thumb, sliding for a
+   choice, pressing for a switch.
+
+   Every cell is a miniature of what it does — the sheet's proportion, a
+   sample of the stock, the mark itself — so no cell needs a word under it.
+   ------------------------------------------------------------------------- */
+.share-setup {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 14px;
+  justify-content: center;
+  padding: 12px 14px 0;
+  animation: fade-up 0.24s var(--ease-out) 0.1s both;
 }
-.share-buttons { display: flex; gap: 8px; }
-.share-buttons > button { display: inline-flex; align-items: center; gap: 7px; }
-/* The sheet controls hold the left end of the row together — what shape the
-   sheet is, what stock it's printed on, whether it's sealed — and take the
-   whole first line when the dialog is too narrow to seat them beside the
-   buttons. */
-.share-controls { display: flex; gap: 8px; margin-right: auto; }
-/* Layout and stock switches — the sidebar segment idiom (track + sliding
-   thumb) sized for the actions row, set with glyphs only: the live card is
-   the label. */
 .share-seg {
-  position: relative;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  flex: none;
+  display: flex;
   padding: 2px;
   isolation: isolate;
   background: var(--seg-track);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
 }
+.share-seg-group {
+  position: relative;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+}
+/* The parting line between one property and the next. */
+.share-seg-rule {
+  flex: none;
+  width: 1px;
+  margin: 3px 4px;
+  background: var(--line-strong);
+  border-radius: 1px;
+}
 .share-seg-thumb {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
-  left: 2px;
-  width: calc((100% - 4px) / 2);
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 50%;
   background: var(--seg-thumb);
   border: 1px solid var(--line-strong);
   /* Concentric with the 2px-padded track. */
@@ -3430,42 +3463,98 @@ button.stats-tag-row:active { scale: 0.992; }
   transform: translateX(0);
   transition: transform 0.22s var(--ease-spring);
 }
-.share-seg[data-layout="landscape"] .share-seg-thumb,
-.share-seg[data-tone="gray"] .share-seg-thumb { transform: translateX(100%); }
-/* The solo cell holds a switch rather than a choice, so its thumb doesn't
-   slide — it is pressed on or lifted off, the way the seal itself is. */
-.share-seg.is-solo .share-seg-thumb {
-  width: calc(100% - 4px);
-  transition: opacity 0.16s var(--ease), transform 0.22s var(--ease-spring);
+.share-seg-group[data-layout="landscape"] .share-seg-thumb,
+.share-seg-group[data-tone="gray"] .share-seg-thumb { transform: translateX(100%); }
+/* The seal group holds a switch rather than a choice, so its thumb has
+   nowhere to slide — it is pressed on and lifted off, the way the seal
+   itself is. */
+.share-seg-group.is-solo .share-seg-thumb {
+  width: 100%;
+  transition: opacity 0.16s var(--ease), transform 0.24s var(--ease-pop);
 }
-.share-seg.is-solo:not(.is-on) .share-seg-thumb { opacity: 0; transform: scale(0.8); }
+.share-seg-group.is-solo:not(.is-on) .share-seg-thumb { opacity: 0; transform: scale(0.72); }
 .share-seg button {
   position: relative;
   z-index: 1;
   display: grid;
   place-items: center;
-  min-width: 42px;
+  min-width: 38px;
   /* 27px inside the 2px track and its hairline is the 33px of the action
-     buttons beside it. Stated rather than stretched: once the row wraps the
-     controls onto their own line there is nothing left to stretch against,
-     and the segments would otherwise shrink to their glyphs. */
+     buttons below. Stated rather than stretched: the strip is only as wide
+     as its cells, so there is nothing to stretch against. */
   min-height: 27px;
   color: var(--seg-muted);
   background: transparent;
   border: 0;
   border-radius: calc(var(--r-md) - 2px);
-  transition: color var(--t) var(--ease), transform 0.12s var(--ease), opacity var(--t) var(--ease);
+  transition: color var(--t) var(--ease), transform 0.12s var(--ease);
 }
-@media (hover: hover) { .share-seg button:hover:not(:disabled):not(.is-active) { color: var(--ink-soft); } }
+/* State lives on the glyph, one level in: the button box is already spoken
+   for by :active, and it is the glyph — not the cell — that should answer
+   the press. --glyph-tilt keeps the seal chip's lean out of the way of the
+   scales composed on top of it. */
+.share-seg button > * {
+  --glyph-tilt: rotate(0deg);
+  transform: var(--glyph-tilt);
+  transition: transform var(--t) var(--ease);
+}
+.share-seg button.is-active > * { animation: seg-pop 0.3s var(--ease-pop); }
+@media (hover: hover) {
+  .share-seg button:hover:not(:disabled):not(.is-active) { color: var(--ink-soft); }
+  .share-seg button:hover:not(:disabled):not(.is-active) > * { transform: var(--glyph-tilt) scale(1.09); }
+}
 .share-seg button:focus-visible { outline: none; background: var(--wash-strong); }
 .share-seg button:active:not(:disabled) { transform: scale(0.94); }
 .share-seg button.is-active { color: var(--ink); }
-/* Sample chips of the two stocks, mirroring --sc-paper in shareCard.css.
+/* Sample chips of the two stocks, mirroring --sc-sheet in shareCard.css.
    Both are light in either theme, so their rim is a fixed ink alpha rather
-   than a token — a theme-flipping hairline would vanish on one of them. */
-.share-swatch { width: 16px; height: 16px; border: 1px solid rgba(0, 0, 0, 0.24); border-radius: 4px; }
+   than a token — a theme-flipping hairline would vanish on one of them.
+
+   The cool stock's gradient runs further here than it does on the sheet: at
+   true value it is within a couple of levels of both the track it sits on
+   and the thumb it sits on when picked, and a sample you cannot see is not
+   a sample. It starts on the stock's own top color and only deepens, so the
+   chip still reads as that paper, tilted toward the light. */
+.share-swatch { width: 18px; height: 18px; border: 1px solid rgba(20, 27, 45, 0.28); border-radius: 4px; }
 .share-swatch.is-paper { background: #f9f5ea; }
-.share-swatch.is-gray { background: #e4e4e4; }
+.share-swatch.is-gray { background: linear-gradient(160deg, #f7f8fb 20%, #dfe3ed); }
+/* The lean, stated specifically enough to beat the `button > *` default
+   above — which sets the same property on this very element. */
+.share-seg button > .share-seal-chip { --glyph-tilt: rotate(-3deg); }
+/* The seal at chip size — the same cinnabar square, the same lean, the same
+   glyph inside it. Off, the ink is gone and only the outline is left: an
+   un-inked stamp. */
+.share-seal-chip {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: #f9f5ea;
+  background: #a63d2a;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  transition: color var(--t) var(--ease), background var(--t) var(--ease), border-color var(--t) var(--ease),
+    transform var(--t) var(--ease);
+}
+.share-seg-group:not(.is-on) .share-seal-chip {
+  color: var(--seg-muted);
+  background: transparent;
+  border-color: var(--line-strong);
+}
+/* Pressing it on replays the card's own gesture at chip scale. */
+.share-seg button.is-active > .share-seal-chip { animation: seal-press 0.34s var(--ease-pop); }
+
+/* The two exits, and nothing else. Last in the cascade of arrivals: frame,
+   sheet, setup, exits. */
+.share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  animation: fade-up 0.24s var(--ease-out) 0.14s both;
+}
+.share-actions > button { display: inline-flex; align-items: center; gap: 7px; }
 
 /* =========================================================================
    Back-to-top — a frosted disc floating bottom-center over the feed. The

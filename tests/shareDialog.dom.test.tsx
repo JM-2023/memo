@@ -112,14 +112,14 @@ describe("share dialog", () => {
     expect(screen.getByRole("button", { name: "Landscape card" }).getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("prints on neutral gray stock and remembers the pick", async () => {
+  it("prints on the cool gray stock and remembers the pick", async () => {
     const user = userEvent.setup();
     const { view } = renderDialog();
 
     const group = screen.getByRole("group", { name: "Card background" });
     expect(view.container.querySelector(".share-card")?.className).not.toContain("is-gray");
 
-    await user.click(screen.getByRole("button", { name: "Neutral gray" }));
+    await user.click(screen.getByRole("button", { name: "Cool gray" }));
 
     expect(group.getAttribute("data-tone")).toBe("gray");
     expect(view.container.querySelector(".share-card")?.className).toContain("is-gray");
@@ -131,7 +131,7 @@ describe("share dialog", () => {
     const { view } = renderDialog();
 
     expect(view.container.querySelector(".share-card")?.className).toContain("is-gray");
-    expect(screen.getByRole("button", { name: "Neutral gray" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Cool gray" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("lifts the seal off the card and remembers it", async () => {
@@ -153,6 +153,31 @@ describe("share dialog", () => {
     await user.click(seal);
     expect(view.container.querySelector(".sc-seal")).not.toBeNull();
     expect(localStorage.getItem("memo:share-seal")).toBe("on");
+  });
+
+  it("lets a lifted seal animate away before it leaves the tree", async () => {
+    // Motion allowed, unlike the shared mock: the mark stays mounted for the
+    // length of its lift, marked so app.css can run it, then goes.
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn()
+      }))
+    });
+    const user = userEvent.setup();
+    const { view } = renderDialog();
+
+    await user.click(screen.getByRole("button", { name: "Seal" }));
+
+    expect(view.container.querySelector(".sc-seal")?.className).toContain("is-lifting");
+    await waitFor(() => expect(view.container.querySelector(".sc-seal")).toBeNull());
   });
 
   it("opens unsealed when that was the last pick", () => {

@@ -1,5 +1,6 @@
 import { Check, Copy, Download, Loader2, NotebookPen, RectangleHorizontal, RectangleVertical, X } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { externalImagesOf, tokenizeLine } from "../lib/content";
@@ -28,6 +29,9 @@ const MODAL_WIDTHS: Record<CardLayout, number> = { portrait: 478, landscape: 690
 const MODAL_CHROME = 50;
 /** 400/640 CSS px → 1000/1600 px PNG: crisp in feeds without absurd payloads. */
 const EXPORT_SCALE = 2.5;
+/** How long a lifted seal stays in the tree to animate away — mirrors
+    seal-lift in app.css. */
+const SEAL_LIFT_MS = 200;
 
 const LAYOUT_KEY = "memo:share-layout";
 const TONE_KEY = "memo:share-tone";
@@ -220,6 +224,12 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   const [layout, setLayout] = useState<CardLayout>(loadLayout);
   const [tone, setTone] = useState<CardTone>(loadTone);
   const [sealed, setSealed] = useState<boolean>(loadSeal);
+  // A lifted seal outlives its own removal by one beat so it can animate
+  // away; `sealTouched` marks the moment the control took over from the
+  // sheet's arrival choreography, after which a press follows the finger.
+  const [sealExit, setSealExit] = useState(false);
+  const sealExitTimer = useRef(0);
+  const sealTouched = useRef(false);
   // External links that refused CORS can't be rasterized; they drop from the
   // preview too, so what you see is exactly what exports.
   const [brokenExternals, setBrokenExternals] = useState<ReadonlySet<string>>(() => new Set());
@@ -254,7 +264,13 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, escapeDisabled: busy !== null, initialFocusRef: saveRef });
 
-  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(closeTimer.current);
+      window.clearTimeout(sealExitTimer.current);
+    },
+    []
+  );
 
   // The artifact keeps its true layout width; narrow dialogs show it through
   // a wrapper scale, and height rides along so the stage scrolls the visual
@@ -337,15 +353,29 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   }
 
   /** Press or lift the seal. Off leaves the wordmark alone on the footer
-      rule — a plain sheet, for anywhere a mark would read as a watermark. */
+      rule — a plain sheet, for anywhere a mark would read as a watermark.
+      Lifting keeps the mark in the tree for one beat so it can pull away
+      rather than blink out; renderPng cuts that beat short if an export
+      lands inside it. */
   function toggleSeal() {
     if (busy) return;
     const next = !sealed;
+    sealTouched.current = true;
+    window.clearTimeout(sealExitTimer.current);
     setSealed(next);
+    setSealExit(!next && !reducedMotion);
     storeSeal(next);
+    if (next || reducedMotion) return;
+    sealExitTimer.current = window.setTimeout(() => setSealExit(false), SEAL_LIFT_MS);
   }
 
   function renderPng(): Promise<Blob> {
+    // What you see is what exports — so a seal still mid-lift has to leave
+    // the tree before the clone is taken, flushed rather than scheduled.
+    if (sealExit) {
+      window.clearTimeout(sealExitTimer.current);
+      flushSync(() => setSealExit(false));
+    }
     const card = cardRef.current;
     if (!card) return Promise.reject(new Error("Card is not mounted"));
     return nodeToPngBlob(card, { css: shareCardCss, scale: EXPORT_SCALE });
@@ -434,8 +464,11 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
               ) : null}
               <footer className="sc-foot">
                 <span className="sc-brand">MEMO</span>
-                {sealed ? (
-                  <span className="sc-seal" aria-hidden="true">
+                {sealed || sealExit ? (
+                  <span
+                    className={`sc-seal${sealExit ? " is-lifting" : sealTouched.current ? " is-quick" : ""}`}
+                    aria-hidden="true"
+                  >
                     <NotebookPen size={12} strokeWidth={2.4} />
                   </span>
                 ) : null}
@@ -452,9 +485,13 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
           ) : null}
         </div>
 
-        <footer className="share-actions">
-          <span className="share-controls">
-            <span className="share-seg" role="group" aria-label={tr("Card layout", "卡片版式")} data-layout={layout}>
+        {/* Sheet setup — how the artifact is made, kept under the artifact
+            and out of the row you leave by. One track, three properties:
+            shape, stock, mark. Each cell is a miniature of what it changes,
+            so none of them needs a word. */}
+        <div className="share-setup">
+          <span className="share-seg">
+            <span className="share-seg-group" role="group" aria-label={tr("Card layout", "卡片版式")} data-layout={layout}>
               <span className="share-seg-thumb" aria-hidden="true" />
               <button
                 type="button"
@@ -479,9 +516,10 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 <RectangleHorizontal size={15} aria-hidden="true" />
               </button>
             </span>
-            {/* Stock picker. The swatches are the labels — each button shows
-                the paper it selects, so nothing has to be named. */}
-            <span className="share-seg" role="group" aria-label={tr("Card background", "卡片底色")} data-tone={tone}>
+            <span className="share-seg-rule" aria-hidden="true" />
+            {/* Stock picker. The swatches are the labels — each button is a
+                sample of the paper it selects. */}
+            <span className="share-seg-group" role="group" aria-label={tr("Card background", "卡片底色")} data-tone={tone}>
               <span className="share-seg-thumb" aria-hidden="true" />
               <button
                 type="button"
@@ -498,17 +536,20 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 type="button"
                 className={tone === "gray" ? "is-active" : ""}
                 aria-pressed={tone === "gray"}
-                aria-label={tr("Neutral gray", "中性灰底")}
-                title={tr("Neutral gray", "中性灰底")}
+                aria-label={tr("Cool gray", "冷灰底")}
+                title={tr("Cool gray", "冷灰底")}
                 disabled={busy !== null}
                 onClick={() => pickTone("gray")}
               >
                 <span className="share-swatch is-gray" aria-hidden="true" />
               </button>
             </span>
-            {/* Seal switch — one cell of the same track: the thumb is under
-                the glyph, or it isn't. */}
-            <span className={`share-seg is-solo${sealed ? " is-on" : ""}`}>
+            <span className="share-seg-rule" aria-hidden="true" />
+            {/* The seal is a switch, not a choice, so it gets one cell and
+                the thumb presses on or lifts off. The glyph is the mark
+                itself at chip size: inked when it's on the sheet, an empty
+                outline when it isn't. */}
+            <span className={`share-seg-group is-solo${sealed ? " is-on" : ""}`}>
               <span className="share-seg-thumb" aria-hidden="true" />
               <button
                 type="button"
@@ -519,25 +560,25 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 disabled={busy !== null}
                 onClick={toggleSeal}
               >
-                <NotebookPen size={15} aria-hidden="true" />
+                <span className="share-seal-chip" aria-hidden="true">
+                  <NotebookPen size={10} strokeWidth={2.6} />
+                </span>
               </button>
             </span>
           </span>
-          {/* The two exits travel together: when the row runs out of width
-              the sheet controls take the first line and both buttons drop to
-              the second, rather than Save wrapping away from Copy. */}
-          <span className="share-buttons">
-            {supportsImageClipboard() ? (
-              <button type="button" className="ghost-button" onClick={handleCopy} disabled={busy !== null}>
-                {busy === "copy" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
-                {tr("Copy image", "复制图片")}
-              </button>
-            ) : null}
-            <button ref={saveRef} type="button" className="accent-button" onClick={handleSave} disabled={busy !== null}>
-              {busy === "save" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
-              {tr("Save image", "保存图片")}
+        </div>
+
+        <footer className="share-actions">
+          {supportsImageClipboard() ? (
+            <button type="button" className="ghost-button" onClick={handleCopy} disabled={busy !== null}>
+              {busy === "copy" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
+              {tr("Copy image", "复制图片")}
             </button>
-          </span>
+          ) : null}
+          <button ref={saveRef} type="button" className="accent-button" onClick={handleSave} disabled={busy !== null}>
+            {busy === "save" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
+            {tr("Save image", "保存图片")}
+          </button>
         </footer>
       </div>
     </div>

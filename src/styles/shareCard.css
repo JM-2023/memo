@@ -27,7 +27,7 @@
    headings), so nothing here depends on a variable face being installed.
 
    Palette: two stocks, one ink. Paper is warm cream; .is-gray is the same
-   page on neutral card stock, for an image that has to sit beside UI
+   page on the app's own cool gray, for an image that has to sit beside UI
    screenshots or in a dark feed without reading as yellowed. The single
    accent is cinnabar, reserved for the seal: the stamp traditionally pressed
    after a finished piece of writing. It is the only saturated color on the
@@ -35,6 +35,10 @@
    ========================================================================= */
 .share-card {
   --sc-paper: #f9f5ea;
+  /* What the sheet is actually painted with. Split from --sc-paper because
+     that one has to stay a flat color: it is also the ink laid ON the stock
+     (the tick inside a filled task box, the glyph inside the seal). */
+  --sc-sheet: var(--sc-paper);
   --sc-ink: #2b2216;
   --sc-soft: #5b5140;
   --sc-faint: #8b7e66;
@@ -56,7 +60,7 @@
   box-sizing: border-box;
   width: 400px;
   padding: 32px 32px 24px;
-  background: var(--sc-paper);
+  background: var(--sc-sheet);
   border: 1px solid var(--sc-rim);
   border-radius: 16px;
   color: var(--sc-ink);
@@ -174,11 +178,16 @@
 .sc-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
 
 /* Provenance: wordmark left, seal right, held apart from the text by the
-   page's one hairline. */
+   page's one hairline. The band keeps the seal's height whether or not the
+   seal is there, so lifting the mark leaves the page the same length
+   instead of shortening it by 11px. */
 .sc-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* Border-box everywhere here, so the seal's 22px of band plus its own
+     rule and the air above it: 1 + 14 + 22. */
+  min-height: 37px;
   margin-top: 30px;
   padding-top: 14px;
   border-top: 1px solid var(--sc-line);
@@ -203,23 +212,35 @@
 }
 
 /* =========================================================================
-   Neutral stock — the same page printed on gray card. Nothing moves and
-   nothing resizes; only the temperature changes, so the sheet can sit next
-   to UI screenshots, or on a dark timeline, without reading as yellowed.
-   The values are true neutrals (equal channels) — a gray that takes no side
-   between the warm and cool surfaces it will be posted among. Ink stays
-   near-black against it at ~15:1.
+   Gray stock — the same page printed on the app's own paper. Nothing moves
+   and nothing resizes; only the temperature changes, so the sheet can sit
+   next to UI screenshots, or on a dark timeline, without reading as
+   yellowed.
+
+   The values are the interface's neutrals, not a desaturation of the cream
+   ones: --bg / --ink / --ink-soft / --line / --line-strong from app.css,
+   transcribed as literals because this file is embedded into the exported
+   SVG, where no app token resolves. So a memo shared on this stock is
+   printed in the same gray the app itself is made of.
+
+   A true neutral (equal channels) is what this replaced, and flat equal
+   channels read as drab at sheet size — there is nothing in them for the
+   light to do. This gray is faintly cool and very faintly lit: the stock
+   carries a top-to-bottom gradient of about ten levels, ~150 export pixels
+   per level, which is under the eye's step threshold — no banding, but the
+   sheet stops reading as a swatch of fill and starts reading as paper.
    ========================================================================= */
 .share-card.is-gray {
-  --sc-paper: #e4e4e4;
-  --sc-ink: #1e1e1e;
-  --sc-soft: #4d4d4d;
-  --sc-faint: #757575;
-  --sc-line: #d3d3d3;
-  --sc-line-strong: #c0c0c0;
-  --sc-rim: rgba(0, 0, 0, 0.12);
-  --sc-wash: rgba(0, 0, 0, 0.06);
-  --sc-hair: rgba(0, 0, 0, 0.34);
+  --sc-paper: #f2f3f7;
+  --sc-sheet: linear-gradient(180deg, #f7f8fb, #eceef4);
+  --sc-ink: #161922;
+  --sc-soft: #454b59;
+  --sc-faint: #5c6675;
+  --sc-line: #e2e5ec;
+  --sc-line-strong: #d3d7e0;
+  --sc-rim: rgba(20, 27, 45, 0.13);
+  --sc-wash: rgba(20, 27, 45, 0.06);
+  --sc-hair: rgba(20, 27, 45, 0.36);
 }
 
 /* =========================================================================
