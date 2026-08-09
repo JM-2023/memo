@@ -56,6 +56,10 @@
   --sc-sans:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui,
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  /* What the entry is written in. Split from --sc-sans because that one is
+     also the sheet's printed furniture — dateline and wordmark — which stays
+     set in type however the entry itself is written. */
+  --sc-face: var(--sc-sans);
 
   box-sizing: border-box;
   width: 400px;
@@ -64,7 +68,7 @@
   border: 1px solid var(--sc-rim);
   border-radius: 16px;
   color: var(--sc-ink);
-  font-family: var(--sc-sans);
+  font-family: var(--sc-face);
   font-size: 16px;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
@@ -83,6 +87,9 @@
 .sc-date {
   display: block;
   color: var(--sc-faint);
+  /* Printed furniture, not writing: the dateline is part of the stationery,
+     so it holds its type face even when the entry is in a hand. */
+  font-family: var(--sc-sans);
   font-size: 12px;
   font-weight: 600;
   line-height: 1.5;
@@ -194,6 +201,8 @@
 }
 .sc-brand {
   color: var(--sc-faint);
+  /* Furniture, like the dateline: a wordmark is set, never written. */
+  font-family: var(--sc-sans);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.18em;
@@ -203,6 +212,9 @@
   display: grid;
   place-items: center;
   flex: none;
+  /* Holds the right edge on its own, for the sheets that carry no wordmark
+     for space-between to push against. */
+  margin-left: auto;
   width: 22px;
   height: 22px;
   background: var(--sc-accent);
@@ -242,6 +254,42 @@
   --sc-wash: rgba(20, 27, 45, 0.06);
   --sc-hair: rgba(20, 27, 45, 0.36);
 }
+
+/* =========================================================================
+   Written by hand — the same stationery, with the entry set in a script
+   instead of type. Only the entry: the dateline and the wordmark are the
+   sheet's printed furniture and keep their face (see --sc-face), so the card
+   reads as writing ON a printed page rather than as a novelty font.
+
+   Latin comes from Dancing Script, bundled with the app (SIL OFL 1.1 —
+   src/assets/fonts/OFL.txt): declared in app.css for the preview, and
+   inlined as a data URI beside this file for the export, which can't fetch
+   anything. It carries no CJK, so Chinese falls through to whatever written
+   face the reader's system has — 翩翩体 or 行楷 on Apple platforms, 楷体 on
+   Windows. All of them a hand rather than a press, which is the whole point;
+   the print stack is not in this list, so a system with none of them lands
+   on the generic cursive instead of quietly looking unchanged.
+
+   The ladder steps up one rung. A script sets smaller on the body than a UI
+   sans at the same size — narrower, with a shorter x-height — so 18px here
+   is the 16px of the printed sheet, and the headings ride up with it to keep
+   the five rungs apart. Tracking goes to zero (a connected hand can't be
+   tracked) and figures come off their columns (a hand has none).
+   ========================================================================= */
+.share-card.is-hand {
+  --sc-face: "Dancing Script", "Hanzipen SC", "Xingkai SC", STXingkai, "Kaiti SC", STKaiti, KaiTi, "楷体", cursive;
+  font-size: 18px;
+  font-variant-numeric: normal;
+  line-height: 1.7;
+}
+.share-card.is-hand .sc-h1 { font-size: 27px; letter-spacing: 0; }
+.share-card.is-hand .sc-h2 { font-size: 23px; letter-spacing: 0; }
+.share-card.is-hand .sc-h3 { font-size: 19px; }
+.share-card.is-hand .sc-code { font-size: 15px; }
+/* The markers are drawn, not written, so they keep their own geometry — but
+   they re-center against the taller line box (18px × 1.7 = 30.6px). */
+.share-card.is-hand .sc-dot { margin-top: 13px; }
+.share-card.is-hand .sc-box { margin-top: 7.8px; }
 
 /* =========================================================================
    Landscape — the same sheet cut wider, read the way a screen reads: one

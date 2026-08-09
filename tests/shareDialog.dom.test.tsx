@@ -51,6 +51,25 @@ beforeEach(() => {
   });
 });
 
+/** The shared mock above asks for reduced motion, which is what most of these
+    tests want: the settled result, with no beat in between. The few that are
+    about the beat itself opt back into real motion. */
+function allowMotion() {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn()
+    }))
+  });
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -156,21 +175,9 @@ describe("share dialog", () => {
   });
 
   it("lets a lifted seal animate away before it leaves the tree", async () => {
-    // Motion allowed, unlike the shared mock: the mark stays mounted for the
-    // length of its lift, marked so app.css can run it, then goes.
-    Object.defineProperty(window, "matchMedia", {
-      configurable: true,
-      value: vi.fn((query: string) => ({
-        matches: false,
-        media: query,
-        onchange: null,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        dispatchEvent: vi.fn()
-      }))
-    });
+    // The mark stays mounted for the length of its lift, marked so app.css
+    // can run it, then goes.
+    allowMotion();
     const user = userEvent.setup();
     const { view } = renderDialog();
 
@@ -186,6 +193,116 @@ describe("share dialog", () => {
 
     expect(view.container.querySelector(".sc-seal")).toBeNull();
     expect(screen.getByRole("button", { name: "Seal" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("sets the entry in a hand and remembers the pick", async () => {
+    const user = userEvent.setup();
+    const { view } = renderDialog();
+
+    const hand = screen.getByRole("button", { name: "Handwriting" });
+    expect(view.container.querySelector(".share-card")?.className).not.toContain("is-hand");
+
+    await user.click(hand);
+
+    expect(hand.getAttribute("aria-pressed")).toBe("true");
+    expect(view.container.querySelector(".share-card")?.className).toContain("is-hand");
+    expect(localStorage.getItem("memo:share-hand")).toBe("on");
+  });
+
+  it("opens in the hand when that was the last pick", () => {
+    localStorage.setItem("memo:share-hand", "on");
+    const { view } = renderDialog();
+
+    expect(view.container.querySelector(".share-card")?.className).toContain("is-hand");
+    expect(screen.getByRole("button", { name: "Handwriting" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("takes the wordmark and the tags off the sheet, and remembers", async () => {
+    const user = userEvent.setup();
+    const { view } = renderDialog();
+
+    const privacy = screen.getByRole("button", { name: "Privacy" });
+    expect(view.container.querySelector(".sc-tag")).not.toBeNull();
+
+    await user.click(privacy);
+
+    expect(privacy.getAttribute("aria-pressed")).toBe("true");
+    expect(view.container.querySelector(".sc-brand")).toBeNull();
+    expect(view.container.querySelector(".sc-tag")).toBeNull();
+    // Only the marks: the line that carried the tag keeps everything else,
+    // and the seal is nobody's name, so it stays.
+    expect(view.container.querySelector(".sc-body")?.textContent).toContain("plain line with");
+    expect(view.container.querySelector(".sc-seal")).not.toBeNull();
+    expect(localStorage.getItem("memo:share-privacy")).toBe("on");
+  });
+
+  it("opens with the marks already off when that was the last pick", () => {
+    localStorage.setItem("memo:share-privacy", "on");
+    const { view } = renderDialog();
+
+    expect(view.container.querySelector(".sc-brand")).toBeNull();
+    expect(view.container.querySelector(".sc-tag")).toBeNull();
+    expect(screen.getByRole("button", { name: "Privacy" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("drops a line that was nothing but tags, and the blank edge it leaves", async () => {
+    const user = userEvent.setup();
+    const { view } = renderDialog({ memo: { ...memo, content: "kept\n\n#work #inbox\n" } });
+    expect(view.container.querySelectorAll(".sc-body > *")).toHaveLength(3);
+
+    await user.click(screen.getByRole("button", { name: "Privacy" }));
+
+    const body = view.container.querySelector(".sc-body");
+    expect(body?.textContent).toBe("kept");
+    expect(body?.querySelector(".sc-blank")).toBeNull();
+  });
+
+  it("closes the page with no band at all once nothing is left to rule off", async () => {
+    const user = userEvent.setup();
+    const { view } = renderDialog();
+
+    await user.click(screen.getByRole("button", { name: "Privacy" }));
+    // The seal alone still earns the rule…
+    expect(view.container.querySelector(".sc-foot")).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Seal" }));
+    expect(view.container.querySelector(".sc-foot")).toBeNull();
+  });
+
+  it("lets the paper drink the marks before they leave the tree", async () => {
+    allowMotion();
+    const user = userEvent.setup();
+    const { view } = renderDialog();
+
+    await user.click(screen.getByRole("button", { name: "Privacy" }));
+
+    const brand = view.container.querySelector(".sc-brand");
+    expect(brand?.className).toContain("is-drinking");
+    // One node per glyph, each dealt its own beat, so the absorption is
+    // granular rather than a wipe.
+    expect(brand?.querySelectorAll(".sc-glyph")).toHaveLength(4);
+    expect(view.container.querySelector(".sc-tag")?.className).toContain("is-drinking");
+
+    await waitFor(() => expect(view.container.querySelector(".sc-brand")).toBeNull());
+    // Settled: nothing per-character is left for the export to serialize.
+    expect(view.container.querySelector(".sc-glyph")).toBeNull();
+  });
+
+  it("writes the marks back on rather than blinking them in", async () => {
+    allowMotion();
+    const user = userEvent.setup();
+    const { view } = renderDialog();
+
+    const privacy = screen.getByRole("button", { name: "Privacy" });
+    await user.click(privacy);
+    await waitFor(() => expect(view.container.querySelector(".sc-brand")).toBeNull());
+
+    await user.click(privacy);
+    expect(view.container.querySelector(".sc-brand")?.className).toContain("is-writing");
+
+    await waitFor(() => expect(view.container.querySelector(".sc-glyph")).toBeNull());
+    expect(view.container.querySelector(".sc-brand")?.textContent).toBe("MEMO");
+    expect(view.container.querySelector(".sc-tag")?.textContent).toBe("#work");
   });
 
   it("drops external images that fail to load and says so", async () => {

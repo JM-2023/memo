@@ -8,6 +8,23 @@
    override.
    ========================================================================= */
 
+/* The one bundled face in the whole app: the script the share card is
+   written in when the reader asks for a hand (SIL OFL 1.1 — the license
+   ships beside it at src/assets/fonts/OFL.txt, and the file is unmodified).
+   Nothing in the interface is set in it, so the browser fetches it only once
+   something actually renders a glyph — the share dialog's type sample, and
+   the sheet itself. The export can't fetch anything, so it carries its own
+   copy of this rule inlined as a data URI; see src/lib/shareFont.ts.
+   `swap` rather than `block`: on a slow line the sample should show up in
+   the fallback hand rather than as a hole in the control. */
+@font-face {
+  font-family: "Dancing Script";
+  src: url("../assets/fonts/DancingScript.ttf") format("truetype");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light;
   /* -----------------------------------------------------------------------
@@ -623,6 +640,24 @@ a:hover { text-decoration: underline; }
 @keyframes seg-pop { from { transform: var(--glyph-tilt) scale(0.76); } }
 /* The seal chip presses on the way the seal does, one size down. */
 @keyframes seal-press { from { opacity: 0; transform: var(--glyph-tilt) scale(1.7) rotate(-12deg); } }
+/* Share card, privacy mode: the two marks it takes off the page are drunk by
+   the paper rather than switched off, and written back rather than switched
+   on — the Riddle diary's own pair of gestures (riddle-lite.css), glyph by
+   glyph. Drinking, the ink spreads as it sinks; writing, the pen lays each
+   stroke down left to right with a wet edge that dries behind it. Which
+   glyph goes when is dealt in inkText.tsx. */
+@keyframes ink-drink { to { opacity: 0; filter: blur(3.5px); transform: translateY(1.5px) scale(1.03); } }
+@keyframes ink-write {
+  from { clip-path: inset(-20% 100% -20% 0); opacity: 0.25; filter: blur(2.5px); }
+  60% { opacity: 1; }
+  to { clip-path: inset(-20% -10% -20% 0); opacity: 1; filter: blur(0); }
+}
+/* Nothing can tween between two typefaces, so the entry is re-inked instead:
+   it soaks back into the page and comes up again in the other hand. */
+@keyframes ink-reset {
+  45% { opacity: 0.26; filter: blur(1.7px); }
+  to { opacity: 1; filter: blur(0); }
+}
 
 .spin { animation: spin 0.8s linear infinite; }
 
@@ -3396,6 +3431,21 @@ button.stats-tag-row:active { scale: 0.992; }
    by exactly this long (SEAL_LIFT_MS in ShareDialog); an export inside that
    beat cuts it short rather than photographing a fading stamp. */
 .share-stage .sc-seal.is-lifting { animation: seal-lift 0.2s var(--ease) forwards; }
+/* Privacy mode's two gestures. The card is split into glyphs only while one
+   of them is running (InkText), so this is the only place a .sc-glyph
+   exists — and, like everything else here, the PNG never sees it: an export
+   that lands mid-gesture settles the card first. The soak and stroke lengths
+   are mirrored by inkText.tsx, which times the unmount off them; the
+   per-glyph offsets come the other way, as --ink-delay. */
+.share-stage .sc-glyph {
+  display: inline-block;
+  white-space: pre;
+}
+.share-stage .is-drinking .sc-glyph { animation: ink-drink 380ms ease-in var(--ink-delay, 0ms) both; }
+.share-stage .is-writing .sc-glyph { animation: ink-write 160ms ease-out var(--ink-delay, 0ms) both; }
+/* A face swap re-mounts the entry (keyed by the swap count in ShareDialog),
+   so this plays once per swap and never on the sheet's own arrival. */
+.share-stage .sc-body.is-reinking { animation: ink-reset 0.34s var(--ease) both; }
 .share-note {
   margin: 12px 0 0;
   color: var(--muted);
@@ -3421,9 +3471,16 @@ button.stats-tag-row:active { scale: 0.992; }
    Every cell is a miniature of what it does — the sheet's proportion, a
    sample of the stock, the mark itself — so no cell needs a word under it.
    ------------------------------------------------------------------------- */
+/* Two objects of the same material: the track of miniatures, and the one
+   option that needs a word. They share a line wherever there is room and
+   stack, still centered, where there isn't — and because neither ever
+   changes width, the wrap point is a property of the window alone. Flipping
+   the sheet can't move it. */
 .share-setup {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: 8px;
   padding: 12px 14px 0;
   animation: fade-up 0.24s var(--ease-out) 0.1s both;
 }
@@ -3536,13 +3593,52 @@ button.stats-tag-row:active { scale: 0.992; }
   transition: color var(--t) var(--ease), background var(--t) var(--ease), border-color var(--t) var(--ease),
     transform var(--t) var(--ease);
 }
-.share-seg-group:not(.is-on) .share-seal-chip {
+/* The type sample, built the way the stock swatches are — a scrap of the
+   artifact rather than a symbol for it. A piece of the cream stock with the
+   sample written on it in the very stack the sheet would use (mirroring
+   --sc-face on .share-card.is-hand in shareCard.css), so the chip answers
+   "which hand?" without being pressed. Latin readers get Aa and Chinese 字:
+   the sample is set in the script it would actually change, and Dancing
+   Script — which carries no CJK — hands 字 down the stack by itself. */
+.share-hand-chip {
+  display: grid;
+  place-items: center;
+  width: 23px;
+  height: 18px;
+  color: #2b2216;
+  background: #f9f5ea;
+  border: 1px solid rgba(20, 27, 45, 0.28);
+  border-radius: 4px;
+  font-family: "Dancing Script", "Hanzipen SC", "Xingkai SC", STXingkai, "Kaiti SC", STKaiti, KaiTi, "楷体", cursive;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  transition: color var(--t) var(--ease), background var(--t) var(--ease), border-color var(--t) var(--ease),
+    transform var(--t) var(--ease);
+}
+.share-seg-group:not(.is-on) .share-seal-chip,
+.share-seg-group:not(.is-on) .share-hand-chip {
   color: var(--seg-muted);
   background: transparent;
   border-color: var(--line-strong);
 }
 /* Pressing it on replays the card's own gesture at chip scale. */
 .share-seg button.is-active > .share-seal-chip { animation: seal-press 0.34s var(--ease-pop); }
+
+/* The worded switch, beside the track. Same material, same thumb, same
+   press — only wider, because this is the one option a miniature can't
+   stand for. Its label is a bare text node on purpose: the rules that scale
+   and pop a cell's contents are written for elements, and a word that
+   bounces on hover reads as a toy, so leaving it unwrapped exempts it
+   without a single override. */
+.share-mode button {
+  grid-auto-flow: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 11px 0 9px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
 
 /* The two exits, and nothing else. Last in the cascade of arrivals: frame,
    sheet, setup, exits. */

@@ -1,4 +1,4 @@
-import { Check, Copy, Download, Loader2, NotebookPen, RectangleHorizontal, RectangleVertical, X } from "lucide-react";
+import { Check, Copy, Download, EyeOff, Loader2, NotebookPen, RectangleHorizontal, RectangleVertical, X } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { useModalA11y } from "../hooks/useModalA11y";
@@ -8,15 +8,33 @@ import { dateKey } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { visualLinesOf } from "../lib/lineDiff";
 import { parseBlock, parseInline, type Inline } from "../lib/markdown";
+import { handFontCss } from "../lib/shareFont";
 import { copyPngToClipboard, downloadBlob, nodeToPngBlob, supportsImageClipboard } from "../lib/shareImage";
 import type { Memo } from "../lib/types";
 import "../styles/shareCard.css";
 import shareCardCss from "../styles/shareCard.css?raw";
+import { InkText, INK_DRINK_MS, inkWriteMs, type InkPhase } from "./inkText";
 
 type CardLayout = "portrait" | "landscape";
 /** The sheet's stock: warm cream, or the neutral gray for images that have
     to sit beside UI screenshots. Both live in shareCard.css. */
 type CardTone = "paper" | "gray";
+
+/**
+ * What privacy mode does to the page, and where the ink is on its way to or
+ * from while it happens. `redact` is the setting; the marks are only really
+ * off the sheet once nothing is still being drunk.
+ */
+interface CardInk {
+  redact: boolean;
+  phase: InkPhase;
+}
+
+/** True once the removable marks are genuinely gone — not merely on their
+    way out, which is still a mark on the page and still in the export. */
+function inkGone({ redact, phase }: CardInk): boolean {
+  return redact && phase !== "drink";
+}
 
 /** The artifact's fixed layout widths; the preview scales, the PNG never.
     Portrait is a phone-reading measure, landscape a desktop one — the same
@@ -32,10 +50,15 @@ const EXPORT_SCALE = 2.5;
 /** How long a lifted seal stays in the tree to animate away — mirrors
     seal-lift in app.css. */
 const SEAL_LIFT_MS = 200;
+/** The wordmark, which privacy mode takes off the sheet along with the tags.
+    A constant because the ink has to know how long it is. */
+const BRAND = "MEMO";
 
 const LAYOUT_KEY = "memo:share-layout";
 const TONE_KEY = "memo:share-tone";
 const SEAL_KEY = "memo:share-seal";
+const HAND_KEY = "memo:share-hand";
+const PRIVACY_KEY = "memo:share-privacy";
 
 function loadLayout(): CardLayout {
   try {
@@ -87,6 +110,24 @@ function storeSeal(sealed: boolean): void {
   }
 }
 
+/** The hand and privacy mode are both off unless asked for, so only "on" is
+    ever written — the same shape as the seal, inverted. */
+function loadFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "on";
+  } catch {
+    return false;
+  }
+}
+
+function storeFlag(key: string, on: boolean): void {
+  try {
+    localStorage.setItem(key, on ? "on" : "off");
+  } catch {
+    // private mode — the pick just won't persist
+  }
+}
+
 interface ShareDialogProps {
   memo: Memo;
   onToast: (text: string, tone?: "info" | "error") => void;
@@ -98,7 +139,7 @@ interface ShareDialogProps {
  * only the shell differs — everything is inert print: links keep their label
  * as quietly-underlined ink, tags read as marginalia.
  */
-function cardInline(nodes: Inline[]): ReactNode[] {
+function cardInline(nodes: Inline[], ink: CardInk): ReactNode[] {
   return nodes.map((node, index): ReactNode => {
     switch (node.t) {
       case "code":
@@ -108,21 +149,21 @@ function cardInline(nodes: Inline[]): ReactNode[] {
           </code>
         );
       case "strong":
-        return <strong key={index}>{cardInline(node.kids)}</strong>;
+        return <strong key={index}>{cardInline(node.kids, ink)}</strong>;
       case "em":
-        return <em key={index}>{cardInline(node.kids)}</em>;
+        return <em key={index}>{cardInline(node.kids, ink)}</em>;
       case "del":
-        return <del key={index}>{cardInline(node.kids)}</del>;
+        return <del key={index}>{cardInline(node.kids, ink)}</del>;
       case "mark":
         return (
           <mark key={index} className="sc-mark">
-            {cardInline(node.kids)}
+            {cardInline(node.kids, ink)}
           </mark>
         );
       case "link":
         return (
           <span key={index} className="sc-a">
-            {cardInline(node.kids)}
+            {cardInline(node.kids, ink)}
           </span>
         );
       case "url":
@@ -132,11 +173,11 @@ function cardInline(nodes: Inline[]): ReactNode[] {
           </span>
         );
       case "tag":
-        return (
-          <span key={index} className="sc-tag">
-            {node.raw}
-          </span>
-        );
+        // A tag is one of the two marks privacy mode takes off the sheet —
+        // it names the writer's own filing system, which is nobody else's
+        // business. It stays in the tree while the paper drinks it.
+        if (inkGone(ink)) return null;
+        return <InkText key={index} className="sc-tag" text={node.raw} phase={ink.phase} />;
       case "image":
         // Out of the text flow — the card renders it in the media grid.
         return null;
@@ -144,6 +185,36 @@ function cardInline(nodes: Inline[]): ReactNode[] {
         return <Fragment key={index}>{node.text}</Fragment>;
     }
   });
+}
+
+/** A line that carried nothing but tags has nothing left to say once they
+    are off the sheet, so it leaves with them rather than ruling off a blank. */
+function isOnlyTags(nodes: Inline[]): boolean {
+  let sawTag = false;
+  for (const node of nodes) {
+    if (node.t === "tag") sawTag = true;
+    else if (node.t !== "text" || node.text.trim()) return false;
+  }
+  return sawTag;
+}
+
+/** Drop the page's blank edges, for whatever the caller counts as blank. */
+function trimBlankEdges<T extends { raw: string }>(all: readonly T[], isBlank: (raw: string) => boolean): T[] {
+  let start = 0;
+  let end = all.length;
+  while (start < end && isBlank(all[start].raw)) start += 1;
+  while (end > start && isBlank(all[end - 1].raw)) end -= 1;
+  return all.slice(start, end);
+}
+
+/** Whether a redacted sheet would print anything at all for this line —
+    used to re-trim the page's edges, since a tag line that leaves from the
+    end of an entry would otherwise leave its blank behind. */
+function printsNothingRedacted(raw: string): boolean {
+  if (raw.trim() === "") return true;
+  const block = parseBlock(raw);
+  if (block.kind === "hr" || block.kind === "trule" || block.kind === "trow") return false;
+  return isOnlyTags(parseInline(block.text));
 }
 
 function depthStyle(depth: number): CSSProperties | undefined {
@@ -155,7 +226,7 @@ function depthStyle(depth: number): CSSProperties | undefined {
  * every marker is a real element (dot, ordinal, task box, rules) — the
  * export serializes the DOM, and pseudo-elements would vanish from the PNG.
  */
-function CardLine({ raw, nextRaw }: { raw: string; nextRaw?: string }) {
+function CardLine({ raw, nextRaw, ink }: { raw: string; nextRaw?: string; ink: CardInk }) {
   if (!raw) return <div className="sc-blank" />;
   const tokens = tokenizeLine(raw);
   const visible = tokens.filter((token) => token.kind !== "image");
@@ -172,14 +243,16 @@ function CardLine({ raw, nextRaw }: { raw: string; nextRaw?: string }) {
       <div className={`sc-tr${isHead ? " is-th" : ""}`} style={{ "--sc-cols": block.cells.length } as CSSProperties}>
         {block.cells.map((cell, index) => (
           <span key={index} className="sc-td">
-            {cardInline(parseInline(cell))}
+            {cardInline(parseInline(cell), ink)}
           </span>
         ))}
       </div>
     );
   }
 
-  const inline = cardInline(parseInline(block.text));
+  const nodes = parseInline(block.text);
+  if (inkGone(ink) && isOnlyTags(nodes)) return null;
+  const inline = cardInline(nodes, ink);
   switch (block.kind) {
     case "heading":
       return <div className={`sc-h${block.level}`}>{inline}</div>;
@@ -224,12 +297,20 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   const [layout, setLayout] = useState<CardLayout>(loadLayout);
   const [tone, setTone] = useState<CardTone>(loadTone);
   const [sealed, setSealed] = useState<boolean>(loadSeal);
+  const [hand, setHand] = useState<boolean>(() => loadFlag(HAND_KEY));
+  const [privacy, setPrivacy] = useState<boolean>(() => loadFlag(PRIVACY_KEY));
   // A lifted seal outlives its own removal by one beat so it can animate
   // away; `sealTouched` marks the moment the control took over from the
   // sheet's arrival choreography, after which a press follows the finger.
   const [sealExit, setSealExit] = useState(false);
   const sealExitTimer = useRef(0);
   const sealTouched = useRef(false);
+  // Which way the removable marks are travelling, and how many face swaps
+  // the page has been through — the counter is the body's key, so each swap
+  // re-mounts it and its re-inking pulse plays again.
+  const [inkPhase, setInkPhase] = useState<InkPhase>(null);
+  const [handSwaps, setHandSwaps] = useState(0);
+  const inkTimer = useRef(0);
   // External links that refused CORS can't be rasterized; they drop from the
   // preview too, so what you see is exactly what exports.
   const [brokenExternals, setBrokenExternals] = useState<ReadonlySet<string>>(() => new Set());
@@ -268,6 +349,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
     () => () => {
       window.clearTimeout(closeTimer.current);
       window.clearTimeout(sealExitTimer.current);
+      window.clearTimeout(inkTimer.current);
     },
     []
   );
@@ -305,15 +387,24 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
     };
   }, [layout]);
 
-  const lines = useMemo(() => {
-    const all = visualLinesOf(memo.content);
-    // Print discipline: the artifact drops blank edges the feed tolerates.
-    let start = 0;
-    let end = all.length;
-    while (start < end && all[start].raw.trim() === "") start += 1;
-    while (end > start && all[end - 1].raw.trim() === "") end -= 1;
-    return all.slice(start, end);
-  }, [memo.content]);
+  // Print discipline: the artifact drops blank edges the feed tolerates.
+  const lines = useMemo(() => trimBlankEdges(visualLinesOf(memo.content), (raw) => raw.trim() === ""), [memo.content]);
+
+  // The longest mark privacy mode can take off the page. The pen writes them
+  // all back at once, so this one sets how long the whole gesture runs.
+  const longestMark = useMemo(() => {
+    let longest = BRAND.length;
+    for (const line of lines) {
+      const block = parseBlock(line.raw);
+      if (block.kind === "hr" || block.kind === "trule") continue;
+      for (const text of block.kind === "trow" ? block.cells : [block.text]) {
+        for (const node of parseInline(text)) {
+          if (node.t === "tag") longest = Math.max(longest, [...node.raw].length);
+        }
+      }
+    }
+    return longest;
+  }, [lines]);
 
   const externalUrls = useMemo(() => externalImagesOf(memo.content), [memo.content]);
   const shownExternals = externalUrls.filter((url) => !brokenExternals.has(url));
@@ -369,16 +460,55 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
     sealExitTimer.current = window.setTimeout(() => setSealExit(false), SEAL_LIFT_MS);
   }
 
-  function renderPng(): Promise<Blob> {
-    // What you see is what exports — so a seal still mid-lift has to leave
-    // the tree before the clone is taken, flushed rather than scheduled.
+  /** Set the page in the other face. Nothing can tween between two
+      typefaces, so the page goes down and comes back up in the new one —
+      one soft re-inking, under cover of which the swap happens. */
+  function toggleHand() {
+    if (busy) return;
+    const next = !hand;
+    setHand(next);
+    setHandSwaps((count) => count + 1);
+    storeFlag(HAND_KEY, next);
+    // Warm the copy the export will need, so Save doesn't wait on a fetch.
+    if (next) void handFontCss();
+  }
+
+  /** Take the wordmark and the tags off the sheet, or let them back on.
+      Neither blinks: the paper drinks them, and the pen writes them back.
+      The marks stay in the tree for the length of the gesture — renderPng
+      settles it first if an export lands inside one. */
+  function togglePrivacy() {
+    if (busy) return;
+    const next = !privacy;
+    window.clearTimeout(inkTimer.current);
+    setPrivacy(next);
+    storeFlag(PRIVACY_KEY, next);
+    if (reducedMotion) {
+      setInkPhase(null);
+      return;
+    }
+    setInkPhase(next ? "drink" : "write");
+    inkTimer.current = window.setTimeout(() => setInkPhase(null), next ? INK_DRINK_MS : inkWriteMs(longestMark));
+  }
+
+  async function renderPng(): Promise<Blob> {
+    // What you see is what exports — so a seal still mid-lift, or a mark the
+    // paper is still drinking, has to settle before the clone is taken;
+    // flushed rather than scheduled, and before the first await.
     if (sealExit) {
       window.clearTimeout(sealExitTimer.current);
       flushSync(() => setSealExit(false));
     }
+    if (inkPhase) {
+      window.clearTimeout(inkTimer.current);
+      flushSync(() => setInkPhase(null));
+    }
     const card = cardRef.current;
-    if (!card) return Promise.reject(new Error("Card is not mounted"));
-    return nodeToPngBlob(card, { css: shareCardCss, scale: EXPORT_SCALE });
+    if (!card) throw new Error("Card is not mounted");
+    // The SVG the export rasterizes is its own document with no network, so
+    // a handwritten sheet has to carry the face along with it.
+    const css = hand ? shareCardCss + (await handFontCss()) : shareCardCss;
+    return nodeToPngBlob(card, { css, scale: EXPORT_SCALE });
   }
 
   async function handleSave() {
@@ -410,6 +540,12 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
     }
   }
 
+  const ink: CardInk = { redact: privacy, phase: inkPhase };
+  const redacted = inkGone(ink);
+  // Print discipline again, one pass later: with the tags off a sheet whose
+  // last line was nothing but tags, the page has a new blank edge to drop.
+  const printed = redacted ? trimBlankEdges(lines, printsNothingRedacted) : lines;
+
   return (
     <div
       ref={overlayRef}
@@ -436,15 +572,19 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
             <div
               key={layout}
               ref={cardRef}
-              className={`share-card${layout === "landscape" ? " is-landscape" : ""}${tone === "gray" ? " is-gray" : ""}`}
+              className={`share-card${layout === "landscape" ? " is-landscape" : ""}${tone === "gray" ? " is-gray" : ""}${
+                hand ? " is-hand" : ""
+              }`}
               lang={language}
               style={fit && fit.scale < 1 ? { transform: `scale(${fit.scale})`, transformOrigin: "top left" } : undefined}
             >
               <span className="sc-date">{dateLabel}</span>
-              {lines.length > 0 ? (
-                <div className="sc-body">
-                  {lines.map((line, index, all) => (
-                    <CardLine key={line.key} raw={line.raw} nextRaw={all[index + 1]?.raw} />
+              {printed.length > 0 ? (
+                // Keyed by the face-swap count: a swap re-mounts the entry so
+                // it can be re-inked, and leaves the sheet around it in place.
+                <div key={handSwaps} className={`sc-body${handSwaps > 0 ? " is-reinking" : ""}`}>
+                  {printed.map((line, index, all) => (
+                    <CardLine key={line.key} raw={line.raw} nextRaw={all[index + 1]?.raw} ink={ink} />
                   ))}
                 </div>
               ) : null}
@@ -462,17 +602,22 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                   ))}
                 </div>
               ) : null}
-              <footer className="sc-foot">
-                <span className="sc-brand">MEMO</span>
-                {sealed || sealExit ? (
-                  <span
-                    className={`sc-seal${sealExit ? " is-lifting" : sealTouched.current ? " is-quick" : ""}`}
-                    aria-hidden="true"
-                  >
-                    <NotebookPen size={12} strokeWidth={2.4} />
-                  </span>
-                ) : null}
-              </footer>
+              {/* Provenance. With the wordmark drunk and the seal lifted
+                  there is nothing left to rule off, so the band goes too
+                  rather than closing the page on an empty line. */}
+              {!redacted || sealed || sealExit ? (
+                <footer className="sc-foot">
+                  {!redacted ? <InkText className="sc-brand" text={BRAND} phase={inkPhase} /> : null}
+                  {sealed || sealExit ? (
+                    <span
+                      className={`sc-seal${sealExit ? " is-lifting" : sealTouched.current ? " is-quick" : ""}`}
+                      aria-hidden="true"
+                    >
+                      <NotebookPen size={12} strokeWidth={2.4} />
+                    </span>
+                  ) : null}
+                </footer>
+              ) : null}
             </div>
           </div>
           {excludedCount > 0 ? (
@@ -486,9 +631,10 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
         </div>
 
         {/* Sheet setup — how the artifact is made, kept under the artifact
-            and out of the row you leave by. One track, three properties:
-            shape, stock, mark. Each cell is a miniature of what it changes,
-            so none of them needs a word. */}
+            and out of the row you leave by. One track, four properties:
+            shape and stock to pick, hand and seal to switch on. Each cell is
+            a miniature of what it changes, so none of them needs a word —
+            and beside the track, the one option that does. */}
         <div className="share-setup">
           <span className="share-seg">
             <span className="share-seg-group" role="group" aria-label={tr("Card layout", "卡片版式")} data-layout={layout}>
@@ -545,10 +691,29 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
               </button>
             </span>
             <span className="share-seg-rule" aria-hidden="true" />
-            {/* The seal is a switch, not a choice, so it gets one cell and
-                the thumb presses on or lifts off. The glyph is the mark
-                itself at chip size: inked when it's on the sheet, an empty
-                outline when it isn't. */}
+            {/* Hand and seal are switches, not choices, so each gets one cell
+                and a thumb that presses on rather than sliding across. Both
+                chips are the thing itself at chip size — a scrap of the
+                stock with the sample written on it in the very face the
+                sheet would use, and the mark as it would be stamped —
+                inked when it's on the sheet, an empty outline when it isn't. */}
+            <span className={`share-seg-group is-solo${hand ? " is-on" : ""}`}>
+              <span className="share-seg-thumb" aria-hidden="true" />
+              <button
+                type="button"
+                className={hand ? "is-active" : ""}
+                aria-pressed={hand}
+                aria-label={tr("Handwriting", "手写体")}
+                title={tr("Handwriting", "手写体")}
+                disabled={busy !== null}
+                onClick={toggleHand}
+              >
+                <span className="share-hand-chip" aria-hidden="true">
+                  {tr("Aa", "字")}
+                </span>
+              </button>
+            </span>
+            <span className="share-seg-rule" aria-hidden="true" />
             <span className={`share-seg-group is-solo${sealed ? " is-on" : ""}`}>
               <span className="share-seg-thumb" aria-hidden="true" />
               <button
@@ -563,6 +728,31 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 <span className="share-seal-chip" aria-hidden="true">
                   <NotebookPen size={10} strokeWidth={2.6} />
                 </span>
+              </button>
+            </span>
+          </span>
+
+          {/* Privacy is the one option that isn't about the artifact's form
+              but about what goes on it, and the only one no miniature can
+              stand for — so it keeps the track's material and takes the word
+              the others don't need. Same line while there's room; its own
+              line on a phone. */}
+          <span className="share-seg share-mode">
+            <span className={`share-seg-group is-solo${privacy ? " is-on" : ""}`}>
+              <span className="share-seg-thumb" aria-hidden="true" />
+              <button
+                type="button"
+                className={privacy ? "is-active" : ""}
+                aria-pressed={privacy}
+                title={tr(
+                  "Privacy mode — leave the wordmark and any tags off the sheet",
+                  "隐私模式 — 落款与标签不印上纸面"
+                )}
+                disabled={busy !== null}
+                onClick={togglePrivacy}
+              >
+                <EyeOff size={14} aria-hidden="true" />
+                {tr("Privacy", "隐私")}
               </button>
             </span>
           </span>
