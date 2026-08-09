@@ -14,7 +14,7 @@
  * spans, and the line breaks exactly where it would have anyway.
  */
 
-import type { CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 /** Which way the ink is going, or null once it has settled. */
 export type InkPhase = "drink" | "write" | null;
@@ -44,13 +44,13 @@ const WRITE_STROKE_MS = 160;
 export const INK_DRINK_MS = (DRINK_STAGES - 1) * DRINK_STAGE_MS + DRINK_SOAK_MS;
 
 /** How long the pen takes to write the marks back — set by the longest one,
-    since they all start together. */
-export function inkWriteMs(longestMark: number): number {
-  return Math.max(0, longestMark - 1) * WRITE_STEP_MS + WRITE_STROKE_MS;
+    since they all start together, plus any wait before the pen is put down. */
+export function inkWriteMs(longestMark: number, lead = 0): number {
+  return lead + Math.max(0, longestMark - 1) * WRITE_STEP_MS + WRITE_STROKE_MS;
 }
 
-function delayOf(phase: Exclude<InkPhase, null>, index: number, total: number): number {
-  if (phase === "write") return index * WRITE_STEP_MS;
+function delayOf(phase: Exclude<InkPhase, null>, index: number, total: number, lead: number): number {
+  if (phase === "write") return lead + index * WRITE_STEP_MS;
   return (pxHash(index, total) % DRINK_STAGES) * DRINK_STAGE_MS;
 }
 
@@ -58,9 +58,13 @@ interface InkTextProps {
   text: string;
   phase: InkPhase;
   className?: string;
+  /** A beat before the pen touches down, for a mark whose room on the page
+      has to open up first. Ignored on the way out — the page can drink from
+      a line it is already closing. */
+  lead?: number;
 }
 
-export function InkText({ text, phase, className }: InkTextProps) {
+export function InkText({ text, phase, className, lead = 0 }: InkTextProps) {
   if (!phase) return <span className={className}>{text}</span>;
   // Code points, not code units: an emoji tag must sink as one mark.
   const glyphs = [...text];
@@ -72,11 +76,44 @@ export function InkText({ text, phase, className }: InkTextProps) {
         <span
           key={`${phase}-${index}`}
           className="sc-glyph"
-          style={{ "--ink-delay": `${delayOf(phase, index, glyphs.length)}ms` } as CSSProperties}
+          style={{ "--ink-delay": `${delayOf(phase, index, glyphs.length, lead)}ms` } as CSSProperties}
         >
           {glyph}
         </span>
       ))}
     </span>
   );
+}
+
+/**
+ * The clock for one mark's leaving and returning. Holds the gesture's phase
+ * for exactly as long as app.css needs to run it, then lets the mark go —
+ * or, under reduced motion, never starts one at all.
+ *
+ * One of these per mark that can leave the page, so a dateline and a
+ * wordmark can be travelling in opposite directions at once.
+ */
+export function useInkPhase(reducedMotion: boolean) {
+  const [phase, setPhase] = useState<InkPhase>(null);
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  return {
+    phase,
+    /** Send the mark away, or bring it back over `writeMs`. */
+    run(leaving: boolean, writeMs: number) {
+      window.clearTimeout(timer.current);
+      if (reducedMotion) {
+        setPhase(null);
+        return;
+      }
+      setPhase(leaving ? "drink" : "write");
+      timer.current = window.setTimeout(() => setPhase(null), leaving ? INK_DRINK_MS : writeMs);
+    },
+    /** Cut a gesture short and land on its result — what an export does, so
+        the PNG never catches a mark halfway. */
+    settle() {
+      window.clearTimeout(timer.current);
+      setPhase(null);
+    }
+  };
 }

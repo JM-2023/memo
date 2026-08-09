@@ -97,6 +97,9 @@
 }
 
 .sc-body { display: grid; gap: 3px; margin-top: 16px; }
+/* With no dateline the entry is the head of the page, so it starts at the
+   margin instead of under the air the dateline needed above it. */
+.share-card.is-dateless .sc-body { margin-top: 0; }
 .sc-blank { height: 10px; }
 
 /* Per-line markdown, print-set. Same grammar as the feed (parseBlock /

@@ -1,4 +1,15 @@
-import { Check, Copy, Download, EyeOff, Loader2, NotebookPen, RectangleHorizontal, RectangleVertical, X } from "lucide-react";
+import {
+  Calendar,
+  Check,
+  Copy,
+  Download,
+  EyeOff,
+  Loader2,
+  NotebookPen,
+  RectangleHorizontal,
+  RectangleVertical,
+  X
+} from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { useModalA11y } from "../hooks/useModalA11y";
@@ -13,7 +24,7 @@ import { copyPngToClipboard, downloadBlob, nodeToPngBlob, supportsImageClipboard
 import type { Memo } from "../lib/types";
 import "../styles/shareCard.css";
 import shareCardCss from "../styles/shareCard.css?raw";
-import { InkText, INK_DRINK_MS, inkWriteMs, type InkPhase } from "./inkText";
+import { InkText, inkWriteMs, useInkPhase, type InkPhase } from "./inkText";
 
 type CardLayout = "portrait" | "landscape";
 /** The sheet's stock: warm cream, or the neutral gray for images that have
@@ -50,6 +61,9 @@ const EXPORT_SCALE = 2.5;
 /** How long a lifted seal stays in the tree to animate away — mirrors
     seal-lift in app.css. */
 const SEAL_LIFT_MS = 200;
+/** How long the dateline's room takes to open before the pen touches down —
+    mirrors date-open in app.css, and leads the writing by exactly that. */
+const DATE_OPEN_MS = 180;
 /** The wordmark, which privacy mode takes off the sheet along with the tags.
     A constant because the ink has to know how long it is. */
 const BRAND = "MEMO";
@@ -58,6 +72,7 @@ const LAYOUT_KEY = "memo:share-layout";
 const TONE_KEY = "memo:share-tone";
 const SEAL_KEY = "memo:share-seal";
 const HAND_KEY = "memo:share-hand";
+const DATE_KEY = "memo:share-date";
 const PRIVACY_KEY = "memo:share-privacy";
 
 function loadLayout(): CardLayout {
@@ -92,31 +107,16 @@ function storeTone(tone: CardTone): void {
   }
 }
 
-/** The seal is stamped unless the reader has turned it off — an unmarked
-    sheet is the exception, so only "off" is ever written. */
-function loadSeal(): boolean {
+/** The sheet's four switches. Each has a way it comes out of the box — the
+    dateline and the seal are on the page unless the reader takes them off,
+    the hand and privacy mode are off until asked for — and `fallback` is
+    that, for the first dialog before anything has been picked. */
+function loadFlag(key: string, fallback: boolean): boolean {
   try {
-    return localStorage.getItem(SEAL_KEY) !== "off";
+    const stored = localStorage.getItem(key);
+    return stored === null ? fallback : stored === "on";
   } catch {
-    return true;
-  }
-}
-
-function storeSeal(sealed: boolean): void {
-  try {
-    localStorage.setItem(SEAL_KEY, sealed ? "on" : "off");
-  } catch {
-    // private mode — the pick just won't persist
-  }
-}
-
-/** The hand and privacy mode are both off unless asked for, so only "on" is
-    ever written — the same shape as the seal, inverted. */
-function loadFlag(key: string): boolean {
-  try {
-    return localStorage.getItem(key) === "on";
-  } catch {
-    return false;
+    return fallback;
   }
 }
 
@@ -296,26 +296,31 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   const [busy, setBusy] = useState<"save" | "copy" | null>(null);
   const [layout, setLayout] = useState<CardLayout>(loadLayout);
   const [tone, setTone] = useState<CardTone>(loadTone);
-  const [sealed, setSealed] = useState<boolean>(loadSeal);
-  const [hand, setHand] = useState<boolean>(() => loadFlag(HAND_KEY));
-  const [privacy, setPrivacy] = useState<boolean>(() => loadFlag(PRIVACY_KEY));
+  const [sealed, setSealed] = useState<boolean>(() => loadFlag(SEAL_KEY, true));
+  const [dated, setDated] = useState<boolean>(() => loadFlag(DATE_KEY, true));
+  const [hand, setHand] = useState<boolean>(() => loadFlag(HAND_KEY, false));
+  const [privacy, setPrivacy] = useState<boolean>(() => loadFlag(PRIVACY_KEY, false));
   // A lifted seal outlives its own removal by one beat so it can animate
   // away; `sealTouched` marks the moment the control took over from the
   // sheet's arrival choreography, after which a press follows the finger.
   const [sealExit, setSealExit] = useState(false);
   const sealExitTimer = useRef(0);
   const sealTouched = useRef(false);
-  // Which way the removable marks are travelling, and how many face swaps
-  // the page has been through — the counter is the body's key, so each swap
-  // re-mounts it and its re-inking pulse plays again.
-  const [inkPhase, setInkPhase] = useState<InkPhase>(null);
+  // How many face swaps the page has been through — the counter is the
+  // entry's key, so each swap re-mounts it and its re-inking pulse plays
+  // again.
   const [handSwaps, setHandSwaps] = useState(0);
-  const inkTimer = useRef(0);
   // External links that refused CORS can't be rasterized; they drop from the
   // preview too, so what you see is exactly what exports.
   const [brokenExternals, setBrokenExternals] = useState<ReadonlySet<string>>(() => new Set());
   const [fit, setFit] = useState<{ scale: number; height: number } | null>(null);
   const reducedMotion = useReducedMotion();
+  // One clock per mark that can leave the page: the dateline at the head,
+  // and the wordmark and tags privacy mode takes together. Separate, so
+  // dropping the date while the paper is still drinking a tag doesn't cut
+  // either gesture short.
+  const head = useInkPhase(reducedMotion);
+  const marks = useInkPhase(reducedMotion);
   const closeTimer = useRef(0);
   const closingRef = useRef(false);
   const closeRef = useRef(onClose);
@@ -349,7 +354,6 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
     () => () => {
       window.clearTimeout(closeTimer.current);
       window.clearTimeout(sealExitTimer.current);
-      window.clearTimeout(inkTimer.current);
     },
     []
   );
@@ -455,7 +459,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
     window.clearTimeout(sealExitTimer.current);
     setSealed(next);
     setSealExit(!next && !reducedMotion);
-    storeSeal(next);
+    storeFlag(SEAL_KEY, next);
     if (next || reducedMotion) return;
     sealExitTimer.current = window.setTimeout(() => setSealExit(false), SEAL_LIFT_MS);
   }
@@ -480,15 +484,21 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   function togglePrivacy() {
     if (busy) return;
     const next = !privacy;
-    window.clearTimeout(inkTimer.current);
     setPrivacy(next);
     storeFlag(PRIVACY_KEY, next);
-    if (reducedMotion) {
-      setInkPhase(null);
-      return;
-    }
-    setInkPhase(next ? "drink" : "write");
-    inkTimer.current = window.setTimeout(() => setInkPhase(null), next ? INK_DRINK_MS : inkWriteMs(longestMark));
+    marks.run(next, inkWriteMs(longestMark));
+  }
+
+  /** Take the dateline off the head of the sheet, or write it back. Its line
+      closes and opens with it (date-close / date-open in app.css), so the
+      entry glides rather than jumping when the last glyph goes; on the way
+      back the room opens first and the pen follows it in. */
+  function toggleDate() {
+    if (busy) return;
+    const next = !dated;
+    setDated(next);
+    storeFlag(DATE_KEY, next);
+    head.run(!next, inkWriteMs([...dateLabel].length, DATE_OPEN_MS));
   }
 
   async function renderPng(): Promise<Blob> {
@@ -499,9 +509,11 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
       window.clearTimeout(sealExitTimer.current);
       flushSync(() => setSealExit(false));
     }
-    if (inkPhase) {
-      window.clearTimeout(inkTimer.current);
-      flushSync(() => setInkPhase(null));
+    if (head.phase || marks.phase) {
+      flushSync(() => {
+        head.settle();
+        marks.settle();
+      });
     }
     const card = cardRef.current;
     if (!card) throw new Error("Card is not mounted");
@@ -540,8 +552,9 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
     }
   }
 
-  const ink: CardInk = { redact: privacy, phase: inkPhase };
+  const ink: CardInk = { redact: privacy, phase: marks.phase };
   const redacted = inkGone(ink);
+  const dateless = inkGone({ redact: !dated, phase: head.phase });
   // Print discipline again, one pass later: with the tags off a sheet whose
   // last line was nothing but tags, the page has a new blank edge to drop.
   const printed = redacted ? trimBlankEdges(lines, printsNothingRedacted) : lines;
@@ -574,11 +587,11 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
               ref={cardRef}
               className={`share-card${layout === "landscape" ? " is-landscape" : ""}${tone === "gray" ? " is-gray" : ""}${
                 hand ? " is-hand" : ""
-              }`}
+              }${dateless ? " is-dateless" : ""}`}
               lang={language}
               style={fit && fit.scale < 1 ? { transform: `scale(${fit.scale})`, transformOrigin: "top left" } : undefined}
             >
-              <span className="sc-date">{dateLabel}</span>
+              {!dateless ? <InkText className="sc-date" text={dateLabel} phase={head.phase} lead={DATE_OPEN_MS} /> : null}
               {printed.length > 0 ? (
                 // Keyed by the face-swap count: a swap re-mounts the entry so
                 // it can be re-inked, and leaves the sheet around it in place.
@@ -607,7 +620,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                   rather than closing the page on an empty line. */}
               {!redacted || sealed || sealExit ? (
                 <footer className="sc-foot">
-                  {!redacted ? <InkText className="sc-brand" text={BRAND} phase={inkPhase} /> : null}
+                  {!redacted ? <InkText className="sc-brand" text={BRAND} phase={marks.phase} /> : null}
                   {sealed || sealExit ? (
                     <span
                       className={`sc-seal${sealExit ? " is-lifting" : sealTouched.current ? " is-quick" : ""}`}
@@ -691,12 +704,14 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
               </button>
             </span>
             <span className="share-seg-rule" aria-hidden="true" />
-            {/* Hand and seal are switches, not choices, so each gets one cell
-                and a thumb that presses on rather than sliding across. Both
-                chips are the thing itself at chip size — a scrap of the
-                stock with the sample written on it in the very face the
-                sheet would use, and the mark as it would be stamped —
-                inked when it's on the sheet, an empty outline when it isn't. */}
+            {/* Three switches, not choices, so each gets one cell and a thumb
+                that presses on rather than sliding across: how the entry is
+                set, then the two pieces of furniture the page can go
+                without, in the order they sit on it. The chips are the thing
+                itself at chip size — a scrap of the stock with the sample
+                written on it in the very face the sheet would use, and the
+                mark as it would be stamped — inked when it's on the sheet,
+                an empty outline when it isn't. */}
             <span className={`share-seg-group is-solo${hand ? " is-on" : ""}`}>
               <span className="share-seg-thumb" aria-hidden="true" />
               <button
@@ -711,6 +726,24 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 <span className="share-hand-chip" aria-hidden="true">
                   {tr("Aa", "字")}
                 </span>
+              </button>
+            </span>
+            <span className="share-seg-rule" aria-hidden="true" />
+            {/* The dateline is the one piece of furniture with no legible
+                miniature at this size — a date set in 3px is a smudge — so
+                it takes the one glyph everybody already reads as a date. */}
+            <span className={`share-seg-group is-solo${dated ? " is-on" : ""}`}>
+              <span className="share-seg-thumb" aria-hidden="true" />
+              <button
+                type="button"
+                className={dated ? "is-active" : ""}
+                aria-pressed={dated}
+                aria-label={tr("Dateline", "日期")}
+                title={tr("Dateline", "日期")}
+                disabled={busy !== null}
+                onClick={toggleDate}
+              >
+                <Calendar size={15} aria-hidden="true" />
               </button>
             </span>
             <span className="share-seg-rule" aria-hidden="true" />

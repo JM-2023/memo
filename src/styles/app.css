@@ -658,6 +658,20 @@ a:hover { text-decoration: underline; }
   45% { opacity: 0.26; filter: blur(1.7px); }
   to { opacity: 1; filter: blur(0); }
 }
+/* The head line closes behind its own ink and opens ahead of it, so dropping
+   the dateline slides the entry up rather than snapping it. Both numbers are
+   shareCard.css's: 18px is the line box it gives .sc-date (12px at 1.5), and
+   16px is the air .sc-body keeps above itself for a dateline to sit in —
+   which .is-dateless then drops, so the negative margin here hands over to
+   it with nothing left to move. */
+@keyframes date-close {
+  from { height: 18px; margin-bottom: 0; }
+  to { height: 0; margin-bottom: -16px; }
+}
+@keyframes date-open {
+  from { height: 0; margin-bottom: -16px; }
+  to { height: 18px; margin-bottom: 0; }
+}
 
 .spin { animation: spin 0.8s linear infinite; }
 
@@ -3443,6 +3457,13 @@ button.stats-tag-row:active { scale: 0.992; }
 }
 .share-stage .is-drinking .sc-glyph { animation: ink-drink 380ms ease-in var(--ink-delay, 0ms) both; }
 .share-stage .is-writing .sc-glyph { animation: ink-write 160ms ease-out var(--ink-delay, 0ms) both; }
+/* The dateline is a whole line rather than a mark inside one, so its room
+   closes and opens too — late enough on the way out that the page is drinking
+   from a line it has almost finished with, and early enough on the way in
+   that the pen never writes into a shut slot (DATE_OPEN_MS leads the glyphs
+   by exactly the opening). */
+.share-stage .sc-date.is-drinking { overflow: hidden; animation: date-close 0.22s ease-in 0.5s both; }
+.share-stage .sc-date.is-writing { overflow: hidden; animation: date-open 0.18s var(--ease-out) both; }
 /* A face swap re-mounts the entry (keyed by the swap count in ShareDialog),
    so this plays once per swap and never on the sheet's own arrival. */
 .share-stage .sc-body.is-reinking { animation: ink-reset 0.34s var(--ease) both; }
@@ -4002,6 +4023,16 @@ button.stats-tag-row:active { scale: 0.992; }
   .select-pill { padding-inline: 6px; }
   .select-tag,
   .select-delete { width: 40px; padding-inline: 4px; }
+
+  /* The sheet-setup track is one object and can't wrap: seven cells parted by
+     four rules is wider than a narrow phone's dialog, and the modal clips
+     rather than scrolls. So the cells close ranks instead — every property
+     stays on the strip, in the same order, a little tighter. Sized to clear
+     the narrowest phone still in use (320px), where the dialog leaves 266px
+     for a 250px track. */
+  .share-setup { padding-inline: 10px; }
+  .share-seg button { min-width: 32px; }
+  .share-seg-rule { margin-inline: 2px; }
 }
 
 /* Short phones need the keypad to scroll as one surface, with the action

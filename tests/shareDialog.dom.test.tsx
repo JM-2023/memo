@@ -217,6 +217,50 @@ describe("share dialog", () => {
     expect(screen.getByRole("button", { name: "Handwriting" }).getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("takes the dateline off the head of the sheet, and remembers", async () => {
+    const user = userEvent.setup();
+    const { view } = renderDialog();
+
+    const dateline = screen.getByRole("button", { name: "Dateline" });
+    expect(dateline.getAttribute("aria-pressed")).toBe("true");
+    expect(view.container.querySelector(".sc-date")).not.toBeNull();
+
+    await user.click(dateline);
+
+    expect(dateline.getAttribute("aria-pressed")).toBe("false");
+    expect(view.container.querySelector(".sc-date")).toBeNull();
+    // With no dateline the entry is the head of the page, and starts at the
+    // margin rather than under the air the dateline needed.
+    expect(view.container.querySelector(".share-card")?.className).toContain("is-dateless");
+    expect(localStorage.getItem("memo:share-date")).toBe("off");
+  });
+
+  it("opens without a dateline when that was the last pick", () => {
+    localStorage.setItem("memo:share-date", "off");
+    const { view } = renderDialog();
+
+    expect(view.container.querySelector(".sc-date")).toBeNull();
+    expect(view.container.querySelector(".share-card")?.className).toContain("is-dateless");
+    expect(screen.getByRole("button", { name: "Dateline" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("drinks the dateline and the marks on their own clocks", async () => {
+    allowMotion();
+    const user = userEvent.setup();
+    const { view } = renderDialog();
+
+    await user.click(screen.getByRole("button", { name: "Dateline" }));
+    await user.click(screen.getByRole("button", { name: "Privacy" }));
+
+    // Both travelling at once; neither toggle cuts the other's gesture short.
+    expect(view.container.querySelector(".sc-date")?.className).toContain("is-drinking");
+    expect(view.container.querySelector(".sc-brand")?.className).toContain("is-drinking");
+
+    await waitFor(() => expect(view.container.querySelector(".sc-date")).toBeNull());
+    await waitFor(() => expect(view.container.querySelector(".sc-brand")).toBeNull());
+    expect(view.container.querySelector(".sc-glyph")).toBeNull();
+  });
+
   it("takes the wordmark and the tags off the sheet, and remembers", async () => {
     const user = userEvent.setup();
     const { view } = renderDialog();
