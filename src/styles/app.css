@@ -2303,7 +2303,17 @@ button.crumb:active { background: var(--wash-strong); }
 /* =========================================================================
    Memo feed
    ========================================================================= */
-.memo-feed { display: grid; width: calc(100% - var(--content-inset) * 2); gap: 14px; margin-top: 16px; }
+/* One explicit column, floored at 0. The default `auto` track is sized from
+   its items' automatic minimum, and every slot is `content-visibility: auto`:
+   a slot scrolled out of view is skipped and reports its LAST REMEMBERED width
+   (see .memo-slot's contain-intrinsic-size) as its intrinsic contribution. So
+   once the feed had ever been laid out wide, narrowing the window left the
+   track pinned at that remembered width — the cards kept the old 880px while
+   the composer above them, sized off the same token, shrank with the column,
+   and the row ran off the right edge of the screen. minmax(0, 1fr) makes the
+   track the container's width by construction, so no item — a stale remembered
+   size, a wide table, an unbreakable URL — can push the row past the gutter. */
+.memo-feed { display: grid; grid-template-columns: minmax(0, 1fr); width: calc(100% - var(--content-inset) * 2); gap: 14px; margin-top: 16px; }
 /* Invisible marker that asks for the next feed page when scrolled near. */
 .feed-sentinel { height: 1px; }
 
