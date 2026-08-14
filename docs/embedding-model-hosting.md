@@ -188,15 +188,15 @@ curl -sI -H "Origin: https://<your-app-host>" \
 # 200, `access-control-allow-origin: *`, and a content-length.
 ```
 
-Observed live on 2026-08-15 after publishing the former
-`model-bge-small-zh-q8-r1` archive: the first hop returned HTTP 302 and the
-signed asset hop returned HTTP 200 with `content-length: 24010842`, but
-neither response carried
-`access-control-allow-origin`. A one-byte ranged GET had the same result.
-GitHub is therefore kept behind the pinned Hugging Face URL and treated as a
-manual-import archive, not a browser-reliable automatic source. Do not add a
-proxy through the app's own Functions as a workaround; that would reintroduce
-the Cloudflare hosting this design exists to avoid.
+Observed live on 2026-08-15 after publishing
+`model-granite-embedding-97m-multilingual-r2-q8-r1`: the first hop returned
+HTTP 302 and the signed asset hop returned HTTP 200 with
+`content-length: 97858099`, but neither response carried
+`access-control-allow-origin`. GitHub is therefore kept behind the pinned
+Hugging Face URL and treated as a manual-import archive, not a
+browser-reliable automatic source. Do not add a proxy through the app's own
+Functions as a workaround; that would reintroduce the Cloudflare hosting this
+design exists to avoid.
 
 ## 5. Client architecture
 
