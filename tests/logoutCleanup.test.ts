@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { adoptCacheKey, openSnapshot, readSealedSnapshot, saveSnapshot, type Snapshot } from "../src/lib/cache";
 import { clearLocalDeviceData } from "../src/lib/logoutCleanup";
+import { readStoredModelFile, writeStoredModelFile } from "../src/lib/modelStore";
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
@@ -40,7 +41,7 @@ afterEach(() => {
 });
 
 describe("logout cleanup", () => {
-  it("clears every current app storage family, encrypted snapshot, and named cache", async () => {
+  it("clears every current app storage family, encrypted snapshot, semantic model, and named cache", async () => {
     const local = new MemoryStorage();
     const session = new MemoryStorage();
     for (const key of [
@@ -73,6 +74,8 @@ describe("logout cleanup", () => {
     await saveSnapshot(snapshot);
     const retained = await readSealedSnapshot();
     expect(retained).not.toBeNull();
+    await writeStoredModelFile("logout-model", "onnx/model.onnx", new TextEncoder().encode("weights").buffer as ArrayBuffer);
+    expect(await readStoredModelFile("logout-model", "onnx/model.onnx")).not.toBeNull();
 
     await clearLocalDeviceData();
 
@@ -82,6 +85,7 @@ describe("logout cleanup", () => {
     expect(cached.size).toBe(0);
     expect(await readSealedSnapshot()).toBeNull();
     expect(await openSnapshot(retained!)).toBeNull();
+    expect(await readStoredModelFile("logout-model", "onnx/model.onnx")).toBeNull();
   });
 
   it("continues when optional storage backends deny access", async () => {

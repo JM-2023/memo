@@ -254,6 +254,7 @@ const DB_NAME = "memo-index";
 const STORE = "kv";
 const RECORD_KEY = "index";
 const SEAL_PURPOSE = "memo-index:1";
+let storeGeneration = 0;
 
 interface SealedIndexRecord {
   v: number;
@@ -278,12 +279,14 @@ function openDb(): Promise<IDBDatabase> {
  * session re-embeds instead.
  */
 export async function saveSemanticIndex(index: SemanticIndex): Promise<void> {
+  const generation = storeGeneration;
   try {
     const sealed = await sealDerivedBytes(SEAL_PURPOSE, encodeSemanticIndex(index));
-    if (!sealed) return;
+    if (!sealed || generation !== storeGeneration) return;
     const record: SealedIndexRecord = { v: 1, iv: sealed.iv, data: sealed.data };
     const db = await openDb();
     try {
+      if (generation !== storeGeneration) return;
       await new Promise<void>((resolve, reject) => {
         const transaction = db.transaction(STORE, "readwrite");
         transaction.objectStore(STORE).put(record, RECORD_KEY);
@@ -301,6 +304,7 @@ export async function saveSemanticIndex(index: SemanticIndex): Promise<void> {
 
 /** The sealed index for this model version, or null (absent, unreadable, stale). */
 export async function loadSemanticIndex(modelVersion: string): Promise<SemanticIndex | null> {
+  const generation = storeGeneration;
   try {
     const db = await openDb();
     let record: SealedIndexRecord | undefined;
@@ -314,9 +318,11 @@ export async function loadSemanticIndex(modelVersion: string): Promise<SemanticI
     } finally {
       db.close();
     }
-    if (!record || record.v !== 1 || !(record.iv instanceof Uint8Array) || !(record.data instanceof ArrayBuffer)) return null;
+    if (generation !== storeGeneration || !record || record.v !== 1 || !(record.iv instanceof Uint8Array) || !(record.data instanceof ArrayBuffer)) {
+      return null;
+    }
     const payload = await openDerivedBytes(SEAL_PURPOSE, record.iv, record.data);
-    if (!payload) return null;
+    if (!payload || generation !== storeGeneration) return null;
     const index = decodeSemanticIndex(payload);
     return index && index.modelVersion === modelVersion ? index : null;
   } catch {
@@ -326,6 +332,7 @@ export async function loadSemanticIndex(modelVersion: string): Promise<SemanticI
 
 /** Drop the sealed index database entirely (logout cleanup). */
 export function deleteSemanticIndexDb(): Promise<void> {
+  storeGeneration += 1;
   return new Promise((resolve) => {
     try {
       const request = indexedDB.deleteDatabase(DB_NAME);

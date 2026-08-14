@@ -9,7 +9,7 @@ Implementation map:
 | Concern                          | File                                   |
 | -------------------------------- | -------------------------------------- |
 | Pinned manifest + mirrors        | `src/lib/modelManifest.ts`             |
-| IndexedDB freeze (survives logout) | `src/lib/modelStore.ts`              |
+| IndexedDB freeze (logout-cleared) | `src/lib/modelStore.ts`               |
 | Mirror chain + SHA-256 verify    | `src/lib/modelLoader.ts`               |
 | transformers.js wiring + self-test | `src/lib/modelRuntime.ts`            |
 | Download/import/export dialog    | `src/components/ModelSettingsModal.tsx`|
@@ -22,18 +22,19 @@ Implementation map:
 Scope: how the on-device semantic index obtains its embedding model
 **without** storing the model on this project's Cloudflare deployment, using
 a pinned automatic source and an owner-controlled manual archive. This
-document guarantees that accepted bytes are verified and permanent on every
-initialized device; the index built on top of them is documented in
-`src/lib/semanticIndex.ts` (short version: embeddings are derived from memo
-content, so unlike the model they are sealed with the snapshot key and wiped
-on logout).
+document guarantees that accepted bytes are verified and remain available
+offline until the user clears local semantic data or explicitly logs out; the
+index built on top of them is documented in `src/lib/semanticIndex.ts` (short
+version: embeddings are derived from memo content, so they are sealed with the
+snapshot key; both stores are wiped on logout).
 
 ## 1. Principles
 
-1. **The network matters only once per device.** After the first successful
-   download, every model byte is frozen into IndexedDB on that device and the
-   feature must keep working fully offline, forever — even if every mirror
-   later disappears.
+1. **The network matters only while the model is absent.** After a successful
+   download, every model byte is frozen into IndexedDB and the feature keeps
+   working fully offline. An explicit logout or the panel's Clear Model action
+   deliberately removes that freeze, so a later activation downloads or
+   imports it again.
 2. **Every byte is pinned.** The app ships a manifest with the SHA-256 and
    size of each file. A download that does not hash-match is discarded no
    matter which mirror served it. "The link is alive but the content changed"
@@ -88,8 +89,9 @@ ONNX repository is explicitly compatible with Transformers.js.
 
 The q8 weights plus tokenizer and configs total 123,173,845 bytes (~123 MB).
 That is substantially larger than the former 24 MB Chinese-first BGE model,
-but remains a one-time per-device download and is the practical quality/size
-point for multilingual browser search. The April 2026 IBM model card reports
+but remains a one-time download within each signed-in local lifecycle and is
+the practical quality/size point for multilingual browser search. The April
+2026 IBM model card reports
 59.6 on Multilingual MTEB Retrieval for the 97M R2 model versus 50.9 for
 `multilingual-e5-small`; the 97M model is also designed for latency-sensitive
 edge deployment. Larger candidates were rejected for this app: EmbeddingGemma
@@ -243,11 +245,11 @@ export const MODEL_MIRRORS: ReadonlyArray<
   `ArrayBuffer` plus `{ sha256, bytes, storedAt }`.
 - On open, delete entries belonging to any other manifest version — one model
   at a time keeps worst-case storage ≈ one model.
-- **Not sealed, and survives logout.** Model weights are public content, not
-  user data; encrypting them buys nothing and re-downloading 123 MB on every
-  logout is pure cost. Add an explicit exclusion (with this rationale as a
-  comment) wherever `logoutCleanup.ts` enumerates what to wipe, so the wipe
-  stays intentional rather than accidental.
+- **Not sealed, but cleared deliberately.** Model weights are public content,
+  so encrypting them buys nothing. Explicit logout and Settings → Semantic
+  Search → Clear Model both delete the database to make clearing this device
+  predictable; the latter also deletes the sealed semantic index and disposes
+  the active ONNX runtime.
 - After the first successful store, call `navigator.storage.persist()` (if
   not already requested elsewhere) to reduce eviction risk.
 
@@ -321,8 +323,9 @@ matters, so on a frozen device none of these paths is ever taken.
 
 This app is startup-latency-obsessed; keep it that way. The model downloads
 only when the user explicitly enables semantic features in Settings (button
-shows the size: "Download model (~123 MB)"), or taps Retry later. Progress in
-the settings row; the feed never blocks on any of this.
+and adjacent metadata show "Download Model" and "About 123 MB"), or taps
+Retry Download later. Progress stays in the settings panel; the feed never
+blocks on any of this.
 
 ### 6.2 The escape hatch: manual import/export
 
@@ -335,6 +338,9 @@ In Settings, next to the model status:
   the files from any old device, a backup, or a local clone of the release.
 - **Export model files** (nice-to-have) — writes the cached files back out,
   making the device-to-device copy first-class.
+- **Clear Model** — after an inline confirmation, disposes the active runtime
+  and deletes both the public model files and the sealed semantic index. The
+  main semantic-search toggle turns off immediately.
 
 Because import verifies the same SHA-256, a corrupted or wrong file cannot be
 imported by accident.
@@ -394,8 +400,9 @@ until the rebuild completes. Publishing a new model release without bumping
 - **Tamper test:** corrupt one manifest hash in a dev build → that mirror's
   download is rejected with the warning, the next mirror is tried, and the
   final state is the readable error UI, not a broken pipeline.
-- **Logout test:** logout wipes the snapshot as today but leaves the model
-  store; re-login re-enables semantic features without a download.
+- **Logout test:** logout wipes the snapshot, sealed vector index, model store,
+  session-only model fallback, and active ONNX runtime; re-login requires a
+  new download or verified file import before semantic search can run.
 - **Import test:** clear site data, then enable the feature using only
   "Import from file" with locally saved copies. Zero network requests.
 - **Unit tests** (Vitest, following the existing suite's conventions):
@@ -409,7 +416,7 @@ until the rebuild completes. Publishing a new model release without bumping
 | Primary mirror 404/network error          | Next mirror; log which mirror failed.                                    |
 | Hash or size mismatch from any mirror     | Discard, warn (named mirror), next mirror. Never store unverified bytes. |
 | All mirrors down (new device)             | "Model unavailable · Retry · Import from file". App otherwise unaffected.|
-| All mirrors down (initialized device)     | Invisible. Store hit; nothing fetches.                                   |
+| All mirrors down (model still stored)     | Invisible. Store hit; nothing fetches.                                   |
 | IndexedDB write fails (quota)             | Keep bytes in memory for the session; warn; retry persisting next run.   |
 | GitHub release download lacks CORS        | Keep it behind HF; use its files through manual import. (§4.1)           |
 | onnxruntime-web version bump              | Same-origin WASM copy updates automatically at build; re-run audit.      |

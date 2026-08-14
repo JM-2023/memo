@@ -60,6 +60,7 @@ export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], quer
   useEffect(() => {
     if (!enabled) {
       generationRef.current += 1;
+      embedRef.current = null;
       setStatus("off");
       setProgress(null);
       setResults(null);

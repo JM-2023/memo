@@ -1,8 +1,9 @@
 // IndexedDB freeze for the embedding model's verified bytes. A separate
 // database from the snapshot cache, and deliberately outside the encrypted
 // pipeline: model weights are public artifacts, not user data, so sealing
-// them buys nothing and re-downloading ~123 MB after every logout would be
-// pure cost. logoutCleanup.ts leaves this database alone on purpose.
+// them buys nothing. They are still removed on explicit logout (and from the
+// Semantic Search settings) so "clear this device" has one predictable
+// meaning across every local store.
 //
 // Bytes are hash-verified by the loader before they are written, so reads
 // trust the store instead of re-hashing 123 MB on every startup. Keys are
@@ -113,6 +114,20 @@ export async function purgeOtherModelVersions(version: string): Promise<void> {
     // A failed purge only costs disk space; the version-prefixed keys keep
     // reads correct either way.
   }
+}
+
+/** Best-effort removal of every locally frozen model file. */
+export function deleteModelStoreDb(): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      const request = indexedDB.deleteDatabase(DB_NAME);
+      request.onsuccess = () => resolve();
+      request.onerror = () => resolve();
+      request.onblocked = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
 }
 
 /**

@@ -52,9 +52,9 @@ const PERIODS: { kind: PeriodKind; en: string; zh: string }[] = [
 ];
 
 const THEME_LABELS: Record<ThemeChoice, readonly [en: string, zh: string]> = {
-  system: ["System theme", "跟随系统"],
-  light: ["Light theme", "浅色模式"],
-  dark: ["Dark theme", "深色模式"]
+  system: ["System Theme", "跟随系统"],
+  light: ["Light Theme", "浅色模式"],
+  dark: ["Dark Theme", "深色模式"]
 };
 
 export function Sidebar(props: SidebarProps) {
@@ -184,7 +184,7 @@ export function Sidebar(props: SidebarProps) {
               >
                 <Sparkles size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
-                  {tr("Daily review settings", "每日回顾设置")}
+                  {tr("Daily Review Settings", "每日回顾设置")}
                 </SwapText>
               </button>
               <button
@@ -197,7 +197,7 @@ export function Sidebar(props: SidebarProps) {
               >
                 <Cpu size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
-                  {tr("Semantic search", "语义搜索")}
+                  {tr("Semantic Search", "语义搜索")}
                 </SwapText>
               </button>
               <button
@@ -210,7 +210,7 @@ export function Sidebar(props: SidebarProps) {
               >
                 <KeyRound size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
-                  {tr("Change passcode", "修改密码")}
+                  {tr("Change Passcode", "修改密码")}
                 </SwapText>
               </button>
               <span className="action-menu__sep" />
@@ -224,7 +224,7 @@ export function Sidebar(props: SidebarProps) {
               >
                 <Download size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
-                  {tr("Export data", "导出数据")}
+                  {tr("Export Data", "导出数据")}
                 </SwapText>
               </button>
               <button
@@ -237,7 +237,7 @@ export function Sidebar(props: SidebarProps) {
               >
                 <Upload size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
-                  {tr("Import data", "导入数据")}
+                  {tr("Import Data", "导入数据")}
                 </SwapText>
               </button>
               <span className="action-menu__sep" />
@@ -252,7 +252,7 @@ export function Sidebar(props: SidebarProps) {
               >
                 <LogOut size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
-                  {tr("Log out", "退出登录")}
+                  {tr("Log Out", "退出登录")}
                 </SwapText>
               </button>
             </>

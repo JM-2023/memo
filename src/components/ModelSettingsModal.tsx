@@ -1,9 +1,23 @@
-import { Check, Cpu, Download, FileDown, RefreshCw, Upload, X } from "lucide-react";
+import {
+  Check,
+  CircleAlert,
+  Cpu,
+  Download,
+  FileDown,
+  HardDrive,
+  Loader2,
+  RefreshCw,
+  ShieldCheck,
+  Trash2,
+  Upload,
+  X
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
 import {
+  clearModelFiles,
   ensureModelFiles,
   importModelFiles,
   ModelUnavailableError,
@@ -13,10 +27,12 @@ import {
   type MirrorFailure
 } from "../lib/modelLoader";
 import { MODEL_MANIFEST, modelTotalBytes, type ModelFileSpec } from "../lib/modelManifest";
-import { getEmbedder, runModelSelfTest } from "../lib/modelRuntime";
+import { getEmbedder, resetModelRuntime, runModelSelfTest } from "../lib/modelRuntime";
+import { deleteSemanticIndexDb } from "../lib/semanticIndex";
 
 interface ModelSettingsModalProps {
   onClose: () => void;
+  onModelCleared: () => void;
 }
 
 type Phase =
@@ -24,6 +40,7 @@ type Phase =
   | { kind: "idle"; stored: "none" | "partial" }
   | { kind: "downloading"; loadedBytes: number }
   | { kind: "activating" }
+  | { kind: "clearing" }
   | { kind: "ready" }
   | { kind: "error"; message: string; failures: readonly MirrorFailure[] };
 
@@ -32,6 +49,11 @@ const TOTAL_MB = Math.round(TOTAL_BYTES / 1e6);
 
 function megabytes(bytes: number): string {
   return `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+function fileSize(bytes: number): string {
+  if (bytes < 1e6) return `${(bytes / 1e3).toFixed(bytes < 10_000 ? 1 : 0)} KB`;
+  return megabytes(bytes);
 }
 
 function failureHost(url: string): string {
@@ -48,13 +70,15 @@ function failureHost(url: string): string {
  * device; everything else surfaces as an explicit state with a next step.
  * The modal follows the review-settings dialog's shell and motion language.
  */
-export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
+export function ModelSettingsModal({ onClose, onModelCleared }: ModelSettingsModalProps) {
   const { tr } = useI18n();
   const reducedMotion = useReducedMotion();
 
   const [phase, setPhase] = useState<Phase>({ kind: "checking" });
   const [present, setPresent] = useState<ReadonlySet<string>>(() => new Set());
   const [importNote, setImportNote] = useState<string | null>(null);
+  const [clearNote, setClearNote] = useState<string | null>(null);
+  const [confirmingClear, setConfirmingClear] = useState(false);
   const [closing, setClosing] = useState(false);
 
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -91,6 +115,7 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
   }, [safeSetPhase, tr]);
 
   const download = useCallback(async () => {
+    setClearNote(null);
     safeSetPhase({ kind: "downloading", loadedBytes: 0 });
     try {
       await ensureModelFiles((progress) => {
@@ -169,6 +194,28 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
     }
   }
 
+  async function handleClearModel() {
+    setConfirmingClear(false);
+    setImportNote(null);
+    setClearNote(null);
+    safeSetPhase({ kind: "clearing" });
+    onModelCleared();
+    try {
+      await Promise.all([resetModelRuntime(), clearModelFiles(), deleteSemanticIndexDb()]);
+      if (disposedRef.current) return;
+      setPresent(new Set());
+      setClearNote(tr("Model and semantic index cleared from this device.", "已从此设备清除模型和语义索引。"));
+      safeSetPhase({ kind: "idle", stored: "none" });
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      safeSetPhase({
+        kind: "error",
+        message: tr(`The model couldn't be cleared. (${detail})`, `无法清除模型。（${detail}）`),
+        failures: []
+      });
+    }
+  }
+
   async function handleExportFile(spec: ModelFileSpec) {
     const bytes = await readModelFileBytes(spec.requestPath);
     if (!bytes) return;
@@ -182,23 +229,55 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
     window.setTimeout(() => URL.revokeObjectURL(url), 4000);
   }
 
-  const busy = phase.kind === "checking" || phase.kind === "downloading" || phase.kind === "activating";
+  const busy = phase.kind === "checking" || phase.kind === "downloading" || phase.kind === "activating" || phase.kind === "clearing";
   const percent = phase.kind === "downloading" ? Math.min(100, Math.floor((phase.loadedBytes / TOTAL_BYTES) * 100)) : 0;
+  const storedBytes = MODEL_MANIFEST.files.reduce((sum, file) => sum + (present.has(file.requestPath) ? file.bytes : 0), 0);
+  const hasStoredFiles = present.size > 0;
+
+  const statusTitle =
+    phase.kind === "checking"
+      ? tr("Checking Device", "正在检查设备")
+      : phase.kind === "idle"
+        ? phase.stored === "partial"
+          ? tr("Download Incomplete", "下载未完成")
+          : tr("Not Downloaded", "尚未下载")
+        : phase.kind === "downloading"
+          ? tr("Downloading Model", "正在下载模型")
+          : phase.kind === "activating"
+            ? tr("Verifying Model", "正在验证模型")
+            : phase.kind === "clearing"
+              ? tr("Clearing Model", "正在清除模型")
+              : phase.kind === "ready"
+                ? tr("Ready", "已就绪")
+                : tr("Action Needed", "需要处理");
 
   const statusText =
     phase.kind === "checking"
-      ? tr("Checking this device…", "正在检查本机状态…")
+      ? tr("Looking for verified model files on this device.", "正在查找此设备上的已验证模型文件。")
       : phase.kind === "idle"
         ? phase.stored === "partial"
-          ? tr("Partially downloaded — resume when ready.", "已下载一部分，可继续下载。")
-          : tr("Not downloaded on this device yet.", "本机尚未下载模型。")
+          ? tr("Some verified files are present. Resume to finish the download.", "已有部分已验证文件，可以继续下载。")
+          : tr("Download the model to search your memos by meaning.", "下载模型后即可按意思搜索笔记。")
         : phase.kind === "downloading"
-          ? tr(`Downloading… ${megabytes(phase.loadedBytes)} of ${megabytes(TOTAL_BYTES)}`, `下载中… ${megabytes(phase.loadedBytes)} / ${megabytes(TOTAL_BYTES)}`)
+          ? tr(`${megabytes(phase.loadedBytes)} of ${megabytes(TOTAL_BYTES)}`, `${megabytes(phase.loadedBytes)} / ${megabytes(TOTAL_BYTES)}`)
           : phase.kind === "activating"
-            ? tr("Verifying on this device…", "正在本机验证…")
-            : phase.kind === "ready"
-              ? tr("Ready — verified on this device. Works offline.", "已就绪——本机验证通过，离线可用。")
-              : phase.message;
+            ? tr("Running a real multilingual inference check on this device.", "正在此设备上运行真实的多语言推理检查。")
+            : phase.kind === "clearing"
+              ? tr("Removing model files and the encrypted semantic index.", "正在删除模型文件和加密语义索引。")
+              : phase.kind === "ready"
+                ? tr("Verified on this device and available offline.", "已在此设备上验证，可离线使用。")
+                : phase.message;
+
+  const statusIcon =
+    phase.kind === "ready" ? (
+      <Check size={17} aria-hidden="true" />
+    ) : phase.kind === "error" ? (
+      <CircleAlert size={17} aria-hidden="true" />
+    ) : busy ? (
+      <Loader2 size={17} className="spin" aria-hidden="true" />
+    ) : (
+      <Download size={17} aria-hidden="true" />
+    );
 
   return (
     <div
@@ -206,38 +285,51 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
       className={`overlay review-overlay${closing ? " is-closing" : ""}`}
       role="dialog"
       aria-modal="true"
-      aria-label={tr("Semantic search", "语义搜索")}
+      aria-label={tr("Semantic Search", "语义搜索")}
       tabIndex={-1}
       onClick={requestClose}
     >
       <div className="review-modal model-modal" onClick={(event) => event.stopPropagation()}>
-        <header className="review-head">
+        <header className="review-head model-head">
           <span className="review-head-logo" aria-hidden="true">
             <Cpu size={15} />
           </span>
-          <h2>{tr("Semantic search", "语义搜索")}</h2>
+          <div className="model-head-copy">
+            <h2>{tr("Semantic Search", "语义搜索")}</h2>
+            <p>{tr("Private, multilingual search on this device", "此设备上的私密多语言搜索")}</p>
+          </div>
           <button ref={closeButtonRef} type="button" className="icon-button review-close" onClick={requestClose} aria-label={tr("Close", "关闭")}>
             <X size={18} aria-hidden="true" />
           </button>
         </header>
 
-        <div className="review-body">
-          <section className="review-section">
-            <h3 className="review-section-title">{tr("Status", "状态")}</h3>
-            <div className={`model-status${phase.kind === "error" ? " is-error" : ""}`} role="status" aria-live="polite">
-              {phase.kind === "ready" ? <Check size={15} aria-hidden="true" /> : null}
-              <span>{statusText}</span>
+        <div className="review-body model-body">
+          <section className="review-section model-overview">
+            <div className={`model-status-card is-${phase.kind}`} role="status" aria-live="polite">
+              <span className="model-status-icon" aria-hidden="true">
+                {statusIcon}
+              </span>
+              <span className="model-status-copy">
+                <strong>{statusTitle}</strong>
+                <span>{statusText}</span>
+              </span>
             </div>
             {phase.kind === "downloading" ? (
-              <div
-                className="model-progress"
-                role="progressbar"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={percent}
-                aria-label={tr("Download progress", "下载进度")}
-              >
-                <span className="model-progress-fill" style={{ width: `${percent}%` }} />
+              <div className="model-progress-wrap">
+                <div className="model-progress-meta">
+                  <span>{tr("Download Progress", "下载进度")}</span>
+                  <span>{percent}%</span>
+                </div>
+                <div
+                  className="model-progress"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={percent}
+                  aria-label={tr("Download Progress", "下载进度")}
+                >
+                  <span className="model-progress-fill" style={{ width: `${percent}%` }} />
+                </div>
               </div>
             ) : null}
             {phase.kind === "error" && phase.failures.length > 0 ? (
@@ -254,29 +346,43 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
                 <button type="button" className="accent-button" onClick={() => void download()}>
                   <Download size={15} aria-hidden="true" />
                   {phase.stored === "partial"
-                    ? tr(`Resume download (~${TOTAL_MB} MB)`, `继续下载（约 ${TOTAL_MB} MB）`)
-                    : tr(`Download model (~${TOTAL_MB} MB)`, `下载模型（约 ${TOTAL_MB} MB）`)}
+                    ? tr("Resume Download", "继续下载")
+                    : tr("Download Model", "下载模型")}
                 </button>
+                <span className="model-action-size">{tr(`About ${TOTAL_MB} MB`, `约 ${TOTAL_MB} MB`)}</span>
               </div>
             ) : null}
             {phase.kind === "error" ? (
               <div className="model-actions">
                 <button type="button" className="accent-button" onClick={() => void download()}>
                   <RefreshCw size={15} aria-hidden="true" />
-                  {tr("Retry", "重试")}
+                  {tr("Retry Download", "重试下载")}
                 </button>
               </div>
             ) : null}
-            <p className="model-note">
+            <div className="model-facts" role="list" aria-label={tr("Model Capabilities", "模型能力")}>
+              <span role="listitem">
+                <ShieldCheck size={14} aria-hidden="true" />
+                {tr("On Device", "本机运行")}
+              </span>
+              <span role="listitem">{tr("52 Languages", "52 种语言")}</span>
+              <span role="listitem">{tr("384 Dimensions", "384 维")}</span>
+            </div>
+            <p className="model-note model-privacy-note">
               {tr(
-                "Downloaded once from a pinned Hugging Face revision, verified against pinned checksums, then stored on this device. The project's GitHub release provides the same files for manual import. Nothing you write ever leaves it.",
-                "模型只需从固定版本的 Hugging Face 下载一次，经固定校验和验证后存储在本机；项目的 GitHub Release 提供相同文件供手动导入。你写下的内容永远不会离开设备。"
+                "Every file is checked against a pinned SHA-256 hash before storage. Memo text and embeddings stay on this device.",
+                "每个文件都会在存储前核对固定的 SHA-256 哈希；笔记文本和向量始终留在此设备上。"
               )}
             </p>
           </section>
 
-          <section className="review-section" style={{ animationDelay: "0.03s" }}>
-            <h3 className="review-section-title">{tr("Model files", "模型文件")}</h3>
+          <section className="review-section model-storage" style={{ animationDelay: "0.04s" }}>
+            <div className="model-section-head">
+              <h3 className="review-section-title">{tr("Device Storage", "设备存储")}</h3>
+              <span className="model-storage-total">
+                {present.size}/{MODEL_MANIFEST.files.length} {tr("Files", "个文件")} · {megabytes(storedBytes)}
+              </span>
+            </div>
             <ul className="model-files">
               {MODEL_MANIFEST.files.map((file) => {
                 const here = present.has(file.requestPath);
@@ -284,7 +390,7 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
                   <li key={file.requestPath} className="model-file-row">
                     <span className={`model-file-dot${here ? " is-present" : ""}`} aria-hidden="true" />
                     <span className="model-file-name">{file.asset}</span>
-                    <span className="model-file-size">{megabytes(file.bytes)}</span>
+                    <span className="model-file-size">{fileSize(file.bytes)}</span>
                     <button
                       type="button"
                       className="icon-button"
@@ -298,10 +404,19 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
                 );
               })}
             </ul>
-            <div className="model-actions">
+            <div className="model-storage-actions">
               <button type="button" className="ghost-button" disabled={busy} onClick={() => importInputRef.current?.click()}>
                 <Upload size={15} aria-hidden="true" />
-                {tr("Import from files", "从文件导入")}
+                {tr("Import Files", "导入文件")}
+              </button>
+              <button
+                type="button"
+                className="ghost-button model-clear-trigger"
+                disabled={!hasStoredFiles || busy}
+                onClick={() => setConfirmingClear(true)}
+              >
+                <Trash2 size={15} aria-hidden="true" />
+                {tr("Clear Model", "清除模型")}
               </button>
             </div>
             {importNote ? (
@@ -309,18 +424,42 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
                 {importNote}
               </p>
             ) : null}
-            <p className="model-note">
-              {tr(
-                "Files saved here (or the release assets themselves) can be imported on another device — matching is by content hash, so names don't matter.",
-                "在这里保存的文件（或 Release 里的原始文件）可以在其他设备上导入——按内容哈希匹配，文件名无关紧要。"
-              )}
-            </p>
+            {clearNote ? (
+              <p className="model-note model-clear-note" role="status">
+                {clearNote}
+              </p>
+            ) : null}
+            {confirmingClear ? (
+              <div className="model-clear-confirm" role="group" aria-label={tr("Confirm Clear Model", "确认清除模型")}>
+                <span className="model-clear-confirm-icon" aria-hidden="true">
+                  <HardDrive size={17} />
+                </span>
+                <span className="model-clear-confirm-copy">
+                  <strong>{tr("Clear Model From This Device?", "从此设备清除模型？")}</strong>
+                  <span>
+                    {tr(
+                      "This removes the model files and encrypted semantic index. You can download them again later.",
+                      "这会删除模型文件和加密语义索引，之后仍可重新下载。"
+                    )}
+                  </span>
+                </span>
+                <span className="model-clear-confirm-actions">
+                  <button type="button" className="ghost-button" onClick={() => setConfirmingClear(false)}>
+                    {tr("Cancel", "取消")}
+                  </button>
+                  <button type="button" className="danger-button" onClick={() => void handleClearModel()}>
+                    {tr("Clear Model", "清除模型")}
+                  </button>
+                </span>
+              </div>
+            ) : null}
           </section>
         </div>
 
         <footer className="review-foot">
           <div className="model-version">
-            {MODEL_MANIFEST.id} · {MODEL_MANIFEST.version}
+            <span>{tr("Model Version", "模型版本")}</span>
+            <code>{MODEL_MANIFEST.version}</code>
           </div>
           <div className="review-foot-actions">
             <button type="button" className="ghost-button" onClick={requestClose}>

@@ -1,6 +1,7 @@
 import "fake-indexeddb/auto";
 import { describe, expect, it } from "vitest";
 import {
+  deleteModelStoreDb,
   listStoredModelFiles,
   purgeOtherModelVersions,
   readStoredModelFile,
@@ -36,5 +37,14 @@ describe("model store", () => {
     expect(await readStoredModelFile("v-old", "config.json")).toBeNull();
     const kept = await readStoredModelFile("v-new", "config.json");
     expect(kept && new TextDecoder().decode(kept)).toBe("new");
+  });
+
+  it("deletes the complete model database for logout or an explicit clear", async () => {
+    await writeStoredModelFile("v-clear", "config.json", bytesOf("public model bytes"));
+    expect(await readStoredModelFile("v-clear", "config.json")).not.toBeNull();
+
+    await deleteModelStoreDb();
+
+    expect(await readStoredModelFile("v-clear", "config.json")).toBeNull();
   });
 });

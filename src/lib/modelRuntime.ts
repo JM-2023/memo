@@ -35,8 +35,10 @@ export const RETRIEVAL_QUERY_PREFIX = "";
 export type EmbedFn = (texts: readonly string[]) => Promise<Float32Array[]>;
 
 let embedderPromise: Promise<EmbedFn> | null = null;
+let runtimeGeneration = 0;
+let activeDisposer: (() => Promise<void>) | null = null;
 
-async function createEmbedder(): Promise<EmbedFn> {
+async function createEmbedder(generation: number): Promise<EmbedFn> {
   const { env, pipeline } = await import("@huggingface/transformers");
 
   env.useBrowserCache = false;
@@ -70,6 +72,15 @@ async function createEmbedder(): Promise<EmbedFn> {
 
   const extractor = await pipeline("feature-extraction", MODEL_MANIFEST.id, { device: "wasm", dtype: "q8" });
 
+  // A clear can land while the several-megabyte runtime is still starting.
+  // Dispose that late result instead of resurrecting a model the user just
+  // removed.
+  if (generation !== runtimeGeneration) {
+    await extractor.dispose();
+    throw new Error("Model runtime was cleared while it was starting");
+  }
+  activeDisposer = () => extractor.dispose();
+
   return async (texts: readonly string[]): Promise<Float32Array[]> => {
     if (texts.length === 0) return [];
     const output = await extractor([...texts], { pooling: "cls", normalize: true });
@@ -93,12 +104,26 @@ async function createEmbedder(): Promise<EmbedFn> {
  */
 export function getEmbedder(): Promise<EmbedFn> {
   if (!embedderPromise) {
-    embedderPromise = createEmbedder().catch((cause: unknown) => {
-      embedderPromise = null;
+    const generation = runtimeGeneration;
+    const current = createEmbedder(generation).catch((cause: unknown) => {
+      if (embedderPromise === current) embedderPromise = null;
       throw cause;
     });
+    embedderPromise = current;
   }
   return embedderPromise;
+}
+
+/**
+ * Drop the process-wide pipeline and release its ONNX session. In-flight
+ * construction is invalidated by generation and disposes itself on arrival.
+ */
+export async function resetModelRuntime(): Promise<void> {
+  runtimeGeneration += 1;
+  embedderPromise = null;
+  const dispose = activeDisposer;
+  activeDisposer = null;
+  if (dispose) await dispose().catch(() => {});
 }
 
 function assertSelfTest(condition: boolean, detail: string): asserts condition {

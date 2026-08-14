@@ -18,6 +18,7 @@ import {
   type ModelManifest
 } from "./modelManifest";
 import {
+  deleteModelStoreDb,
   listStoredModelFiles,
   purgeOtherModelVersions,
   readStoredModelFile,
@@ -58,6 +59,28 @@ export interface ModelLoaderOptions {
  * browsing). Keyed like the store, so distinct manifest versions never mix.
  */
 const memoryFiles = new Map<string, ArrayBuffer>();
+let storageGeneration = 0;
+
+class ModelFilesClearedError extends Error {
+  constructor() {
+    super("Model files were cleared during this operation");
+    this.name = "ModelFilesClearedError";
+  }
+}
+
+function assertStorageGeneration(generation: number): void {
+  if (generation !== storageGeneration) throw new ModelFilesClearedError();
+}
+
+/**
+ * Forget every model byte, including the session-only quota fallback. This is
+ * shared by explicit logout and the settings panel's standalone clear action.
+ */
+export async function clearModelFiles(): Promise<void> {
+  storageGeneration += 1;
+  memoryFiles.clear();
+  await deleteModelStoreDb();
+}
 
 function memoryKey(manifest: ModelManifest, requestPath: string): string {
   return `${manifest.version}/${requestPath}`;
@@ -126,14 +149,18 @@ async function fetchExactBytes(
   return bytes.buffer;
 }
 
-async function keepBytes(manifest: ModelManifest, file: ModelFileSpec, buffer: ArrayBuffer): Promise<void> {
+async function keepBytes(manifest: ModelManifest, file: ModelFileSpec, buffer: ArrayBuffer, generation: number): Promise<void> {
+  assertStorageGeneration(generation);
   try {
     await writeStoredModelFile(manifest.version, file.requestPath, buffer);
-    memoryFiles.delete(memoryKey(manifest, file.requestPath));
   } catch (cause) {
+    assertStorageGeneration(generation);
     console.warn(`Model file ${file.requestPath} could not be persisted; keeping it in memory for this session.`, cause);
     memoryFiles.set(memoryKey(manifest, file.requestPath), buffer);
+    return;
   }
+  assertStorageGeneration(generation);
+  memoryFiles.delete(memoryKey(manifest, file.requestPath));
 }
 
 /**
@@ -150,8 +177,10 @@ export async function ensureModelFiles(
   const manifest = options.manifest ?? MODEL_MANIFEST;
   const fetchImpl = options.fetchImpl ?? fetch;
   const urlsFor = options.mirrorUrls ?? modelMirrorUrls;
+  const generation = storageGeneration;
 
   await purgeOtherModelVersions(manifest.version);
+  assertStorageGeneration(generation);
 
   const totalBytes = modelTotalBytes(manifest);
   let loadedBytes = 0;
@@ -160,6 +189,7 @@ export async function ensureModelFiles(
   let downloadedAny = false;
   emit(null);
   for (const file of manifest.files) {
+    assertStorageGeneration(generation);
     if (await readModelFileBytes(file.requestPath, manifest)) {
       loadedBytes += file.bytes;
       emit(null);
@@ -176,10 +206,13 @@ export async function ensureModelFiles(
           loadedBytes += chunkBytes;
           emit(file.requestPath);
         });
+        assertStorageGeneration(generation);
         if (!(await verifyModelBytes(file, candidate))) throw new Error("SHA-256 mismatch");
+        assertStorageGeneration(generation);
         buffer = candidate;
         break;
       } catch (cause) {
+        if (cause instanceof ModelFilesClearedError) throw cause;
         // Roll progress back to the file boundary so a retry on the next
         // mirror never shows the bar moving backwards mid-chunk.
         loadedBytes = fileStart;
@@ -193,13 +226,16 @@ export async function ensureModelFiles(
       throw new ModelUnavailableError(`Model file ${file.requestPath} is unavailable from every mirror.`, failures);
     }
 
-    await keepBytes(manifest, file, buffer);
+    await keepBytes(manifest, file, buffer, generation);
     downloadedAny = true;
     loadedBytes = fileStart + file.bytes;
     emit(null);
   }
 
-  if (downloadedAny) await requestPersistentStorage();
+  if (downloadedAny) {
+    assertStorageGeneration(generation);
+    await requestPersistentStorage();
+  }
 }
 
 export interface ModelImportResult {
@@ -224,25 +260,33 @@ interface ImportableFile {
  */
 export async function importModelFiles(files: readonly ImportableFile[], options: ModelLoaderOptions = {}): Promise<ModelImportResult> {
   const manifest = options.manifest ?? MODEL_MANIFEST;
+  const generation = storageGeneration;
   await purgeOtherModelVersions(manifest.version);
+  assertStorageGeneration(generation);
 
   const result: ModelImportResult = { imported: [], alreadyPresent: [], unmatched: [] };
   for (const file of files) {
     const buffer = await file.arrayBuffer();
+    assertStorageGeneration(generation);
     const digest = await sha256Hex(buffer);
+    assertStorageGeneration(generation);
     const spec = manifest.files.find((candidate) => candidate.sha256 === digest && candidate.bytes === buffer.byteLength);
     if (!spec) {
       result.unmatched.push(file.name);
       continue;
     }
     if (await readModelFileBytes(spec.requestPath, manifest)) {
+      assertStorageGeneration(generation);
       result.alreadyPresent.push(spec.requestPath);
       continue;
     }
-    await keepBytes(manifest, spec, buffer);
+    await keepBytes(manifest, spec, buffer, generation);
     result.imported.push(spec.requestPath);
   }
 
-  if (result.imported.length > 0) await requestPersistentStorage();
+  if (result.imported.length > 0) {
+    assertStorageGeneration(generation);
+    await requestPersistentStorage();
+  }
   return result;
 }

@@ -8,6 +8,7 @@ import {
   SEMANTIC_MAX_CHUNKS,
   chunkMemoContent,
   decodeSemanticIndex,
+  deleteSemanticIndexDb,
   emptySemanticIndex,
   encodeSemanticIndex,
   loadSemanticIndex,
@@ -172,5 +173,16 @@ describe("sealed persistence", () => {
     // Losing the key makes the stored index unreadable.
     forgetCacheKey();
     expect(await loadSemanticIndex("test-r1")).toBeNull();
+  });
+
+  it("deletes the sealed index for logout or the standalone model clear", async () => {
+    adoptCacheKey(KEY_B64);
+    await saveSemanticIndex(indexWith([{ id: "clear-me", vector: axis(2, 0.9) }]));
+    expect(await loadSemanticIndex("test-r1")).not.toBeNull();
+
+    await deleteSemanticIndexDb();
+
+    expect(await loadSemanticIndex("test-r1")).toBeNull();
+    forgetCacheKey();
   });
 });

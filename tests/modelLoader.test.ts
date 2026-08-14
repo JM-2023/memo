@@ -9,6 +9,7 @@ const mockStore = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/lib/modelStore", () => ({
+  deleteModelStoreDb: vi.fn(async () => mockStore.files.clear()),
   readStoredModelFile: vi.fn(async (version: string, requestPath: string) => mockStore.files.get(`${version}/${requestPath}`) ?? null),
   writeStoredModelFile: vi.fn(async (version: string, requestPath: string, bytes: ArrayBuffer) => {
     if (mockStore.failWrites) throw new Error("quota exceeded");
@@ -27,6 +28,7 @@ vi.mock("../src/lib/modelStore", () => ({
 }));
 
 import {
+  clearModelFiles,
   ensureModelFiles,
   importModelFiles,
   ModelUnavailableError,
@@ -37,6 +39,14 @@ import {
 import { sha256Hex, type ModelFileSpec, type ModelManifest } from "../src/lib/modelManifest";
 
 const encoder = new TextEncoder();
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 /** Distinct versions per test keep the loader's session overlay isolated. */
 async function makeManifest(version: string, contents: Record<string, string>): Promise<{ manifest: ModelManifest; bodies: Map<string, Uint8Array> }> {
@@ -173,6 +183,47 @@ describe("model loader", () => {
     expect(await storedModelState(manifest)).toBe("complete");
     const kept = await readModelFileBytes("config.json", manifest);
     expect(kept && new TextDecoder().decode(kept)).toBe("unpersistable");
+  });
+
+  it("clears persisted files and the session-only quota fallback together", async () => {
+    const { manifest, bodies } = await makeManifest("v-clear", { "config.json": "clear-me" });
+    mockStore.failWrites = true;
+    const { impl } = fetchStub({
+      "https://primary.test/config.json": () => new Response(bodies.get("config.json")!)
+    });
+    await ensureModelFiles(undefined, { manifest, fetchImpl: impl, mirrorUrls });
+    mockStore.files.set("another-version/config.json", encoder.encode("persisted").buffer as ArrayBuffer);
+    expect(await storedModelState(manifest)).toBe("complete");
+
+    await clearModelFiles();
+
+    expect(mockStore.files.size).toBe(0);
+    expect(await storedModelState(manifest)).toBe("none");
+  });
+
+  it("does not let an in-flight import restore files after they are cleared", async () => {
+    const { manifest, bodies } = await makeManifest("v-clear-race", { "config.json": "late import" });
+    const started = deferred<void>();
+    const bytes = deferred<ArrayBuffer>();
+    const pending = importModelFiles(
+      [
+        {
+          name: "config.json",
+          arrayBuffer: () => {
+            started.resolve();
+            return bytes.promise;
+          }
+        }
+      ],
+      { manifest }
+    );
+    await started.promise;
+
+    await clearModelFiles();
+    bytes.resolve(bodies.get("config.json")!.buffer as ArrayBuffer);
+
+    await expect(pending).rejects.toThrow("cleared during this operation");
+    expect(await storedModelState(manifest)).toBe("none");
   });
 
   it("imports files by content hash regardless of their names", async () => {

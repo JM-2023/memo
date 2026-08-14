@@ -503,6 +503,7 @@ export default function App() {
     setActiveTag(null);
     setActiveDay(null);
     setQuery("");
+    setSemanticOn(false);
     setSearchOpen(false);
     setFilters(EMPTY_FILTERS);
     setStatsDrilldown(null);
@@ -529,6 +530,7 @@ export default function App() {
     setShareMemo(null);
     setStatsOpen(false);
     setReviewSettingsOpen(false);
+    setModelSettingsOpen(false);
     setChangingPasscode(false);
     setDrawerOpen(false);
     setDrawerClosing(false);
@@ -2684,7 +2686,7 @@ export default function App() {
                 className={`icon-button semantic-toggle${semanticOn ? " is-active" : ""}`}
                 aria-pressed={semanticOn}
                 disabled={editingId !== null}
-                aria-label={tr("Semantic search", "语义搜索")}
+                aria-label={tr("Semantic Search", "语义搜索")}
                 title={
                   semantic.status === "indexing"
                     ? tr(
@@ -2834,7 +2836,12 @@ export default function App() {
           onClose={() => setReviewSettingsOpen(false)}
         />
       ) : null}
-      {modelSettingsOpen ? <ModelSettingsModal onClose={() => setModelSettingsOpen(false)} /> : null}
+      {modelSettingsOpen ? (
+        <ModelSettingsModal
+          onClose={() => setModelSettingsOpen(false)}
+          onModelCleared={() => setSemanticOn(false)}
+        />
+      ) : null}
       <input
         ref={importFileRef}
         type="file"
