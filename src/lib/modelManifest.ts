@@ -36,34 +36,34 @@ export interface ModelManifest {
 export const MODEL_RELEASE_REPO = "JM-2023/memo";
 
 export const MODEL_MANIFEST: ModelManifest = Object.freeze({
-  id: "Xenova/bge-small-zh-v1.5",
-  hfRevision: "75c43b069aac4d136ba6bc1122f995fedcfd2781",
-  version: "bge-small-zh-q8-r1",
-  releaseTag: "model-bge-small-zh-q8-r1",
+  id: "onnx-community/granite-embedding-97m-multilingual-r2-ONNX",
+  hfRevision: "536a9f241cb3f02a9c5995a1e708c784bd274859",
+  version: "granite-embedding-97m-multilingual-r2-q8-r1",
+  releaseTag: "model-granite-embedding-97m-multilingual-r2-q8-r1",
   files: Object.freeze([
     {
       asset: "config.json",
       requestPath: "config.json",
-      bytes: 716,
-      sha256: "d4193ead3a810fd694fa8a31d7fc72fbaebc0668b603e398734bf2f6538ff42f"
+      bytes: 1215,
+      sha256: "ae74d55a56f779774cb9a8e63d3c2da9ae1af83c00229ffdff43d0b38407a0ee"
     },
     {
       asset: "tokenizer.json",
       requestPath: "tokenizer.json",
-      bytes: 439125,
-      sha256: "48cea5d44424912a6fd1ea647bf4fe50b55ab8b1e5879c3275f80e339e8fae26"
+      bytes: 25301671,
+      sha256: "51947676cae1f991fa51c6b9a24e14ee5460e5f0b9f692f13bb3159829d1592a"
     },
     {
       asset: "tokenizer_config.json",
       requestPath: "tokenizer_config.json",
-      bytes: 367,
-      sha256: "e6f3b96db926a37d4039995fbf5ad17de158dfb8f6343d607e4dbaad18d75f5a"
+      bytes: 12860,
+      sha256: "6ed69389e30a8ecabfce2f9ebcdf0c908b34056f24d994340f2f216521c057d5"
     },
     {
       asset: "model_quantized.onnx",
       requestPath: "onnx/model_quantized.onnx",
-      bytes: 24010842,
-      sha256: "15b717c382bcb518ba457b93ea6850ede7f4f1cd8937454aa06972366cd19bcc"
+      bytes: 97858099,
+      sha256: "704c1ebca5fbb7cd83ced41827658ac4c9990c64f7f2874d22b78044e5022e22"
     }
   ])
 });

@@ -54,7 +54,7 @@ async function clearCacheStorage(): Promise<void> {
  *
  * The `memo-model` IndexedDB database (src/lib/modelStore.ts) is deliberately
  * left alone: it holds the semantic model's hash-verified weights — public
- * artifacts, not user data — and wiping it would only force a ~24 MB
+ * artifacts, not user data — and wiping it would only force a ~123 MB
  * re-download after every logout. The `memo-index` database is the opposite
  * case — vectors derived from memo content — so it is deleted here even
  * though forgetting the snapshot key already made it unreadable.

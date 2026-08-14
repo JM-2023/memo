@@ -78,10 +78,24 @@ Two independent "links" exist and both must be self-controlled:
 
 ## 3. Model choice and files
 
-Recommended: **`Xenova/bge-small-zh-v1.5`** (ONNX conversion of BAAI's
-`bge-small-zh-v1.5`, MIT-licensed) at int8 quantization — Chinese-first with
-acceptable English, ~24 MB quantized, 512-token input window, well within
-mobile WASM performance for a few thousand memos.
+Selected: **`onnx-community/granite-embedding-97m-multilingual-r2-ONNX`**
+(ONNX conversion of IBM Granite Embedding 97M Multilingual R2, Apache 2.0)
+at int8 quantization. It produces 384-dimensional vectors, supports 200+
+languages through its pretraining corpus, and has retrieval-pair and
+cross-lingual training for 52 languages including Chinese, English, Japanese,
+Korean, French, German, Spanish, Arabic, Hindi, and many others. The official
+ONNX repository is explicitly compatible with Transformers.js.
+
+The q8 weights plus tokenizer and configs total 123,173,845 bytes (~123 MB).
+That is substantially larger than the former 24 MB Chinese-first BGE model,
+but remains a one-time per-device download and is the practical quality/size
+point for multilingual browser search. The April 2026 IBM model card reports
+59.6 on Multilingual MTEB Retrieval for the 97M R2 model versus 50.9 for
+`multilingual-e5-small`; the 97M model is also designed for latency-sensitive
+edge deployment. Larger candidates were rejected for this app: EmbeddingGemma
+needs about 198 MB for q4 weights alone, while Qwen3-Embedding-0.6B is a 600M
+parameter decoder model. Jina Embeddings v5 Nano is smaller than its full
+model but uses a non-commercial license and custom model code.
 
 Files the transformers.js `feature-extraction` pipeline requests:
 
@@ -95,23 +109,20 @@ Files the transformers.js `feature-extraction` pipeline requests:
 GitHub release assets cannot contain `/` in their names, so asset names are
 flattened; the manifest maps flat asset names back to request paths.
 
-As implemented: a live network audit against `@huggingface/transformers`
+As implemented: a local frozen-cache audit against `@huggingface/transformers`
 4.2.0 confirmed exactly these four requests and nothing else
 (`special_tokens_map.json` is never asked for). If a future library upgrade
 requests an additional small JSON, add it to the release and the manifest
 rather than letting it fall through to the network.
 
-Alternative if English recall matters more: `Xenova/multilingual-e5-small`
-(~4–5× larger quantized). Everything in this document is model-agnostic — the
-manifest decides; switching models is a new release tag plus a manifest edit.
-
 Usage notes (for the index feature, recorded here so they are not lost):
 
-- BGE models: pool with `cls`, `normalize: true`.
-- For query→memo retrieval, prefix the *query only* with
-  `为这个句子生成表示以用于检索相关文章：`; memo→memo similarity uses no prefix.
-- Memos can reach 40k characters; anything past the 512-token window must be
-  chunked by the index design, not truncated silently.
+- Granite R2 uses `cls` pooling and normalized vectors.
+- Query and document text share one symmetric embedding space. Do not add the
+  former BGE Chinese query prefix; it harms multilingual input.
+- Although the model supports a 32,768-token context, the browser index keeps
+  400-character overlapping chunks. This keeps single-threaded WASM work
+  responsive and lets the best local passage represent a long memo.
 
 ## 4. Publishing runbook (one-time per model version)
 
@@ -124,8 +135,8 @@ artifacts; nothing private is disclosed).
 ```bash
 # 1. Download the pinned revision from Hugging Face.
 #    Pin a commit SHA, never `main` — `main` can change under you.
-REV=<hf-commit-sha>
-BASE="https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/${REV}"
+REV=536a9f241cb3f02a9c5995a1e708c784bd274859
+BASE="https://huggingface.co/onnx-community/granite-embedding-97m-multilingual-r2-ONNX/resolve/${REV}"
 curl -fLO "${BASE}/config.json"
 curl -fLO "${BASE}/tokenizer.json"
 curl -fLO "${BASE}/tokenizer_config.json"
@@ -137,15 +148,16 @@ wc -c    config.json tokenizer.json tokenizer_config.json model_quantized.onnx
 
 # 3. Publish an immutable release. `--latest=false` keeps model releases from
 #    shadowing app releases if they share a repository.
-gh release create model-bge-small-zh-q8-r1 \
+gh release create model-granite-embedding-97m-multilingual-r2-q8-r1 \
   --repo JM-2023/memo --latest=false \
-  --title "Embedding model: bge-small-zh-v1.5 q8 (r1)" \
-  --notes "ONNX int8 of BAAI/bge-small-zh-v1.5 via Xenova (MIT). Pinned HF revision: ${REV}. Immutable: never edit assets on this tag; publish r2 instead." \
+  --title "Embedding model: Granite 97M Multilingual R2 q8 (r1)" \
+  --notes "ONNX int8 of IBM Granite Embedding 97M Multilingual R2 via ONNX Community (Apache-2.0). Pinned HF revision: ${REV}. Immutable: never edit assets on this tag; publish r2 instead." \
   config.json tokenizer.json tokenizer_config.json model_quantized.onnx
 ```
 
 No `gh`? The web UI works identically: repository → Releases → "Draft a new
-release" → tag `model-bge-small-zh-q8-r1` → attach the four files → uncheck
+release" → tag `model-granite-embedding-97m-multilingual-r2-q8-r1` → attach
+the four files → uncheck
 "Set as the latest release" → publish. The app uses the pinned Hugging Face
 revision for automatic download; publishing creates an immutable owner-held
 archive and a manual-import path.
@@ -156,7 +168,8 @@ Rules:
   published `model-*` tag; any change — even re-quantizing the same model —
   is a new tag (`…-r2`) and a manifest update. Client-side hash pinning
   enforces this even if the policy is violated.
-- Include the model's license (MIT for BGE) in the release notes.
+- Include the model's Apache 2.0 license and IBM/ONNX Community attribution in
+  the release notes.
 
 ### 4.1 Verify CORS before relying on it
 
@@ -167,15 +180,16 @@ CORS-capable source:
 
 ```bash
 curl -sI -H "Origin: https://<your-app-host>" \
-  "https://github.com/OWNER/REPO/releases/download/model-bge-small-zh-q8-r1/model_quantized.onnx" \
+  "https://github.com/OWNER/REPO/releases/download/model-granite-embedding-97m-multilingual-r2-q8-r1/model_quantized.onnx" \
   | rg -i '^(HTTP|location|access-control)'
 # Then repeat against the reported `location:` URL. A usable result has HTTP
 # 200, `access-control-allow-origin: *`, and a content-length.
 ```
 
-Observed live on 2026-08-15 after publishing `model-bge-small-zh-q8-r1`:
-the first hop returned HTTP 302 and the signed asset hop returned HTTP 200
-with `content-length: 24010842`, but neither response carried
+Observed live on 2026-08-15 after publishing the former
+`model-bge-small-zh-q8-r1` archive: the first hop returned HTTP 302 and the
+signed asset hop returned HTTP 200 with `content-length: 24010842`, but
+neither response carried
 `access-control-allow-origin`. A one-byte ranged GET had the same result.
 GitHub is therefore kept behind the pinned Hugging Face URL and treated as a
 manual-import archive, not a browser-reliable automatic source. Do not add a
@@ -202,13 +216,13 @@ export interface ModelFileSpec {
 }
 
 export interface ModelManifest {
-  /** transformers.js model id, e.g. "Xenova/bge-small-zh-v1.5". */
+  /** transformers.js model id, e.g. the pinned Granite ONNX repository. */
   id: string;
   /** Pinned HF revision for the primary mirror (commit SHA, not "main"). */
   hfRevision: string;
   /** Bump on ANY change; the embedding index stores and keys off this. */
-  version: string; // e.g. "bge-small-zh-q8-r1"
-  releaseTag: string; // e.g. "model-bge-small-zh-q8-r1"
+  version: string; // e.g. "granite-embedding-97m-multilingual-r2-q8-r1"
+  releaseTag: string; // e.g. "model-granite-embedding-97m-multilingual-r2-q8-r1"
   files: ModelFileSpec[];
 }
 
@@ -230,7 +244,7 @@ export const MODEL_MIRRORS: ReadonlyArray<
 - On open, delete entries belonging to any other manifest version — one model
   at a time keeps worst-case storage ≈ one model.
 - **Not sealed, and survives logout.** Model weights are public content, not
-  user data; encrypting them buys nothing and re-downloading 24 MB on every
+  user data; encrypting them buys nothing and re-downloading 123 MB on every
   logout is pure cost. Add an explicit exclusion (with this rationale as a
   comment) wherever `logoutCleanup.ts` enumerates what to wipe, so the wipe
   stays intentional rather than accidental.
@@ -242,7 +256,7 @@ export const MODEL_MIRRORS: ReadonlyArray<
 `ensureModelReady(onProgress): Promise<void>`, sequential over
 `manifest.files`:
 
-1. Store hit → done (hash was verified at write time; do not re-hash 24 MB on
+1. Store hit → done (hash was verified at write time; do not re-hash 123 MB on
    every startup).
 2. Miss → for each mirror in order: `fetch`, stream to an `ArrayBuffer` with
    progress callbacks (`content-length` is used where supplied; the big file
@@ -307,7 +321,7 @@ matters, so on a frozen device none of these paths is ever taken.
 
 This app is startup-latency-obsessed; keep it that way. The model downloads
 only when the user explicitly enables semantic features in Settings (button
-shows the size: "Download model (~24 MB)"), or taps Retry later. Progress in
+shows the size: "Download model (~123 MB)"), or taps Retry later. Progress in
 the settings row; the feed never blocks on any of this.
 
 ### 6.2 The escape hatch: manual import/export
@@ -402,7 +416,7 @@ until the rebuild completes. Publishing a new model release without bumping
 
 ## 9. Non-goals
 
-- No R2, no Workers AI, no proxying model bytes through Pages Functions —
+- No Cloudflare R2 bucket, no Workers AI, no proxying model bytes through Pages Functions —
   the model never touches the Cloudflare deployment.
 - No automatic model updates; new models are deliberate manifest + release
   changes.

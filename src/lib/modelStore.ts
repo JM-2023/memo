@@ -1,11 +1,11 @@
 // IndexedDB freeze for the embedding model's verified bytes. A separate
 // database from the snapshot cache, and deliberately outside the encrypted
 // pipeline: model weights are public artifacts, not user data, so sealing
-// them buys nothing and re-downloading ~24 MB after every logout would be
+// them buys nothing and re-downloading ~123 MB after every logout would be
 // pure cost. logoutCleanup.ts leaves this database alone on purpose.
 //
 // Bytes are hash-verified by the loader before they are written, so reads
-// trust the store instead of re-hashing 24 MB on every startup. Keys are
+// trust the store instead of re-hashing 123 MB on every startup. Keys are
 // namespaced by manifest version; opening the store for one version purges
 // every other, keeping worst-case storage at about one model.
 

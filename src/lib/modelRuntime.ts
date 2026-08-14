@@ -21,15 +21,16 @@
 import { readModelFileBytes } from "./modelLoader";
 import { MODEL_MANIFEST, modelFileForCacheKey } from "./modelManifest";
 
-/** Hidden size of bge-small-zh-v1.5. */
-export const EMBEDDING_DIM = 512;
+/** Hidden size of Granite Embedding 97M Multilingual R2. */
+export const EMBEDDING_DIM = 384;
 
 /**
- * BGE models want short retrieval queries prefixed with this instruction;
- * memo-to-memo similarity uses no prefix. Recorded here for the index
- * feature that builds on this runtime.
+ * Granite's retrieval space is symmetric and its official examples use raw
+ * query and document text, so it needs no query-only instruction. Keeping
+ * the empty prefix explicit makes that model contract visible at the call
+ * site and avoids silently carrying the old Chinese-only BGE instruction.
  */
-export const RETRIEVAL_QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章：";
+export const RETRIEVAL_QUERY_PREFIX = "";
 
 export type EmbedFn = (texts: readonly string[]) => Promise<Float32Array[]>;
 
@@ -105,15 +106,15 @@ function assertSelfTest(condition: boolean, detail: string): asserts condition {
 }
 
 /**
- * One real inference over one Chinese and one English probe. Throws with a
- * specific reason when the runtime produces the wrong shape or degenerate
- * vectors; the settings UI only reports "ready" after this passes.
+ * One real inference over related Chinese/English probes and an unrelated
+ * English control. Throws with a specific reason when the runtime produces
+ * the wrong shape, degenerate vectors, or no cross-language alignment; the
+ * settings UI only reports "ready" after this passes.
  */
 export async function runModelSelfTest(): Promise<void> {
   const embed = await getEmbedder();
-  const vectors = await embed(["你好，世界", "hello world"]);
-  assertSelfTest(vectors.length === 2, `expected 2 vectors, got ${vectors.length}`);
-  let dot = 0;
+  const vectors = await embed(["今天买了苹果和香蕉。", "fresh fruit from the market", "The cat is sleeping by the window."]);
+  assertSelfTest(vectors.length === 3, `expected 3 vectors, got ${vectors.length}`);
   for (const vector of vectors) {
     assertSelfTest(vector.length === EMBEDDING_DIM, `expected ${EMBEDDING_DIM} dimensions, got ${vector.length}`);
     let normSquared = 0;
@@ -124,6 +125,12 @@ export async function runModelSelfTest(): Promise<void> {
     const norm = Math.sqrt(normSquared);
     assertSelfTest(Math.abs(norm - 1) < 0.02, `expected a unit vector, got norm ${norm.toFixed(4)}`);
   }
-  for (let index = 0; index < EMBEDDING_DIM; index += 1) dot += vectors[0][index] * vectors[1][index];
-  assertSelfTest(Math.abs(dot) < 0.999, "distinct probes collapsed to one direction");
+  let related = 0;
+  let unrelated = 0;
+  for (let index = 0; index < EMBEDDING_DIM; index += 1) {
+    related += vectors[0][index] * vectors[1][index];
+    unrelated += vectors[0][index] * vectors[2][index];
+  }
+  assertSelfTest(Math.abs(related) < 0.999, "distinct probes collapsed to one direction");
+  assertSelfTest(related > unrelated + 0.03, "cross-language probe did not outrank the unrelated control");
 }

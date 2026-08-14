@@ -17,26 +17,25 @@ import { EMBEDDING_DIM } from "./modelRuntime";
 import type { Memo } from "./types";
 
 /**
- * Window sizing is token-budget driven: BERT-style Chinese tokenizers spend
- * roughly one token per CJK character, and the model truncates at 512 —
- * 400 characters keeps every chunk inside the window with room for mixed
- * English. Six windows cover ~2.2k characters; a longer memo's tail goes
- * unindexed rather than exploding index size (a 40k-character memo would
- * otherwise be ~100 rows on its own).
+ * Granite accepts much longer inputs, but 400-character overlapping windows
+ * keep single-threaded browser WASM inference responsive and let the best
+ * local passage represent a long memo. Six windows cover ~2.2k characters;
+ * a longer memo's tail goes unindexed rather than exploding index time and
+ * size (a 40k-character memo would otherwise be ~100 rows on its own).
  */
 export const SEMANTIC_CHUNK_CHARS = 400;
 export const SEMANTIC_CHUNK_OVERLAP = 50;
 export const SEMANTIC_MAX_CHUNKS = 6;
 /**
  * Dot-product floor below which a match reads as noise. Calibrated against
- * bge-small-zh-v1.5 q8 with the retrieval prefix on real probes: honest
- * matches landed at 0.356–0.538 ("运动"→跑步 memo 0.356, "宠物"→猫 memo
- * 0.464, "水果"→水果 memo 0.538) while every unrelated pair stayed at or
- * under 0.326 (control "量子物理" peaked there). 0.32 sits under the honest
- * floor with margin for WASM/CPU numeric drift; personal search prefers a
- * weak tail hit over a silently missing true one.
+ * Granite Embedding 97M Multilingual R2 q8 on representative Chinese,
+ * English, Japanese, French, and German probes: correct cross-language
+ * matches landed at 0.750–0.882 while the unrelated "量子物理" control
+ * peaked at 0.701. 0.74 sits between them with margin for WASM/CPU numeric
+ * drift; personal search still prefers a weak tail hit over silently missing
+ * a true one.
  */
-export const SEMANTIC_SCORE_FLOOR = 0.32;
+export const SEMANTIC_SCORE_FLOOR = 0.74;
 export const SEMANTIC_MAX_RESULTS = 200;
 
 export interface SemanticRow {

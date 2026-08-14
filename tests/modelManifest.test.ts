@@ -19,6 +19,7 @@ async function specFor(content: string): Promise<ModelFileSpec> {
 
 describe("model manifest", () => {
   it("pins every file with a size and a SHA-256", () => {
+    expect(MODEL_MANIFEST.id).toBe("onnx-community/granite-embedding-97m-multilingual-r2-ONNX");
     expect(MODEL_MANIFEST.files.length).toBe(4);
     expect(MODEL_MANIFEST.hfRevision).toMatch(/^[0-9a-f]{40}$/);
     for (const file of MODEL_MANIFEST.files) {
@@ -26,6 +27,7 @@ describe("model manifest", () => {
       expect(file.sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(file.asset).not.toContain("/");
     }
+    expect(modelTotalBytes()).toBe(123173845);
     expect(modelTotalBytes()).toBe(MODEL_MANIFEST.files.reduce((sum, file) => sum + file.bytes, 0));
   });
 
@@ -41,10 +43,10 @@ describe("model manifest", () => {
   });
 
   it("resolves cache keys by boundary-anchored request-path suffix", () => {
-    const localKey = "/assets/model-cache-miss/Xenova/bge-small-zh-v1.5/onnx/model_quantized.onnx";
+    const localKey = `/assets/model-cache-miss/${MODEL_MANIFEST.id}/onnx/model_quantized.onnx`;
     expect(modelFileForCacheKey(localKey)?.requestPath).toBe("onnx/model_quantized.onnx");
 
-    const remoteKey = "https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/main/config.json";
+    const remoteKey = `https://huggingface.co/${MODEL_MANIFEST.id}/resolve/main/config.json`;
     expect(modelFileForCacheKey(remoteKey)?.requestPath).toBe("config.json");
 
     expect(modelFileForCacheKey("config.json")?.requestPath).toBe("config.json");
@@ -53,7 +55,7 @@ describe("model manifest", () => {
   });
 
   it("never lets config.json claim tokenizer_config.json", () => {
-    const key = "/assets/model-cache-miss/Xenova/bge-small-zh-v1.5/tokenizer_config.json";
+    const key = `/assets/model-cache-miss/${MODEL_MANIFEST.id}/tokenizer_config.json`;
     expect(modelFileForCacheKey(key)?.requestPath).toBe("tokenizer_config.json");
   });
 

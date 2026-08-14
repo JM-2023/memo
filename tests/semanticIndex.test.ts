@@ -117,13 +117,13 @@ describe("search", () => {
     const index = indexWith([
       { id: "a", vector: axis(0, 0.5) },
       { id: "a", vector: axis(0, 0.9) },
-      { id: "b", vector: axis(0, 0.45) },
-      { id: "c", vector: axis(0, 0.2) }
+      { id: "b", vector: axis(0, 0.8) },
+      { id: "c", vector: axis(0, 0.73) }
     ]);
     const results = searchSemanticIndex(index, axis(0));
     expect([...results.keys()]).toEqual(["a", "b"]);
     expect(results.get("a")).toBeCloseTo(0.9, 5);
-    expect(results.get("b")).toBeCloseTo(0.45, 5);
+    expect(results.get("b")).toBeCloseTo(0.8, 5);
   });
 });
 
