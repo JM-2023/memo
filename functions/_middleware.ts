@@ -2,18 +2,27 @@ import type { AppContext } from "./api/_utils/types";
 import { DecryptionError } from "./api/_utils/crypto";
 import { apiError } from "./api/_utils/response";
 
-// The app is fully self-contained (no external scripts, fonts, or API hosts),
-// so everything locks to 'self'. 'unsafe-inline' for styles covers React's
-// style attributes; data:/blob: under img covers inline image previews and
-// the D1-served attachments. img-src additionally allows https: — memo text
-// may embed external image links that render as previews without being stored.
+// The app's own scripts, styles, and fonts stay locked to 'self'.
+// 'unsafe-inline' for styles covers React's style attributes; data:/blob:
+// under img covers inline image previews and the D1-served attachments.
+// The deliberate exceptions:
+// - img-src https:: memo text may embed external image links that render as
+//   previews without being stored.
+// - script-src 'wasm-unsafe-eval': the semantic model runs on same-origin
+//   onnxruntime WASM, and browsers gate WebAssembly compilation behind this
+//   keyword (it does not permit JS eval).
+// - connect-src lists exactly the embedding-model mirrors — our GitHub
+//   release assets with their redirect host, then the pinned Hugging Face
+//   fallback with its CDN hosts. Model files are fetched once per device,
+//   verified against the SHA-256 manifest in src/lib/modelManifest.ts, and
+//   frozen into IndexedDB; no other cross-origin request exists.
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self'",
-  "connect-src 'self'",
+  "connect-src 'self' https://github.com https://objects.githubusercontent.com https://release-assets.githubusercontent.com https://huggingface.co https://*.huggingface.co https://*.hf.co",
   "worker-src 'self' blob:",
   "manifest-src 'self'",
   "object-src 'none'",

@@ -1,4 +1,5 @@
 import { invalidateSnapshot } from "./cache";
+import { deleteSemanticIndexDb } from "./semanticIndex";
 
 const APP_STORAGE_PREFIXES = ["memo:", "memo-"] as const;
 
@@ -50,6 +51,13 @@ async function clearCacheStorage(): Promise<void> {
  * The server's logout response remains responsible for the HTTP cache through
  * Clear-Site-Data; this also clears Cache Storage for present or future app
  * shell caches.
+ *
+ * The `memo-model` IndexedDB database (src/lib/modelStore.ts) is deliberately
+ * left alone: it holds the semantic model's hash-verified weights — public
+ * artifacts, not user data — and wiping it would only force a ~24 MB
+ * re-download after every logout. The `memo-index` database is the opposite
+ * case — vectors derived from memo content — so it is deleted here even
+ * though forgetting the snapshot key already made it unreadable.
  */
 export async function clearLocalDeviceData(): Promise<void> {
   const snapshotInvalidation = invalidateSnapshot();
@@ -68,5 +76,5 @@ export async function clearLocalDeviceData(): Promise<void> {
   // Forgetting the snapshot key already happened synchronously. A damaged or
   // unavailable IndexedDB must not turn a completed server logout into an
   // unhandled client-side rejection.
-  await Promise.allSettled([snapshotInvalidation, clearCacheStorage()]);
+  await Promise.allSettled([snapshotInvalidation, clearCacheStorage(), deleteSemanticIndexDb()]);
 }

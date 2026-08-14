@@ -1,4 +1,5 @@
 import {
+  Brain,
   Calendar,
   CalendarRange,
   ChartNoAxesColumn,
@@ -30,6 +31,7 @@ import { LoginScreen } from "./components/LoginScreen";
 import { MemoCard } from "./components/MemoCard";
 import { Menu } from "./components/Menu";
 import { PromptDialog } from "./components/PromptDialog";
+import { ModelSettingsModal } from "./components/ModelSettingsModal";
 import { ReviewSettingsModal } from "./components/ReviewSettingsModal";
 import { RollingText } from "./components/RollingText";
 import { ScrollTopButton } from "./components/ScrollTopButton";
@@ -39,6 +41,7 @@ import { ShareDialog } from "./components/ShareDialog";
 import { StatsModal } from "./components/StatsModal";
 import { SwapText } from "./components/SwapText";
 import { useModalA11y } from "./hooks/useModalA11y";
+import { useSemanticSearch } from "./hooks/useSemanticSearch";
 import {
   AuthRequiredError,
   ApiError,
@@ -349,6 +352,15 @@ export default function App() {
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [activeDay, setActiveDay] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  // The preference key sits under the memo: prefix, so an ordinary logout
+  // resets it along with the other workspace furniture.
+  const [semanticOn, setSemanticOn] = useState(() => {
+    try {
+      return localStorage.getItem("memo:semantic-search") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [searchOpen, setSearchOpen] = useState(false);
   const [filters, setFilters] = useState<FeedFilters>(EMPTY_FILTERS);
   const [statsDrilldown, setStatsDrilldown] = useState<StatsDrilldown | null>(null);
@@ -363,6 +375,7 @@ export default function App() {
   const [reviewSettings, setReviewSettings] = useState<ReviewSettings>(loadReviewSettings);
   const [reviewDay, setReviewDay] = useState<ReviewDay | null>(loadReviewDay);
   const [reviewSettingsOpen, setReviewSettingsOpen] = useState(false);
+  const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
 
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -847,6 +860,27 @@ export default function App() {
   const structuredFiltersOn = hasActiveFilters(filters);
   const filtersActive = activeTag !== null || activeDay !== null || statsDrilldown !== null || trimmedQuery.length > 0 || structuredFiltersOn;
 
+  // Semantic ranking rides the same search box: once the on-device model is
+  // ready, the query ranks memos by meaning instead of substring. Trash and
+  // review keep plain search, so the hook sees their query as empty.
+  const semantic = useSemanticSearch(semanticOn, activeMemos, view === "memos" ? trimmedQuery : "");
+  const semanticResults = view === "memos" ? semantic.results : null;
+  useEffect(() => {
+    try {
+      if (semanticOn) localStorage.setItem("memo:semantic-search", "1");
+      else localStorage.removeItem("memo:semantic-search");
+    } catch {
+      // Preference persistence is best-effort.
+    }
+  }, [semanticOn]);
+  // Toggling semantic search on a device without the model routes straight
+  // to the download dialog instead of leaving a silently dead switch.
+  useEffect(() => {
+    if (semantic.status !== "model-missing") return;
+    setSemanticOn(false);
+    setModelSettingsOpen(true);
+  }, [semantic.status]);
+
   // The live feed lenses, for async work that lands later (checkbox toggle
   // batches read this at commit time instead of a render-stale capture).
   const feedContextRef = useRef({ view, filters, statsDrilldown, sortKey, parsedQuery });
@@ -866,6 +900,13 @@ export default function App() {
     if (hasActiveFilters(filters)) {
       list = filterPreservingId(list, editingId, (memo) => memoMatchesFilters(memo, filters));
     }
+    if (semanticResults) {
+      // Semantic ranking replaces substring matching AND the sort: score
+      // order is the result order, pins included. filterPreservingId still
+      // keeps the memo being edited visible outside the ranking.
+      list = filterPreservingId(list, editingId, (memo) => semanticResults.has(memo.id));
+      return [...list].sort((a, b) => (semanticResults.get(b.id) ?? -1) - (semanticResults.get(a.id) ?? -1));
+    }
     if (!queryIsEmpty(parsedQuery)) {
       list = filterPreservingId(list, editingId, (memo) => memoMatchesQuery(memo, parsedQuery));
     }
@@ -874,7 +915,7 @@ export default function App() {
       if (Boolean(a.pinnedAt) !== Boolean(b.pinnedAt)) return a.pinnedAt ? -1 : 1;
       return compare(a, b);
     });
-  }, [activeMemos, activeTag, activeDay, statsDrilldown, filters, parsedQuery, editingId, sortKey]);
+  }, [activeMemos, activeTag, activeDay, statsDrilldown, filters, parsedQuery, semanticResults, editingId, sortKey]);
 
   // The day's frozen batch, resolved against live truth: edits show through
   // (ids point at whatever the memo says now), deletions drop out, and the
@@ -902,7 +943,7 @@ export default function App() {
   // Object identity is the generation token: revisiting an earlier query must
   // still start a fresh window rather than reviving that query's old cap.
   const feedQueryKey = feedQuery;
-  const feedWindowKey = useMemo(() => ({}), [view, activeTag, activeDay, statsDrilldown, feedQueryKey, filters, sortKey]);
+  const feedWindowKey = useMemo(() => ({}), [view, activeTag, activeDay, statsDrilldown, feedQueryKey, filters, sortKey, semanticResults]);
   const [renderWindow, setRenderWindow] = useState<FeedWindow<object>>({ key: {}, cap: FEED_PAGE });
   // Resolve a stale generation synchronously during render. An effect would
   // reconcile the previous, potentially huge window once before shrinking it.
@@ -2322,6 +2363,7 @@ export default function App() {
             closeDrawer();
           }}
           onOpenReviewSettings={() => closeDrawer(() => setReviewSettingsOpen(true))}
+          onOpenModelSettings={() => closeDrawer(() => setModelSettingsOpen(true))}
           onOpenStats={() => closeDrawer(() => setStatsOpen(true))}
           onCycleTheme={() => setTheme((value) => nextTheme(value))}
           onChangePasscode={() => {
@@ -2637,6 +2679,30 @@ export default function App() {
                   </button>
                 ) : null}
               </div>
+              <button
+                type="button"
+                className={`icon-button semantic-toggle${semanticOn ? " is-active" : ""}`}
+                aria-pressed={semanticOn}
+                disabled={editingId !== null}
+                aria-label={tr("Semantic search", "语义搜索")}
+                title={
+                  semantic.status === "indexing"
+                    ? tr(
+                        `Semantic search — indexing${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}`,
+                        `语义搜索——索引中${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}`
+                      )
+                    : semanticOn
+                      ? tr("Semantic search is on — results rank by meaning", "语义搜索已开启——结果按意思排序")
+                      : tr("Semantic search — find memos by meaning", "语义搜索——按意思找笔记")
+                }
+                onClick={() => setSemanticOn((on) => !on)}
+              >
+                {semantic.status === "preparing" || semantic.status === "indexing" ? (
+                  <Loader2 size={17} className="spin" aria-hidden="true" />
+                ) : (
+                  <Brain size={17} aria-hidden="true" />
+                )}
+              </button>
               <SearchFilter
                 filters={filters}
                 saved={savedFilters}
@@ -2768,6 +2834,7 @@ export default function App() {
           onClose={() => setReviewSettingsOpen(false)}
         />
       ) : null}
+      {modelSettingsOpen ? <ModelSettingsModal onClose={() => setModelSettingsOpen(false)} /> : null}
       <input
         ref={importFileRef}
         type="file"

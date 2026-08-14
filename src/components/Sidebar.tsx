@@ -1,4 +1,4 @@
-import { ChevronDown, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sparkles, Sun, Trash2, Upload } from "lucide-react";
+import { ChevronDown, Cpu, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sparkles, Sun, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useI18n } from "../lib/i18n";
 import { dayKeyOf, periodStats, totalStats, type PeriodKind } from "../lib/stats";
@@ -33,6 +33,7 @@ interface SidebarProps {
   onOpenTrash: () => void;
   onOpenReview: () => void;
   onOpenReviewSettings: () => void;
+  onOpenModelSettings: () => void;
   onOpenStats: () => void;
   onCycleTheme: () => void;
   onChangePasscode: () => void;
@@ -184,6 +185,19 @@ export function Sidebar(props: SidebarProps) {
                 <Sparkles size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
                   {tr("Daily review settings", "每日回顾设置")}
+                </SwapText>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  close();
+                  props.onOpenModelSettings();
+                }}
+              >
+                <Cpu size={16} aria-hidden="true" />
+                <SwapText id={language} className="locale-swap">
+                  {tr("Semantic search", "语义搜索")}
                 </SwapText>
               </button>
               <button

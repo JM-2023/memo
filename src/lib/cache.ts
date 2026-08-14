@@ -75,6 +75,55 @@ export function forgetCacheKey(): void {
   keyPromise = null;
 }
 
+/**
+ * Seal a derived payload (e.g. the semantic index) with the same server-held
+ * key as the snapshot. Data derived from memo content must share the
+ * notebook's fate: without an authenticated session there is no key, sealing
+ * returns null, and callers must store nothing rather than fall back to
+ * plaintext. The purpose string is bound as additional data so one sealed
+ * payload type can never be replayed as another.
+ */
+export async function sealDerivedBytes(
+  purpose: string,
+  payload: Uint8Array<ArrayBuffer>
+): Promise<{ iv: Uint8Array<ArrayBuffer>; data: ArrayBuffer } | null> {
+  const pendingKey = keyPromise;
+  if (!pendingKey) return null;
+  try {
+    const key = await pendingKey;
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const data = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(purpose) },
+      key,
+      payload
+    );
+    return { iv, data };
+  } catch {
+    return null;
+  }
+}
+
+/** Open a payload sealed by sealDerivedBytes; null without the key or on tampering. */
+export async function openDerivedBytes(
+  purpose: string,
+  iv: Uint8Array<ArrayBuffer>,
+  data: ArrayBuffer
+): Promise<Uint8Array<ArrayBuffer> | null> {
+  const pendingKey = keyPromise;
+  if (!pendingKey) return null;
+  try {
+    const key = await pendingKey;
+    const plain = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(purpose) },
+      key,
+      data
+    );
+    return new Uint8Array(plain);
+  } catch {
+    return null;
+  }
+}
+
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, 1);

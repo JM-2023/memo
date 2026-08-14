@@ -4097,3 +4097,72 @@ button.stats-tag-row:active { scale: 0.992; }
   ::view-transition-old(*),
   ::view-transition-new(*) { animation: none !important; }
 }
+
+/* ---- Semantic model modal ------------------------------------------------
+   Reuses the review modal shell (.review-modal/.review-section); only the
+   model-specific rows live here. The progress fill moves by width — that is
+   status, not decoration, and stays visible under reduced motion because
+   width isn't animated, only transitioned between real values. */
+.model-modal { width: min(460px, 100%); }
+.model-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  color: var(--ink-soft);
+  font-size: var(--fs-sm);
+}
+.model-status.is-error { color: var(--danger); }
+.model-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+.model-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(145deg, var(--primary), var(--primary-dark));
+  transition: width 0.2s var(--ease-out);
+}
+.model-failures {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 2px;
+  color: var(--danger);
+  font-size: var(--fs-xs, 12px);
+  overflow-wrap: anywhere;
+}
+.model-actions { display: flex; gap: 8px; }
+.model-actions .accent-button,
+.model-actions .ghost-button { display: inline-flex; align-items: center; gap: 6px; }
+.model-note { margin: 0; color: var(--ink-soft); font-size: var(--fs-xs, 12px); line-height: 1.5; }
+.model-files { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.model-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+.model-file-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line);
+  flex: none;
+}
+.model-file-dot.is-present { background: var(--primary); }
+.model-file-name { overflow-wrap: anywhere; }
+.model-file-size { margin-left: auto; color: var(--ink-soft); font-size: var(--fs-xs, 12px); }
+.model-version { color: var(--ink-soft); font-size: var(--fs-xs, 12px); overflow-wrap: anywhere; }
+
+/* The semantic toggle sits between the searchbox and the filter funnel and
+   borrows the funnel's active treatment so "on" reads the same way. */
+.semantic-toggle.is-active { color: var(--primary-dark); background: var(--primary-tint); }
+@media (hover: hover) {
+  .semantic-toggle.is-active:hover:not(:disabled) { background: var(--primary-tint-strong); color: var(--primary-dark); }
+}
