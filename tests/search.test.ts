@@ -6,6 +6,7 @@ import {
   facetsOf,
   filtersEqual,
   hasActiveFilters,
+  hybridSearchScore,
   memoMatchesFilters,
   memoMatchesQuery,
   parseSearchQuery,
@@ -81,6 +82,14 @@ describe("search query language", () => {
 
   it("matches case-insensitively against memo content", () => {
     expect(memoMatchesQuery(memoOf("Hello World"), parseSearchQuery("hello WORLD"))).toBe(true);
+  });
+
+  it("keeps keyword hits ahead of semantic-only matches in hybrid search", () => {
+    expect(hybridSearchScore(true, undefined)).toBe(2);
+    expect(hybridSearchScore(true, 0.8)).toBeCloseTo(2.8);
+    expect(hybridSearchScore(false, 0.99)).toBeCloseTo(0.99);
+    expect(hybridSearchScore(true, undefined)).toBeGreaterThan(hybridSearchScore(false, 1) ?? 0);
+    expect(hybridSearchScore(false, undefined)).toBeNull();
   });
 });
 

@@ -325,7 +325,9 @@ This app is startup-latency-obsessed; keep it that way. The model downloads
 only when the user explicitly enables semantic features in Settings (button
 and adjacent metadata show "Download Model" and "About 123 MB"), or taps
 Retry Download later. Progress stays in the settings panel; the feed never
-blocks on any of this.
+blocks on any of this. When a Brain-toggle request discovers a missing model,
+that intent is remembered: successful download and self-test begin indexing
+without requiring a second toggle click.
 
 ### 6.2 The escape hatch: manual import/export
 
@@ -384,6 +386,22 @@ The embedding index stores `manifest.version` with its vectors. On mismatch
 (model upgraded), rebuild in the background and keep serving the old index
 until the rebuild completes. Publishing a new model release without bumping
 `version` is a bug; hashes make it impossible to do accidentally.
+
+### 6.5 First-build latency and hybrid retrieval
+
+Transformers.js pads every feature-extraction batch to its longest input. The
+indexer therefore groups the exact same memo chunks by approximate length
+before inference, then restores deterministic memo/chunk order in the stored
+index. This removes padding-only attention work without changing text windows,
+weights, pooling, normalization, or the similarity threshold. Model startup
+and sealed-index loading also run in parallel.
+
+Each completed batch publishes a consistent partial index. Query inference is
+serialized through the same ONNX session and its vector is reused as later
+batches arrive, so semantic matches can appear before the full first build is
+finished. Literal keyword/phrase matching remains active throughout and after
+the build: final results are the union of both paths, with keyword hits in the
+high-confidence tier and semantic-only hits ranked beneath them.
 
 ## 7. Verification checklist (before shipping)
 

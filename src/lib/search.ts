@@ -76,6 +76,18 @@ export function memoMatchesQuery(memo: Memo, query: ParsedQuery): boolean {
   return true;
 }
 
+/**
+ * Merge the two retrieval signals without letting semantic search hide an
+ * exact keyword/phrase hit. Unit-normalized cosine scores cannot exceed 1,
+ * so a fixed boost of 2 keeps every keyword hit ahead of semantic-only
+ * matches while still letting meaning rank ties inside the keyword tier.
+ * `null` means neither retrieval path matched.
+ */
+export function hybridSearchScore(keywordMatch: boolean, semanticScore: number | undefined): number | null {
+  if (keywordMatch) return 2 + (semanticScore ?? 0);
+  return semanticScore ?? null;
+}
+
 export type FacetKey = "noTags" | "hasImage" | "hasLink" | "hasOpenTask";
 
 export interface FeedFilters {

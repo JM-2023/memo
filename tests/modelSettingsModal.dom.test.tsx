@@ -77,6 +77,18 @@ describe("semantic search settings", () => {
     expect(await screen.findByText("Ready")).toBeTruthy();
   });
 
+  it("reports readiness once so an interrupted first Brain toggle can continue", async () => {
+    const onModelReady = vi.fn();
+    render(
+      <LanguageProvider>
+        <ModelSettingsModal onClose={vi.fn()} onModelCleared={vi.fn()} onModelReady={onModelReady} />
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("Ready")).toBeTruthy();
+    await waitFor(() => expect(onModelReady).toHaveBeenCalledOnce());
+  });
+
   it("confirms a standalone clear, disables semantic search, and clears both stores and runtime", async () => {
     const user = userEvent.setup();
     const onModelCleared = vi.fn();

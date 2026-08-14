@@ -1,8 +1,10 @@
 // Orchestrates semantic search for the feed: activates the on-device model,
 // keeps the sealed vector index reconciled with the live memos, and turns
-// the (debounced) query into a ranked id → score map. Everything heavy —
-// model activation, embedding, ranking — happens off the render path; the
-// hook only ever publishes small state transitions.
+// the (debounced) query into a ranked id → score map. The first build exposes
+// consistent partial indexes batch by batch, so the feed can add semantic
+// matches progressively while ordinary keyword search remains available.
+// Everything heavy — model activation, embedding, ranking — happens off the
+// render path; the hook only ever publishes small state transitions.
 
 import { useEffect, useRef, useState } from "react";
 import { storedModelState } from "../lib/modelLoader";
@@ -33,8 +35,8 @@ export interface SemanticSearchState {
   progress: { done: number; total: number } | null;
   /**
    * Ranked id → score for the current query; null while semantic ranking is
-   * inactive (off, empty query, or still indexing) so the feed falls back to
-   * substring search.
+   * inactive or has no searchable rows yet. The feed always keeps keyword
+   * matching active and merges this map when it is available.
    */
   results: ReadonlyMap<string, number> | null;
 }
@@ -52,6 +54,10 @@ export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], quer
   const embedRef = useRef<EmbedFn | null>(null);
   const indexRef = useRef<SemanticIndex | null>(null);
   const generationRef = useRef(0);
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const queryVectorRef = useRef<{ query: string; vector: Float32Array } | null>(null);
+  const queryTaskRef = useRef<{ query: string; promise: Promise<Float32Array> } | null>(null);
   const memosRef = useRef(memos);
   memosRef.current = memos;
 
@@ -61,6 +67,8 @@ export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], quer
     if (!enabled) {
       generationRef.current += 1;
       embedRef.current = null;
+      queryVectorRef.current = null;
+      queryTaskRef.current = null;
       setStatus("off");
       setProgress(null);
       setResults(null);
@@ -74,15 +82,17 @@ export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], quer
         if (alive()) setStatus("model-missing");
         return;
       }
+      const persistedIndex =
+        !indexRef.current || indexRef.current.modelVersion !== MODEL_MANIFEST.version
+          ? loadSemanticIndex(MODEL_MANIFEST.version)
+          : Promise.resolve(indexRef.current);
       try {
-        embedRef.current = await getEmbedder();
+        const [embed, loadedIndex] = await Promise.all([getEmbedder(), persistedIndex]);
+        embedRef.current = embed;
+        indexRef.current = loadedIndex ?? emptySemanticIndex(MODEL_MANIFEST.version);
       } catch {
         if (alive()) setStatus("error");
         return;
-      }
-      if (!alive()) return;
-      if (!indexRef.current || indexRef.current.modelVersion !== MODEL_MANIFEST.version) {
-        indexRef.current = (await loadSemanticIndex(MODEL_MANIFEST.version)) ?? emptySemanticIndex(MODEL_MANIFEST.version);
       }
       if (!alive()) return;
       setStatus("indexing");
@@ -90,6 +100,11 @@ export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], quer
       const reconciled = await reconcileSemanticIndex(indexRef.current, memosRef.current, embed, {
         onProgress: (done, total) => {
           if (alive()) setProgress(total > 0 ? { done, total } : null);
+        },
+        onPartial: (partial) => {
+          if (!alive()) return;
+          indexRef.current = partial;
+          setIndexEpoch((epoch) => epoch + 1);
         },
         shouldContinue: alive,
         onFlush: (partial) => {
@@ -128,9 +143,11 @@ export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], quer
     return () => window.clearTimeout(timer);
   }, [enabled, status, memos]);
 
-  // Query → ranked results, debounced past keystrokes and embed latency.
+  // Query → ranked results, debounced past keystrokes. During the first build,
+  // a serialized query inference can take the next ONNX slot; its vector is
+  // then reused as each partial index arrives instead of being recomputed.
   useEffect(() => {
-    if (!enabled || status !== "ready") {
+    if (!enabled || (status !== "ready" && status !== "indexing")) {
       setResults(null);
       return;
     }
@@ -139,16 +156,37 @@ export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], quer
       setResults(null);
       return;
     }
+    const index = indexRef.current;
+    if (!index || index.rows.length === 0) {
+      setResults(null);
+      return;
+    }
+    const cached = queryVectorRef.current;
+    if (cached?.query === trimmed) {
+      setResults(searchSemanticIndex(index, cached.vector));
+      return;
+    }
+    // A changed query must immediately fall back to keyword results rather
+    // than showing semantic scores calculated for the previous text.
+    setResults(null);
     let cancelled = false;
     const timer = window.setTimeout(() => {
       const embed = embedRef.current;
-      const index = indexRef.current;
-      if (!embed || !index) return;
+      if (!embed) return;
       void (async () => {
+        let task = queryTaskRef.current;
         try {
-          const [vector] = await embed([RETRIEVAL_QUERY_PREFIX + trimmed]);
-          if (!cancelled) setResults(searchSemanticIndex(index, vector));
+          if (!task || task.query !== trimmed) {
+            const promise = embed([RETRIEVAL_QUERY_PREFIX + trimmed]).then(([vector]) => vector);
+            task = { query: trimmed, promise };
+            queryTaskRef.current = task;
+          }
+          const vector = await task.promise;
+          if (queryRef.current.trim() === trimmed) queryVectorRef.current = { query: trimmed, vector };
+          const currentIndex = indexRef.current;
+          if (!cancelled && currentIndex) setResults(searchSemanticIndex(currentIndex, vector));
         } catch {
+          if (task && queryTaskRef.current === task) queryTaskRef.current = null;
           if (!cancelled) setResults(null);
         }
       })();

@@ -97,6 +97,8 @@ export function planSemanticIndex(index: SemanticIndex, memos: readonly Memo[]):
 export interface ReconcileCallbacks {
   /** Called after each embedded batch with memos done vs. memos to do. */
   onProgress?: (done: number, total: number) => void;
+  /** A searchable, consistent snapshot published after each embedded batch. */
+  onPartial?: (index: SemanticIndex) => void;
   /** Return false to stop early; the partial index is still returned. */
   shouldContinue?: () => boolean;
   /** Called periodically with a consistent snapshot worth persisting. */
@@ -140,46 +142,74 @@ export async function reconcileSemanticIndex(
   const { stale, keptRowIndices } = planSemanticIndex(index, memos);
   if (stale.length === 0 && keptRowIndices.length === index.rows.length) return index;
 
-  const rows: SemanticRow[] = [];
-  const pieces: Float32Array[] = [];
+  const keptRows: SemanticRow[] = [];
+  const keptPieces: Float32Array[] = [];
   for (const rowIndex of keptRowIndices) {
-    rows.push(index.rows[rowIndex]);
-    pieces.push(index.vectors.slice(rowIndex * EMBEDDING_DIM, (rowIndex + 1) * EMBEDDING_DIM));
+    keptRows.push(index.rows[rowIndex]);
+    keptPieces.push(index.vectors.slice(rowIndex * EMBEDDING_DIM, (rowIndex + 1) * EMBEDDING_DIM));
   }
 
-  let done = 0;
-  let rowsSinceFlush = 0;
-  callbacks.onProgress?.(done, stale.length);
+  interface PendingChunk {
+    memo: Memo;
+    chunk: string;
+    order: number;
+    vector?: Float32Array;
+  }
 
-  let batch: { memo: Memo; chunk: string }[] = [];
-  const flushBatch = async () => {
-    if (batch.length === 0) return;
-    const vectors = await embed(batch.map((item) => item.chunk));
-    for (let i = 0; i < batch.length; i += 1) {
-      rows.push({ id: batch[i].memo.id, updatedAt: batch[i].memo.updatedAt });
-      pieces.push(vectors[i]);
+  const pending: PendingChunk[] = [];
+  const remainingByMemo = new Map<string, number>();
+  let order = 0;
+  let done = 0;
+  callbacks.onProgress?.(0, stale.length);
+  for (const memo of stale) {
+    const chunks = chunkMemoContent(memo.content);
+    remainingByMemo.set(memo.id, chunks.length);
+    if (chunks.length === 0) done += 1;
+    for (const chunk of chunks) pending.push({ memo, chunk, order: order++ });
+  }
+  if (done > 0) callbacks.onProgress?.(done, stale.length);
+
+  // FeatureExtractionPipeline pads every batch to its longest text. Running
+  // similarly sized chunks together removes that wasted attention work while
+  // preserving the exact same chunks, model, pooling, and final row order.
+  const executionOrder = [...pending].sort((a, b) => a.chunk.length - b.chunk.length || a.order - b.order);
+
+  const snapshot = (): SemanticIndex => {
+    const rows = [...keptRows];
+    const pieces = [...keptPieces];
+    for (const item of pending) {
+      if (!item.vector || remainingByMemo.get(item.memo.id) !== 0) continue;
+      rows.push({ id: item.memo.id, updatedAt: item.memo.updatedAt });
+      pieces.push(item.vector);
     }
-    rowsSinceFlush += batch.length;
-    batch = [];
-    if (callbacks.onFlush && rowsSinceFlush >= FLUSH_EVERY_ROWS) {
-      rowsSinceFlush = 0;
-      await callbacks.onFlush(packIndex(index.modelVersion, [...rows], [...pieces]));
-    }
-    await yieldToMainThread();
+    return packIndex(index.modelVersion, rows, pieces);
   };
 
-  for (const memo of stale) {
+  let rowsSinceFlush = 0;
+  for (let start = 0; start < executionOrder.length; start += EMBED_BATCH_TEXTS) {
     if (callbacks.shouldContinue && !callbacks.shouldContinue()) break;
-    for (const chunk of chunkMemoContent(memo.content)) {
-      batch.push({ memo, chunk });
-      if (batch.length >= EMBED_BATCH_TEXTS) await flushBatch();
+    const batch = executionOrder.slice(start, start + EMBED_BATCH_TEXTS);
+    const vectors = await embed(batch.map((item) => item.chunk));
+    if (vectors.length !== batch.length) throw new Error(`Embedder returned ${vectors.length} vectors for ${batch.length} chunks`);
+    for (let i = 0; i < batch.length; i += 1) {
+      const item = batch[i];
+      item.vector = vectors[i];
+      const remaining = (remainingByMemo.get(item.memo.id) ?? 1) - 1;
+      remainingByMemo.set(item.memo.id, remaining);
+      if (remaining === 0) done += 1;
     }
-    done += 1;
     callbacks.onProgress?.(done, stale.length);
+    const partial = snapshot();
+    callbacks.onPartial?.(partial);
+    rowsSinceFlush += batch.length;
+    if (callbacks.onFlush && rowsSinceFlush >= FLUSH_EVERY_ROWS) {
+      rowsSinceFlush = 0;
+      await callbacks.onFlush(partial);
+    }
+    await yieldToMainThread();
   }
-  await flushBatch();
 
-  return packIndex(index.modelVersion, rows, pieces);
+  return snapshot();
 }
 
 /**

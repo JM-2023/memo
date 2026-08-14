@@ -96,6 +96,7 @@ import {
   facetsOf,
   filtersEqual,
   hasActiveFilters,
+  hybridSearchScore,
   memoMatchesFilters,
   memoMatchesQuery,
   parseSearchQuery,
@@ -376,6 +377,10 @@ export default function App() {
   const [reviewDay, setReviewDay] = useState<ReviewDay | null>(loadReviewDay);
   const [reviewSettingsOpen, setReviewSettingsOpen] = useState(false);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
+  // Remembers that the settings panel was opened by a failed first Brain
+  // toggle. Once download + self-test succeeds, honour that original click
+  // and begin indexing without asking for a second click.
+  const [enableSemanticWhenReady, setEnableSemanticWhenReady] = useState(false);
 
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -531,6 +536,7 @@ export default function App() {
     setStatsOpen(false);
     setReviewSettingsOpen(false);
     setModelSettingsOpen(false);
+    setEnableSemanticWhenReady(false);
     setChangingPasscode(false);
     setDrawerOpen(false);
     setDrawerClosing(false);
@@ -862,10 +868,10 @@ export default function App() {
   const structuredFiltersOn = hasActiveFilters(filters);
   const filtersActive = activeTag !== null || activeDay !== null || statsDrilldown !== null || trimmedQuery.length > 0 || structuredFiltersOn;
 
-  // Semantic ranking rides the same search box: once the on-device model is
-  // ready, the query ranks memos by meaning instead of substring. Trash and
-  // review keep plain search, so the hook sees their query as empty.
-  const semantic = useSemanticSearch(semanticOn, activeMemos, view === "memos" ? trimmedQuery : "");
+  // Semantic ranking rides the same search box. Keyword/phrase matching stays
+  // active as the high-confidence tier; semantic results add related memos.
+  // Trash and review keep plain search, so the hook sees their query as empty.
+  const semantic = useSemanticSearch(semanticOn, activeMemos, view === "memos" ? feedQuery : "");
   const semanticResults = view === "memos" ? semantic.results : null;
   useEffect(() => {
     try {
@@ -880,6 +886,7 @@ export default function App() {
   useEffect(() => {
     if (semantic.status !== "model-missing") return;
     setSemanticOn(false);
+    setEnableSemanticWhenReady(true);
     setModelSettingsOpen(true);
   }, [semantic.status]);
 
@@ -903,11 +910,24 @@ export default function App() {
       list = filterPreservingId(list, editingId, (memo) => memoMatchesFilters(memo, filters));
     }
     if (semanticResults) {
-      // Semantic ranking replaces substring matching AND the sort: score
-      // order is the result order, pins included. filterPreservingId still
-      // keeps the memo being edited visible outside the ranking.
-      list = filterPreservingId(list, editingId, (memo) => semanticResults.has(memo.id));
-      return [...list].sort((a, b) => (semanticResults.get(b.id) ?? -1) - (semanticResults.get(a.id) ?? -1));
+      // Hybrid retrieval is a union: an exact keyword/phrase match can never
+      // disappear behind the semantic threshold, and meaning adds results
+      // that share no literal text. The keyword tier stays first; semantic
+      // score ranks within it and then ranks semantic-only matches.
+      const hybridScores = new Map<string, number>();
+      list = filterPreservingId(list, editingId, (memo) => {
+        const score = hybridSearchScore(memoMatchesQuery(memo, parsedQuery), semanticResults.get(memo.id));
+        if (score === null) return false;
+        hybridScores.set(memo.id, score);
+        return true;
+      });
+      const compare = SORT_COMPARATORS[sortKey];
+      return [...list].sort((a, b) => {
+        const scoreDelta = (hybridScores.get(b.id) ?? -1) - (hybridScores.get(a.id) ?? -1);
+        if (scoreDelta !== 0) return scoreDelta;
+        if (Boolean(a.pinnedAt) !== Boolean(b.pinnedAt)) return a.pinnedAt ? -1 : 1;
+        return compare(a, b);
+      });
     }
     if (!queryIsEmpty(parsedQuery)) {
       list = filterPreservingId(list, editingId, (memo) => memoMatchesQuery(memo, parsedQuery));
@@ -2365,7 +2385,12 @@ export default function App() {
             closeDrawer();
           }}
           onOpenReviewSettings={() => closeDrawer(() => setReviewSettingsOpen(true))}
-          onOpenModelSettings={() => closeDrawer(() => setModelSettingsOpen(true))}
+          onOpenModelSettings={() =>
+            closeDrawer(() => {
+              setEnableSemanticWhenReady(false);
+              setModelSettingsOpen(true);
+            })
+          }
           onOpenStats={() => closeDrawer(() => setStatsOpen(true))}
           onCycleTheme={() => setTheme((value) => nextTheme(value))}
           onChangePasscode={() => {
@@ -2690,20 +2715,22 @@ export default function App() {
                 title={
                   semantic.status === "indexing"
                     ? tr(
-                        `Semantic search — indexing${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}`,
-                        `语义搜索——索引中${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}`
+                        `Semantic search — indexing${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}; keyword search remains available`,
+                        `语义搜索——索引中${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}；关键词搜索仍可用`
                       )
                     : semanticOn
-                      ? tr("Semantic search is on — results rank by meaning", "语义搜索已开启——结果按意思排序")
+                      ? tr(
+                          "Semantic search is on — keyword matches stay first and related memos are added",
+                          "语义搜索已开启——关键词命中优先，并补充意思相关的笔记"
+                        )
                       : tr("Semantic search — find memos by meaning", "语义搜索——按意思找笔记")
                 }
                 onClick={() => setSemanticOn((on) => !on)}
               >
+                <Brain size={17} aria-hidden="true" />
                 {semantic.status === "preparing" || semantic.status === "indexing" ? (
-                  <Loader2 size={17} className="spin" aria-hidden="true" />
-                ) : (
-                  <Brain size={17} aria-hidden="true" />
-                )}
+                  <Loader2 size={9} className="semantic-toggle-progress spin" aria-hidden="true" />
+                ) : null}
               </button>
               <SearchFilter
                 filters={filters}
@@ -2838,8 +2865,19 @@ export default function App() {
       ) : null}
       {modelSettingsOpen ? (
         <ModelSettingsModal
-          onClose={() => setModelSettingsOpen(false)}
-          onModelCleared={() => setSemanticOn(false)}
+          onClose={() => {
+            setModelSettingsOpen(false);
+            setEnableSemanticWhenReady(false);
+          }}
+          onModelReady={() => {
+            if (!enableSemanticWhenReady) return;
+            setEnableSemanticWhenReady(false);
+            setSemanticOn(true);
+          }}
+          onModelCleared={() => {
+            setEnableSemanticWhenReady(false);
+            setSemanticOn(false);
+          }}
         />
       ) : null}
       <input

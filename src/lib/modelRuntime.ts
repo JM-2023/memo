@@ -81,20 +81,31 @@ async function createEmbedder(generation: number): Promise<EmbedFn> {
   }
   activeDisposer = () => extractor.dispose();
 
-  return async (texts: readonly string[]): Promise<Float32Array[]> => {
-    if (texts.length === 0) return [];
-    const output = await extractor([...texts], { pooling: "cls", normalize: true });
-    const dims = output.dims;
-    if (dims.length !== 2 || dims[0] !== texts.length) {
-      throw new Error(`Unexpected embedding shape [${dims.join(", ")}] for ${texts.length} texts`);
-    }
-    const dim = dims[1];
-    const data = output.data as Float32Array;
-    const vectors: Float32Array[] = [];
-    for (let index = 0; index < texts.length; index += 1) {
-      vectors.push(data.slice(index * dim, (index + 1) * dim));
-    }
-    return vectors;
+  // One ONNX session is shared by index and query work. Serialize calls so a
+  // query arriving during the first index build can take the next slot
+  // safely instead of racing a session.run already in progress.
+  let inferenceTail: Promise<void> = Promise.resolve();
+  return (texts: readonly string[]): Promise<Float32Array[]> => {
+    if (texts.length === 0) return Promise.resolve([]);
+    const run = inferenceTail.then(async () => {
+      const output = await extractor([...texts], { pooling: "cls", normalize: true });
+      const dims = output.dims;
+      if (dims.length !== 2 || dims[0] !== texts.length) {
+        throw new Error(`Unexpected embedding shape [${dims.join(", ")}] for ${texts.length} texts`);
+      }
+      const dim = dims[1];
+      const data = output.data as Float32Array;
+      const vectors: Float32Array[] = [];
+      for (let index = 0; index < texts.length; index += 1) {
+        vectors.push(data.slice(index * dim, (index + 1) * dim));
+      }
+      return vectors;
+    });
+    inferenceTail = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
   };
 }
 

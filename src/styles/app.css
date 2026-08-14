@@ -4323,7 +4323,18 @@ button.stats-tag-row:active { scale: 0.992; }
 
 /* The semantic toggle sits between the searchbox and the filter funnel and
    borrows the funnel's active treatment so "on" reads the same way. */
+.semantic-toggle { position: relative; }
 .semantic-toggle.is-active { color: var(--primary-dark); background: var(--primary-tint); }
+.semantic-toggle-progress {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  padding: 1px;
+  border-radius: 50%;
+  color: var(--primary-dark);
+  background: var(--surface);
+  box-sizing: content-box;
+}
 @media (hover: hover) {
   .semantic-toggle.is-active:hover:not(:disabled) { background: var(--primary-tint-strong); color: var(--primary-dark); }
 }

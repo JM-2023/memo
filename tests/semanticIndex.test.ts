@@ -111,6 +111,41 @@ describe("plan and reconcile", () => {
     expect(seen[0]).toEqual([0, 3]);
     expect(seen.at(-1)).toEqual([3, 3]);
   });
+
+  it("batches similar lengths, publishes partial indexes, and restores final row order", async () => {
+    const memos = Array.from({ length: 18 }, (_, index) => {
+      const length = index % 2 === 0 ? 300 - index : 20 + index;
+      return memoOf(`memo-${index}`, `memo-${index}:${"x".repeat(length)}`);
+    });
+    const vectorValue = new Map(memos.map((memo, index) => [memo.content, index + 1]));
+    const batches: string[][] = [];
+    const progress: [number, number][] = [];
+    const partialSizes: number[] = [];
+    const embed = async (texts: readonly string[]) => {
+      batches.push([...texts]);
+      if (batches.length === 1) expect(progress.at(-1)).toEqual([0, memos.length]);
+      return texts.map((text) => axis(0, vectorValue.get(text)!));
+    };
+
+    const built = await reconcileSemanticIndex(emptySemanticIndex("test-r1"), memos, embed, {
+      onProgress: (done, total) => progress.push([done, total]),
+      onPartial: (partial) => partialSizes.push(partial.rows.length)
+    });
+
+    const executionLengths = batches.flat().map((text) => text.length);
+    expect(executionLengths).toEqual([...executionLengths].sort((a, b) => a - b));
+    const paddedWork = (groups: readonly (readonly string[])[]) =>
+      groups.reduce((sum, group) => sum + Math.max(...group.map((text) => text.length)) * group.length, 0);
+    const originalOrderBatches = [memos.slice(0, 16).map((memo) => memo.content), memos.slice(16).map((memo) => memo.content)];
+    expect(paddedWork(batches)).toBeLessThan(paddedWork(originalOrderBatches));
+    expect(partialSizes.length).toBeGreaterThan(1);
+    expect(partialSizes[0]).toBeGreaterThan(0);
+    expect(partialSizes[0]).toBeLessThan(memos.length);
+    expect(partialSizes.at(-1)).toBe(memos.length);
+    expect(built.rows.map((row) => row.id)).toEqual(memos.map((memo) => memo.id));
+    expect(built.rows.map((_, index) => built.vectors[index * EMBEDDING_DIM])).toEqual(memos.map((_, index) => index + 1));
+    expect(progress.at(-1)).toEqual([memos.length, memos.length]);
+  });
 });
 
 describe("search", () => {

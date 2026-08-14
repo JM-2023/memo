@@ -33,6 +33,8 @@ import { deleteSemanticIndexDb } from "../lib/semanticIndex";
 interface ModelSettingsModalProps {
   onClose: () => void;
   onModelCleared: () => void;
+  /** Completes a Brain-toggle request that first had to download the model. */
+  onModelReady?: () => void;
 }
 
 type Phase =
@@ -70,7 +72,7 @@ function failureHost(url: string): string {
  * device; everything else surfaces as an explicit state with a next step.
  * The modal follows the review-settings dialog's shell and motion language.
  */
-export function ModelSettingsModal({ onClose, onModelCleared }: ModelSettingsModalProps) {
+export function ModelSettingsModal({ onClose, onModelCleared, onModelReady }: ModelSettingsModalProps) {
   const { tr } = useI18n();
   const reducedMotion = useReducedMotion();
 
@@ -85,8 +87,11 @@ export function ModelSettingsModal({ onClose, onModelCleared }: ModelSettingsMod
   const importInputRef = useRef<HTMLInputElement>(null);
   const dismissTimer = useRef(0);
   const disposedRef = useRef(false);
+  const readyReportedRef = useRef(false);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  const modelReadyRef = useRef(onModelReady);
+  modelReadyRef.current = onModelReady;
 
   const safeSetPhase = useCallback((next: Phase) => {
     if (!disposedRef.current) setPhase(next);
@@ -103,7 +108,13 @@ export function ModelSettingsModal({ onClose, onModelCleared }: ModelSettingsMod
     try {
       await getEmbedder();
       await runModelSelfTest();
-      safeSetPhase({ kind: "ready" });
+      if (!disposedRef.current) {
+        setPhase({ kind: "ready" });
+        if (!readyReportedRef.current) {
+          readyReportedRef.current = true;
+          modelReadyRef.current?.();
+        }
+      }
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause);
       safeSetPhase({
