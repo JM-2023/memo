@@ -269,8 +269,8 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
             ) : null}
             <p className="model-note">
               {tr(
-                "Downloaded once from this project's GitHub release (Hugging Face as fallback), verified against pinned checksums, then stored on this device. Nothing you write ever leaves it.",
-                "模型只需从本项目的 GitHub Release 下载一次（失败时回退 Hugging Face），经固定校验和验证后存储在本机。你写下的内容永远不会离开设备。"
+                "Downloaded once from a pinned Hugging Face revision, verified against pinned checksums, then stored on this device. The project's GitHub release provides the same files for manual import. Nothing you write ever leaves it.",
+                "模型只需从固定版本的 Hugging Face 下载一次，经固定校验和验证后存储在本机；项目的 GitHub Release 提供相同文件供手动导入。你写下的内容永远不会离开设备。"
               )}
             </p>
           </section>

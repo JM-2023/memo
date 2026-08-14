@@ -1,4 +1,4 @@
-# Embedding model hosting — GitHub Releases
+# Embedding model hosting — pinned download and release archive
 
 Status: **implemented** (semantic search shipped on top of it). The design
 survived contact with reality with a handful of amendments, all folded into
@@ -20,10 +20,10 @@ Implementation map:
 | CSP for mirrors + wasm           | `functions/_middleware.ts`             |
 
 Scope: how the on-device semantic index obtains its embedding model
-**without** storing the model on this project's Cloudflare deployment and
-**without** depending on any third-party URL staying alive. This document
-guarantees that the model bytes are available, verified, and permanent on
-every device; the index built on top of them is documented in
+**without** storing the model on this project's Cloudflare deployment, using
+a pinned automatic source and an owner-controlled manual archive. This
+document guarantees that accepted bytes are verified and permanent on every
+initialized device; the index built on top of them is documented in
 `src/lib/semanticIndex.ts` (short version: embeddings are derived from memo
 content, so unlike the model they are sealed with the snapshot key and wiped
 on logout).
@@ -42,10 +42,11 @@ on logout).
    features show an explicit "model unavailable" state with Retry and a manual
    file import. The rest of the app is untouched. There is never a silent
    network fetch to a host the manifest does not list.
-4. **The primary mirror is ours.** GitHub release assets on a repository we
-   control are the primary source. Hugging Face is a pinned fallback, never
-   the primary. Link rot on the primary is therefore something only we can
-   cause.
+4. **The automatic source must pass browser CORS.** The pinned Hugging Face
+   revision is primary because it passes the live browser path. Our immutable
+   GitHub release keeps hash-identical files under our control for manual
+   import and remains a best-effort secondary; its current redirect chain does
+   not expose CORS headers (§4.1).
 
 ## 2. Architecture overview
 
@@ -57,8 +58,8 @@ ensureModelReady()  ── per file: IndexedDB hit? ──► done
       │                        │ miss
       │                        ▼
       │              try mirrors in order:
-      │                1. GitHub release asset   (ours)
-      │                2. Hugging Face, pinned   (fallback)
+      │                1. Hugging Face, pinned   (CORS-capable)
+      │                2. GitHub release asset   (best effort)
       │              verify sha256 → write to IndexedDB
       ▼
 transformers.js pipeline
@@ -145,9 +146,9 @@ gh release create model-bge-small-zh-q8-r1 \
 
 No `gh`? The web UI works identically: repository → Releases → "Draft a new
 release" → tag `model-bge-small-zh-q8-r1` → attach the four files → uncheck
-"Set as the latest release" → publish. Until the release exists the app
-simply uses the Hugging Face fallback (verified end-to-end), so publishing
-is an availability upgrade, not a blocker.
+"Set as the latest release" → publish. The app uses the pinned Hugging Face
+revision for automatic download; publishing creates an immutable owner-held
+archive and a manual-import path.
 
 Rules:
 
@@ -161,28 +162,25 @@ Rules:
 
 GitHub serves release-asset downloads through a redirect; **both hops** must
 carry `access-control-allow-origin` for a browser `fetch()` to succeed. Verify
-once at publish time from a terminal:
+once at publish time from a terminal before putting this URL ahead of a known
+CORS-capable source:
 
 ```bash
 curl -sI -H "Origin: https://<your-app-host>" \
   "https://github.com/OWNER/REPO/releases/download/model-bge-small-zh-q8-r1/model_quantized.onnx" \
-  | grep -iE '^(HTTP|location|access-control)'
-# Then repeat against the reported `location:` URL and expect HTTP 200,
-# `access-control-allow-origin: *`, and a content-length.
+  | rg -i '^(HTTP|location|access-control)'
+# Then repeat against the reported `location:` URL. A usable result has HTTP
+# 200, `access-control-allow-origin: *`, and a content-length.
 ```
 
-Observed live: while the release does **not** exist, GitHub answers the URL
-with a 404 that carries no CORS headers, so the browser console shows a CORS
-error rather than a 404 for the primary mirror. That is the expected shape of
-"primary missing" — the loader records it and falls through to Hugging Face,
-which is exactly how the feature ran end-to-end before the release was
-published.
-
-If GitHub ever drops CORS on this path (unlikely but out of our control), the
-mirror list makes the fix a one-line change — e.g. promote the Hugging Face
-mirror or move the assets to any static host. Do not add a proxy through the
-app's own Functions as a workaround; that reintroduces the Cloudflare
-hosting this design exists to avoid.
+Observed live on 2026-08-15 after publishing `model-bge-small-zh-q8-r1`:
+the first hop returned HTTP 302 and the signed asset hop returned HTTP 200
+with `content-length: 24010842`, but neither response carried
+`access-control-allow-origin`. A one-byte ranged GET had the same result.
+GitHub is therefore kept behind the pinned Hugging Face URL and treated as a
+manual-import archive, not a browser-reliable automatic source. Do not add a
+proxy through the app's own Functions as a workaround; that would reintroduce
+the Cloudflare hosting this design exists to avoid.
 
 ## 5. Client architecture
 
@@ -206,7 +204,7 @@ export interface ModelFileSpec {
 export interface ModelManifest {
   /** transformers.js model id, e.g. "Xenova/bge-small-zh-v1.5". */
   id: string;
-  /** Pinned HF revision for the fallback mirror (commit SHA, not "main"). */
+  /** Pinned HF revision for the primary mirror (commit SHA, not "main"). */
   hfRevision: string;
   /** Bump on ANY change; the embedding index stores and keys off this. */
   version: string; // e.g. "bge-small-zh-q8-r1"
@@ -214,13 +212,13 @@ export interface ModelManifest {
   files: ModelFileSpec[];
 }
 
-/** Ordered: first success wins. Ours first, pinned third party as fallback. */
+/** Ordered: first success wins. Browser-valid pinned source first. */
 export const MODEL_MIRRORS: ReadonlyArray<
   (m: ModelManifest, f: ModelFileSpec) => string
 > = [
+  (m, f) => `https://huggingface.co/${m.id}/resolve/${m.hfRevision}/${f.requestPath}`,
   (m, f) =>
     `https://github.com/OWNER/REPO/releases/download/${m.releaseTag}/${f.asset}`,
-  (m, f) => `https://huggingface.co/${m.id}/resolve/${m.hfRevision}/${f.requestPath}`,
 ];
 ```
 
@@ -247,8 +245,8 @@ export const MODEL_MIRRORS: ReadonlyArray<
 1. Store hit → done (hash was verified at write time; do not re-hash 24 MB on
    every startup).
 2. Miss → for each mirror in order: `fetch`, stream to an `ArrayBuffer` with
-   progress callbacks (`content-length` is present on both mirrors; the big
-   file dominates, so per-byte progress ≈ overall progress).
+   progress callbacks (`content-length` is used where supplied; the big file
+   dominates, so per-byte progress ≈ overall progress).
 3. Verify `crypto.subtle.digest("SHA-256", buf)` and the byte length against
    the manifest. Mismatch → discard, log a console warning naming the mirror
    (possible tamper or truncation), try the next mirror.
@@ -370,16 +368,15 @@ until the rebuild completes. Publishing a new model release without bumping
 ## 7. Verification checklist (before shipping)
 
 - **Network audit:** with the feature active on a fresh profile, the network
-  tab shows only: same-origin requests, `github.com` +
-  `objects.githubusercontent.com` (first activation only), and
-  `huggingface.co` only while the GitHub mirror is deliberately blocked.
-  Anything from `cdn.jsdelivr.net` means §6.3 is misconfigured; anything from
-  `huggingface.co` while GitHub is healthy means §5.4's flags or the adapter
-  are wrong.
+  tab shows only same-origin requests plus the pinned `huggingface.co` path on
+  first activation. Anything from `cdn.jsdelivr.net` means §6.3 is
+  misconfigured; a GitHub request during a healthy HF download means the
+  primary failed verification or transport.
 - **Offline test:** activate once, then reload and use semantic search in
   airplane mode. Must work.
-- **Failover test:** block `github.com` in DevTools request blocking → first
-  activation succeeds via Hugging Face.
+- **Failure-path test:** block `huggingface.co` in DevTools request blocking →
+  the best-effort GitHub attempt fails readably under current CORS behavior,
+  and the dialog offers Retry and file import.
 - **Tamper test:** corrupt one manifest hash in a dev build → that mirror's
   download is rejected with the warning, the next mirror is tried, and the
   final state is the readable error UI, not a broken pipeline.
@@ -400,7 +397,7 @@ until the rebuild completes. Publishing a new model release without bumping
 | All mirrors down (new device)             | "Model unavailable · Retry · Import from file". App otherwise unaffected.|
 | All mirrors down (initialized device)     | Invisible. Store hit; nothing fetches.                                   |
 | IndexedDB write fails (quota)             | Keep bytes in memory for the session; warn; retry persisting next run.   |
-| GitHub drops CORS on release downloads    | Promote HF mirror / move assets; one manifest edit. (§4.1)               |
+| GitHub release download lacks CORS        | Keep it behind HF; use its files through manual import. (§4.1)           |
 | onnxruntime-web version bump              | Same-origin WASM copy updates automatically at build; re-run audit.      |
 
 ## 9. Non-goals

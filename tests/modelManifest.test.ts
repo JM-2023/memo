@@ -29,14 +29,14 @@ describe("model manifest", () => {
     expect(modelTotalBytes()).toBe(MODEL_MANIFEST.files.reduce((sum, file) => sum + file.bytes, 0));
   });
 
-  it("orders mirrors as our release first, pinned Hugging Face second", () => {
+  it("orders the CORS-capable pinned Hugging Face mirror before the release archive", () => {
     const onnx = MODEL_MANIFEST.files.find((file) => file.requestPath === "onnx/model_quantized.onnx")!;
     const urls = modelMirrorUrls(onnx);
     expect(urls[0]).toBe(
-      `https://github.com/${MODEL_RELEASE_REPO}/releases/download/${MODEL_MANIFEST.releaseTag}/model_quantized.onnx`
+      `https://huggingface.co/${MODEL_MANIFEST.id}/resolve/${MODEL_MANIFEST.hfRevision}/onnx/model_quantized.onnx`
     );
     expect(urls[1]).toBe(
-      `https://huggingface.co/${MODEL_MANIFEST.id}/resolve/${MODEL_MANIFEST.hfRevision}/onnx/model_quantized.onnx`
+      `https://github.com/${MODEL_RELEASE_REPO}/releases/download/${MODEL_MANIFEST.releaseTag}/model_quantized.onnx`
     );
   });
 

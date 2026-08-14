@@ -11,9 +11,10 @@ import { apiError } from "./api/_utils/response";
 // - script-src 'wasm-unsafe-eval': the semantic model runs on same-origin
 //   onnxruntime WASM, and browsers gate WebAssembly compilation behind this
 //   keyword (it does not permit JS eval).
-// - connect-src lists exactly the embedding-model mirrors — our GitHub
-//   release assets with their redirect host, then the pinned Hugging Face
-//   fallback with its CDN hosts. Model files are fetched once per device,
+// - connect-src lists exactly the embedding-model sources — the pinned
+//   Hugging Face revision and its CDN hosts first, plus our GitHub release
+//   archive as a best-effort secondary/manual source. Model files are fetched
+//   once per device,
 //   verified against the SHA-256 manifest in src/lib/modelManifest.ts, and
 //   frozen into IndexedDB; no other cross-origin request exists.
 const CONTENT_SECURITY_POLICY = [

@@ -1,6 +1,7 @@
 // Pinned identity of the on-device embedding model. The bytes live outside
-// this repository and outside the Cloudflare deployment — a GitHub release
-// first, the pinned Hugging Face revision as fallback — so this manifest is
+// this repository and outside the Cloudflare deployment — the pinned Hugging
+// Face revision first, with our immutable GitHub release as a best-effort
+// secondary and manual-import archive — so this manifest is
 // the only source of truth for what they are: exact size and SHA-256 per
 // file. A download that does not verify is discarded no matter which mirror
 // served it; "the link is alive but the content changed" behaves like a dead
@@ -20,7 +21,7 @@ export interface ModelFileSpec {
 }
 
 export interface ModelManifest {
-  /** transformers.js model id, also the tail of the fallback mirror URL. */
+  /** transformers.js model id, also the tail of the primary mirror URL. */
   id: string;
   /** Pinned Hugging Face revision (a commit SHA, never a branch name). */
   hfRevision: string;
@@ -31,7 +32,7 @@ export interface ModelManifest {
   files: readonly ModelFileSpec[];
 }
 
-/** Repository whose releases host the primary mirror. */
+/** Repository whose releases hold the immutable manual-import archive. */
 export const MODEL_RELEASE_REPO = "JM-2023/memo";
 
 export const MODEL_MANIFEST: ModelManifest = Object.freeze({
@@ -68,14 +69,15 @@ export const MODEL_MANIFEST: ModelManifest = Object.freeze({
 });
 
 /**
- * Ordered download sources for one file: our release assets, then the pinned
- * upstream revision. Both ends serve `access-control-allow-origin` on every
- * redirect hop, which §4.1 of the hosting doc verifies at publish time.
+ * Ordered download sources for one file. The pinned Hugging Face revision is
+ * first because it passes browser CORS. GitHub's immutable release is kept as
+ * a best-effort secondary and manual-import archive; its current redirect
+ * chain lacks CORS, as recorded in §4.1 of the hosting doc.
  */
 export function modelMirrorUrls(file: ModelFileSpec, manifest: ModelManifest = MODEL_MANIFEST): string[] {
   return [
-    `https://github.com/${MODEL_RELEASE_REPO}/releases/download/${manifest.releaseTag}/${file.asset}`,
-    `https://huggingface.co/${manifest.id}/resolve/${manifest.hfRevision}/${file.requestPath}`
+    `https://huggingface.co/${manifest.id}/resolve/${manifest.hfRevision}/${file.requestPath}`,
+    `https://github.com/${MODEL_RELEASE_REPO}/releases/download/${manifest.releaseTag}/${file.asset}`
   ];
 }
 
