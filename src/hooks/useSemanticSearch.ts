@@ -76,7 +76,15 @@ export function useSemanticSearch(
   enabled: boolean,
   memos: readonly Memo[],
   query: string,
-  allowedMemoIds: ReadonlySet<string> | null = null
+  allowedMemoIds: ReadonlySet<string> | null = null,
+  /**
+   * How a finished ranking reaches the feed. A landing reorders every visible
+   * row at once, so the caller gets to commit it inside whatever motion it
+   * wants; the default just applies it. Only the landing goes through here —
+   * dropping stale results (below) happens on the typing path, where a
+   * per-keystroke transition would be worse than the cut it replaces.
+   */
+  publish: (commit: () => void) => void = (commit) => commit()
 ): SemanticSearchState {
   const [status, setStatus] = useState<SemanticSearchStatus>("off");
   const [progress, setProgress] = useState<SemanticIndexProgress | null>(null);
@@ -98,6 +106,8 @@ export function useSemanticSearch(
   const searchGenerationRef = useRef(0);
   const memosRef = useRef(memos);
   memosRef.current = memos;
+  const publishRef = useRef(publish);
+  publishRef.current = publish;
   /** Consumed by the activation pass below: wipe the store before rebuilding. */
   const purgeRef = useRef(false);
   const retry = useCallback(() => setRetryEpoch((epoch) => epoch + 1), []);
@@ -300,7 +310,7 @@ export function useSemanticSearch(
           if (current()) setQueryProgress({ stage: "ranking", done, total });
         }
       });
-      if (current()) setResults(ranked);
+      if (current()) publishRef.current(() => setResults(ranked));
     };
 
     let timer = 0;

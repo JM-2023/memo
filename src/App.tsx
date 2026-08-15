@@ -114,7 +114,7 @@ import { applyTaskFlips, freshestTaskMemo, type TaskFlipQueue } from "./lib/task
 import { applyTheme, loadTheme, nextTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, NewImagePayload, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
-import { withViewTransition } from "./lib/viewTransition";
+import { tuneFeedTransitionNames, withViewTransition } from "./lib/viewTransition";
 
 type Phase = "checking" | "error" | "login" | "ready";
 type View = "memos" | "trash" | "review";
@@ -868,7 +868,19 @@ export default function App() {
   // Filtering follows the keystroke at deferred priority: the input never
   // waits for a big feed to re-render.
   const deferredQuery = useDeferredValue(trimmedQuery);
-  const feedQuery = feedQueryForStatsDrilldown(statsDrilldown, trimmedQuery, deferredQuery);
+  // Controls that set the search text outright — the clear ×, a saved preset,
+  // going home — are not typing, and the deferral actively breaks them: they
+  // run inside a view transition, whose callback must leave the DOM in its
+  // final state, and a deferred query lands one render too late for that. The
+  // swap glided the tag and the chips into place while the query's share of
+  // the change popped in afterwards. Marking the value they set opts that one
+  // value out of the deferral; typing (which clears the mark) never does.
+  const queryLeapRef = useRef<string | null>(null);
+  const feedQuery = feedQueryForStatsDrilldown(
+    statsDrilldown,
+    trimmedQuery,
+    queryLeapRef.current === trimmedQuery ? trimmedQuery : deferredQuery
+  );
   // Keywords AND together; "quoted" runs must match as whole phrases.
   const parsedQuery = useMemo(() => parseSearchQuery(feedQuery), [feedQuery]);
   const structuredFiltersOn = hasActiveFilters(filters);
@@ -890,6 +902,18 @@ export default function App() {
     [searchScopeMemos, semanticScopeActive]
   );
 
+  /**
+   * How a landed ranking reaches the feed. The single biggest reorder in the
+   * app — every card can move at once, and rows sharing no keyword with the
+   * query join the list — used to be the one feed reorder that cut instead of
+   * moving: arrivals played their entrance while everything the reader was
+   * already looking at teleported. It reads as a filter change, so it moves
+   * like one (swapFeed, wired in below: the swap needs state declared after
+   * this call, and a ranking can only land long after the first render).
+   */
+  const publishSemanticRef = useRef<(commit: () => void) => void>((commit) => commit());
+  const publishSemanticResults = useCallback((commit: () => void) => publishSemanticRef.current(commit), []);
+
   // Semantic ranking rides the same search box. Keyword/phrase matching stays
   // active as the high-confidence tier; semantic results add related memos.
   // Trash and review keep plain search, so the hook sees their query as empty.
@@ -897,9 +921,32 @@ export default function App() {
   // the cache key adopted from the first authenticated response, and starting
   // earlier misreads "not decryptable yet" as "no index", throwing away the
   // persisted vectors and re-embedding the whole notebook on every refresh.
-  const semantic = useSemanticSearch(semanticOn && phase === "ready", activeMemos, view === "memos" ? feedQuery : "", semanticScopeIds);
-  const semanticResults = view === "memos" ? semantic.results : null;
+  const semantic = useSemanticSearch(
+    semanticOn && phase === "ready",
+    activeMemos,
+    view === "memos" ? feedQuery : "",
+    semanticScopeIds,
+    publishSemanticResults
+  );
+  // Gated on the switch as well as the hook's own state: the hook drops its
+  // results from an effect, a commit later than the click that flipped the
+  // switch, and the swap animating that click has to see the keyword-only
+  // list it is switching back to.
+  const semanticResults = semanticOn && view === "memos" ? semantic.results : null;
   const semanticBusy = semantic.status === "preparing" || semantic.status === "indexing" || semantic.queryProgress !== null;
+  // This query's ranking is still on its way. The keyword tier answers within
+  // the keystroke, meaning answers a beat later, so a feed with nothing in it
+  // yet is "still looking" — saying "no matching memos" there makes the app
+  // contradict itself half a second later on every search whose answer is
+  // semantic. Only for a live index: with no vectors to rank, or the model
+  // still loading, the keyword answer is the whole answer.
+  const semanticPending =
+    semanticOn &&
+    view === "memos" &&
+    semanticResults === null &&
+    !queryIsEmpty(parsedQuery) &&
+    semantic.indexedMemos > 0 &&
+    (semantic.status === "ready" || semantic.status === "indexing");
   useEffect(() => {
     try {
       if (semanticOn) localStorage.setItem("memo:semantic-search", "1");
@@ -979,8 +1026,15 @@ export default function App() {
   // matter how many memos exist.
   // Object identity is the generation token: revisiting an earlier query must
   // still start a fresh window rather than reviving that query's old cap.
+  // The lenses are what open a new list — semantic search by being switched
+  // on or off, NOT by re-ranking. Keying on the ranked map itself made every
+  // re-rank a new generation, and a re-rank needs no reason of its own: an
+  // edit anywhere reconciles the index, which re-runs the query and hands
+  // back an identically ordered but freshly built map. A reader 200 rows into
+  // their results watched the feed truncate to one page under them and the
+  // browser clamp their scroll into whatever was left.
   const feedQueryKey = feedQuery;
-  const feedWindowKey = useMemo(() => ({}), [view, activeTag, activeDay, statsDrilldown, feedQueryKey, filters, sortKey, semanticResults]);
+  const feedWindowKey = useMemo(() => ({}), [view, activeTag, activeDay, statsDrilldown, feedQueryKey, filters, sortKey, semanticOn]);
   const [renderWindow, setRenderWindow] = useState<FeedWindow<object>>({ key: {}, cap: FEED_PAGE });
   // Resolve a stale generation synchronously during render. An effect would
   // reconcile the previous, potentially huge window once before shrinking it.
@@ -992,6 +1046,21 @@ export default function App() {
     return editingMemo ? [...rendered, editingMemo] : rendered;
   }, [feedMemos, renderCap, editingId]);
   const hasMoreFeed = feedMemos.length > renderCap;
+
+  // Typing opens a new result list, and a new list starts at the top — the
+  // same rule every other lens follows through changeFeed. Search reached the
+  // feed straight from the input instead (a view transition per keystroke
+  // would be worse than no transition at all), so it was the one lens that
+  // left the reader's old offset in place: the shorter document clamped it,
+  // and they landed partway down results they had never scrolled through.
+  // Before paint, so the new list is never painted at the stale offset first.
+  const feedQueryScrollRef = useRef(feedQueryKey);
+  useLayoutEffect(() => {
+    if (feedQueryScrollRef.current === feedQueryKey) return;
+    feedQueryScrollRef.current = feedQueryKey;
+    window.scrollTo(0, 0);
+  }, [feedQueryKey]);
+
   const feedSentinelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!hasMoreFeed) return;
@@ -1050,51 +1119,58 @@ export default function App() {
   const enterSuppressRef = useRef(false);
 
   /**
-   * Feed filter changes run inside a view transition: shared cards glide to
-   * their new positions, departures fade back, arrivals rise, and the
-   * scroll reset is masked by the transition. Skipped while the mobile
-   * drawer is open (its own closing animation would get double-captured).
+   * Feed reorders run inside a view transition: shared cards glide to their
+   * new positions, departures fade back, arrivals rise. Skipped while the
+   * mobile drawer is open (its own closing animation would get
+   * double-captured). Which cards morph is decided on both sides by
+   * tuneFeedTransitionNames.
    *
-   * Cards only morph when both endpoints sit near their viewports: the old
-   * capture drops the names of slots far from the current viewport, and the
-   * post-flush pass only restores names (from data-vt — React bails out of
-   * unchanged slots, so the stripped inline style would leak into the new
-   * capture) onto slots landing near the first screen. A shared card whose
-   * old or new spot is pages away would otherwise streak across the screen
-   * instead of entering or departing like its neighbours.
+   * `rewind` separates the two kinds of reorder. A new result list (a filter,
+   * a tag, the sort key) starts over: back to page one, back to the top, and
+   * the transition masks the scroll reset. A re-ranking of the list the reader
+   * is already in (semantic scores landing) keeps both their page and their
+   * place — collapsing the window under them would drop them somewhere else
+   * entirely.
    */
-  const changeFeed = useCallback(
-    (apply: () => void) => {
+  const swapFeed = useCallback(
+    (apply: () => void, { rewind }: { rewind: boolean }) => {
       const update = () => {
         enterSuppressRef.current = true;
         try {
           flushSync(() => {
-            setRenderWindow((current) => ({ ...current, cap: FEED_PAGE }));
+            if (rewind) setRenderWindow((current) => ({ ...current, cap: FEED_PAGE }));
             apply();
           });
         } finally {
           enterSuppressRef.current = false;
         }
-        const margin = window.innerHeight / 2;
-        document.querySelectorAll<HTMLElement>(".memo-slot").forEach((slot) => {
-          // Document position, because the scroll reset below hasn't landed.
-          const docTop = slot.getBoundingClientRect().top + window.scrollY;
-          slot.style.viewTransitionName = docTop < window.innerHeight + margin ? (slot.dataset.vt ?? "") : "";
-        });
-        window.scrollTo(0, 0);
+        tuneFeedTransitionNames(rewind ? 0 : window.scrollY);
+        if (rewind) window.scrollTo(0, 0);
       };
       if (drawerOpen) update();
       else {
-        const margin = window.innerHeight / 2;
-        document.querySelectorAll<HTMLElement>(".memo-slot").forEach((slot) => {
-          const rect = slot.getBoundingClientRect();
-          if (rect.bottom < -margin || rect.top > window.innerHeight + margin) slot.style.viewTransitionName = "";
-        });
+        tuneFeedTransitionNames(window.scrollY);
         withViewTransition(update);
       }
     },
     [drawerOpen]
   );
+
+  const changeFeed = useCallback((apply: () => void) => swapFeed(apply, { rewind: true }), [swapFeed]);
+
+  // The wiring promised above the useSemanticSearch call.
+  publishSemanticRef.current = (commit) => swapFeed(commit, { rewind: false });
+
+  /** Search text set by a control: lands with the swap that animates it. */
+  const swapQuery = useCallback((next: string) => {
+    queryLeapRef.current = next.trim().toLowerCase();
+    setQuery(next);
+  }, []);
+  /** Search text set by the keyboard: stays on the deferred path. */
+  const typeQuery = useCallback((next: string) => {
+    queryLeapRef.current = null;
+    setQuery(next);
+  }, []);
 
   const blockNavigationWhileEditing = useCallback(() => {
     if (!editingId) return false;
@@ -1141,11 +1217,11 @@ export default function App() {
       setActiveTag(null);
       setActiveDay(null);
       setStatsDrilldown(null);
-      setQuery("");
+      swapQuery("");
       setFilters(EMPTY_FILTERS);
       setView("memos");
     });
-  }, [view, activeTag, activeDay, statsDrilldown, query, filters, changeFeed, blockNavigationWhileEditing]);
+  }, [view, activeTag, activeDay, statsDrilldown, query, filters, changeFeed, swapQuery, blockNavigationWhileEditing]);
 
   /** Facet on/off is a discrete choice — it rides the same feed morph as a
       tag or sort change, whether it comes from the panel or a chip's ×. */
@@ -1188,7 +1264,7 @@ export default function App() {
         setStatsDrilldown(drilldown);
         setActiveTag(null);
         setActiveDay(null);
-        setQuery("");
+        swapQuery("");
         setFilters(EMPTY_FILTERS);
         setView("memos");
         setSelectMode(false);
@@ -1196,7 +1272,7 @@ export default function App() {
         setConfirmBatchDelete(false);
       });
     },
-    [blockNavigationWhileEditing, changeFeed]
+    [blockNavigationWhileEditing, changeFeed, swapQuery]
   );
 
   /** A preset restores the whole feed context in one morph. */
@@ -1208,11 +1284,11 @@ export default function App() {
         setActiveTag(item.tag);
         setActiveDay(item.day);
         setStatsDrilldown(null);
-        setQuery(item.query);
+        swapQuery(item.query);
         setFilters(item.filters);
       });
     },
-    [changeFeed, blockNavigationWhileEditing]
+    [changeFeed, swapQuery, blockNavigationWhileEditing]
   );
 
   const deleteSavedFilter = useCallback(
@@ -2701,7 +2777,7 @@ export default function App() {
                   placeholder={tr("Search memos", "搜索笔记")}
                   title={tr("Space separates keywords; “quotes” match an exact phrase", "空格分隔多个关键词；“引号”匹配完整短语")}
                   disabled={editingId !== null}
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) => typeQuery(event.target.value)}
                   onFocus={() => setSearchOpen(true)}
                   onBlur={() => setSearchOpen(false)}
                 />
@@ -2713,7 +2789,9 @@ export default function App() {
                     disabled={editingId !== null}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => {
-                      setQuery("");
+                      // The same restoration the home pill performs, so it
+                      // reads the same: one click, the full list glides back.
+                      changeFeed(() => swapQuery(""));
                       searchRef.current?.focus();
                     }}
                   >
@@ -2758,7 +2836,12 @@ export default function App() {
                     setModelSettingsOpen(true);
                     return;
                   }
-                  setSemanticOn((on) => !on);
+                  // Switching the lens off drops every semantic-only row and
+                  // re-sorts what stays, all in this commit, so it moves like
+                  // a filter change. Switching it on changes nothing yet —
+                  // the ranking lands later and animates its own arrival.
+                  if (semanticOn) changeFeed(() => setSemanticOn(false));
+                  else setSemanticOn(true);
                 }}
               >
                 <Brain size={17} aria-hidden="true" />
@@ -2818,6 +2901,11 @@ export default function App() {
                     <SlidersHorizontal size={15} aria-hidden="true" />
                     {tr("Review settings", "回顾设置")}
                   </button>
+                </>
+              ) : semanticPending ? (
+                <>
+                  <p className="feed-empty-title">{tr("Searching by meaning…", "正在按意思搜索…")}</p>
+                  <p>{tr("No memo uses those words. Looking for ones that mean the same thing.", "没有笔记用到这些词，正在找意思相近的")}</p>
                 </>
               ) : activeMemos.length === 0 ? (
                 <>

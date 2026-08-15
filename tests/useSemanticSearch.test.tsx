@@ -127,6 +127,27 @@ describe("useSemanticSearch", () => {
     expect(result.current.error).toBeNull();
   });
 
+  it("hands a landed ranking to the caller instead of committing it itself", async () => {
+    // The landing reorders every visible row at once, so the feed gets to
+    // commit it inside a view transition. Swallowing the commit here proves
+    // the results really do travel that way and not around it.
+    mocks.load.mockResolvedValue(indexOf("a"));
+    const swallowed = vi.fn();
+    const { result } = renderHook(() => useSemanticSearch(true, [], "meaning", null, swallowed));
+
+    await waitFor(() => expect(swallowed).toHaveBeenCalledOnce());
+    expect(result.current.results).toBeNull();
+  });
+
+  it("publishes the ranking once the caller commits it", async () => {
+    mocks.load.mockResolvedValue(indexOf("a"));
+    const publish = vi.fn((commit: () => void) => commit());
+    const { result } = renderHook(() => useSemanticSearch(true, [], "meaning", null, publish));
+
+    await waitFor(() => expect(result.current.results).not.toBeNull());
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
   it("rebuilds straight out of a failure and stops calling the pass a rebuild", async () => {
     mocks.reconcile.mockRejectedValueOnce(new Error("embedder died"));
     const { result } = renderHook(() => useSemanticSearch(true, [], ""));
