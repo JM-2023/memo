@@ -108,10 +108,12 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
   const hasChildren = node.children.length > 0;
   const isActive = activeTag === node.path;
   const pinned = pinnedTags.has(node.path);
+  const named = tr(`${node.name}, ${count(node.count, "memo")}`, `${node.name}，${count(node.count, "memo")}`);
+  const label = pinned ? tr(`${named}, pinned`, `${named}，已置顶`) : named;
 
   return (
     <li className="tag-item" data-flip={node.path}>
-      <div className={`tag-row${isActive ? " is-active" : ""}`} style={{ paddingLeft: `${8 + depth * 18}px` }}>
+      <div className={`tag-row${isActive ? " is-active" : ""}${pinned ? " is-pinned" : ""}`} style={{ paddingLeft: `${8 + depth * 18}px` }}>
         {hasChildren ? (
           <button
             type="button"
@@ -129,22 +131,20 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
             <Hash size={12} aria-hidden="true" />
           </span>
         )}
-        {/* Name, pin mark and count live inside the button: the count trails the
-            name as one unit instead of being flung to the far edge of a sidebar
-            that can be 392px wide, while the button still spans the row so the
-            empty space to its right stays a hit target. */}
-        {/* Named explicitly: the bare digits sit flush against the name in the
-            markup, so the derived name would come out "work2". */}
+        {/* Name and count share the button so the blank space beside a short
+            name stays a hit target. Named explicitly because the bare digits sit
+            flush against the name in the markup — the derived name would come
+            out "work2" — and because the pinned state is drawn as a mark in the
+            row's margin, which no assistive tech can read. */}
         <button
           type="button"
           className="tag-label"
           aria-pressed={isActive}
-          aria-label={tr(`${node.name}, ${count(node.count, "memo")}`, `${node.name}，${count(node.count, "memo")}`)}
+          aria-label={label}
           onClick={() => onPickTag(isActive ? null : node.path)}
         >
           <span className="tag-name">{node.name}</span>
           <span className="tag-count">{formatNumber(node.count)}</span>
-          {pinned ? <Pin size={12} className="tag-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}
         </button>
         <Menu
           portal

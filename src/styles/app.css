@@ -537,6 +537,9 @@ a:hover { text-decoration: underline; }
 @keyframes card-depart { to { opacity: 0; transform: scale(0.965); } }
 @keyframes scale-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
 @keyframes pop-in { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+/* Margin marks: grow from their own middle. The translate is carried through
+   because it is what centres them on the row. */
+@keyframes tick-in { from { opacity: 0; transform: translateY(-50%) scaleY(0.2); } to { opacity: 1; transform: translateY(-50%) scaleY(1); } }
 /* Content entrance: rises with a long damped settle. Pair with --ease-out. */
 @keyframes rise-in { from { opacity: 0; transform: translateY(18px) scale(0.995); } to { opacity: 1; transform: none; } }
 /* Dialogs: a damped swell — no overshoot, the long tail does the settling. */
@@ -1407,6 +1410,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 .tag-list, .tag-children ul { margin: 0; padding: 0; list-style: none; }
 .tag-item { display: grid; }
 .tag-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -1421,6 +1425,25 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   transition: background var(--t) var(--ease);
 }
 @media (hover: hover) { .tag-row:hover { background: var(--wash); } }
+/* Pinned: an accent tick in the row's own margin, not a glyph among the name,
+   count and ⋯. Pinning lifts a tag above its siblings at every level, so a
+   nested pin never gathers into a visible group and the state has to read per
+   row — but drawn out here it costs no content width, leaving pinned and
+   unpinned rows identical in layout so the count column holds, and it lands at
+   one x whatever the depth or name length, so the marks scan as a column of
+   their own. Same idea as .memo-card.is-pinned tinting a card's edge. */
+.tag-row.is-pinned::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 3px;
+  height: 16px;
+  background: var(--leaf);
+  border-radius: 999px;
+  transform: translateY(-50%);
+  animation: tick-in 0.2s var(--ease-pop) both;
+}
 .tag-row.is-active { background: var(--leaf-tint); }
 .tag-row.is-active .tag-label { color: var(--leaf); font-weight: 700; }
 .tag-expand {
@@ -1458,10 +1481,6 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
    count off the row, so pin mark and count survive at any sidebar width. */
 .tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag-count { flex: none; margin-left: auto; padding-left: var(--count-gap); color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
-/* Trails the count instead of splitting it from the name: sitting between the
-   two, the mark gave pinned rows a visibly wider name → count gap than every
-   other row, so the count column went ragged exactly where it was pinned. */
-.tag-pin-mark { flex: none; margin-left: 6px; color: var(--leaf); animation: pop-in 0.18s var(--ease-pop) both; }
 /* Row action menu trigger — surfaces on row hover / focus / touch. */
 .tag-more {
   display: grid;
