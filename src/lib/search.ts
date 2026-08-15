@@ -8,7 +8,8 @@
 
 import { MD_IMAGE_PATTERN, URL_PATTERN, isImageUrl, splitTrailingPunct } from "./content";
 import { dayKeyOf } from "./stats";
-import { tagsOf } from "./tags";
+import { memoMatchesStatsDrilldown, type StatsDrilldown } from "./statsDrilldown";
+import { tagMatches, tagsOf } from "./tags";
 import type { Memo } from "./types";
 
 export interface ParsedQuery {
@@ -178,4 +179,24 @@ export function memoMatchesFilters(memo: Memo, filters: FeedFilters): boolean {
     if (hi !== null && day > hi) return false;
   }
   return true;
+}
+
+export interface MemoSearchScope {
+  activeTag: string | null;
+  activeDay: string | null;
+  statsDrilldown: StatsDrilldown | null;
+  filters: FeedFilters;
+}
+
+/**
+ * One canonical predicate for every feed lens that narrows a search corpus.
+ * Each active lens must match, making combinations such as Tag + Has Link +
+ * date range an explicit intersection shared by keyword and semantic search.
+ */
+export function memoMatchesSearchScope(memo: Memo, scope: MemoSearchScope): boolean {
+  const activeTag = scope.activeTag;
+  if (activeTag && !tagsOf(memo).some((tag) => tagMatches(tag, activeTag))) return false;
+  if (scope.activeDay && dayKeyOf(memo) !== scope.activeDay) return false;
+  if (scope.statsDrilldown && !memoMatchesStatsDrilldown(memo, scope.statsDrilldown)) return false;
+  return memoMatchesFilters(memo, scope.filters);
 }

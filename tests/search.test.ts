@@ -9,6 +9,7 @@ import {
   hybridSearchScore,
   memoMatchesFilters,
   memoMatchesQuery,
+  memoMatchesSearchScope,
   parseSearchQuery,
   queryIsEmpty,
   type FeedFilters
@@ -142,6 +143,23 @@ describe("structured filters", () => {
     const both = filtersWith({ hasImage: true, hasOpenTask: true });
     expect(memoMatchesFilters(memoOf("- [ ] fix ![s](https://x.com/p)"), both)).toBe(true);
     expect(memoMatchesFilters(memoOf("- [ ] fix"), both)).toBe(false);
+  });
+
+  it("intersects an active Tag with every structured Filter", () => {
+    const scope = {
+      activeTag: "work",
+      activeDay: null,
+      statsDrilldown: null,
+      filters: filtersWith({ hasLink: true })
+    };
+    const both = memoOf("planning #work https://example.com", { id: "both" });
+    const tagOnly = memoOf("planning #work", { id: "tag-only" });
+    const filterOnly = memoOf("planning https://example.com", { id: "filter-only" });
+    const nestedTag = memoOf("planning #work/client https://example.com", { id: "nested" });
+
+    const matched = [both, tagOnly, filterOnly, nestedTag].filter((memo) => memoMatchesSearchScope(memo, scope));
+
+    expect(matched.map((memo) => memo.id)).toEqual(["both", "nested"]);
   });
 
   it("date range is inclusive and supports open ends", () => {

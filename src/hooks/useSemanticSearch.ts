@@ -9,13 +9,14 @@
 import { useEffect, useRef, useState } from "react";
 import { storedModelState } from "../lib/modelLoader";
 import { MODEL_MANIFEST } from "../lib/modelManifest";
-import { getEmbedder, RETRIEVAL_QUERY_PREFIX, type EmbedFn } from "../lib/modelRuntime";
+import { getEmbedder, RETRIEVAL_QUERY_PREFIX, runModelSelfTest, type EmbedFn } from "../lib/modelRuntime";
 import {
   emptySemanticIndex,
   loadSemanticIndex,
+  planSemanticIndex,
   reconcileSemanticIndex,
   saveSemanticIndex,
-  searchSemanticIndex,
+  searchSemanticIndexAsync,
   type SemanticIndex
 } from "../lib/semanticIndex";
 import type { Memo } from "../lib/types";
@@ -33,6 +34,8 @@ export interface SemanticSearchState {
   status: SemanticSearchStatus;
   /** Memos embedded vs. memos pending, while indexing. */
   progress: { done: number; total: number } | null;
+  /** Observable stages for the current query and scoped vector ranking. */
+  queryProgress: SemanticQueryProgress | null;
   /**
    * Ranked id → score for the current query; null while semantic ranking is
    * inactive or has no searchable rows yet. The feed always keeps keyword
@@ -41,12 +44,24 @@ export interface SemanticSearchState {
   results: ReadonlyMap<string, number> | null;
 }
 
+export interface SemanticQueryProgress {
+  stage: "waiting" | "embedding" | "ranking";
+  done: number;
+  total: number;
+}
+
 const QUERY_DEBOUNCE_MS = 250;
 const RECONCILE_DEBOUNCE_MS = 1500;
 
-export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], query: string): SemanticSearchState {
+export function useSemanticSearch(
+  enabled: boolean,
+  memos: readonly Memo[],
+  query: string,
+  allowedMemoIds: ReadonlySet<string> | null = null
+): SemanticSearchState {
   const [status, setStatus] = useState<SemanticSearchStatus>("off");
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [queryProgress, setQueryProgress] = useState<SemanticQueryProgress | null>(null);
   const [results, setResults] = useState<ReadonlyMap<string, number> | null>(null);
   /** Bumped whenever index content changes, so the search effect re-ranks. */
   const [indexEpoch, setIndexEpoch] = useState(0);
@@ -58,6 +73,7 @@ export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], quer
   queryRef.current = query;
   const queryVectorRef = useRef<{ query: string; vector: Float32Array } | null>(null);
   const queryTaskRef = useRef<{ query: string; promise: Promise<Float32Array> } | null>(null);
+  const searchGenerationRef = useRef(0);
   const memosRef = useRef(memos);
   memosRef.current = memos;
 
@@ -71,6 +87,7 @@ export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], quer
       queryTaskRef.current = null;
       setStatus("off");
       setProgress(null);
+      setQueryProgress(null);
       setResults(null);
       return;
     }
@@ -87,39 +104,46 @@ export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], quer
           ? loadSemanticIndex(MODEL_MANIFEST.version)
           : Promise.resolve(indexRef.current);
       try {
-        const [embed, loadedIndex] = await Promise.all([getEmbedder(), persistedIndex]);
+        const [embed, loadedIndex] = await Promise.all([
+          getEmbedder().then(async (readyEmbed) => {
+            await runModelSelfTest();
+            return readyEmbed;
+          }),
+          persistedIndex
+        ]);
         embedRef.current = embed;
         indexRef.current = loadedIndex ?? emptySemanticIndex(MODEL_MANIFEST.version);
-      } catch {
-        if (alive()) setStatus("error");
-        return;
-      }
-      if (!alive()) return;
-      setStatus("indexing");
-      const embed = embedRef.current;
-      const reconciled = await reconcileSemanticIndex(indexRef.current, memosRef.current, embed, {
-        onProgress: (done, total) => {
-          if (alive()) setProgress(total > 0 ? { done, total } : null);
-        },
-        onPartial: (partial) => {
-          if (!alive()) return;
-          indexRef.current = partial;
-          setIndexEpoch((epoch) => epoch + 1);
-        },
-        shouldContinue: alive,
-        onFlush: (partial) => {
-          indexRef.current = partial;
-          return saveSemanticIndex(partial);
+        if (!alive()) return;
+        setStatus("indexing");
+        const reconciled = await reconcileSemanticIndex(indexRef.current, memosRef.current, embed, {
+          onProgress: (done, total) => {
+            if (alive()) setProgress(total > 0 ? { done, total } : null);
+          },
+          onPartial: (partial) => {
+            if (!alive()) return;
+            indexRef.current = partial;
+            setIndexEpoch((epoch) => epoch + 1);
+          },
+          shouldContinue: alive,
+          onFlush: (partial) => {
+            indexRef.current = partial;
+            return saveSemanticIndex(partial);
+          }
+        });
+        if (reconciled !== indexRef.current) {
+          indexRef.current = reconciled;
+          await saveSemanticIndex(reconciled);
         }
-      });
-      if (reconciled !== indexRef.current) {
-        indexRef.current = reconciled;
-        await saveSemanticIndex(reconciled);
+        if (!alive()) return;
+        setProgress(null);
+        setIndexEpoch((epoch) => epoch + 1);
+        setStatus("ready");
+      } catch {
+        if (alive()) {
+          setProgress(null);
+          setStatus("error");
+        }
       }
-      if (!alive()) return;
-      setProgress(null);
-      setIndexEpoch((epoch) => epoch + 1);
-      setStatus("ready");
     })();
   }, [enabled]);
 
@@ -132,12 +156,41 @@ export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], quer
       const embed = embedRef.current;
       const index = indexRef.current;
       if (!embed || !index) return;
+      const plan = planSemanticIndex(index, memosRef.current);
+      if (plan.stale.length === 0 && plan.keptRowIndices.length === index.rows.length) return;
       void (async () => {
-        const reconciled = await reconcileSemanticIndex(index, memosRef.current, embed, { shouldContinue: alive });
-        if (!alive() || reconciled === index) return;
-        indexRef.current = reconciled;
-        await saveSemanticIndex(reconciled);
-        if (alive()) setIndexEpoch((epoch) => epoch + 1);
+        setStatus("indexing");
+        try {
+          const reconciled = await reconcileSemanticIndex(index, memosRef.current, embed, {
+            shouldContinue: alive,
+            onProgress: (done, total) => {
+              if (alive()) setProgress(total > 0 ? { done, total } : null);
+            },
+            onPartial: (partial) => {
+              if (!alive()) return;
+              indexRef.current = partial;
+              setIndexEpoch((epoch) => epoch + 1);
+            },
+            onFlush: (partial) => {
+              indexRef.current = partial;
+              return saveSemanticIndex(partial);
+            }
+          });
+          if (!alive()) return;
+          if (reconciled !== indexRef.current) {
+            indexRef.current = reconciled;
+            await saveSemanticIndex(reconciled);
+          }
+          if (!alive()) return;
+          setProgress(null);
+          setIndexEpoch((epoch) => epoch + 1);
+          setStatus("ready");
+        } catch {
+          if (alive()) {
+            setProgress(null);
+            setStatus("error");
+          }
+        }
       })();
     }, RECONCILE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
@@ -147,55 +200,83 @@ export function useSemanticSearch(enabled: boolean, memos: readonly Memo[], quer
   // a serialized query inference can take the next ONNX slot; its vector is
   // then reused as each partial index arrives instead of being recomputed.
   useEffect(() => {
+    const searchGeneration = (searchGenerationRef.current += 1);
+    const current = () => searchGenerationRef.current === searchGeneration;
     if (!enabled || (status !== "ready" && status !== "indexing")) {
+      setQueryProgress(null);
       setResults(null);
       return;
     }
     const trimmed = query.trim();
     if (!trimmed) {
+      setQueryProgress(null);
       setResults(null);
       return;
     }
     const index = indexRef.current;
     if (!index || index.rows.length === 0) {
+      setQueryProgress(null);
       setResults(null);
       return;
     }
     const cached = queryVectorRef.current;
-    if (cached?.query === trimmed) {
-      setResults(searchSemanticIndex(index, cached.vector));
-      return;
-    }
     // A changed query must immediately fall back to keyword results rather
     // than showing semantic scores calculated for the previous text.
-    setResults(null);
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      const embed = embedRef.current;
-      if (!embed) return;
-      void (async () => {
-        let task = queryTaskRef.current;
-        try {
-          if (!task || task.query !== trimmed) {
-            const promise = embed([RETRIEVAL_QUERY_PREFIX + trimmed]).then(([vector]) => vector);
-            task = { query: trimmed, promise };
-            queryTaskRef.current = task;
-          }
-          const vector = await task.promise;
-          if (queryRef.current.trim() === trimmed) queryVectorRef.current = { query: trimmed, vector };
-          const currentIndex = indexRef.current;
-          if (!cancelled && currentIndex) setResults(searchSemanticIndex(currentIndex, vector));
-        } catch {
-          if (task && queryTaskRef.current === task) queryTaskRef.current = null;
-          if (!cancelled) setResults(null);
-        }
-      })();
-    }, QUERY_DEBOUNCE_MS);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [enabled, status, query, indexEpoch]);
+    if (cached?.query !== trimmed) setResults(null);
+    setQueryProgress({ stage: cached?.query === trimmed ? "ranking" : "waiting", done: 0, total: index.rows.length });
 
-  return { status, progress, results };
+    const rank = async (vector: Float32Array) => {
+      const currentIndex = indexRef.current;
+      if (!current() || !currentIndex) return;
+      setQueryProgress({ stage: "ranking", done: 0, total: currentIndex.rows.length });
+      const ranked = await searchSemanticIndexAsync(currentIndex, vector, allowedMemoIds, {
+        shouldContinue: current,
+        onProgress: (done, total) => {
+          if (current()) setQueryProgress({ stage: "ranking", done, total });
+        }
+      });
+      if (current()) setResults(ranked);
+    };
+
+    let timer = 0;
+    const run = async () => {
+      const embed = embedRef.current;
+      if (!embed) {
+        if (current()) setQueryProgress(null);
+        return;
+      }
+      let task = queryTaskRef.current;
+      try {
+        if (current()) setQueryProgress({ stage: "embedding", done: 0, total: 1 });
+        if (!task || task.query !== trimmed) {
+          const promise = embed([RETRIEVAL_QUERY_PREFIX + trimmed]).then(([vector]) => vector);
+          task = { query: trimmed, promise };
+          queryTaskRef.current = task;
+        }
+        const vector = await task.promise;
+        if (queryRef.current.trim() === trimmed) queryVectorRef.current = { query: trimmed, vector };
+        await rank(vector);
+      } catch {
+        if (task && queryTaskRef.current === task) queryTaskRef.current = null;
+        if (current()) setResults(null);
+      } finally {
+        if (current()) setQueryProgress(null);
+      }
+    };
+
+    if (cached?.query === trimmed) {
+      void rank(cached.vector)
+        .catch(() => {
+          if (current()) setResults(null);
+        })
+        .finally(() => current() && setQueryProgress(null));
+    } else {
+      timer = window.setTimeout(() => void run(), QUERY_DEBOUNCE_MS);
+    }
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [enabled, status, query, indexEpoch, allowedMemoIds]);
+
+  return { status, progress, queryProgress, results };
 }

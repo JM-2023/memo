@@ -105,8 +105,12 @@ export interface ReconcileCallbacks {
   onFlush?: (index: SemanticIndex) => void | Promise<void>;
 }
 
-const EMBED_BATCH_TEXTS = 16;
+// Eight similarly sized inputs keep memory and per-batch latency modest. ONNX
+// runs in a one-thread proxy worker, so smaller batches trade a little elapsed
+// time for steadier progress and a responsive UI without changing embeddings.
+const EMBED_BATCH_TEXTS = 8;
 const FLUSH_EVERY_ROWS = 256;
+const SEARCH_ROWS_PER_YIELD = 256;
 
 function packIndex(modelVersion: string, rows: SemanticRow[], pieces: Float32Array[]): SemanticIndex {
   const vectors = new Float32Array(rows.length * EMBEDDING_DIM);
@@ -213,24 +217,79 @@ export async function reconcileSemanticIndex(
 }
 
 /**
- * Rank memos against a unit query vector: per-row dot product, best chunk
- * wins per memo, noise floored, insertion order of the returned map is the
- * ranking.
+ * Add a range of row scores to a memo-level best-score map. Scope membership
+ * is checked before the 384-float dot product, so a narrow Tag + Filter view
+ * avoids almost all arithmetic for out-of-view memos.
  */
-export function searchSemanticIndex(index: SemanticIndex, queryVector: Float32Array): Map<string, number> {
-  const best = new Map<string, number>();
+function scoreSemanticRows(
+  index: SemanticIndex,
+  queryVector: Float32Array,
+  best: Map<string, number>,
+  start: number,
+  end: number,
+  allowedMemoIds: ReadonlySet<string> | null
+): void {
   const { rows, vectors } = index;
-  for (let row = 0; row < rows.length; row += 1) {
+  for (let row = start; row < end; row += 1) {
+    const id = rows[row].id;
+    if (allowedMemoIds && !allowedMemoIds.has(id)) continue;
     const base = row * EMBEDDING_DIM;
     let dot = 0;
     for (let k = 0; k < EMBEDDING_DIM; k += 1) dot += vectors[base + k] * queryVector[k];
-    const id = rows[row].id;
     const current = best.get(id);
     if (current === undefined || dot > current) best.set(id, dot);
   }
+}
+
+function finishSemanticRanking(best: Map<string, number>): Map<string, number> {
   const ranked = [...best].filter(([, score]) => score >= SEMANTIC_SCORE_FLOOR);
   ranked.sort((a, b) => b[1] - a[1]);
   return new Map(ranked.slice(0, SEMANTIC_MAX_RESULTS));
+}
+
+/**
+ * Rank memos against a unit query vector: per-row dot product, best chunk
+ * wins per memo, noise floored, insertion order of the returned map is the
+ * ranking. The optional set is the already-intersected feed scope.
+ */
+export function searchSemanticIndex(
+  index: SemanticIndex,
+  queryVector: Float32Array,
+  allowedMemoIds: ReadonlySet<string> | null = null
+): Map<string, number> {
+  const best = new Map<string, number>();
+  scoreSemanticRows(index, queryVector, best, 0, index.rows.length, allowedMemoIds);
+  return finishSemanticRanking(best);
+}
+
+export interface SemanticSearchCallbacks {
+  onProgress?: (doneRows: number, totalRows: number) => void;
+  shouldContinue?: () => boolean;
+}
+
+/**
+ * UI-safe ranking for the live search path. Dot products are split into small
+ * slices with a main-thread yield between them; progress therefore reflects
+ * rows actually examined and controls remain interactive even for a very
+ * large encrypted index.
+ */
+export async function searchSemanticIndexAsync(
+  index: SemanticIndex,
+  queryVector: Float32Array,
+  allowedMemoIds: ReadonlySet<string> | null = null,
+  callbacks: SemanticSearchCallbacks = {}
+): Promise<Map<string, number>> {
+  const best = new Map<string, number>();
+  const total = index.rows.length;
+  callbacks.onProgress?.(0, total);
+  for (let start = 0; start < total; start += SEARCH_ROWS_PER_YIELD) {
+    if (callbacks.shouldContinue && !callbacks.shouldContinue()) return new Map();
+    const end = Math.min(start + SEARCH_ROWS_PER_YIELD, total);
+    scoreSemanticRows(index, queryVector, best, start, end, allowedMemoIds);
+    callbacks.onProgress?.(end, total);
+    if (end < total) await yieldToMainThread();
+  }
+  return finishSemanticRanking(best);
 }
 
 // ---- Serialization ---------------------------------------------------------

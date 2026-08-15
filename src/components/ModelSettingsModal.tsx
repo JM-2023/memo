@@ -12,9 +12,10 @@ import {
   Upload,
   X
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
+import type { SemanticQueryProgress, SemanticSearchStatus } from "../hooks/useSemanticSearch";
 import { useI18n } from "../lib/i18n";
 import {
   clearModelFiles,
@@ -27,7 +28,13 @@ import {
   type MirrorFailure
 } from "../lib/modelLoader";
 import { MODEL_MANIFEST, modelTotalBytes, type ModelFileSpec } from "../lib/modelManifest";
-import { getEmbedder, resetModelRuntime, runModelSelfTest } from "../lib/modelRuntime";
+import {
+  getEmbedder,
+  getModelRuntimeProgress,
+  resetModelRuntime,
+  runModelSelfTest,
+  subscribeModelRuntimeProgress
+} from "../lib/modelRuntime";
 import { deleteSemanticIndexDb } from "../lib/semanticIndex";
 
 interface ModelSettingsModalProps {
@@ -35,6 +42,9 @@ interface ModelSettingsModalProps {
   onModelCleared: () => void;
   /** Completes a Brain-toggle request that first had to download the model. */
   onModelReady?: () => void;
+  semanticStatus?: SemanticSearchStatus;
+  semanticProgress?: { done: number; total: number } | null;
+  semanticQueryProgress?: SemanticQueryProgress | null;
 }
 
 type Phase =
@@ -66,15 +76,57 @@ function failureHost(url: string): string {
   }
 }
 
+interface ProgressBarProps {
+  label: string;
+  detail: string;
+  percent: number;
+  ariaLabel: string;
+}
+
+function ModelProgressBar({ label, detail, percent, ariaLabel }: ProgressBarProps) {
+  const value = Math.max(0, Math.min(100, Math.round(percent)));
+  return (
+    <div className="model-progress-wrap">
+      <div className="model-progress-meta">
+        <span>{label}</span>
+        <span>{detail}</span>
+      </div>
+      <div
+        className="model-progress"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={value}
+        aria-valuetext={detail}
+        aria-label={ariaLabel}
+      >
+        <span className="model-progress-fill" style={{ width: `${value}%` }} />
+      </div>
+    </div>
+  );
+}
+
 /**
  * Download, verify, activate, import, and export the on-device embedding
  * model. "Ready" is only shown after a real self-test inference on this
  * device; everything else surfaces as an explicit state with a next step.
  * The modal follows the review-settings dialog's shell and motion language.
  */
-export function ModelSettingsModal({ onClose, onModelCleared, onModelReady }: ModelSettingsModalProps) {
+export function ModelSettingsModal({
+  onClose,
+  onModelCleared,
+  onModelReady,
+  semanticStatus = "off",
+  semanticProgress = null,
+  semanticQueryProgress = null
+}: ModelSettingsModalProps) {
   const { tr } = useI18n();
   const reducedMotion = useReducedMotion();
+  const runtimeProgress = useSyncExternalStore(
+    subscribeModelRuntimeProgress,
+    getModelRuntimeProgress,
+    getModelRuntimeProgress
+  );
 
   const [phase, setPhase] = useState<Phase>({ kind: "checking" });
   const [present, setPresent] = useState<ReadonlySet<string>>(() => new Set());
@@ -244,6 +296,52 @@ export function ModelSettingsModal({ onClose, onModelCleared, onModelReady }: Mo
   const percent = phase.kind === "downloading" ? Math.min(100, Math.floor((phase.loadedBytes / TOTAL_BYTES) * 100)) : 0;
   const storedBytes = MODEL_MANIFEST.files.reduce((sum, file) => sum + (present.has(file.requestPath) ? file.bytes : 0), 0);
   const hasStoredFiles = present.size > 0;
+  const showRuntimeProgress = phase.kind === "activating" || semanticStatus === "preparing";
+  const runtimeStageText = (() => {
+    switch (runtimeProgress.stage) {
+      case "loading-code":
+        return tr("Loading the private search engine.", "正在加载本地搜索引擎。");
+      case "loading-files":
+        return tr("Reading verified model files from device storage.", "正在从设备存储读取已验证的模型文件。");
+      case "starting-runtime":
+      case "runtime-ready":
+        return tr("Starting the single-thread background inference worker.", "正在启动单线程后台推理 Worker。");
+      case "self-testing":
+        return tr("Checking multilingual results with a real inference.", "正在通过真实推理检查多语言结果。");
+      case "ready":
+        return tr("The on-device model is ready.", "本机模型已就绪。");
+      case "error":
+        return tr("The model runtime needs attention.", "模型运行时需要处理。");
+      case "idle":
+        return tr("Preparing the on-device model.", "正在准备本机模型。");
+    }
+  })();
+  const indexPercent =
+    semanticProgress && semanticProgress.total > 0 ? (semanticProgress.done / semanticProgress.total) * 100 : 0;
+  const queryPercent = semanticQueryProgress
+    ? semanticQueryProgress.stage === "waiting"
+      ? 4
+      : semanticQueryProgress.stage === "embedding"
+        ? 35
+        : semanticQueryProgress.total > 0
+          ? 50 + (semanticQueryProgress.done / semanticQueryProgress.total) * 50
+          : 100
+    : 0;
+  const queryLabel =
+    semanticQueryProgress?.stage === "waiting"
+      ? tr("Waiting To Search", "等待检索")
+      : semanticQueryProgress?.stage === "embedding"
+        ? tr("Understanding Query", "理解查询")
+        : tr("Ranking Current View", "排序当前范围");
+  const queryDetail =
+    semanticQueryProgress?.stage === "waiting"
+      ? tr("Queued", "已排队")
+      : semanticQueryProgress?.stage === "embedding"
+        ? tr("Step 1 Of 2", "第 1 / 2 步")
+        : `${semanticQueryProgress?.done ?? 0} / ${semanticQueryProgress?.total ?? 0} ${tr("Rows", "行")}`;
+  const semanticActivityActive =
+    phase.kind === "ready" &&
+    (semanticStatus === "preparing" || semanticStatus === "indexing" || semanticQueryProgress !== null);
 
   const statusTitle =
     phase.kind === "checking"
@@ -255,11 +353,19 @@ export function ModelSettingsModal({ onClose, onModelCleared, onModelReady }: Mo
         : phase.kind === "downloading"
           ? tr("Downloading Model", "正在下载模型")
           : phase.kind === "activating"
-            ? tr("Verifying Model", "正在验证模型")
+            ? runtimeProgress.stage === "self-testing"
+              ? tr("Verifying Model", "正在验证模型")
+              : tr("Loading Model", "正在加载模型")
             : phase.kind === "clearing"
               ? tr("Clearing Model", "正在清除模型")
               : phase.kind === "ready"
-                ? tr("Ready", "已就绪")
+                ? semanticStatus === "preparing"
+                  ? tr("Preparing Semantic Search", "正在准备语义搜索")
+                  : semanticStatus === "indexing"
+                    ? tr("Building Search Index", "正在构建搜索索引")
+                    : semanticQueryProgress
+                      ? tr("Searching Current View", "正在搜索当前范围")
+                      : tr("Ready", "已就绪")
                 : tr("Action Needed", "需要处理");
 
   const statusText =
@@ -272,15 +378,28 @@ export function ModelSettingsModal({ onClose, onModelCleared, onModelReady }: Mo
         : phase.kind === "downloading"
           ? tr(`${megabytes(phase.loadedBytes)} of ${megabytes(TOTAL_BYTES)}`, `${megabytes(phase.loadedBytes)} / ${megabytes(TOTAL_BYTES)}`)
           : phase.kind === "activating"
-            ? tr("Running a real multilingual inference check on this device.", "正在此设备上运行真实的多语言推理检查。")
+            ? runtimeStageText
             : phase.kind === "clearing"
               ? tr("Removing model files and the encrypted semantic index.", "正在删除模型文件和加密语义索引。")
               : phase.kind === "ready"
-                ? tr("Verified on this device and available offline.", "已在此设备上验证，可离线使用。")
+                ? semanticStatus === "preparing"
+                  ? runtimeStageText
+                  : semanticStatus === "indexing"
+                    ? tr(
+                        "Embedding memos in the background. Keyword search and the rest of the app remain available.",
+                        "正在后台为笔记生成向量；关键词搜索和应用其他功能仍可使用。"
+                      )
+                    : semanticQueryProgress?.stage === "ranking"
+                      ? tr("Ranking only memos inside the current view.", "仅对当前范围内的笔记进行排序。")
+                      : semanticQueryProgress
+                        ? tr("Understanding your query on this device.", "正在此设备上理解你的查询。")
+                        : tr("Verified on this device and available offline.", "已在此设备上验证，可离线使用。")
                 : phase.message;
 
   const statusIcon =
-    phase.kind === "ready" ? (
+    semanticActivityActive ? (
+      <Loader2 size={17} className="spin" aria-hidden="true" />
+    ) : phase.kind === "ready" ? (
       <Check size={17} aria-hidden="true" />
     ) : phase.kind === "error" ? (
       <CircleAlert size={17} aria-hidden="true" />
@@ -316,7 +435,7 @@ export function ModelSettingsModal({ onClose, onModelCleared, onModelReady }: Mo
 
         <div className="review-body model-body">
           <section className="review-section model-overview">
-            <div className={`model-status-card is-${phase.kind}`} role="status" aria-live="polite">
+            <div className={`model-status-card is-${semanticActivityActive ? "working" : phase.kind}`} role="status" aria-live="polite">
               <span className="model-status-icon" aria-hidden="true">
                 {statusIcon}
               </span>
@@ -325,22 +444,44 @@ export function ModelSettingsModal({ onClose, onModelCleared, onModelReady }: Mo
                 <span>{statusText}</span>
               </span>
             </div>
-            {phase.kind === "downloading" ? (
-              <div className="model-progress-wrap">
-                <div className="model-progress-meta">
-                  <span>{tr("Download Progress", "下载进度")}</span>
-                  <span>{percent}%</span>
-                </div>
-                <div
-                  className="model-progress"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={percent}
-                  aria-label={tr("Download Progress", "下载进度")}
-                >
-                  <span className="model-progress-fill" style={{ width: `${percent}%` }} />
-                </div>
+            {phase.kind === "downloading" || showRuntimeProgress || semanticStatus === "indexing" || semanticQueryProgress ? (
+              <div className="model-activity-stack" aria-live="polite">
+                {phase.kind === "downloading" ? (
+                  <ModelProgressBar
+                    label={tr("Download Progress", "下载进度")}
+                    detail={`${percent}%`}
+                    percent={percent}
+                    ariaLabel={tr("Download Progress", "下载进度")}
+                  />
+                ) : null}
+                {showRuntimeProgress && phase.kind !== "downloading" ? (
+                  <ModelProgressBar
+                    label={tr("Model Loading Progress", "模型加载进度")}
+                    detail={`${runtimeProgress.percent}%`}
+                    percent={runtimeProgress.percent}
+                    ariaLabel={tr("Model Loading Progress", "模型加载进度")}
+                  />
+                ) : null}
+                {semanticStatus === "indexing" ? (
+                  <ModelProgressBar
+                    label={tr("Semantic Index Progress", "语义索引进度")}
+                    detail={
+                      semanticProgress
+                        ? `${semanticProgress.done} / ${semanticProgress.total} ${tr("Memos", "条笔记")}`
+                        : tr("Preparing", "准备中")
+                    }
+                    percent={indexPercent}
+                    ariaLabel={tr("Semantic Index Progress", "语义索引进度")}
+                  />
+                ) : null}
+                {semanticQueryProgress ? (
+                  <ModelProgressBar
+                    label={queryLabel}
+                    detail={queryDetail}
+                    percent={queryPercent}
+                    ariaLabel={tr("Semantic Search Progress", "语义搜索进度")}
+                  />
+                ) : null}
               </div>
             ) : null}
             {phase.kind === "error" && phase.failures.length > 0 ? (

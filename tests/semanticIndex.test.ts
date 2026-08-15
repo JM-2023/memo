@@ -16,6 +16,7 @@ import {
   reconcileSemanticIndex,
   saveSemanticIndex,
   searchSemanticIndex,
+  searchSemanticIndexAsync,
   type SemanticIndex
 } from "../src/lib/semanticIndex";
 import type { Memo } from "../src/lib/types";
@@ -136,7 +137,11 @@ describe("plan and reconcile", () => {
     expect(executionLengths).toEqual([...executionLengths].sort((a, b) => a - b));
     const paddedWork = (groups: readonly (readonly string[])[]) =>
       groups.reduce((sum, group) => sum + Math.max(...group.map((text) => text.length)) * group.length, 0);
-    const originalOrderBatches = [memos.slice(0, 16).map((memo) => memo.content), memos.slice(16).map((memo) => memo.content)];
+    const originalOrderBatches = [
+      memos.slice(0, 8).map((memo) => memo.content),
+      memos.slice(8, 16).map((memo) => memo.content),
+      memos.slice(16).map((memo) => memo.content)
+    ];
     expect(paddedWork(batches)).toBeLessThan(paddedWork(originalOrderBatches));
     expect(partialSizes.length).toBeGreaterThan(1);
     expect(partialSizes[0]).toBeGreaterThan(0);
@@ -160,6 +165,35 @@ describe("search", () => {
     expect([...results.keys()]).toEqual(["a", "b"]);
     expect(results.get("a")).toBeCloseTo(0.9, 5);
     expect(results.get("b")).toBeCloseTo(0.8, 5);
+  });
+
+  it("scores only memo ids in the intersected feed scope", () => {
+    const index = indexWith([
+      { id: "outside-high", vector: axis(0, 0.99) },
+      { id: "inside", vector: axis(0, 0.82) },
+      { id: "outside-low", vector: axis(0, 0.8) }
+    ]);
+
+    const results = searchSemanticIndex(index, axis(0), new Set(["inside"]));
+
+    expect([...results.keys()]).toEqual(["inside"]);
+    expect(results.get("inside")).toBeCloseTo(0.82, 5);
+  });
+
+  it("reports actual row progress while yielding through scoped ranking", async () => {
+    const index = indexWith(
+      Array.from({ length: 600 }, (_, row) => ({ id: `memo-${row}`, vector: axis(0, row === 511 ? 0.9 : 0.2) }))
+    );
+    const progress: [number, number][] = [];
+
+    const results = await searchSemanticIndexAsync(index, axis(0), new Set(["memo-511"]), {
+      onProgress: (done, total) => progress.push([done, total])
+    });
+
+    expect([...results.keys()]).toEqual(["memo-511"]);
+    expect(progress[0]).toEqual([0, 600]);
+    expect(progress.at(-1)).toEqual([600, 600]);
+    expect(progress.length).toBeGreaterThan(2);
   });
 });
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LanguageProvider } from "../src/lib/i18n";
@@ -12,7 +12,11 @@ const mocks = vi.hoisted(() => ({
   deleteSemanticIndexDb: vi.fn(async () => {}),
   resetModelRuntime: vi.fn(async () => {}),
   getEmbedder: vi.fn(async () => async () => []),
-  runModelSelfTest: vi.fn(async () => {})
+  runModelSelfTest: vi.fn(async () => {}),
+  runtime: {
+    current: { stage: "idle", percent: 0 },
+    listeners: new Set<() => void>()
+  }
 }));
 
 vi.mock("../src/lib/modelLoader", async (importOriginal) => {
@@ -27,8 +31,13 @@ vi.mock("../src/lib/modelLoader", async (importOriginal) => {
 
 vi.mock("../src/lib/modelRuntime", () => ({
   getEmbedder: mocks.getEmbedder,
+  getModelRuntimeProgress: () => mocks.runtime.current,
   resetModelRuntime: mocks.resetModelRuntime,
-  runModelSelfTest: mocks.runModelSelfTest
+  runModelSelfTest: mocks.runModelSelfTest,
+  subscribeModelRuntimeProgress: (listener: () => void) => {
+    mocks.runtime.listeners.add(listener);
+    return () => mocks.runtime.listeners.delete(listener);
+  }
 }));
 
 vi.mock("../src/lib/semanticIndex", () => ({
@@ -38,6 +47,11 @@ vi.mock("../src/lib/semanticIndex", () => ({
 import { ModelSettingsModal } from "../src/components/ModelSettingsModal";
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.getEmbedder.mockResolvedValue(async () => []);
+  mocks.runModelSelfTest.mockResolvedValue(undefined);
+  mocks.runtime.current = { stage: "idle", percent: 0 };
+  mocks.runtime.listeners.clear();
   mocks.present = new Set(MODEL_MANIFEST.files.map((file) => file.requestPath));
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
@@ -87,6 +101,45 @@ describe("semantic search settings", () => {
 
     expect(await screen.findByText("Ready")).toBeTruthy();
     await waitFor(() => expect(onModelReady).toHaveBeenCalledOnce());
+  });
+
+  it("shows real model-loading progress while the runtime starts", async () => {
+    mocks.getEmbedder.mockImplementationOnce(() => new Promise(() => {}));
+    render(
+      <LanguageProvider>
+        <ModelSettingsModal onClose={vi.fn()} onModelCleared={vi.fn()} />
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("Loading Model")).toBeTruthy();
+    act(() => {
+      mocks.runtime.current = { stage: "loading-files", percent: 45 };
+      for (const listener of mocks.runtime.listeners) listener();
+    });
+
+    const progress = screen.getByRole("progressbar", { name: "Model Loading Progress" });
+    expect(progress.getAttribute("aria-valuenow")).toBe("45");
+    expect(screen.getByText("Reading verified model files from device storage.")).toBeTruthy();
+  });
+
+  it("shows indexing and live query-ranking progress in the same panel", async () => {
+    render(
+      <LanguageProvider>
+        <ModelSettingsModal
+          onClose={vi.fn()}
+          onModelCleared={vi.fn()}
+          semanticStatus="indexing"
+          semanticProgress={{ done: 3, total: 10 }}
+          semanticQueryProgress={{ stage: "ranking", done: 25, total: 100 }}
+        />
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("Building Search Index")).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "Semantic Index Progress" }).getAttribute("aria-valuenow")).toBe("30");
+    expect(screen.getByRole("progressbar", { name: "Semantic Search Progress" }).getAttribute("aria-valuenow")).toBe("63");
+    expect(screen.getByText("3 / 10 Memos")).toBeTruthy();
+    expect(screen.getByText("25 / 100 Rows")).toBeTruthy();
   });
 
   it("confirms a standalone clear, disables semantic search, and clears both stores and runtime", async () => {

@@ -99,6 +99,7 @@ import {
   hybridSearchScore,
   memoMatchesFilters,
   memoMatchesQuery,
+  memoMatchesSearchScope,
   parseSearchQuery,
   queryIsEmpty,
   type FacetKey,
@@ -868,11 +869,28 @@ export default function App() {
   const structuredFiltersOn = hasActiveFilters(filters);
   const filtersActive = activeTag !== null || activeDay !== null || statsDrilldown !== null || trimmedQuery.length > 0 || structuredFiltersOn;
 
+  // Tag, day, stats, and structured filters are one intersection shared by
+  // both retrieval paths. Keeping this corpus explicit prevents semantic
+  // scoring from doing work outside the current view (and makes Tag + Filter
+  // combinations behave exactly like ordinary keyword search).
+  const semanticScopeActive = activeTag !== null || activeDay !== null || statsDrilldown !== null || structuredFiltersOn;
+  const searchScopeMemos = useMemo(() => {
+    if (!semanticScopeActive) return activeMemos;
+    return filterPreservingId(activeMemos, editingId, (memo) =>
+      memoMatchesSearchScope(memo, { activeTag, activeDay, statsDrilldown, filters })
+    );
+  }, [activeMemos, activeTag, activeDay, statsDrilldown, filters, editingId, semanticScopeActive]);
+  const semanticScopeIds = useMemo(
+    () => (semanticScopeActive ? new Set(searchScopeMemos.map((memo) => memo.id)) : null),
+    [searchScopeMemos, semanticScopeActive]
+  );
+
   // Semantic ranking rides the same search box. Keyword/phrase matching stays
   // active as the high-confidence tier; semantic results add related memos.
   // Trash and review keep plain search, so the hook sees their query as empty.
-  const semantic = useSemanticSearch(semanticOn, activeMemos, view === "memos" ? feedQuery : "");
+  const semantic = useSemanticSearch(semanticOn, activeMemos, view === "memos" ? feedQuery : "", semanticScopeIds);
   const semanticResults = view === "memos" ? semantic.results : null;
+  const semanticBusy = semantic.status === "preparing" || semantic.status === "indexing" || semantic.queryProgress !== null;
   useEffect(() => {
     try {
       if (semanticOn) localStorage.setItem("memo:semantic-search", "1");
@@ -896,19 +914,7 @@ export default function App() {
   feedContextRef.current = { view, filters, statsDrilldown, sortKey, parsedQuery };
 
   const visibleMemos = useMemo(() => {
-    let list = activeMemos;
-    if (activeTag) {
-      list = filterPreservingId(list, editingId, (memo) => tagsOf(memo).some((tag) => tagMatches(tag, activeTag)));
-    }
-    if (activeDay) {
-      list = filterPreservingId(list, editingId, (memo) => dayKeyOf(memo) === activeDay);
-    }
-    if (statsDrilldown) {
-      list = filterPreservingId(list, editingId, (memo) => memoMatchesStatsDrilldown(memo, statsDrilldown));
-    }
-    if (hasActiveFilters(filters)) {
-      list = filterPreservingId(list, editingId, (memo) => memoMatchesFilters(memo, filters));
-    }
+    let list = searchScopeMemos;
     if (semanticResults) {
       // Hybrid retrieval is a union: an exact keyword/phrase match can never
       // disappear behind the semantic threshold, and meaning adds results
@@ -937,7 +943,7 @@ export default function App() {
       if (Boolean(a.pinnedAt) !== Boolean(b.pinnedAt)) return a.pinnedAt ? -1 : 1;
       return compare(a, b);
     });
-  }, [activeMemos, activeTag, activeDay, statsDrilldown, filters, parsedQuery, semanticResults, editingId, sortKey]);
+  }, [searchScopeMemos, parsedQuery, semanticResults, editingId, sortKey]);
 
   // The day's frozen batch, resolved against live truth: edits show through
   // (ids point at whatever the memo says now), deletions drop out, and the
@@ -2718,6 +2724,10 @@ export default function App() {
                         `Semantic search — indexing${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}; keyword search remains available`,
                         `语义搜索——索引中${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}；关键词搜索仍可用`
                       )
+                    : semantic.queryProgress
+                      ? tr("Semantic Search Is Working — Open Progress", "语义搜索正在工作——打开进度")
+                      : semantic.status === "preparing"
+                        ? tr("Semantic Model Is Loading — Open Progress", "语义模型正在加载——打开进度")
                     : semanticOn
                       ? tr(
                           "Semantic search is on — keyword matches stay first and related memos are added",
@@ -2725,7 +2735,13 @@ export default function App() {
                         )
                       : tr("Semantic search — find memos by meaning", "语义搜索——按意思找笔记")
                 }
-                onClick={() => setSemanticOn((on) => !on)}
+                onClick={() => {
+                  if (semanticBusy) {
+                    setModelSettingsOpen(true);
+                    return;
+                  }
+                  setSemanticOn((on) => !on);
+                }}
               >
                 <Brain size={17} aria-hidden="true" />
                 {semantic.status === "preparing" || semantic.status === "indexing" ? (
@@ -2878,6 +2894,9 @@ export default function App() {
             setEnableSemanticWhenReady(false);
             setSemanticOn(false);
           }}
+          semanticStatus={semantic.status}
+          semanticProgress={semantic.progress}
+          semanticQueryProgress={semantic.queryProgress}
         />
       ) : null}
       <input

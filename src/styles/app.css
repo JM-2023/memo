@@ -4142,6 +4142,10 @@ button.stats-tag-row:active { scale: 0.992; }
   background: color-mix(in srgb, var(--primary-tint) 76%, var(--field-bg));
   border-color: color-mix(in srgb, var(--primary) 28%, var(--line));
 }
+.model-status-card.is-working {
+  background: color-mix(in srgb, var(--primary-tint) 48%, var(--field-bg));
+  border-color: color-mix(in srgb, var(--primary) 22%, var(--line));
+}
 .model-status-card.is-error {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger-tint) 72%, var(--field-bg));
@@ -4163,6 +4167,15 @@ button.stats-tag-row:active { scale: 0.992; }
 .model-status-copy strong { color: var(--ink); font-size: var(--fs-md); font-weight: 700; }
 .model-status-card.is-error .model-status-copy strong { color: var(--danger); }
 .model-status-copy > span { font-size: var(--fs-xs); line-height: 1.45; overflow-wrap: anywhere; }
+.model-activity-stack {
+  display: grid;
+  gap: 10px;
+  padding: 10px 11px;
+  background: color-mix(in srgb, var(--primary-tint) 36%, var(--field-bg));
+  border: 1px solid color-mix(in srgb, var(--primary) 16%, var(--line));
+  border-radius: var(--r-md);
+  animation: fade-up 0.18s var(--ease-out) both;
+}
 .model-progress-wrap { display: grid; gap: 6px; animation: fade-up 0.18s var(--ease-out) both; }
 .model-progress-meta {
   display: flex;
@@ -4180,11 +4193,24 @@ button.stats-tag-row:active { scale: 0.992; }
   border-radius: 999px;
 }
 .model-progress-fill {
+  position: relative;
   display: block;
   height: 100%;
+  overflow: hidden;
   background: linear-gradient(145deg, var(--primary), var(--primary-dark));
   border-radius: inherit;
   transition: width 0.2s var(--ease-out);
+}
+.model-progress-fill::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(105deg, transparent 20%, color-mix(in srgb, white 34%, transparent) 50%, transparent 80%);
+  transform: translateX(-115%);
+  animation: model-progress-sheen 1.6s var(--ease-in-out) infinite;
+}
+@keyframes model-progress-sheen {
+  to { transform: translateX(115%); }
 }
 .model-failures {
   display: grid;

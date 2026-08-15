@@ -324,10 +324,14 @@ matters, so on a frozen device none of these paths is ever taken.
 This app is startup-latency-obsessed; keep it that way. The model downloads
 only when the user explicitly enables semantic features in Settings (button
 and adjacent metadata show "Download Model" and "About 123 MB"), or taps
-Retry Download later. Progress stays in the settings panel; the feed never
-blocks on any of this. When a Brain-toggle request discovers a missing model,
-that intent is remembered: successful download and self-test begin indexing
-without requiring a second toggle click.
+Retry Download later. The panel reports downloaded bytes, Transformers.js
+aggregate model-loading bytes, real runtime/self-test stages, completed index
+memos, and scanned query rows. None of these values is advanced by a timer.
+Clicking the Brain while any semantic work remains opens this progress monitor
+instead of disabling the feature; the feed remains usable throughout. When a
+Brain-toggle request discovers a missing model, that intent is remembered:
+successful download and self-test begin indexing without requiring a second
+toggle click.
 
 ### 6.2 The escape hatch: manual import/export
 
@@ -371,8 +375,9 @@ can rot. As implemented (onnxruntime-web 1.26):
   import same-origin, so CSP only needs `'wasm-unsafe-eval'`.
 - `numThreads = 1` — multithreading needs cross-origin isolation
   (COOP/COEP), and a site-wide COEP header would break the
-  external-image-link feature. Single-threaded q8 inference measured fine
-  for incremental embedding of short memos.
+  external-image-link feature. `wasm.proxy = true` moves that one inference
+  thread into onnxruntime-web's proxy Worker, keeping React and the settings
+  panel on the main thread while still capping inference at one CPU thread.
 - onnxruntime-web's ESM also references its sibling builds through
   `new URL(…, import.meta.url)`, which made Rollup emit a stray hashed
   23 MB asyncify copy into `dist/assets/`. The copy plugin deletes every
@@ -390,11 +395,12 @@ until the rebuild completes. Publishing a new model release without bumping
 ### 6.5 First-build latency and hybrid retrieval
 
 Transformers.js pads every feature-extraction batch to its longest input. The
-indexer therefore groups the exact same memo chunks by approximate length
-before inference, then restores deterministic memo/chunk order in the stored
-index. This removes padding-only attention work without changing text windows,
-weights, pooling, normalization, or the similarity threshold. Model startup
-and sealed-index loading also run in parallel.
+indexer therefore groups the exact same memo chunks by approximate length into
+eight-input batches before inference, then restores deterministic memo/chunk
+order in the stored index. This removes padding-only attention work and keeps
+batch latency and memory peaks bounded without changing text windows, weights,
+pooling, normalization, or the similarity threshold. Model startup and
+sealed-index loading also run in parallel.
 
 Each completed batch publishes a consistent partial index. Query inference is
 serialized through the same ONNX session and its vector is reused as later
@@ -402,6 +408,13 @@ batches arrive, so semantic matches can appear before the full first build is
 finished. Literal keyword/phrase matching remains active throughout and after
 the build: final results are the union of both paths, with keyword hits in the
 high-confidence tier and semantic-only hits ranked beneath them.
+
+Tag, calendar day, statistics drilldown, and structured Filters form one
+intersection before retrieval. The same scoped memo IDs gate semantic dot
+products, so a Tag + Filter search cannot surface or spend scoring work on an
+out-of-view memo. Query ranking itself runs in 256-row slices with a browser
+scheduler yield between slices. Its progress is observable in the panel, and
+large indexes cannot monopolize the main thread.
 
 ## 7. Verification checklist (before shipping)
 
