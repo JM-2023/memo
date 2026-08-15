@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LanguageProvider } from "../src/lib/i18n";
 import { MODEL_MANIFEST } from "../src/lib/modelManifest";
+import type { SemanticIndexProgress } from "../src/lib/semanticIndex";
 
 const mocks = vi.hoisted(() => ({
   present: new Set<string>(),
@@ -273,6 +274,72 @@ describe("semantic search settings", () => {
     expect(screen.getByText("Semantic search hit an error. Index storage failed")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Retry semantic search" }));
     expect(onSemanticRetry).toHaveBeenCalledOnce();
+  });
+
+  it("offers the rebuild in Ready, states the index size, and asks before spending the CPU", async () => {
+    const user = userEvent.setup();
+    const onSemanticReindex = vi.fn();
+    render(
+      <LanguageProvider>
+        <ModelSettingsModal
+          onClose={vi.fn()}
+          onModelCleared={vi.fn()}
+          onSemanticReindex={onSemanticReindex}
+          semanticStatus="ready"
+          semanticIndexedMemos={1204}
+        />
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("Ready")).toBeTruthy();
+    // The device column names the thing the action acts on.
+    expect(screen.getByText("1,204 memos")).toBeTruthy();
+    expect(screen.getByText("1,204 memos indexed")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Rebuild index" }));
+    expect(onSemanticReindex).not.toHaveBeenCalled();
+    const confirmation = screen.getByRole("group", { name: "Confirm rebuilding the index" });
+    expect(within(confirmation).getByText("Re-embed 1,204 memos?")).toBeTruthy();
+    // Focus lands on Cancel: the affirmative costs minutes of this device's CPU.
+    expect(document.activeElement).toBe(within(confirmation).getByRole("button", { name: "Cancel" }));
+
+    await user.click(within(confirmation).getByRole("button", { name: "Rebuild" }));
+    expect(onSemanticReindex).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("group", { name: "Confirm rebuilding the index" })).toBeNull();
+  });
+
+  it("names a rebuild apart from a first build, from the moment the store is cleared", async () => {
+    const user = userEvent.setup();
+    const panel = (status: "preparing" | "indexing", progress?: SemanticIndexProgress) => (
+      <LanguageProvider>
+        <ModelSettingsModal
+          onClose={vi.fn()}
+          onModelCleared={vi.fn()}
+          onSemanticReindex={vi.fn()}
+          semanticStatus={status}
+          semanticRebuilding
+          semanticProgress={progress ?? null}
+        />
+      </LanguageProvider>
+    );
+    const { rerender } = render(panel("preparing"));
+
+    // Clearing the store is part of the rebuild, not the model loading again.
+    // (The live headline is the one that counts — the outgoing layer of the
+    // swap still carries the state this panel passed through on mount.)
+    expect(await screen.findByText("Rebuilding index")).toBeTruthy();
+    expect(document.querySelector(".model-headline")?.textContent).toBe("Rebuilding index");
+    expect(screen.getByText("Preparing")).toBeTruthy();
+    expect(screen.getByText("The old index is gone; every memo is queued for embedding.")).toBeTruthy();
+
+    rerender(panel("indexing", { done: 12, total: 40, doneChunks: 30, totalChunks: 96 }));
+    const bar = screen.getByRole("progressbar", { name: "Index rebuild" });
+    expect(bar.getAttribute("aria-valuenow")).toBe("30");
+    expect(bar.getAttribute("aria-valuetext")).toBe("12 / 40");
+    await user.click(screen.getByRole("button", { name: "Stages" }));
+    expect(screen.getByText("Previous index discarded")).toBeTruthy();
+    // The offer folds away while its own work runs.
+    expect(screen.getByRole("button", { name: "Rebuild index" }).closest(".model-collapse")?.className).not.toContain("is-open");
   });
 
   it("confirms a clear from Advanced, disables semantic search, and clears stores and runtime", async () => {

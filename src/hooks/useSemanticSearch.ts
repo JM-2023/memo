@@ -7,13 +7,14 @@
 // Everything heavy — model activation, embedding, ranking — happens off the
 // render path; the hook only ever publishes small state transitions.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { storedModelState } from "../lib/modelLoader";
 import { MODEL_MANIFEST } from "../lib/modelManifest";
 import { getEmbedder, RETRIEVAL_QUERY_PREFIX, runModelSelfTest, type EmbedFn } from "../lib/modelRuntime";
 import {
   emptySemanticIndex,
   captureSemanticIndexWriteToken,
+  deleteSemanticIndexDb,
   loadSemanticIndex,
   planSemanticIndex,
   reconcileSemanticIndex,
@@ -47,8 +48,15 @@ export interface SemanticSearchState {
   results: ReadonlyMap<string, number> | null;
   /** Actionable detail for activation, indexing, or query failures. */
   error: string | null;
+  /** Memos with at least one vector row in the live index. */
+  indexedMemos: number;
+  /** True from a rebuild request until that pass settles, so the panel can
+      name the work honestly instead of calling it an ordinary first build. */
+  rebuilding: boolean;
   /** Retry activation without requiring an off/on toggle. */
   retry: () => void;
+  /** Discard the sealed index and embed every memo again from scratch. */
+  rebuild: () => void;
 }
 
 export interface SemanticQueryProgress {
@@ -76,6 +84,7 @@ export function useSemanticSearch(
   const [results, setResults] = useState<ReadonlyMap<string, number> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retryEpoch, setRetryEpoch] = useState(0);
+  const [rebuilding, setRebuilding] = useState(false);
   /** Bumped whenever index content changes, so the search effect re-ranks. */
   const [indexEpoch, setIndexEpoch] = useState(0);
 
@@ -89,7 +98,20 @@ export function useSemanticSearch(
   const searchGenerationRef = useRef(0);
   const memosRef = useRef(memos);
   memosRef.current = memos;
+  /** Consumed by the activation pass below: wipe the store before rebuilding. */
+  const purgeRef = useRef(false);
   const retry = useCallback(() => setRetryEpoch((epoch) => epoch + 1), []);
+  // A rebuild is activation with the stored vectors thrown away first: drop
+  // the in-memory index here so the pass reloads (nothing) from the emptied
+  // store, and route it through the same epoch the retry uses.
+  const rebuild = useCallback(() => {
+    purgeRef.current = true;
+    indexRef.current = null;
+    queryVectorRef.current = null;
+    queryTaskRef.current = null;
+    setRebuilding(true);
+    setRetryEpoch((epoch) => epoch + 1);
+  }, []);
 
   // Activation: model → persisted index → first reconcile. Disabling (or a
   // re-enable) bumps the generation, which parks any in-flight loop.
@@ -100,21 +122,39 @@ export function useSemanticSearch(
       indexRef.current = null;
       queryVectorRef.current = null;
       queryTaskRef.current = null;
+      purgeRef.current = false;
       setStatus("off");
       setProgress(null);
       setQueryProgress(null);
       setResults(null);
       setError(null);
+      setRebuilding(false);
       return;
     }
     const generation = (generationRef.current += 1);
     const alive = () => generationRef.current === generation;
-    const writeToken = captureSemanticIndexWriteToken();
+    const purge = purgeRef.current;
+    purgeRef.current = false;
     void (async () => {
       setError(null);
       setStatus("preparing");
+      if (purge) {
+        // Deleting the store also invalidates every write token handed out
+        // before it, so an older pass still unwinding cannot write the
+        // vectors we are discarding back into IndexedDB.
+        setResults(null);
+        setProgress(null);
+        indexRef.current = null;
+        await deleteSemanticIndexDb();
+        if (!alive()) return;
+      }
+      // Captured after the purge, for the generation that survives it.
+      const writeToken = captureSemanticIndexWriteToken();
       if ((await storedModelState()) !== "complete") {
-        if (alive()) setStatus("model-missing");
+        if (alive()) {
+          setStatus("model-missing");
+          setRebuilding(false);
+        }
         return;
       }
       const persistedIndex =
@@ -158,11 +198,13 @@ export function useSemanticSearch(
         setIndexEpoch((epoch) => epoch + 1);
         setError(null);
         setStatus("ready");
+        setRebuilding(false);
       } catch (cause) {
         if (alive()) {
           setProgress(null);
           setError(semanticErrorMessage(cause));
           setStatus("error");
+          setRebuilding(false);
         }
       }
     })();
@@ -309,5 +351,16 @@ export function useSemanticSearch(
     };
   }, [enabled, status, query, indexEpoch, allowedMemoIds]);
 
-  return { status, progress, queryProgress, results, error, retry };
+  // The index lives in a ref because it changes far more often than it is
+  // rendered; indexEpoch is its render signal, so the headline figure the
+  // settings panel shows follows exactly the same beat as the search results.
+  const indexedMemos = useMemo(() => {
+    const index = status === "off" ? null : indexRef.current;
+    if (!index) return 0;
+    const memoIds = new Set<string>();
+    for (const row of index.rows) memoIds.add(row.id);
+    return memoIds.size;
+  }, [indexEpoch, status]);
+
+  return { status, progress, queryProgress, results, error, indexedMemos, rebuilding, retry, rebuild };
 }

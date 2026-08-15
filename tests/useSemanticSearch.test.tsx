@@ -8,6 +8,7 @@ import type { SemanticIndex } from "../src/lib/semanticIndex";
 const mocks = vi.hoisted(() => ({
   load: vi.fn(),
   save: vi.fn(async () => {}),
+  deleteDb: vi.fn(async () => {}),
   reconcile: vi.fn(),
   storedModelState: vi.fn(async () => "complete" as const),
   getEmbedder: vi.fn(async () => async (texts: readonly string[]) => texts.map(() => new Float32Array(384))),
@@ -29,6 +30,7 @@ vi.mock("../src/lib/semanticIndex", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/semanticIndex")>();
   return {
     ...original,
+    deleteSemanticIndexDb: mocks.deleteDb,
     loadSemanticIndex: mocks.load,
     reconcileSemanticIndex: mocks.reconcile,
     saveSemanticIndex: mocks.save
@@ -41,8 +43,17 @@ function emptyIndex(): SemanticIndex {
   return { modelVersion: MODEL_MANIFEST.version, rows: [], vectors: new Float32Array(0) };
 }
 
+function indexOf(...memoIds: string[]): SemanticIndex {
+  return {
+    modelVersion: MODEL_MANIFEST.version,
+    rows: memoIds.map((id) => ({ id, updatedAt: "2026-08-15T00:00:00Z", contentKey: `${id}:1`, chunkIndex: 0, chunkCount: 1 })),
+    vectors: new Float32Array(memoIds.length * 384)
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.deleteDb.mockResolvedValue(undefined);
   mocks.load.mockResolvedValue(emptyIndex());
   mocks.reconcile.mockImplementation(async (index: SemanticIndex) => index);
   mocks.storedModelState.mockResolvedValue("complete");
@@ -82,5 +93,47 @@ describe("useSemanticSearch", () => {
 
     expect(result.current.error).toBeNull();
     expect(mocks.reconcile).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts the memos it has vectors for", async () => {
+    // Two rows per memo: the count is memos, not chunks.
+    mocks.load.mockResolvedValue(indexOf("a", "a", "b"));
+    const { result } = renderHook(() => useSemanticSearch(true, [], ""));
+
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.indexedMemos).toBe(2);
+  });
+
+  it("rebuilds by discarding the sealed index and embedding from empty", async () => {
+    mocks.load.mockResolvedValueOnce(indexOf("a", "b", "c"));
+    const { result } = renderHook(() => useSemanticSearch(true, [], ""));
+
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.indexedMemos).toBe(3);
+    expect(result.current.rebuilding).toBe(false);
+
+    // The purge empties the store, so the pass that follows loads nothing.
+    mocks.load.mockResolvedValue(null);
+    act(() => result.current.rebuild());
+    expect(result.current.rebuilding).toBe(true);
+
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(mocks.deleteDb).toHaveBeenCalledOnce();
+    expect(mocks.reconcile).toHaveBeenCalledTimes(2);
+    // The second pass starts from nothing rather than reconciling with itself.
+    expect((mocks.reconcile.mock.calls[1][0] as SemanticIndex).rows).toEqual([]);
+    expect(result.current.indexedMemos).toBe(0);
+    expect(result.current.rebuilding).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("rebuilds straight out of a failure and stops calling the pass a rebuild", async () => {
+    mocks.reconcile.mockRejectedValueOnce(new Error("embedder died"));
+    const { result } = renderHook(() => useSemanticSearch(true, [], ""));
+
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    act(() => result.current.rebuild());
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.rebuilding).toBe(false);
   });
 });

@@ -2910,10 +2910,13 @@ export default function App() {
             setSemanticOn(false);
           }}
           onSemanticRetry={semantic.retry}
+          onSemanticReindex={semantic.rebuild}
           semanticStatus={semantic.status}
           semanticProgress={semantic.progress}
           semanticQueryProgress={semantic.queryProgress}
           semanticError={semantic.error}
+          semanticIndexedMemos={semantic.indexedMemos}
+          semanticRebuilding={semantic.rebuilding}
           semanticQuery={view === "memos" ? feedQuery : ""}
           attend={modelSettingsAttend}
         />

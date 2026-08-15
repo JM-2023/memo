@@ -4396,6 +4396,45 @@ button.stats-tag-row:active { scale: 0.992; }
 .model-cta:active { transform: scale(0.98); }
 .model-action-note { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; }
 
+/* Rebuilding the index: the quiet standing action of the Ready state, in the
+   space the download CTA vacates. It folds away the instant the rebuild
+   starts, handing the column back to the one progress bar. Under a retry
+   (the semantic-failure state) it tightens up rather than opening a gap. */
+.model-rebuild-collapse { width: 100%; }
+.model-rebuild-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 12px;
+  padding-top: 32px;
+  animation: model-swap-in 0.26s var(--ease-out) both;
+}
+/* Tight enough that the ask, Cancel and Rebuild share the one line the
+   button left; past ~100k memos the count wins and it wraps, centred. */
+.model-rebuild-row.is-confirming { gap: 6px; }
+.model-rebuild-collapse.is-tight .model-rebuild-row { padding-top: 14px; }
+/* The mark turns once on approach — the gesture the action performs. */
+.model-rebuild-icon { transition: transform 0.5s var(--ease-out); }
+@media (hover: hover) { .model-rebuild-button:hover .model-rebuild-icon { transform: rotate(180deg); } }
+.model-rebuild-button:active .model-rebuild-icon { transform: rotate(180deg); }
+/* The ask replaces the button in place: same row, same height, no jump. */
+.model-rebuild-ask { color: var(--ink); font-size: var(--fs-sm); font-weight: 600; font-variant-numeric: tabular-nums; }
+.model-rebuild-actions { display: inline-flex; align-items: center; gap: 6px; }
+.model-rebuild-cancel { padding: 8px 10px; }
+.model-rebuild-go {
+  padding: 8px 12px;
+  color: var(--primary-ink);
+  background: var(--primary);
+  border-radius: var(--r-sm);
+  box-shadow: var(--chip-pop);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  transition: filter var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+@media (hover: hover) { .model-rebuild-go:hover { filter: brightness(1.06); } }
+.model-rebuild-go:active { transform: scale(0.96); }
+
 /* ---- right: this device's facts ---- */
 .model-device-col {
   display: grid;

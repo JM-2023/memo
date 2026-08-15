@@ -32,10 +32,17 @@ interface ModelSettingsModalProps {
   /** Completes a Brain-toggle request that first had to download the model. */
   onModelReady?: () => void;
   onSemanticRetry?: () => void;
+  /** Throws the sealed index away and embeds every memo again. Omitted when
+      there is no live index to rebuild, which also hides the control. */
+  onSemanticReindex?: () => void;
   semanticStatus?: SemanticSearchStatus;
   semanticProgress?: SemanticIndexProgress | null;
   semanticQueryProgress?: SemanticQueryProgress | null;
   semanticError?: string | null;
+  /** Memos with vectors in the live index — the figure the rebuild acts on. */
+  semanticIndexedMemos?: number;
+  /** True while the current indexing pass is a rebuild, not a first build. */
+  semanticRebuilding?: boolean;
   /** The live search text — quoted by the "Understanding query" meta line. */
   semanticQuery?: string;
   /**
@@ -55,7 +62,17 @@ type Phase =
   | { kind: "error"; origin: "download" | "activate" | "clear"; message: string; failures: readonly MirrorFailure[] };
 
 /** The redesign's lifecycle vocabulary — one look per moment of the feature. */
-type StateId = "checking" | "idle" | "downloading" | "loading" | "ready" | "indexing" | "searching" | "failed" | "clearing";
+type StateId =
+  | "checking"
+  | "idle"
+  | "downloading"
+  | "loading"
+  | "ready"
+  | "indexing"
+  | "rebuilding"
+  | "searching"
+  | "failed"
+  | "clearing";
 
 /** Which of the six thinking-orbs marks each state wears. Nothing is ever
     frozen: at rest the mark keeps moving, muted, rather than stopping. */
@@ -66,6 +83,8 @@ const ORB: Record<StateId, OrbState> = {
   loading: "working",
   ready: "connecting",
   indexing: "solving",
+  // Same work, same mark — only the words say it is starting over.
+  rebuilding: "solving",
   searching: "searching",
   failed: "breathing",
   clearing: "working"
@@ -121,10 +140,13 @@ export function ModelSettingsModal({
   onModelCleared,
   onModelReady,
   onSemanticRetry,
+  onSemanticReindex,
   semanticStatus = "off",
   semanticProgress = null,
   semanticQueryProgress = null,
   semanticError = null,
+  semanticIndexedMemos = 0,
+  semanticRebuilding = false,
   semanticQuery = "",
   attend = 0
 }: ModelSettingsModalProps) {
@@ -141,6 +163,7 @@ export function ModelSettingsModal({
   const [importNote, setImportNote] = useState<string | null>(null);
   const [clearNote, setClearNote] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [confirmingRebuild, setConfirmingRebuild] = useState(false);
   const [closing, setClosing] = useState(false);
   const [stagesOpen, setStagesOpen] = useState(false);
   const [advOpen, setAdvOpen] = useState(false);
@@ -151,6 +174,8 @@ export function ModelSettingsModal({
   const progressBlockRef = useRef<HTMLDivElement>(null);
   const stagesRegionRef = useRef<HTMLDivElement>(null);
   const actionRegionRef = useRef<HTMLDivElement>(null);
+  const rebuildRegionRef = useRef<HTMLDivElement>(null);
+  const rebuildConfirmRef = useRef<HTMLButtonElement>(null);
   const advRegionRef = useRef<HTMLDivElement>(null);
   const dismissTimer = useRef(0);
   const disposedRef = useRef(false);
@@ -328,13 +353,17 @@ export function ModelSettingsModal({
                 ? "failed"
                 : semanticStatus === "error"
                   ? "failed"
-                  : semanticStatus === "preparing"
-                    ? "loading"
-                    : semanticStatus === "indexing"
-                      ? "indexing"
-                      : semanticQueryProgress
-                        ? "searching"
-                        : "ready";
+                  : // A rebuild owns both of its phases: the moment spent
+                    // clearing the store is not the model loading again.
+                    semanticRebuilding && (semanticStatus === "preparing" || semanticStatus === "indexing")
+                    ? "rebuilding"
+                    : semanticStatus === "preparing"
+                      ? "loading"
+                      : semanticStatus === "indexing"
+                        ? "indexing"
+                        : semanticQueryProgress
+                          ? "searching"
+                          : "ready";
 
   const busy = phase.kind === "checking" || phase.kind === "downloading" || phase.kind === "activating" || phase.kind === "clearing";
   const idlePartial = phase.kind === "idle" && phase.stored === "partial";
@@ -356,17 +385,19 @@ export function ModelSettingsModal({
               ? tr("Ready", "已就绪")
               : stateId === "indexing"
                 ? tr("Building index", "正在构建索引")
-                : stateId === "searching"
-                  ? tr("Searching this view", "正在搜索当前范围")
-                  : stateId === "clearing"
-                    ? tr("Clearing model", "正在清除模型")
-                    : errorOrigin === "semantic"
-                      ? tr("Semantic search stopped", "语义搜索已停止")
-                      : errorOrigin === "activate"
-                        ? tr("Model couldn't start", "模型启动失败")
-                        : errorOrigin === "clear"
-                          ? tr("Couldn't clear the model", "无法清除模型")
-                          : tr("Download failed", "下载失败");
+                : stateId === "rebuilding"
+                  ? tr("Rebuilding index", "正在重建索引")
+                  : stateId === "searching"
+                    ? tr("Searching this view", "正在搜索当前范围")
+                    : stateId === "clearing"
+                      ? tr("Clearing model", "正在清除模型")
+                      : errorOrigin === "semantic"
+                        ? tr("Semantic search stopped", "语义搜索已停止")
+                        : errorOrigin === "activate"
+                          ? tr("Model couldn't start", "模型启动失败")
+                          : errorOrigin === "clear"
+                            ? tr("Couldn't clear the model", "无法清除模型")
+                            : tr("Download failed", "下载失败");
 
   const subline =
     stateId === "checking"
@@ -386,20 +417,25 @@ export function ModelSettingsModal({
                     "Embedding memos in the background. Keyword search stays available throughout.",
                     "正在后台为笔记生成向量；关键词搜索始终可用。"
                   )
-                : stateId === "searching"
-                  ? tr("Ranking only the memos inside the current view.", "仅对当前范围内的笔记排序。")
-                  : stateId === "clearing"
-                    ? tr("Removing model files and the encrypted semantic index.", "正在删除模型文件和加密语义索引。")
-                    : errorOrigin === "semantic"
-                      ? tr(
-                          `Semantic search hit an error. ${semanticError || "Retry to start it again."}`,
-                          `语义搜索遇到错误。${semanticError || "请重试以重新启动。"}`
-                        )
-                      : failures.length > 0
-                        ? tr("No source could deliver the model. Keyword search is unaffected.", "所有下载源均无法提供模型；关键词搜索不受影响。")
-                        : phase.kind === "error"
-                          ? phase.message
-                          : "";
+                : stateId === "rebuilding"
+                  ? tr(
+                      "Every stored vector was discarded; your memos are being embedded again from scratch.",
+                      "已丢弃全部已存向量，正在从零开始重新嵌入笔记。"
+                    )
+                  : stateId === "searching"
+                    ? tr("Ranking only the memos inside the current view.", "仅对当前范围内的笔记排序。")
+                    : stateId === "clearing"
+                      ? tr("Removing model files and the encrypted semantic index.", "正在删除模型文件和加密语义索引。")
+                      : errorOrigin === "semantic"
+                        ? tr(
+                            `Semantic search hit an error. ${semanticError || "Retry to start it again."}`,
+                            `语义搜索遇到错误。${semanticError || "请重试以重新启动。"}`
+                          )
+                        : failures.length > 0
+                          ? tr("No source could deliver the model. Keyword search is unaffected.", "所有下载源均无法提供模型；关键词搜索不受影响。")
+                          : phase.kind === "error"
+                            ? phase.message
+                            : "";
 
   /* One true progress surface per working state, every figure real. */
   const progress: ProgressView = (() => {
@@ -461,7 +497,8 @@ export function ModelSettingsModal({
       };
     }
 
-    if (stateId === "indexing") {
+    if (stateId === "indexing" || stateId === "rebuilding") {
+      const rebuilding = stateId === "rebuilding";
       const done = semanticProgress?.done ?? 0;
       const total = semanticProgress?.total ?? 0;
       const doneChunks = semanticProgress?.doneChunks ?? 0;
@@ -472,14 +509,22 @@ export function ModelSettingsModal({
       const fmt = (n: number) => n.toLocaleString("en-US");
       const sealed = total > 0 && done >= total;
       return {
-        label: tr("Semantic index", "语义索引"),
+        label: rebuilding ? tr("Index rebuild", "索引重建") : tr("Semantic index", "语义索引"),
         value: total > 0 ? `${fmt(done)} / ${fmt(total)}` : tr("Preparing", "准备中"),
-        meta: tr(
-          `Batch ${batch} of ${batches} · length-grouped, yielded between slices`,
-          `第 ${batch} / ${batches} 批 · 按长度分组，分片间让出主线程`
-        ),
+        // Before the first batch lands there is no batch to report; saying so
+        // beats printing "Batch 1 of 1" over a corpus nobody has counted yet.
+        meta:
+          total > 0
+            ? tr(
+                `Batch ${batch} of ${batches} · length-grouped, yielded between slices`,
+                `第 ${batch} / ${batches} 批 · 按长度分组，分片间让出主线程`
+              )
+            : rebuilding
+              ? tr("The old index is gone; every memo is queued for embedding.", "旧索引已清除，所有笔记正在排队等待嵌入。")
+              : tr("Counting the memos that still need embedding.", "正在统计仍需嵌入的笔记。"),
         percent: total > 0 ? (done / total) * 100 : 0,
         stages: [
+          ...(rebuilding ? [row(tr("Previous index discarded", "已丢弃旧索引"), tr("Done", "完成"), "done")] : []),
           row(tr("Memos embedded", "已嵌入笔记"), tr(`${fmt(done)} of ${fmt(total)}`, `${fmt(done)} / ${fmt(total)}`), "active"),
           row(
             tr("Batches processed", "已处理批次"),
@@ -525,6 +570,28 @@ export function ModelSettingsModal({
   const showAction = stateId === "idle" || stateId === "failed";
   const showFailures = stateId === "failed" && failures.length > 0;
   const orbMute = stateId === "checking" || stateId === "idle" || stateId === "failed" || stateId === "clearing";
+
+  /* Rebuilding is offered only where it can actually run and where it would
+     not flicker: the model is live on this device, semantic search is on, and
+     nothing is mid-flight. In "Ready" it is the one thing left to do here, so
+     it fills the space the download CTA leaves behind; on a semantic failure
+     it sits under the retry as the heavier second option. */
+  const showRebuild =
+    Boolean(onSemanticReindex) &&
+    phase.kind === "ready" &&
+    (stateId === "ready" || stateId === "failed") &&
+    (semanticStatus === "ready" || semanticStatus === "error");
+  const indexedCount = semanticIndexedMemos.toLocaleString("en-US");
+  const rebuildNote =
+    semanticIndexedMemos > 0
+      ? tr(`${indexedCount} memos indexed`, `已索引 ${indexedCount} 条笔记`)
+      : tr("Nothing indexed yet", "尚无索引内容");
+  // Short enough to keep the ask, Cancel and Rebuild on the line the button
+  // vacated: the row swaps in place instead of growing under the reader.
+  const rebuildAsk =
+    semanticIndexedMemos > 0
+      ? tr(`Re-embed ${indexedCount} memos?`, `重新嵌入 ${indexedCount} 条笔记？`)
+      : tr("Index every memo now?", "立即索引所有笔记？");
 
   const actionLabel =
     stateId === "failed"
@@ -579,6 +646,16 @@ export function ModelSettingsModal({
             `${displayStored.size} of ${fileCount} · ${megabytes(displayStoredBytes)}`,
             `${displayStored.size} / ${fileCount} · ${megabytes(displayStoredBytes)}`
           );
+  /* The index is a device fact too, and the only one the rebuild acts on —
+     so it is named beside the model files rather than left implicit. */
+  const indexLine =
+    semanticStatus === "off"
+      ? tr("Not in use", "未启用")
+      : semanticIndexedMemos > 0
+        ? tr(`${indexedCount} memos`, `${indexedCount} 条笔记`)
+        : stateId === "indexing" || stateId === "rebuilding" || semanticStatus === "preparing"
+          ? tr("Building…", "构建中…")
+          : tr("Not built yet", "尚未构建");
   const storageLine =
     displayStored.size < 1
       ? tr(`0 of ${fileCount} files`, `0 / ${fileCount} 个文件`)
@@ -626,8 +703,22 @@ export function ModelSettingsModal({
     if (actionRegionRef.current) actionRegionRef.current.inert = !showAction;
   }, [showAction]);
   useEffect(() => {
+    if (rebuildRegionRef.current) rebuildRegionRef.current.inert = !showRebuild;
+  }, [showRebuild]);
+  useEffect(() => {
     if (advRegionRef.current) advRegionRef.current.inert = !advOpen;
   }, [advOpen]);
+
+  /* The confirm replaces the button that opened it, so keyboard focus has to
+     be carried across; Cancel takes it, because the affirmative here spends
+     minutes of this device's CPU and should never be one stray Space away.
+     A rebuild starting (or any state change that folds the row) cancels it. */
+  useEffect(() => {
+    if (!showRebuild) setConfirmingRebuild(false);
+  }, [showRebuild]);
+  useEffect(() => {
+    if (confirmingRebuild) rebuildConfirmRef.current?.focus();
+  }, [confirmingRebuild]);
 
   return (
     <div
@@ -783,6 +874,60 @@ export function ModelSettingsModal({
                   </div>
                 </div>
               </div>
+
+              <div
+                ref={rebuildRegionRef}
+                className={`model-collapse model-rebuild-collapse${showRebuild ? " is-open" : ""}${
+                  showAction ? " is-tight" : ""
+                }`}
+              >
+                <div>
+                  {confirmingRebuild ? (
+                    <div
+                      key="rebuild-confirm"
+                      className="model-rebuild-row is-confirming"
+                      role="group"
+                      aria-label={tr("Confirm rebuilding the index", "确认重建索引")}
+                    >
+                      <span className="model-rebuild-ask">{rebuildAsk}</span>
+                      {/* The pair travels together, so a narrow column drops
+                          both buttons below the ask instead of splitting them. */}
+                      <span className="model-rebuild-actions">
+                        <button
+                          ref={rebuildConfirmRef}
+                          type="button"
+                          className="ghost-button model-rebuild-cancel"
+                          onClick={() => setConfirmingRebuild(false)}
+                        >
+                          {tr("Cancel", "取消")}
+                        </button>
+                        <button
+                          type="button"
+                          className="model-rebuild-go"
+                          onClick={() => {
+                            setConfirmingRebuild(false);
+                            onSemanticReindex?.();
+                          }}
+                        >
+                          {tr("Rebuild", "重建")}
+                        </button>
+                      </span>
+                    </div>
+                  ) : (
+                    <div key="rebuild-rest" className="model-rebuild-row">
+                      <button
+                        type="button"
+                        className="model-wash-button model-rebuild-button"
+                        onClick={() => setConfirmingRebuild(true)}
+                      >
+                        <RefreshCw size={14} className="model-rebuild-icon" aria-hidden="true" />
+                        {tr("Rebuild index", "重建索引")}
+                      </button>
+                      <span className="model-action-note">{rebuildNote}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
             <aside className="model-device-col">
@@ -794,6 +939,10 @@ export function ModelSettingsModal({
               <div className="model-device-field">
                 <span>{tr("Verified files", "已验证文件")}</span>
                 <b className="model-device-files">{filesLine}</b>
+              </div>
+              <div className="model-device-field">
+                <span>{tr("Semantic index", "语义索引")}</span>
+                <b className="model-device-files">{indexLine}</b>
               </div>
               <span className="model-device-caps">{tr("52 languages · 384 dimensions", "52 种语言 · 384 维")}</span>
               <p className="model-device-note">
