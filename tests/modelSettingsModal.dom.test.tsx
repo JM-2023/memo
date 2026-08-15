@@ -67,12 +67,31 @@ beforeEach(() => {
     }))
   });
   vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([new DOMRect(0, 0, 20, 20)] as unknown as DOMRectList);
+  // jsdom has no canvas backend; the orb only needs the calls it makes.
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    setTransform: vi.fn(),
+    clearRect: vi.fn(),
+    beginPath: vi.fn(),
+    arc: vi.fn(),
+    fill: vi.fn()
+  } as unknown as CanvasRenderingContext2D);
+  // Present but never firing: the orb paints its first frame and parks,
+  // instead of running an unbounded rAF loop through the suite.
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  );
 });
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("semantic search settings", () => {
@@ -140,6 +159,29 @@ describe("semantic search settings", () => {
     expect(screen.getByRole("progressbar", { name: "Semantic Search Progress" }).getAttribute("aria-valuenow")).toBe("63");
     expect(screen.getByText("3 / 10 Memos")).toBeTruthy();
     expect(screen.getByText("25 / 100 Rows")).toBeTruthy();
+  });
+
+  it("marks loading with the working orb, index building with solving, and rest with neither", async () => {
+    const orb = () => document.querySelector("canvas.thinking-orb");
+    const panel = (status: "preparing" | "indexing" | "ready") => (
+      <LanguageProvider>
+        <ModelSettingsModal onClose={vi.fn()} onModelCleared={vi.fn()} semanticStatus={status} />
+      </LanguageProvider>
+    );
+    const { rerender } = render(panel("preparing"));
+
+    expect(await screen.findByText("Preparing Semantic Search")).toBeTruthy();
+    expect(orb()?.getAttribute("data-orb")).toBe("working");
+    // Decorative: the state is already announced by the live status copy.
+    expect(orb()?.getAttribute("aria-hidden")).toBe("true");
+
+    rerender(panel("indexing"));
+    expect(await screen.findByText("Building Search Index")).toBeTruthy();
+    expect(orb()?.getAttribute("data-orb")).toBe("solving");
+
+    rerender(panel("ready"));
+    expect(await screen.findByText("Ready")).toBeTruthy();
+    expect(orb()).toBeNull();
   });
 
   it("confirms a standalone clear, disables semantic search, and clears both stores and runtime", async () => {

@@ -4098,12 +4098,21 @@ button.stats-tag-row:active { scale: 0.992; }
   ::view-transition-new(*) { animation: none !important; }
 }
 
-/* ---- Semantic Search modal ----------------------------------------------
-   This is the feature's only bespoke surface. It keeps the review dialog's
-   frame, spacing scale, control hierarchy and motion curves, then organizes
-   the scan-heavy model state into one status card and one storage block.
-   Interface text inherits the app's UI sans; technical names use monospace,
-   while every changing figure keeps tabular alignment. */
+/* ---- Semantic Search panel ----------------------------------------------
+   The feature's only bespoke surface. It keeps the review dialog's frame,
+   spacing scale, control hierarchy and motion curves, then sorts the
+   scan-heavy model state into two blocks: one live surface for what is
+   happening right now, one ledger of what is on the disk.
+
+   Type follows use here, strictly. Everything the eye re-reads — state
+   names, meter labels, running figures, file sizes — is the app's UI sans
+   with tabular figures, so a percentage that ticks or a count that grows
+   never nudges the glyphs beside it, and a stack of values lands on one
+   right edge you can run a finger down. Monospace is kept for the two
+   things that are identifiers rather than quantities: the asset file names
+   and the model version string. Levels come from size and air — 15 / 14 /
+   13 / 12px off the shared scale, with whitespace between the blocks —
+   never from another border or another fill. */
 .model-modal {
   width: min(500px, 100%);
   font-family: inherit;
@@ -4123,94 +4132,139 @@ button.stats-tag-row:active { scale: 0.992; }
   font-weight: 600;
   line-height: 1.35;
 }
-.model-body { gap: 18px; }
-.model-overview { gap: 10px; }
-.model-status-card {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  min-height: 62px;
-  padding: 11px 12px;
+.model-body { gap: 20px; }
+.model-overview { gap: 12px; }
+
+/* One surface for the present tense: the mark, the two lines that name the
+   state, and — only while work is running — the ledger measuring it. The
+   tint carries the state; nothing inside needs a second box. */
+.model-status {
+  display: grid;
+  gap: 13px;
+  padding: 12px;
   color: var(--ink-soft);
   background: var(--field-bg);
   border: 1px solid var(--line);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   box-shadow: var(--shadow-xs);
-  transition: border-color var(--t) var(--ease), background var(--t) var(--ease), color var(--t) var(--ease);
+  transition: border-color var(--t-slow) var(--ease), background var(--t-slow) var(--ease), color var(--t-slow) var(--ease);
 }
-.model-status-card.is-ready {
+.model-status.is-ready {
   background: color-mix(in srgb, var(--primary-tint) 76%, var(--field-bg));
   border-color: color-mix(in srgb, var(--primary) 28%, var(--line));
 }
-.model-status-card.is-working {
+.model-status.is-working {
   background: color-mix(in srgb, var(--primary-tint) 48%, var(--field-bg));
   border-color: color-mix(in srgb, var(--primary) 22%, var(--line));
 }
-.model-status-card.is-error {
+.model-status.is-error {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger-tint) 72%, var(--field-bg));
   border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
 }
+/* The mark column is one 64px square in every state — the orb fills it, the
+   icon chip centres in it — so the panel below never shifts when a check
+   turns into a download turns into an index build. */
+.model-status-head {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+}
+.model-status-mark { display: grid; place-items: center; width: 64px; height: 64px; }
+/* At rest the mark is a solid chip rather than the orb. It is smaller than
+   the square it centres in — a filled 40px block already carries more
+   weight than 64px of dust — and takes --r-md so its corner stays
+   concentric with the card's --r-lg across the 12px padding. */
 .model-status-icon {
   display: grid;
-  flex: none;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   color: var(--primary-dark);
   background: var(--primary-tint);
-  border-radius: var(--r-sm);
-}
-.model-status-card.is-error .model-status-icon { color: var(--danger); background: var(--danger-tint); }
-.model-status-icon > svg { animation: pop-in 0.18s var(--ease-pop) both; }
-.model-status-copy { display: grid; min-width: 0; gap: 2px; }
-.model-status-copy strong { color: var(--ink); font-size: var(--fs-md); font-weight: 700; }
-.model-status-card.is-error .model-status-copy strong { color: var(--danger); }
-.model-status-copy > span { font-size: var(--fs-xs); line-height: 1.45; overflow-wrap: anywhere; }
-.model-activity-stack {
-  display: grid;
-  gap: 10px;
-  padding: 10px 11px;
-  background: color-mix(in srgb, var(--primary-tint) 36%, var(--field-bg));
-  border: 1px solid color-mix(in srgb, var(--primary) 16%, var(--line));
   border-radius: var(--r-md);
+}
+/* On the ready card the plain tint would sit within a step of the fill
+   behind it, so the chip takes the strong tint to stay a mark. */
+.model-status.is-ready .model-status-icon { background: var(--primary-tint-strong); }
+.model-status.is-error .model-status-icon { color: var(--danger); background: var(--danger-tint); }
+.model-status-icon > svg { animation: pop-in 0.18s var(--ease-pop) both; }
+.model-status-copy { display: grid; min-width: 0; gap: 3px; }
+.model-status-copy strong { color: var(--ink); font-size: var(--fs-md); font-weight: 700; letter-spacing: -0.01em; }
+.model-status.is-error .model-status-copy strong { color: var(--danger); }
+.model-status-copy > span { font-size: var(--fs-xs); line-height: 1.45; overflow-wrap: anywhere; }
+
+/* The dotted thought-orb (src/lib/thinkingOrb.ts). Depth is painted from
+   these two stops rather than the library's grayscale, so the mark swaps
+   with the theme like every other surface; the canvas re-reads them when
+   [data-theme] or the OS preference changes. */
+.thinking-orb {
+  display: block;
+  /* Near is the accent at full strength; far is pitched to sit ~4 steps off
+     the card behind it — light enough to recede, dark enough that the ghost
+     paths still draw the sphere instead of dissolving into the fill. */
+  --orb-near: #2d6248;
+  --orb-far: #aec8b8;
+  animation: pop-in 0.26s var(--ease-pop) both;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .thinking-orb { --orb-near: #d3edde; --orb-far: #42604f; }
+}
+:root[data-theme="dark"] .thinking-orb { --orb-near: #d3edde; --orb-far: #42604f; }
+
+/* The activity ledger: rows in the order the work happens, labels left,
+   figures right. A hairline separates it from the status line — the point
+   is that it belongs to the same card, not that it is its own panel. */
+.model-status-ledger {
+  display: grid;
+  gap: 13px;
+  padding-top: 13px;
+  border-top: 1px solid color-mix(in srgb, var(--primary) 20%, var(--line));
+  animation: fade-up 0.2s var(--ease-out) both;
+}
+.model-meter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 7px 12px;
   animation: fade-up 0.18s var(--ease-out) both;
 }
-.model-progress-wrap { display: grid; gap: 6px; animation: fade-up 0.18s var(--ease-out) both; }
-.model-progress-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
+/* The label names the row once; the figure is what the eye returns for, so
+   it takes the larger rung, the darker ink and the fixed right edge. On a
+   narrow phone the label wraps rather than truncating — a clipped label
+   costs meaning, a second line only costs 18px, and baseline alignment
+   keeps the figure on the first line either way. */
+.model-meter-label {
   color: var(--muted);
   font-size: var(--fs-xs);
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
 }
-.model-progress {
-  height: 7px;
+.model-meter-value {
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+.model-status.is-error .model-meter-value { color: var(--danger); }
+.model-meter-track {
+  grid-column: 1 / -1;
+  height: 6px;
   overflow: hidden;
-  background: var(--line);
+  background: color-mix(in srgb, var(--ink) 11%, transparent);
   border-radius: 999px;
 }
-.model-progress-fill {
-  position: relative;
+/* No sheen sweep: the orb above is the "still alive" signal now, so the
+   track can stay a quiet instrument and just report the number. */
+.model-meter-fill {
   display: block;
   height: 100%;
-  overflow: hidden;
   background: linear-gradient(145deg, var(--primary), var(--primary-dark));
   border-radius: inherit;
-  transition: width 0.2s var(--ease-out);
-}
-.model-progress-fill::after {
-  position: absolute;
-  inset: 0;
-  content: "";
-  background: linear-gradient(105deg, transparent 20%, color-mix(in srgb, white 34%, transparent) 50%, transparent 80%);
-  transform: translateX(-115%);
-  animation: model-progress-sheen 1.6s var(--ease-in-out) infinite;
-}
-@keyframes model-progress-sheen {
-  to { transform: translateX(115%); }
+  transition: width 0.28s var(--ease-out);
 }
 .model-failures {
   display: grid;
@@ -4234,33 +4288,39 @@ button.stats-tag-row:active { scale: 0.992; }
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
-.model-facts { display: flex; flex-wrap: wrap; gap: 6px; }
-.model-facts > span {
-  display: inline-flex;
+/* Three fixed facts, read once and rarely again — a meta line with hairline
+   middots, not three bordered chips. Chips are the app's language for
+   controls; nothing here is pressable. */
+.model-facts {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
-  min-height: 26px;
-  padding: 4px 9px;
-  color: var(--ink-soft);
-  background: var(--chip-fill);
-  border: 1px solid var(--chip-rim);
-  border-radius: var(--r-sm);
-  box-shadow: var(--chip-shadow);
+  gap: 3px 0;
+  color: var(--muted);
   font-size: var(--fs-xs);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+.model-facts > span { display: inline-flex; align-items: center; gap: 5px; }
+/* The alt-text half of `content` keeps the middot out of the accessibility
+   tree — it separates the list items visually, it is not part of one. */
+.model-facts > span + span::before { padding: 0 9px; color: var(--line-strong); content: "·" / ""; }
 .model-note { margin: 0; color: var(--ink-soft); font-size: var(--fs-xs); line-height: 1.5; }
 .model-privacy-note { color: var(--muted); }
-.model-storage { gap: 9px; }
+.model-storage { gap: 10px; }
 .model-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+/* Kept as inline text, not a flex row: the space between the figure and the
+   word it qualifies is a real space, and flex would eat it. */
 .model-storage-total {
   flex: none;
   color: var(--muted);
   font-size: var(--fs-xs);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
+.model-figure { color: var(--ink-soft); font-weight: 700; }
+.model-total-sep::before { padding: 0 7px; color: var(--line-strong); content: "·" / ""; }
 .model-files {
   display: grid;
   margin: 0;
@@ -4272,11 +4332,11 @@ button.stats-tag-row:active { scale: 0.992; }
 }
 .model-file-row {
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) auto 32px;
+  grid-template-columns: 7px minmax(0, 1fr) auto 32px;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-height: 34px;
-  padding: 0 2px 0 8px;
+  padding: 0 2px 0 9px;
   color: var(--ink);
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease);
@@ -4290,18 +4350,23 @@ button.stats-tag-row:active { scale: 0.992; }
   transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
 .model-file-dot.is-present { background: var(--primary); box-shadow: 0 0 0 3px var(--primary-tint); }
+/* Mono is for the identifier — an asset name is matched character by
+   character against a manifest, never compared for size. */
 .model-file-name,
 .model-version code {
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
   font-size: var(--fs-2xs);
   overflow-wrap: anywhere;
 }
+/* The size beside it is a quantity: sans with tabular figures, right-aligned,
+   so the column reads as one list of numbers rather than five strings. */
 .model-file-size {
   color: var(--muted);
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
   font-size: var(--fs-2xs);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  text-align: right;
 }
 .model-storage-actions { display: flex; justify-content: space-between; gap: 8px; }
 .model-clear-trigger { color: var(--danger); }
@@ -4338,8 +4403,15 @@ button.stats-tag-row:active { scale: 0.992; }
 
 @media (max-width: 520px) {
   .model-head-copy p { display: none; }
-  .model-body { gap: 16px; }
-  .model-file-row { grid-template-columns: 8px minmax(0, 1fr) 32px; }
+  .model-body { gap: 17px; }
+  /* The orb keeps its tuned 64px at every width — it is the panel's one
+     figure, and the copy beside it reflows rather than the mark shrinking. */
+  .model-status-head { gap: 12px; }
+  /* Once the facts wrap, a middot would open the second line. Whitespace
+     separates them just as well at this width. */
+  .model-facts { gap: 2px 14px; }
+  .model-facts > span + span::before { content: none; }
+  .model-file-row { grid-template-columns: 7px minmax(0, 1fr) 32px; }
   .model-file-size { display: none; }
   .model-storage-actions { align-items: stretch; flex-direction: column; }
   .model-storage-actions .ghost-button { justify-content: center; }

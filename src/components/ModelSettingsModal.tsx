@@ -36,6 +36,8 @@ import {
   subscribeModelRuntimeProgress
 } from "../lib/modelRuntime";
 import { deleteSemanticIndexDb } from "../lib/semanticIndex";
+import type { OrbState } from "../lib/thinkingOrb";
+import { ThinkingOrb } from "./ThinkingOrb";
 
 interface ModelSettingsModalProps {
   onClose: () => void;
@@ -76,31 +78,33 @@ function failureHost(url: string): string {
   }
 }
 
-interface ProgressBarProps {
+/** One row of the activity ledger: what is running, how far along, a track. */
+interface Meter {
+  key: string;
+  /** Names the work — the part the eye skips once it knows the row. */
   label: string;
-  detail: string;
+  /** The figure the eye comes back for: sans with tabular figures, right-aligned. */
+  value: string;
   percent: number;
   ariaLabel: string;
 }
 
-function ModelProgressBar({ label, detail, percent, ariaLabel }: ProgressBarProps) {
-  const value = Math.max(0, Math.min(100, Math.round(percent)));
+function ModelMeter({ label, value, percent, ariaLabel }: Omit<Meter, "key">) {
+  const now = Math.max(0, Math.min(100, Math.round(percent)));
   return (
-    <div className="model-progress-wrap">
-      <div className="model-progress-meta">
-        <span>{label}</span>
-        <span>{detail}</span>
-      </div>
+    <div className="model-meter">
+      <span className="model-meter-label">{label}</span>
+      <span className="model-meter-value">{value}</span>
       <div
-        className="model-progress"
+        className="model-meter-track"
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={value}
-        aria-valuetext={detail}
+        aria-valuenow={now}
+        aria-valuetext={value}
         aria-label={ariaLabel}
       >
-        <span className="model-progress-fill" style={{ width: `${value}%` }} />
+        <span className="model-meter-fill" style={{ width: `${now}%` }} />
       </div>
     </div>
   );
@@ -339,9 +343,23 @@ export function ModelSettingsModal({
       : semanticQueryProgress?.stage === "embedding"
         ? tr("Step 1 Of 2", "第 1 / 2 步")
         : `${semanticQueryProgress?.done ?? 0} / ${semanticQueryProgress?.total ?? 0} ${tr("Rows", "行")}`;
-  const semanticActivityActive =
-    phase.kind === "ready" &&
-    (semanticStatus === "preparing" || semanticStatus === "indexing" || semanticQueryProgress !== null);
+  /**
+   * The orb marks work that builds toward semantic search — fetching the
+   * model, starting it, embedding memos, ranking a query. `solving` is the
+   * index being assembled band by band; `working` is every other step on
+   * that path. Inspection (checking) and teardown (clearing) keep the plain
+   * icon chip: both are brief, and neither is building anything.
+   */
+  const orbState: OrbState | null =
+    phase.kind === "downloading" || phase.kind === "activating"
+      ? "working"
+      : phase.kind !== "ready"
+        ? null
+        : semanticStatus === "indexing"
+          ? "solving"
+          : semanticStatus === "preparing" || semanticQueryProgress !== null
+            ? "working"
+            : null;
 
   const statusTitle =
     phase.kind === "checking"
@@ -397,9 +415,7 @@ export function ModelSettingsModal({
                 : phase.message;
 
   const statusIcon =
-    semanticActivityActive ? (
-      <Loader2 size={17} className="spin" aria-hidden="true" />
-    ) : phase.kind === "ready" ? (
+    phase.kind === "ready" ? (
       <Check size={17} aria-hidden="true" />
     ) : phase.kind === "error" ? (
       <CircleAlert size={17} aria-hidden="true" />
@@ -408,6 +424,48 @@ export function ModelSettingsModal({
     ) : (
       <Download size={17} aria-hidden="true" />
     );
+
+  /* One ledger, one column of figures: whichever steps are live stack up in
+     the order the work happens, so a repeat reader always finds the number
+     they came back for in the same place. */
+  const meters: Meter[] = [];
+  if (phase.kind === "downloading") {
+    meters.push({
+      key: "download",
+      label: tr("Download Progress", "下载进度"),
+      value: `${percent}%`,
+      percent,
+      ariaLabel: tr("Download Progress", "下载进度")
+    });
+  } else if (showRuntimeProgress) {
+    meters.push({
+      key: "runtime",
+      label: tr("Model Loading Progress", "模型加载进度"),
+      value: `${runtimeProgress.percent}%`,
+      percent: runtimeProgress.percent,
+      ariaLabel: tr("Model Loading Progress", "模型加载进度")
+    });
+  }
+  if (semanticStatus === "indexing") {
+    meters.push({
+      key: "index",
+      label: tr("Semantic Index Progress", "语义索引进度"),
+      value: semanticProgress
+        ? `${semanticProgress.done} / ${semanticProgress.total} ${tr("Memos", "条笔记")}`
+        : tr("Preparing", "准备中"),
+      percent: indexPercent,
+      ariaLabel: tr("Semantic Index Progress", "语义索引进度")
+    });
+  }
+  if (semanticQueryProgress) {
+    meters.push({
+      key: "query",
+      label: queryLabel,
+      value: queryDetail,
+      percent: queryPercent,
+      ariaLabel: tr("Semantic Search Progress", "语义搜索进度")
+    });
+  }
 
   return (
     <div
@@ -435,55 +493,40 @@ export function ModelSettingsModal({
 
         <div className="review-body model-body">
           <section className="review-section model-overview">
-            <div className={`model-status-card is-${semanticActivityActive ? "working" : phase.kind}`} role="status" aria-live="polite">
-              <span className="model-status-icon" aria-hidden="true">
-                {statusIcon}
-              </span>
-              <span className="model-status-copy">
-                <strong>{statusTitle}</strong>
-                <span>{statusText}</span>
-              </span>
-            </div>
-            {phase.kind === "downloading" || showRuntimeProgress || semanticStatus === "indexing" || semanticQueryProgress ? (
-              <div className="model-activity-stack" aria-live="polite">
-                {phase.kind === "downloading" ? (
-                  <ModelProgressBar
-                    label={tr("Download Progress", "下载进度")}
-                    detail={`${percent}%`}
-                    percent={percent}
-                    ariaLabel={tr("Download Progress", "下载进度")}
-                  />
-                ) : null}
-                {showRuntimeProgress && phase.kind !== "downloading" ? (
-                  <ModelProgressBar
-                    label={tr("Model Loading Progress", "模型加载进度")}
-                    detail={`${runtimeProgress.percent}%`}
-                    percent={runtimeProgress.percent}
-                    ariaLabel={tr("Model Loading Progress", "模型加载进度")}
-                  />
-                ) : null}
-                {semanticStatus === "indexing" ? (
-                  <ModelProgressBar
-                    label={tr("Semantic Index Progress", "语义索引进度")}
-                    detail={
-                      semanticProgress
-                        ? `${semanticProgress.done} / ${semanticProgress.total} ${tr("Memos", "条笔记")}`
-                        : tr("Preparing", "准备中")
-                    }
-                    percent={indexPercent}
-                    ariaLabel={tr("Semantic Index Progress", "语义索引进度")}
-                  />
-                ) : null}
-                {semanticQueryProgress ? (
-                  <ModelProgressBar
-                    label={queryLabel}
-                    detail={queryDetail}
-                    percent={queryPercent}
-                    ariaLabel={tr("Semantic Search Progress", "语义搜索进度")}
-                  />
-                ) : null}
+            {/* One surface for "what is happening now": the mark, the two
+                lines that name the state, and — while work runs — the ledger
+                measuring it. The live region is the copy alone, so a meter
+                ticking every frame never re-announces the whole card. */}
+            <div className={`model-status is-${orbState ? "working" : phase.kind}`}>
+              <div className="model-status-head">
+                <span className="model-status-mark">
+                  {orbState ? (
+                    <ThinkingOrb state={orbState} size={64} />
+                  ) : (
+                    <span className="model-status-icon" aria-hidden="true">
+                      {statusIcon}
+                    </span>
+                  )}
+                </span>
+                <span className="model-status-copy" role="status" aria-live="polite">
+                  <strong>{statusTitle}</strong>
+                  <span>{statusText}</span>
+                </span>
               </div>
-            ) : null}
+              {meters.length > 0 ? (
+                <div className="model-status-ledger">
+                  {meters.map((meter) => (
+                    <ModelMeter
+                      key={meter.key}
+                      label={meter.label}
+                      value={meter.value}
+                      percent={meter.percent}
+                      ariaLabel={meter.ariaLabel}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </div>
             {phase.kind === "error" && phase.failures.length > 0 ? (
               <ul className="model-failures">
                 {phase.failures.slice(0, 3).map((failure) => (
@@ -531,8 +574,15 @@ export function ModelSettingsModal({
           <section className="review-section model-storage" style={{ animationDelay: "0.04s" }}>
             <div className="model-section-head">
               <h3 className="review-section-title">{tr("Device Storage", "设备存储")}</h3>
+              {/* The two figures carry the ink; the words that qualify them
+                  step back, so the pair reads at a glance from the title. */}
               <span className="model-storage-total">
-                {present.size}/{MODEL_MANIFEST.files.length} {tr("Files", "个文件")} · {megabytes(storedBytes)}
+                <span className="model-figure">
+                  {present.size}/{MODEL_MANIFEST.files.length}
+                </span>{" "}
+                {tr("Files", "个文件")}
+                <span className="model-total-sep" aria-hidden="true" />
+                <span className="model-figure">{megabytes(storedBytes)}</span>
               </span>
             </div>
             <ul className="model-files">
