@@ -1344,18 +1344,26 @@ a:hover { text-decoration: underline; }
 button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 
 /* ---- Sidebar nav + tags ---- */
-/* Distance from a row's name to its count, shared by the nav rows and the tag
-   rows so both lists breathe alike. Sits on the 8/10/12 house scale: below it
-   the number looks glued to the last letter, while pinning it to the row's far
-   edge (the old margin-left: auto) read as an unrelated column once the
-   sidebar stretched toward its 392px ceiling. */
+/* Every row in both lists is shrink-to-fit with a floor, rather than a band
+   stretched across whatever width the sidebar happens to have. Two things come
+   out of that: the hover wash and the active tint read as a pill around the
+   label instead of a bar reaching the far edge of a 392px sidebar, and the
+   count rides in at the row's own right edge instead of the sidebar's.
+   --row-cap is the floor. It is what actually sets how far a short name sits
+   from its count, and it keeps every count in one column down the list; without
+   it a two-character tag would pull its number right up against itself.
+   --count-gap is only the closest they may ever get, for names long enough to
+   push past the floor. */
 .sidebar-nav,
-.tag-section { --count-gap: 12px; }
+.tag-section { --row-cap: 216px; --count-gap: 12px; }
 
 .sidebar-nav { display: grid; margin: 14px 2px 4px; }
 .nav-item {
   display: flex;
   align-items: center;
+  width: fit-content;
+  min-width: var(--row-cap);
+  max-width: 100%;
   min-height: 40px;
   padding: 8px 11px;
   color: var(--ink-soft);
@@ -1371,11 +1379,18 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 .nav-item:active { transform: scale(0.98); }
 .nav-item.is-active { color: var(--leaf); background: var(--leaf-tint); }
 .nav-item.is-active svg { color: var(--leaf); }
-/* The name shrinks to its text and the count trails it a --count-gap behind,
-   so the pair travels together instead of splitting to opposite edges. The
-   name ellipsizes first, so a narrow sidebar never squeezes out the count. */
+/* auto margin parks the count at the row's right edge — which is now the floor,
+   not the sidebar. padding-left is the guaranteed separation for names long
+   enough that there is no slack left for the auto margin to spend. */
 .nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nav-count { flex: none; margin-left: var(--count-gap); color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
+.nav-count {
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--count-gap);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
 .nav-item.is-active .nav-count { color: var(--leaf); }
 
 .tag-section { margin: 8px 2px 0; }
@@ -1395,10 +1410,11 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   display: flex;
   align-items: center;
   gap: 2px;
-  /* Grid item of .tag-item: without this its automatic minimum is the whole
-     nowrap row, so a long tag widens the row past the sidebar instead of
-     letting .tag-name ellipsize. */
-  min-width: 0;
+  width: fit-content;
+  /* min-width would otherwise be auto — the whole nowrap row — so a long tag
+     widened the row past the sidebar instead of letting .tag-name ellipsize. */
+  min-width: var(--row-cap);
+  max-width: 100%;
   min-height: 34px;
   padding-right: 8px;
   border-radius: var(--r-sm);
@@ -1419,12 +1435,13 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 .tag-expand.is-expanded { transform: rotate(90deg); }
 @media (hover: hover) { .tag-expand:hover { background: var(--wash-strong); color: var(--ink); } }
 .tag-expand-spacer { display: grid; place-items: center; width: 22px; height: 22px; color: var(--muted); opacity: 0.75; }
-/* Still spans the row so its empty right half stays a hit target, but its
-   contents hug the left: the name shrinks to its text and the count follows
-   6px behind rather than sitting a sidebar-width away. */
+/* flex: auto, not flex: 1 — a 0% basis would contribute nothing to the row's
+   fit-content width and collapse every row onto the floor. Basis auto lets a
+   long name size the row, and the label still fills the slack so the blank
+   space beside a short name stays a hit target. */
 .tag-label {
   display: flex;
-  flex: 1;
+  flex: auto;
   align-items: center;
   min-width: 0;
   padding: 6px 4px;
@@ -1440,7 +1457,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 /* Only the name gives way: a long tag ellipsizes instead of pushing its own
    count off the row, so pin mark and count survive at any sidebar width. */
 .tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tag-count { flex: none; margin-left: var(--count-gap); color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
+.tag-count { flex: none; margin-left: auto; padding-left: var(--count-gap); color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
 /* Trails the count instead of splitting it from the name: sitting between the
    two, the mark gave pinned rows a visibly wider name → count gap than every
    other row, so the count column went ragged exactly where it was pinned. */
