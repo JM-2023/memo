@@ -1214,7 +1214,7 @@ export default function App() {
   const deleteSavedFilter = useCallback(
     (item: SavedFilter) => {
       setSavedFilters((current) => current.filter((entry) => entry.id !== item.id));
-      showToast(tr("Filter deleted", "已删除筛选"));
+      showToast(tr(`Deleted “${item.name}”`, `已删除「${item.name}」`));
     },
     [showToast, tr]
   );
@@ -1227,7 +1227,7 @@ export default function App() {
       return [...current, { ...snapshot, id: crypto.randomUUID() }];
     });
     setSavingFilter(false);
-    showToast(tr("Filter saved", "筛选已保存"));
+    showToast(tr(`Saved “${name}”`, `已保存「${name}」`));
   }
 
   // The preset whose snapshot equals the live feed state — its row gets the
@@ -1345,7 +1345,7 @@ export default function App() {
     setReviewSettings(next);
     persistReviewSettings(next);
     setReviewSettingsOpen(false);
-    showToast(tr("Daily Review Settings saved", "每日回顾设置已保存"));
+    showToast(tr("Saved Daily Review Settings", "已保存每日回顾设置"));
     if (reviewDayValid(reviewDay, next)) return;
     if (view === "review") {
       // Redraw immediately — after the dialog's exit has painted, so the
@@ -1757,7 +1757,7 @@ export default function App() {
       );
       void runSync();
       notifyPeers();
-      showToast(tr("Trash emptied", "回收站已清空"));
+      showToast(tr("Emptied Trash", "已清空回收站"));
     } catch (cause) {
       setEmptyTrashArm(false);
       showToast(errorMessage(cause, "Couldn’t empty Trash.", "清空回收站失败"), "error");
@@ -2153,7 +2153,7 @@ export default function App() {
       applySyncChanges([], [], [result.tag]);
       void runSync();
       notifyPeers();
-      showToast(pinned ? tr("Tag pinned", "标签已置顶") : tr("Tag unpinned", "标签已取消置顶"));
+      showToast(pinned ? tr(`Pinned #${path}`, `已置顶 #${path}`) : tr(`Unpinned #${path}`, `已取消置顶 #${path}`));
     } catch (cause) {
       showToast(errorMessage(cause, "Couldn’t complete the action.", "操作失败"), "error");
     }
@@ -2181,7 +2181,7 @@ export default function App() {
       );
       void runSync();
       notifyPeers();
-      showToast(tr(`Tag renamed to #${to} in ${count(result.updated, "memo")}`, `标签已重命名为 #${to}，更新了 ${count(result.updated, "memo")}`));
+      showToast(tr(`Renamed #${from} to #${to} in ${count(result.updated, "memo")}`, `已将 #${from} 重命名为 #${to}，更新了 ${count(result.updated, "memo")}`));
     } catch (cause) {
       void runSync();
       notifyPeers();
@@ -2210,7 +2210,7 @@ export default function App() {
       );
       void runSync();
       notifyPeers();
-      showToast(tr(`Tag removed from ${count(result.updated, "memo")}`, `已从 ${count(result.updated, "memo")}中移除标签`));
+      showToast(tr(`Removed #${path} from ${count(result.updated, "memo")}`, `已从 ${count(result.updated, "memo")}中移除 #${path}`));
     } catch (cause) {
       void runSync();
       notifyPeers();
@@ -2230,7 +2230,7 @@ export default function App() {
       anchor.click();
       anchor.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 4000);
-      showToast(tr("Backup exported", "备份已导出"));
+      showToast(tr("Exported your backup", "已导出备份"));
     } catch (cause) {
       showToast(errorMessage(cause, "Couldn’t export the backup.", "导出备份失败"), "error");
     }
@@ -3011,7 +3011,7 @@ export default function App() {
           onAuthLost={dropToLogin}
           onDone={() => {
             setChangingPasscode(false);
-            showToast(tr("Passcode updated", "密码已更新"));
+            showToast(tr("Updated your passcode", "已更新密码"));
           }}
         />
       ) : null}

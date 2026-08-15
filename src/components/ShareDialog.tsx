@@ -530,7 +530,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
       const blob = await renderPng();
       downloadBlob(blob, `memo-${dateKey(new Date(memo.createdAt))}.png`);
       setBusy(null);
-      onToast(tr("Image saved", "图片已保存"));
+      onToast(tr("Saved the image", "已保存图片"));
       beginClose();
     } catch {
       setBusy(null);
@@ -544,7 +544,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
     try {
       await copyPngToClipboard(renderPng);
       setBusy(null);
-      onToast(tr("Image copied", "图片已复制"));
+      onToast(tr("Copied the image", "已复制图片"));
       beginClose();
     } catch {
       setBusy(null);

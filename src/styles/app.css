@@ -3832,6 +3832,19 @@ button.stats-tag-row:active { scale: 0.992; }
   top: 18px;
   left: 50%;
   z-index: 200;
+  /* Toasts quote user text — tag paths and saved-filter names. Centred on
+     left:50%, the box could only shrink-to-fit the half-viewport to its
+     right, so a spaceless name grew past BOTH edges and lost its ends.
+     max-content frees it from that half; the cap then reins it back in.
+     640px is measured, not picked: it is the first cap that leaves every
+     built-in string byte-identical on desktop (the decryption error, the
+     widest, sits at 621), so this rule only ever acts on text long enough
+     to leave the screen. break-word, not anywhere: it only splits a run
+     that cannot fit a line alone, so #work/projects/2026 breaks between
+     segments instead of mid-year. */
+  width: max-content;
+  max-width: min(640px, calc(100vw - 32px));
+  overflow-wrap: break-word;
   padding: 9px 18px;
   color: var(--ink);
   background: var(--menu-fill);
