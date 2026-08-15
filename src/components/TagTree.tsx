@@ -143,8 +143,8 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
           onClick={() => onPickTag(isActive ? null : node.path)}
         >
           <span className="tag-name">{node.name}</span>
-          {pinned ? <Pin size={12} className="tag-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}
           <span className="tag-count">{formatNumber(node.count)}</span>
+          {pinned ? <Pin size={12} className="tag-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}
         </button>
         <Menu
           portal
