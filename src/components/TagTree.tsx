@@ -103,7 +103,7 @@ interface TagRowProps extends TagCallbacks {
 }
 
 function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRenameTag, onRemoveTag }: TagRowProps) {
-  const { formatNumber, tr } = useI18n();
+  const { count, formatNumber, tr } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const hasChildren = node.children.length > 0;
   const isActive = activeTag === node.path;
@@ -129,11 +129,23 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
             <Hash size={12} aria-hidden="true" />
           </span>
         )}
-        <button type="button" className="tag-label" aria-pressed={isActive} onClick={() => onPickTag(isActive ? null : node.path)}>
-          {node.name}
+        {/* Name, pin mark and count live inside the button: the count trails the
+            name as one unit instead of being flung to the far edge of a sidebar
+            that can be 392px wide, while the button still spans the row so the
+            empty space to its right stays a hit target. */}
+        {/* Named explicitly: the bare digits sit flush against the name in the
+            markup, so the derived name would come out "work2". */}
+        <button
+          type="button"
+          className="tag-label"
+          aria-pressed={isActive}
+          aria-label={tr(`${node.name}, ${count(node.count, "memo")}`, `${node.name}，${count(node.count, "memo")}`)}
+          onClick={() => onPickTag(isActive ? null : node.path)}
+        >
+          <span className="tag-name">{node.name}</span>
+          {pinned ? <Pin size={12} className="tag-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}
+          <span className="tag-count">{formatNumber(node.count)}</span>
         </button>
-        {pinned ? <Pin size={12} className="tag-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}
-        <span className="tag-count">{formatNumber(node.count)}</span>
         <Menu
           portal
           align="right"

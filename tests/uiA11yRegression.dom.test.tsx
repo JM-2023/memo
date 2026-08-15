@@ -271,7 +271,9 @@ describe("selected and expanded semantics", () => {
       </Providers>
     );
 
-    expect(screen.getByRole("button", { name: "work" }).getAttribute("aria-pressed")).toBe("true");
+    // The count sits inside the button (it trails the name in the row), so the
+    // label spells it out rather than leaving the digits glued to the name.
+    expect(screen.getByRole("button", { name: "work, 2 memos" }).getAttribute("aria-pressed")).toBe("true");
     const expand = screen.getByRole("button", { name: "Expand tag work" });
     expect(expand.getAttribute("aria-expanded")).toBe("false");
     await user.click(expand);

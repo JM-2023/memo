@@ -1348,7 +1348,9 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  /* 6px, matching the tag rows below, so the count reads as part of the name;
+     the icon re-adds 4px of its own to keep the icon → name rhythm at 10px. */
+  gap: 6px;
   min-height: 40px;
   padding: 8px 11px;
   color: var(--ink-soft);
@@ -1359,12 +1361,17 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   border-radius: var(--r-md);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
-.nav-item svg { color: var(--muted); transition: color var(--t) var(--ease); }
+.nav-item svg { flex: none; margin-right: 4px; color: var(--muted); transition: color var(--t) var(--ease); }
 @media (hover: hover) { .nav-item:hover { background: var(--wash); color: var(--ink); } }
 .nav-item:active { transform: scale(0.98); }
 .nav-item.is-active { color: var(--leaf); background: var(--leaf-tint); }
 .nav-item.is-active svg { color: var(--leaf); }
-.nav-count { margin-left: auto; color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
+/* The name shrinks to its text and the count trails it. Pushed to opposite
+   edges (the old margin-left: auto) they read as two unrelated columns once
+   the sidebar stretches to its 392px ceiling. The name ellipsizes first so a
+   narrow sidebar never squeezes the count out of the row. */
+.nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-count { flex: none; color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
 .nav-item.is-active .nav-count { color: var(--leaf); }
 
 .tag-section { margin: 8px 2px 0; }
@@ -1384,6 +1391,10 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   display: flex;
   align-items: center;
   gap: 2px;
+  /* Grid item of .tag-item: without this its automatic minimum is the whole
+     nowrap row, so a long tag widens the row past the sidebar instead of
+     letting .tag-name ellipsize. */
+  min-width: 0;
   min-height: 34px;
   padding-right: 8px;
   border-radius: var(--r-sm);
@@ -1404,24 +1415,30 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 .tag-expand.is-expanded { transform: rotate(90deg); }
 @media (hover: hover) { .tag-expand:hover { background: var(--wash-strong); color: var(--ink); } }
 .tag-expand-spacer { display: grid; place-items: center; width: 22px; height: 22px; color: var(--muted); opacity: 0.75; }
+/* Still spans the row so its empty right half stays a hit target, but its
+   contents hug the left: the name shrinks to its text and the count follows
+   6px behind rather than sitting a sidebar-width away. */
 .tag-label {
+  display: flex;
   flex: 1;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
   padding: 6px 4px;
   color: var(--ink-soft);
   font-size: var(--fs-md);
   font-weight: 600;
   text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   border-radius: var(--r-xs);
   transition: color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .tag-label:hover { color: var(--ink); } }
 .tag-label:active { transform: scale(0.98); }
-.tag-pin-mark { flex: none; margin-right: 3px; color: var(--leaf); animation: pop-in 0.18s var(--ease-pop) both; }
-.tag-count { color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
+/* Only the name gives way: a long tag ellipsizes instead of pushing its own
+   count off the row, so pin mark and count survive at any sidebar width. */
+.tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-pin-mark { flex: none; color: var(--leaf); animation: pop-in 0.18s var(--ease-pop) both; }
+.tag-count { flex: none; color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
 /* Row action menu trigger — surfaces on row hover / focus / touch. */
 .tag-more {
   display: grid;

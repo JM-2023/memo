@@ -366,7 +366,7 @@ export function Sidebar(props: SidebarProps) {
           onClick={props.onShowAll}
         >
           <Inbox size={16} aria-hidden="true" />
-          {tr("All memos", "全部笔记")}
+          <span className="nav-label">{tr("All memos", "全部笔记")}</span>
           <span className="nav-count">
             <RollingText value={totals.memoCount} />
           </span>
@@ -378,7 +378,7 @@ export function Sidebar(props: SidebarProps) {
           onClick={props.onOpenReview}
         >
           <Sparkles size={16} aria-hidden="true" />
-          {tr("Daily review", "每日回顾")}
+          <span className="nav-label">{tr("Daily review", "每日回顾")}</span>
         </button>
         <button
           type="button"
@@ -387,7 +387,7 @@ export function Sidebar(props: SidebarProps) {
           onClick={props.onOpenTrash}
         >
           <Trash2 size={16} aria-hidden="true" />
-          {tr("Trash", "回收站")}
+          <span className="nav-label">{tr("Trash", "回收站")}</span>
           <span className="nav-count">
             <RollingText value={trashCount} />
           </span>
