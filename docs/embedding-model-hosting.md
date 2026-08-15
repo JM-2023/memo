@@ -262,7 +262,9 @@ export const MODEL_MIRRORS: ReadonlyArray<
    every startup).
 2. Miss → for each mirror in order: `fetch`, stream to an `ArrayBuffer` with
    progress callbacks (`content-length` is used where supplied; the big file
-   dominates, so per-byte progress ≈ overall progress).
+   dominates, so per-byte progress ≈ overall progress). Opening the response
+   and every body read have a 30-second inactivity deadline; a stalled mirror
+   is aborted before the next source is tried.
 3. Verify `crypto.subtle.digest("SHA-256", buf)` and the byte length against
    the manifest. Mismatch → discard, log a console warning naming the mirror
    (possible tamper or truncation), try the next mirror.
@@ -388,9 +390,14 @@ can rot. As implemented (onnxruntime-web 1.26):
 ### 6.4 Index invalidation
 
 The embedding index stores `manifest.version` with its vectors. On mismatch
-(model upgraded), rebuild in the background and keep serving the old index
-until the rebuild completes. Publishing a new model release without bumping
-`version` is a bug; hashes make it impossible to do accidentally.
+(model upgraded), the old index is rejected and rebuilt in the background.
+Publishing a new model release without bumping `version` is a bug; hashes make
+it impossible to do accidentally. Each row also stores a compact fingerprint
+of the exact text windows embedded, plus its chunk position and count. When a
+memo timestamp changes, that distinguishes attachment-only edits from text
+edits without re-embedding unchanged text, and it lets the planner reject
+incomplete memo rows. Image-only memos are deliberately settled with zero
+vector rows.
 
 ### 6.5 First-build latency and hybrid retrieval
 
@@ -402,12 +409,16 @@ batch latency and memory peaks bounded without changing text windows, weights,
 pooling, normalization, or the similarity threshold. Model startup and
 sealed-index loading also run in parallel.
 
-Each completed batch publishes a consistent partial index. Query inference is
-serialized through the same ONNX session and its vector is reused as later
-batches arrive, so semantic matches can appear before the full first build is
-finished. Literal keyword/phrase matching remains active throughout and after
-the build: final results are the union of both paths, with keyword hits in the
-high-confidence tier and semantic-only hits ranked beneath them.
+The indexer publishes the first searchable partial index quickly, checkpoints
+larger builds every 256 completed rows, and publishes the final deterministic
+order. Intermediate views share one preallocated append-only vector buffer, so
+progressive search stays linear instead of recopying the whole accumulated
+index after every eight-text batch. Query inference is serialized through the
+same ONNX session and its vector is reused as later checkpoints arrive, so
+semantic matches can appear before the full first build is finished. Literal
+keyword/phrase matching remains active throughout and after the build: final
+results are the union of both paths, with keyword hits in the high-confidence
+tier and semantic-only hits ranked beneath them.
 
 Tag, calendar day, statistics drilldown, and structured Filters form one
 intersection before retrieval. The same scoped memo IDs gate semantic dot

@@ -134,6 +134,42 @@ describe("model loader", () => {
     expect(await storedModelState(manifest)).toBe("complete");
   });
 
+  it("abandons a mirror that stalls before response headers", async () => {
+    const { manifest, bodies } = await makeManifest("v-header-stall", { "config.json": "fallback-body" });
+    const calls: string[] = [];
+    const impl = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("primary.test")) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+        });
+      }
+      return Promise.resolve(new Response(bodies.get("config.json")!));
+    }) as typeof fetch;
+
+    await ensureModelFiles(undefined, { manifest, fetchImpl: impl, mirrorUrls, stallTimeoutMs: 5 });
+
+    expect(calls).toEqual(["https://primary.test/config.json", "https://fallback.test/config.json"]);
+    expect(await storedModelState(manifest)).toBe("complete");
+  });
+
+  it("abandons a response body that stops making progress", async () => {
+    const { manifest, bodies } = await makeManifest("v-body-stall", { "config.json": "fallback-body" });
+    const calls: string[] = [];
+    const stalledBody = new ReadableStream<Uint8Array>({ start() {} });
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      return url.includes("primary.test") ? new Response(stalledBody) : new Response(bodies.get("config.json")!);
+    }) as typeof fetch;
+
+    await ensureModelFiles(undefined, { manifest, fetchImpl: impl, mirrorUrls, stallTimeoutMs: 5 });
+
+    expect(calls).toEqual(["https://primary.test/config.json", "https://fallback.test/config.json"]);
+    expect(await storedModelState(manifest)).toBe("complete");
+  });
+
   it("discards tampered bytes no matter which mirror served them", async () => {
     const { manifest, bodies } = await makeManifest("v-tamper", { "config.json": "honest-body" });
     // Same length, different content: only the hash can catch it.

@@ -52,7 +52,11 @@ export interface ModelLoaderOptions {
   manifest?: ModelManifest;
   fetchImpl?: typeof fetch;
   mirrorUrls?: (file: ModelFileSpec, manifest: ModelManifest) => string[];
+  /** Maximum silence while opening or reading one mirror before failover. */
+  stallTimeoutMs?: number;
 }
+
+const MODEL_FETCH_STALL_TIMEOUT_MS = 30_000;
 
 /**
  * Session-only overlay for bytes that could not be persisted (quota, private
@@ -119,34 +123,61 @@ async function fetchExactBytes(
   fetchImpl: typeof fetch,
   url: string,
   expectedBytes: number,
-  onChunk: (bytes: number) => void
+  onChunk: (bytes: number) => void,
+  stallTimeoutMs: number
 ): Promise<ArrayBuffer> {
-  const response = await fetchImpl(url);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const body = response.body;
-  if (!body) {
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength !== expectedBytes) throw new Error(`received ${buffer.byteLength} bytes, expected ${expectedBytes}`);
-    onChunk(expectedBytes);
-    return buffer;
-  }
-  const bytes = new Uint8Array(expectedBytes);
-  const reader = body.getReader();
-  let offset = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value || value.byteLength === 0) continue;
-    if (offset + value.byteLength > expectedBytes) {
-      await reader.cancel().catch(() => {});
-      throw new Error(`body exceeds the pinned ${expectedBytes} bytes`);
+  const controller = new AbortController();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  const waitForNetwork = <T>(operation: Promise<T>): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error(`stalled for ${stallTimeoutMs} ms`));
+      }, stallTimeoutMs);
+      operation.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (cause) => {
+          clearTimeout(timer);
+          reject(cause);
+        }
+      );
+    });
+
+  try {
+    const response = await waitForNetwork(fetchImpl(url, { signal: controller.signal }));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const body = response.body;
+    if (!body) {
+      const buffer = await waitForNetwork(response.arrayBuffer());
+      if (buffer.byteLength !== expectedBytes) throw new Error(`received ${buffer.byteLength} bytes, expected ${expectedBytes}`);
+      onChunk(expectedBytes);
+      return buffer;
     }
-    bytes.set(value, offset);
-    offset += value.byteLength;
-    onChunk(value.byteLength);
+    const bytes = new Uint8Array(expectedBytes);
+    reader = body.getReader();
+    let offset = 0;
+    for (;;) {
+      const { done, value } = await waitForNetwork(reader.read());
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      if (offset + value.byteLength > expectedBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`body exceeds the pinned ${expectedBytes} bytes`);
+      }
+      bytes.set(value, offset);
+      offset += value.byteLength;
+      onChunk(value.byteLength);
+    }
+    if (offset !== expectedBytes) throw new Error(`received ${offset} bytes, expected ${expectedBytes}`);
+    return bytes.buffer;
+  } catch (cause) {
+    controller.abort();
+    if (reader) void reader.cancel().catch(() => {});
+    throw cause;
   }
-  if (offset !== expectedBytes) throw new Error(`received ${offset} bytes, expected ${expectedBytes}`);
-  return bytes.buffer;
 }
 
 async function keepBytes(manifest: ModelManifest, file: ModelFileSpec, buffer: ArrayBuffer, generation: number): Promise<void> {
@@ -177,6 +208,8 @@ export async function ensureModelFiles(
   const manifest = options.manifest ?? MODEL_MANIFEST;
   const fetchImpl = options.fetchImpl ?? fetch;
   const urlsFor = options.mirrorUrls ?? modelMirrorUrls;
+  const stallTimeoutMs = options.stallTimeoutMs ?? MODEL_FETCH_STALL_TIMEOUT_MS;
+  if (!Number.isFinite(stallTimeoutMs) || stallTimeoutMs <= 0) throw new RangeError("stallTimeoutMs must be a positive number");
   const generation = storageGeneration;
 
   await purgeOtherModelVersions(manifest.version);
@@ -202,10 +235,16 @@ export async function ensureModelFiles(
     for (const url of urlsFor(file, manifest)) {
       emit(file.requestPath);
       try {
-        const candidate = await fetchExactBytes(fetchImpl, url, file.bytes, (chunkBytes) => {
-          loadedBytes += chunkBytes;
-          emit(file.requestPath);
-        });
+        const candidate = await fetchExactBytes(
+          fetchImpl,
+          url,
+          file.bytes,
+          (chunkBytes) => {
+            loadedBytes += chunkBytes;
+            emit(file.requestPath);
+          },
+          stallTimeoutMs
+        );
         assertStorageGeneration(generation);
         if (!(await verifyModelBytes(file, candidate))) throw new Error("SHA-256 mismatch");
         assertStorageGeneration(generation);

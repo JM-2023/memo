@@ -2724,23 +2724,29 @@ export default function App() {
                 disabled={editingId !== null}
                 aria-label={tr("Semantic Search", "语义搜索")}
                 title={
-                  semantic.status === "indexing"
-                    ? tr(
-                        `Semantic search — indexing${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}; keyword search remains available`,
-                        `语义搜索——索引中${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}；关键词搜索仍可用`
-                      )
-                    : semantic.queryProgress
-                      ? tr("Semantic Search Is Working — Open Progress", "语义搜索正在工作——打开进度")
-                      : semantic.status === "preparing"
-                        ? tr("Semantic Model Is Loading — Open Progress", "语义模型正在加载——打开进度")
-                    : semanticOn
+                  semantic.status === "error"
+                    ? tr("Semantic search stopped — open details", "语义搜索已停止——打开详情")
+                    : semantic.status === "indexing"
                       ? tr(
-                          "Semantic search is on — keyword matches stay first and related memos are added",
-                          "语义搜索已开启——关键词命中优先，并补充意思相关的笔记"
+                          `Semantic search — indexing${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}; keyword search remains available`,
+                          `语义搜索——索引中${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}；关键词搜索仍可用`
                         )
-                      : tr("Semantic search — find memos by meaning", "语义搜索——按意思找笔记")
+                      : semantic.queryProgress
+                        ? tr("Semantic Search Is Working — Open Progress", "语义搜索正在工作——打开进度")
+                        : semantic.status === "preparing"
+                          ? tr("Semantic Model Is Loading — Open Progress", "语义模型正在加载——打开进度")
+                          : semanticOn
+                            ? tr(
+                                "Semantic search is on — keyword matches stay first and related memos are added",
+                                "语义搜索已开启——关键词命中优先，并补充意思相关的笔记"
+                              )
+                            : tr("Semantic search — find memos by meaning", "语义搜索——按意思找笔记")
                 }
                 onClick={() => {
+                  if (semantic.status === "error") {
+                    setModelSettingsOpen(true);
+                    return;
+                  }
                   // While work is unfinished the Brain is a monitor, not a
                   // switch: it opens the panel and marks the progress block.
                   if (semanticBusy) {
@@ -2903,9 +2909,11 @@ export default function App() {
             setEnableSemanticWhenReady(false);
             setSemanticOn(false);
           }}
+          onSemanticRetry={semantic.retry}
           semanticStatus={semantic.status}
           semanticProgress={semantic.progress}
           semanticQueryProgress={semantic.queryProgress}
+          semanticError={semantic.error}
           semanticQuery={view === "memos" ? feedQuery : ""}
           attend={modelSettingsAttend}
         />

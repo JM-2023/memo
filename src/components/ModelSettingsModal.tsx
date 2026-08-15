@@ -22,7 +22,7 @@ import {
   runModelSelfTest,
   subscribeModelRuntimeProgress
 } from "../lib/modelRuntime";
-import { deleteSemanticIndexDb, EMBED_BATCH_TEXTS } from "../lib/semanticIndex";
+import { deleteSemanticIndexDb, EMBED_BATCH_TEXTS, type SemanticIndexProgress } from "../lib/semanticIndex";
 import type { OrbState } from "../lib/thinkingOrb";
 import { ThinkingOrb } from "./ThinkingOrb";
 
@@ -31,9 +31,11 @@ interface ModelSettingsModalProps {
   onModelCleared: () => void;
   /** Completes a Brain-toggle request that first had to download the model. */
   onModelReady?: () => void;
+  onSemanticRetry?: () => void;
   semanticStatus?: SemanticSearchStatus;
-  semanticProgress?: { done: number; total: number } | null;
+  semanticProgress?: SemanticIndexProgress | null;
   semanticQueryProgress?: SemanticQueryProgress | null;
+  semanticError?: string | null;
   /** The live search text — quoted by the "Understanding query" meta line. */
   semanticQuery?: string;
   /**
@@ -118,9 +120,11 @@ export function ModelSettingsModal({
   onClose,
   onModelCleared,
   onModelReady,
+  onSemanticRetry,
   semanticStatus = "off",
   semanticProgress = null,
   semanticQueryProgress = null,
+  semanticError = null,
   semanticQuery = "",
   attend = 0
 }: ModelSettingsModalProps) {
@@ -322,18 +326,20 @@ export function ModelSettingsModal({
               ? "clearing"
               : phase.kind === "error"
                 ? "failed"
-                : semanticStatus === "preparing"
-                  ? "loading"
-                  : semanticStatus === "indexing"
-                    ? "indexing"
-                    : semanticQueryProgress
-                      ? "searching"
-                      : "ready";
+                : semanticStatus === "error"
+                  ? "failed"
+                  : semanticStatus === "preparing"
+                    ? "loading"
+                    : semanticStatus === "indexing"
+                      ? "indexing"
+                      : semanticQueryProgress
+                        ? "searching"
+                        : "ready";
 
   const busy = phase.kind === "checking" || phase.kind === "downloading" || phase.kind === "activating" || phase.kind === "clearing";
   const idlePartial = phase.kind === "idle" && phase.stored === "partial";
   const failures = phase.kind === "error" ? phase.failures : [];
-  const errorOrigin = phase.kind === "error" ? phase.origin : null;
+  const errorOrigin = phase.kind === "error" ? phase.origin : semanticStatus === "error" ? "semantic" : null;
 
   const headline =
     stateId === "checking"
@@ -354,11 +360,13 @@ export function ModelSettingsModal({
                   ? tr("Searching this view", "正在搜索当前范围")
                   : stateId === "clearing"
                     ? tr("Clearing model", "正在清除模型")
-                    : errorOrigin === "activate"
-                      ? tr("Model couldn't start", "模型启动失败")
-                      : errorOrigin === "clear"
-                        ? tr("Couldn't clear the model", "无法清除模型")
-                        : tr("Download failed", "下载失败");
+                    : errorOrigin === "semantic"
+                      ? tr("Semantic search stopped", "语义搜索已停止")
+                      : errorOrigin === "activate"
+                        ? tr("Model couldn't start", "模型启动失败")
+                        : errorOrigin === "clear"
+                          ? tr("Couldn't clear the model", "无法清除模型")
+                          : tr("Download failed", "下载失败");
 
   const subline =
     stateId === "checking"
@@ -382,11 +390,16 @@ export function ModelSettingsModal({
                   ? tr("Ranking only the memos inside the current view.", "仅对当前范围内的笔记排序。")
                   : stateId === "clearing"
                     ? tr("Removing model files and the encrypted semantic index.", "正在删除模型文件和加密语义索引。")
-                    : failures.length > 0
-                      ? tr("No source could deliver the model. Keyword search is unaffected.", "所有下载源均无法提供模型；关键词搜索不受影响。")
-                      : phase.kind === "error"
-                        ? phase.message
-                        : "";
+                    : errorOrigin === "semantic"
+                      ? tr(
+                          `Semantic search hit an error. ${semanticError || "Retry to start it again."}`,
+                          `语义搜索遇到错误。${semanticError || "请重试以重新启动。"}`
+                        )
+                      : failures.length > 0
+                        ? tr("No source could deliver the model. Keyword search is unaffected.", "所有下载源均无法提供模型；关键词搜索不受影响。")
+                        : phase.kind === "error"
+                          ? phase.message
+                          : "";
 
   /* One true progress surface per working state, every figure real. */
   const progress: ProgressView = (() => {
@@ -451,8 +464,11 @@ export function ModelSettingsModal({
     if (stateId === "indexing") {
       const done = semanticProgress?.done ?? 0;
       const total = semanticProgress?.total ?? 0;
-      const batches = Math.max(1, Math.ceil(total / EMBED_BATCH_TEXTS));
-      const batch = Math.min(batches, Math.floor(done / EMBED_BATCH_TEXTS) + 1);
+      const doneChunks = semanticProgress?.doneChunks ?? 0;
+      const totalChunks = semanticProgress?.totalChunks ?? 0;
+      const batches = Math.max(1, Math.ceil(totalChunks / EMBED_BATCH_TEXTS));
+      const completedBatches = Math.min(batches, Math.ceil(doneChunks / EMBED_BATCH_TEXTS));
+      const batch = doneChunks >= totalChunks ? batches : Math.min(batches, Math.floor(doneChunks / EMBED_BATCH_TEXTS) + 1);
       const fmt = (n: number) => n.toLocaleString("en-US");
       const sealed = total > 0 && done >= total;
       return {
@@ -465,7 +481,11 @@ export function ModelSettingsModal({
         percent: total > 0 ? (done / total) * 100 : 0,
         stages: [
           row(tr("Memos embedded", "已嵌入笔记"), tr(`${fmt(done)} of ${fmt(total)}`, `${fmt(done)} / ${fmt(total)}`), "active"),
-          row(tr("Batches written", "已写入批次"), tr(`${batch} of ${batches}`, `${batch} / ${batches}`), done > 0 ? "done" : "idle"),
+          row(
+            tr("Batches processed", "已处理批次"),
+            tr(`${completedBatches} of ${batches}`, `${completedBatches} / ${batches}`),
+            completedBatches >= batches ? "done" : completedBatches > 0 ? "active" : "idle"
+          ),
           row(tr("Sealed with the device key", "已用设备密钥加密"), sealed ? tr("Done", "完成") : tr("On write", "写入时"), sealed ? "done" : "idle")
         ]
       };
@@ -510,20 +530,27 @@ export function ModelSettingsModal({
     stateId === "failed"
       ? errorOrigin === "clear"
         ? tr("Try again", "重试")
-        : tr("Retry download", "重试下载")
+        : errorOrigin === "semantic"
+          ? tr("Retry semantic search", "重试语义搜索")
+          : tr("Retry download", "重试下载")
       : idlePartial
         ? tr("Resume download", "继续下载")
         : tr("Download model", "下载模型");
   const storedBytes = MODEL_MANIFEST.files.reduce((sum, file) => sum + (present.has(file.requestPath) ? file.bytes : 0), 0);
   const actionNote =
     stateId === "failed"
-      ? errorOrigin === "clear"
+      ? errorOrigin === "clear" || errorOrigin === "semantic"
         ? ""
         : tr(`About ${TOTAL_MB} MB`, `约 ${TOTAL_MB} MB`)
       : idlePartial
         ? tr(`About ${megabytes(TOTAL_BYTES - storedBytes)} remaining`, `还需约 ${megabytes(TOTAL_BYTES - storedBytes)}`)
         : tr(`About ${TOTAL_MB} MB · one time`, `约 ${TOTAL_MB} MB · 仅需一次`);
-  const onAction = errorOrigin === "clear" ? () => void clearModel() : () => void download();
+  const onAction =
+    errorOrigin === "clear"
+      ? () => void clearModel()
+      : errorOrigin === "semantic"
+        ? () => onSemanticRetry?.()
+        : () => void download();
 
   /* This device's facts. While a download runs, files count as stored the
      moment their bytes are fully down (each is verified before storage), so

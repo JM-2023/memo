@@ -1,11 +1,12 @@
 import "fake-indexeddb/auto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { adoptCacheKey, forgetCacheKey } from "../src/lib/cache";
 import { EMBEDDING_DIM } from "../src/lib/modelRuntime";
 import {
   SEMANTIC_CHUNK_CHARS,
   SEMANTIC_CHUNK_OVERLAP,
   SEMANTIC_MAX_CHUNKS,
+  captureSemanticIndexWriteToken,
   chunkMemoContent,
   decodeSemanticIndex,
   deleteSemanticIndexDb,
@@ -15,6 +16,7 @@ import {
   planSemanticIndex,
   reconcileSemanticIndex,
   saveSemanticIndex,
+  semanticContentKey,
   searchSemanticIndex,
   searchSemanticIndexAsync,
   type SemanticIndex
@@ -39,7 +41,13 @@ function indexWith(rows: { id: string; vector: Float32Array }[]): SemanticIndex 
   rows.forEach((row, i) => vectors.set(row.vector, i * EMBEDDING_DIM));
   return {
     modelVersion: "test-r1",
-    rows: rows.map((row) => ({ id: row.id, updatedAt: "2026-08-15T00:00:00.000Z" })),
+    rows: rows.map((row) => ({
+      id: row.id,
+      updatedAt: "2026-08-15T00:00:00.000Z",
+      contentKey: `fixture:${row.id}`,
+      chunkIndex: 0,
+      chunkCount: 1
+    })),
     vectors
   };
 }
@@ -79,6 +87,39 @@ describe("plan and reconcile", () => {
     expect(await reconcileSemanticIndex(built, memos, countingEmbed)).toBe(built);
   });
 
+  it("settles image-only memos without creating vector rows", async () => {
+    const memo = memoOf("image-only", "   \n ");
+    const empty = emptySemanticIndex("test-r1");
+
+    expect(semanticContentKey(memo.content)).toBeNull();
+    expect(planSemanticIndex(empty, [memo])).toEqual({ stale: [], keptRowIndices: [], refreshedUpdatedAt: [] });
+    expect(await reconcileSemanticIndex(empty, [memo], countingEmbed)).toBe(empty);
+  });
+
+  it("drops old text rows when a memo becomes image-only, then settles", async () => {
+    const textMemo = memoOf("a", "text before the image-only edit");
+    const built = await reconcileSemanticIndex(emptySemanticIndex("test-r1"), [textMemo], countingEmbed);
+    const imageOnly = memoOf("a", "", "2026-08-15T09:00:00.000Z");
+
+    const cleared = await reconcileSemanticIndex(built, [imageOnly], countingEmbed);
+    expect(cleared.rows).toEqual([]);
+    expect(planSemanticIndex(cleared, [imageOnly])).toEqual({ stale: [], keptRowIndices: [], refreshedUpdatedAt: [] });
+  });
+
+  it("keys invalidation to embedded text instead of attachment timestamps", async () => {
+    const original = memoOf("a", "unchanged text");
+    const built = await reconcileSemanticIndex(emptySemanticIndex("test-r1"), [original], countingEmbed);
+    const attachmentOnlyEdit = memoOf("a", original.content, "2026-08-15T09:00:00.000Z");
+    const embed = vi.fn(countingEmbed);
+
+    expect(planSemanticIndex(built, [attachmentOnlyEdit]).stale).toEqual([]);
+    const refreshed = await reconcileSemanticIndex(built, [attachmentOnlyEdit], embed);
+    expect(embed).not.toHaveBeenCalled();
+    expect(refreshed).not.toBe(built);
+    expect(refreshed.rows[0].updatedAt).toBe(attachmentOnlyEdit.updatedAt);
+    expect(await reconcileSemanticIndex(refreshed, [attachmentOnlyEdit], embed)).toBe(refreshed);
+  });
+
   it("re-embeds an edited memo and drops a deleted one", async () => {
     const memos = [memoOf("a", "旧内容"), memoOf("b", "kept")];
     const built = await reconcileSemanticIndex(emptySemanticIndex("test-r1"), memos, countingEmbed);
@@ -103,14 +144,14 @@ describe("plan and reconcile", () => {
     expect(partial.rows).toEqual([]);
   });
 
-  it("reports progress in memos", async () => {
-    const memos = [memoOf("a", "one"), memoOf("b", "two"), memoOf("c", "three")];
-    const seen: [number, number][] = [];
+  it("reports progress in memos and actual text chunks", async () => {
+    const memos = [memoOf("a", "one"), memoOf("b", "x".repeat(1000)), memoOf("c", "three")];
+    const seen: Array<{ done: number; total: number; doneChunks: number; totalChunks: number }> = [];
     await reconcileSemanticIndex(emptySemanticIndex("test-r1"), memos, countingEmbed, {
-      onProgress: (done, total) => seen.push([done, total])
+      onProgress: (progress) => seen.push(progress)
     });
-    expect(seen[0]).toEqual([0, 3]);
-    expect(seen.at(-1)).toEqual([3, 3]);
+    expect(seen[0]).toEqual({ done: 0, total: 3, doneChunks: 0, totalChunks: 5 });
+    expect(seen.at(-1)).toEqual({ done: 3, total: 3, doneChunks: 5, totalChunks: 5 });
   });
 
   it("batches similar lengths, publishes partial indexes, and restores final row order", async () => {
@@ -120,16 +161,18 @@ describe("plan and reconcile", () => {
     });
     const vectorValue = new Map(memos.map((memo, index) => [memo.content, index + 1]));
     const batches: string[][] = [];
-    const progress: [number, number][] = [];
+    const progress: Array<{ done: number; total: number; doneChunks: number; totalChunks: number }> = [];
     const partialSizes: number[] = [];
     const embed = async (texts: readonly string[]) => {
       batches.push([...texts]);
-      if (batches.length === 1) expect(progress.at(-1)).toEqual([0, memos.length]);
+      if (batches.length === 1) {
+        expect(progress.at(-1)).toEqual({ done: 0, total: memos.length, doneChunks: 0, totalChunks: memos.length });
+      }
       return texts.map((text) => axis(0, vectorValue.get(text)!));
     };
 
     const built = await reconcileSemanticIndex(emptySemanticIndex("test-r1"), memos, embed, {
-      onProgress: (done, total) => progress.push([done, total]),
+      onProgress: (next) => progress.push(next),
       onPartial: (partial) => partialSizes.push(partial.rows.length)
     });
 
@@ -149,7 +192,28 @@ describe("plan and reconcile", () => {
     expect(partialSizes.at(-1)).toBe(memos.length);
     expect(built.rows.map((row) => row.id)).toEqual(memos.map((memo) => memo.id));
     expect(built.rows.map((_, index) => built.vectors[index * EMBEDDING_DIM])).toEqual(memos.map((_, index) => index + 1));
-    expect(progress.at(-1)).toEqual([memos.length, memos.length]);
+    expect(progress.at(-1)).toEqual({
+      done: memos.length,
+      total: memos.length,
+      doneChunks: memos.length,
+      totalChunks: memos.length
+    });
+  });
+
+  it("bounds partial publications and shares their append-only vector buffer", async () => {
+    const memos = Array.from({ length: 512 }, (_, index) => memoOf(`memo-${index}`, `memo ${index}`));
+    const partials: SemanticIndex[] = [];
+
+    const built = await reconcileSemanticIndex(emptySemanticIndex("test-r1"), memos, countingEmbed, {
+      onPartial: (partial) => partials.push(partial)
+    });
+
+    expect(partials.length).toBeLessThanOrEqual(4);
+    expect(partials[0].rows.length).toBeGreaterThan(0);
+    expect(partials.at(-1)?.rows.length).toBe(memos.length);
+    const intermediateBuffers = partials.slice(0, -1).map((partial) => partial.vectors.buffer);
+    expect(new Set(intermediateBuffers).size).toBeLessThanOrEqual(1);
+    expect(built.rows.map((row) => row.id)).toEqual(memos.map((memo) => memo.id));
   });
 });
 
@@ -250,6 +314,17 @@ describe("sealed persistence", () => {
     expect(await loadSemanticIndex("test-r1")).not.toBeNull();
 
     await deleteSemanticIndexDb();
+
+    expect(await loadSemanticIndex("test-r1")).toBeNull();
+    forgetCacheKey();
+  });
+
+  it("rejects a late save captured before the semantic index was cleared", async () => {
+    adoptCacheKey(KEY_B64);
+    const token = captureSemanticIndexWriteToken();
+
+    await deleteSemanticIndexDb();
+    await saveSemanticIndex(indexWith([{ id: "late", vector: axis(1) }]), token);
 
     expect(await loadSemanticIndex("test-r1")).toBeNull();
     forgetCacheKey();

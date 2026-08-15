@@ -155,7 +155,7 @@ describe("semantic search settings", () => {
           onClose={vi.fn()}
           onModelCleared={vi.fn()}
           semanticStatus="indexing"
-          semanticProgress={{ done: 3, total: 10 }}
+          semanticProgress={{ done: 3, total: 10, doneChunks: 16, totalChunks: 60 }}
           semanticQueryProgress={{ stage: "ranking", done: 25, total: 100 }}
         />
       </LanguageProvider>
@@ -167,6 +167,7 @@ describe("semantic search settings", () => {
     expect(bars[0].getAttribute("aria-label")).toBe("Semantic index");
     expect(bars[0].getAttribute("aria-valuenow")).toBe("30");
     expect(bars[0].getAttribute("aria-valuetext")).toBe("3 / 10");
+    expect(screen.getByText("Batch 3 of 8 · length-grouped, yielded between slices")).toBeTruthy();
   });
 
   it("ranks the current view with live figures once the index is ready", async () => {
@@ -238,7 +239,7 @@ describe("semantic search settings", () => {
           onClose={vi.fn()}
           onModelCleared={vi.fn()}
           semanticStatus="indexing"
-          semanticProgress={{ done: 3, total: 10 }}
+          semanticProgress={{ done: 3, total: 10, doneChunks: 16, totalChunks: 60 }}
         />
       </LanguageProvider>
     );
@@ -250,6 +251,28 @@ describe("semantic search settings", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("Memos embedded")).toBeTruthy();
     expect(screen.getByText("Sealed with the device key")).toBeTruthy();
+  });
+
+  it("shows semantic failures and offers a direct retry", async () => {
+    const user = userEvent.setup();
+    const onSemanticRetry = vi.fn();
+    render(
+      <LanguageProvider>
+        <ModelSettingsModal
+          onClose={vi.fn()}
+          onModelCleared={vi.fn()}
+          onSemanticRetry={onSemanticRetry}
+          semanticStatus="error"
+          semanticError="Index storage failed"
+        />
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("Semantic search stopped")).toBeTruthy();
+    expect(screen.queryByText("Ready")).toBeNull();
+    expect(screen.getByText("Semantic search hit an error. Index storage failed")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Retry semantic search" }));
+    expect(onSemanticRetry).toHaveBeenCalledOnce();
   });
 
   it("confirms a clear from Advanced, disables semantic search, and clears stores and runtime", async () => {

@@ -1,23 +1,26 @@
 // Orchestrates semantic search for the feed: activates the on-device model,
 // keeps the sealed vector index reconciled with the live memos, and turns
 // the (debounced) query into a ranked id → score map. The first build exposes
-// consistent partial indexes batch by batch, so the feed can add semantic
-// matches progressively while ordinary keyword search remains available.
+// consistent partial indexes at bounded checkpoints, so the feed can add
+// semantic matches progressively without recopying the full vector corpus
+// after every batch. Ordinary keyword search remains available throughout.
 // Everything heavy — model activation, embedding, ranking — happens off the
 // render path; the hook only ever publishes small state transitions.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { storedModelState } from "../lib/modelLoader";
 import { MODEL_MANIFEST } from "../lib/modelManifest";
 import { getEmbedder, RETRIEVAL_QUERY_PREFIX, runModelSelfTest, type EmbedFn } from "../lib/modelRuntime";
 import {
   emptySemanticIndex,
+  captureSemanticIndexWriteToken,
   loadSemanticIndex,
   planSemanticIndex,
   reconcileSemanticIndex,
   saveSemanticIndex,
   searchSemanticIndexAsync,
-  type SemanticIndex
+  type SemanticIndex,
+  type SemanticIndexProgress
 } from "../lib/semanticIndex";
 import type { Memo } from "../lib/types";
 
@@ -33,7 +36,7 @@ export type SemanticSearchStatus =
 export interface SemanticSearchState {
   status: SemanticSearchStatus;
   /** Memos embedded vs. memos pending, while indexing. */
-  progress: { done: number; total: number } | null;
+  progress: SemanticIndexProgress | null;
   /** Observable stages for the current query and scoped vector ranking. */
   queryProgress: SemanticQueryProgress | null;
   /**
@@ -42,6 +45,10 @@ export interface SemanticSearchState {
    * matching active and merges this map when it is available.
    */
   results: ReadonlyMap<string, number> | null;
+  /** Actionable detail for activation, indexing, or query failures. */
+  error: string | null;
+  /** Retry activation without requiring an off/on toggle. */
+  retry: () => void;
 }
 
 export interface SemanticQueryProgress {
@@ -53,6 +60,10 @@ export interface SemanticQueryProgress {
 const QUERY_DEBOUNCE_MS = 250;
 const RECONCILE_DEBOUNCE_MS = 1500;
 
+function semanticErrorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause || "Unknown semantic search error");
+}
+
 export function useSemanticSearch(
   enabled: boolean,
   memos: readonly Memo[],
@@ -60,9 +71,11 @@ export function useSemanticSearch(
   allowedMemoIds: ReadonlySet<string> | null = null
 ): SemanticSearchState {
   const [status, setStatus] = useState<SemanticSearchStatus>("off");
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [progress, setProgress] = useState<SemanticIndexProgress | null>(null);
   const [queryProgress, setQueryProgress] = useState<SemanticQueryProgress | null>(null);
   const [results, setResults] = useState<ReadonlyMap<string, number> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [retryEpoch, setRetryEpoch] = useState(0);
   /** Bumped whenever index content changes, so the search effect re-ranks. */
   const [indexEpoch, setIndexEpoch] = useState(0);
 
@@ -76,6 +89,7 @@ export function useSemanticSearch(
   const searchGenerationRef = useRef(0);
   const memosRef = useRef(memos);
   memosRef.current = memos;
+  const retry = useCallback(() => setRetryEpoch((epoch) => epoch + 1), []);
 
   // Activation: model → persisted index → first reconcile. Disabling (or a
   // re-enable) bumps the generation, which parks any in-flight loop.
@@ -83,17 +97,21 @@ export function useSemanticSearch(
     if (!enabled) {
       generationRef.current += 1;
       embedRef.current = null;
+      indexRef.current = null;
       queryVectorRef.current = null;
       queryTaskRef.current = null;
       setStatus("off");
       setProgress(null);
       setQueryProgress(null);
       setResults(null);
+      setError(null);
       return;
     }
     const generation = (generationRef.current += 1);
     const alive = () => generationRef.current === generation;
+    const writeToken = captureSemanticIndexWriteToken();
     void (async () => {
+      setError(null);
       setStatus("preparing");
       if ((await storedModelState()) !== "complete") {
         if (alive()) setStatus("model-missing");
@@ -114,10 +132,11 @@ export function useSemanticSearch(
         embedRef.current = embed;
         indexRef.current = loadedIndex ?? emptySemanticIndex(MODEL_MANIFEST.version);
         if (!alive()) return;
+        const startingIndex = indexRef.current;
         setStatus("indexing");
-        const reconciled = await reconcileSemanticIndex(indexRef.current, memosRef.current, embed, {
-          onProgress: (done, total) => {
-            if (alive()) setProgress(total > 0 ? { done, total } : null);
+        const reconciled = await reconcileSemanticIndex(startingIndex, memosRef.current, embed, {
+          onProgress: (nextProgress) => {
+            if (alive()) setProgress(nextProgress.total > 0 ? nextProgress : null);
           },
           onPartial: (partial) => {
             if (!alive()) return;
@@ -126,26 +145,28 @@ export function useSemanticSearch(
           },
           shouldContinue: alive,
           onFlush: (partial) => {
+            if (!alive()) return;
             indexRef.current = partial;
-            return saveSemanticIndex(partial);
+            return saveSemanticIndex(partial, writeToken);
           }
         });
-        if (reconciled !== indexRef.current) {
-          indexRef.current = reconciled;
-          await saveSemanticIndex(reconciled);
-        }
+        if (!alive()) return;
+        indexRef.current = reconciled;
+        if (reconciled !== startingIndex) await saveSemanticIndex(reconciled, writeToken);
         if (!alive()) return;
         setProgress(null);
         setIndexEpoch((epoch) => epoch + 1);
+        setError(null);
         setStatus("ready");
-      } catch {
+      } catch (cause) {
         if (alive()) {
           setProgress(null);
+          setError(semanticErrorMessage(cause));
           setStatus("error");
         }
       }
     })();
-  }, [enabled]);
+  }, [enabled, retryEpoch]);
 
   // Later syncs and edits: fold changes in quietly once the dust settles.
   useEffect(() => {
@@ -157,14 +178,15 @@ export function useSemanticSearch(
       const index = indexRef.current;
       if (!embed || !index) return;
       const plan = planSemanticIndex(index, memosRef.current);
-      if (plan.stale.length === 0 && plan.keptRowIndices.length === index.rows.length) return;
+      if (plan.stale.length === 0 && plan.keptRowIndices.length === index.rows.length && plan.refreshedUpdatedAt.length === 0) return;
       void (async () => {
+        const writeToken = captureSemanticIndexWriteToken();
         setStatus("indexing");
         try {
           const reconciled = await reconcileSemanticIndex(index, memosRef.current, embed, {
             shouldContinue: alive,
-            onProgress: (done, total) => {
-              if (alive()) setProgress(total > 0 ? { done, total } : null);
+            onProgress: (nextProgress) => {
+              if (alive()) setProgress(nextProgress.total > 0 ? nextProgress : null);
             },
             onPartial: (partial) => {
               if (!alive()) return;
@@ -172,22 +194,23 @@ export function useSemanticSearch(
               setIndexEpoch((epoch) => epoch + 1);
             },
             onFlush: (partial) => {
+              if (!alive()) return;
               indexRef.current = partial;
-              return saveSemanticIndex(partial);
+              return saveSemanticIndex(partial, writeToken);
             }
           });
           if (!alive()) return;
-          if (reconciled !== indexRef.current) {
-            indexRef.current = reconciled;
-            await saveSemanticIndex(reconciled);
-          }
+          indexRef.current = reconciled;
+          if (reconciled !== index) await saveSemanticIndex(reconciled, writeToken);
           if (!alive()) return;
           setProgress(null);
           setIndexEpoch((epoch) => epoch + 1);
+          setError(null);
           setStatus("ready");
-        } catch {
+        } catch (cause) {
           if (alive()) {
             setProgress(null);
+            setError(semanticErrorMessage(cause));
             setStatus("error");
           }
         }
@@ -256,9 +279,13 @@ export function useSemanticSearch(
         const vector = await task.promise;
         if (queryRef.current.trim() === trimmed) queryVectorRef.current = { query: trimmed, vector };
         await rank(vector);
-      } catch {
+      } catch (cause) {
         if (task && queryTaskRef.current === task) queryTaskRef.current = null;
-        if (current()) setResults(null);
+        if (current()) {
+          setResults(null);
+          setError(semanticErrorMessage(cause));
+          setStatus("error");
+        }
       } finally {
         if (current()) setQueryProgress(null);
       }
@@ -266,8 +293,12 @@ export function useSemanticSearch(
 
     if (cached?.query === trimmed) {
       void rank(cached.vector)
-        .catch(() => {
-          if (current()) setResults(null);
+        .catch((cause: unknown) => {
+          if (current()) {
+            setResults(null);
+            setError(semanticErrorMessage(cause));
+            setStatus("error");
+          }
         })
         .finally(() => current() && setQueryProgress(null));
     } else {
@@ -278,5 +309,5 @@ export function useSemanticSearch(
     };
   }, [enabled, status, query, indexEpoch, allowedMemoIds]);
 
-  return { status, progress, queryProgress, results };
+  return { status, progress, queryProgress, results, error, retry };
 }
