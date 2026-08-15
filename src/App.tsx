@@ -893,7 +893,11 @@ export default function App() {
   // Semantic ranking rides the same search box. Keyword/phrase matching stays
   // active as the high-confidence tier; semantic results add related memos.
   // Trash and review keep plain search, so the hook sees their query as empty.
-  const semantic = useSemanticSearch(semanticOn, activeMemos, view === "memos" ? feedQuery : "", semanticScopeIds);
+  // Activation also waits for phase "ready": the sealed index only opens with
+  // the cache key adopted from the first authenticated response, and starting
+  // earlier misreads "not decryptable yet" as "no index", throwing away the
+  // persisted vectors and re-embedding the whole notebook on every refresh.
+  const semantic = useSemanticSearch(semanticOn && phase === "ready", activeMemos, view === "memos" ? feedQuery : "", semanticScopeIds);
   const semanticResults = view === "memos" ? semantic.results : null;
   const semanticBusy = semantic.status === "preparing" || semantic.status === "indexing" || semantic.queryProgress !== null;
   useEffect(() => {
