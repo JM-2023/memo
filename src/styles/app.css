@@ -1355,7 +1355,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
    --count-gap is only the closest they may ever get, for names long enough to
    push past the floor. */
 .sidebar-nav,
-.tag-section { --row-cap: 216px; --count-gap: 12px; }
+.tag-section { --row-cap: 232px; --count-gap: 12px; }
 
 .sidebar-nav { display: grid; margin: 14px 2px 4px; }
 .nav-item {
