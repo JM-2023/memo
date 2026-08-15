@@ -1,17 +1,4 @@
-import {
-  Check,
-  CircleAlert,
-  Cpu,
-  Download,
-  FileDown,
-  HardDrive,
-  Loader2,
-  RefreshCw,
-  ShieldCheck,
-  Trash2,
-  Upload,
-  X
-} from "lucide-react";
+import { ChevronDown, Cpu, Download, FileDown, HardDrive, RefreshCw, Trash2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
@@ -35,7 +22,7 @@ import {
   runModelSelfTest,
   subscribeModelRuntimeProgress
 } from "../lib/modelRuntime";
-import { deleteSemanticIndexDb } from "../lib/semanticIndex";
+import { deleteSemanticIndexDb, EMBED_BATCH_TEXTS } from "../lib/semanticIndex";
 import type { OrbState } from "../lib/thinkingOrb";
 import { ThinkingOrb } from "./ThinkingOrb";
 
@@ -47,6 +34,13 @@ interface ModelSettingsModalProps {
   semanticStatus?: SemanticSearchStatus;
   semanticProgress?: { done: number; total: number } | null;
   semanticQueryProgress?: SemanticQueryProgress | null;
+  /** The live search text — quoted by the "Understanding query" meta line. */
+  semanticQuery?: string;
+  /**
+   * Non-zero when the Brain button opened the panel to show unfinished work:
+   * the progress block plays its attention wash and is scrolled into view.
+   */
+  attend?: number;
 }
 
 type Phase =
@@ -56,7 +50,24 @@ type Phase =
   | { kind: "activating" }
   | { kind: "clearing" }
   | { kind: "ready" }
-  | { kind: "error"; message: string; failures: readonly MirrorFailure[] };
+  | { kind: "error"; origin: "download" | "activate" | "clear"; message: string; failures: readonly MirrorFailure[] };
+
+/** The redesign's lifecycle vocabulary — one look per moment of the feature. */
+type StateId = "checking" | "idle" | "downloading" | "loading" | "ready" | "indexing" | "searching" | "failed" | "clearing";
+
+/** Which of the six thinking-orbs marks each state wears. Nothing is ever
+    frozen: at rest the mark keeps moving, muted, rather than stopping. */
+const ORB: Record<StateId, OrbState> = {
+  checking: "working",
+  idle: "shaping",
+  downloading: "working",
+  loading: "working",
+  ready: "connecting",
+  indexing: "solving",
+  searching: "searching",
+  failed: "breathing",
+  clearing: "working"
+};
 
 const TOTAL_BYTES = modelTotalBytes();
 const TOTAL_MB = Math.round(TOTAL_BYTES / 1e6);
@@ -78,43 +89,30 @@ function failureHost(url: string): string {
   }
 }
 
-/** One row of the activity ledger: what is running, how far along, a track. */
-interface Meter {
-  key: string;
-  /** Names the work — the part the eye skips once it knows the row. */
-  label: string;
-  /** The figure the eye comes back for: sans with tabular figures, right-aligned. */
-  value: string;
-  percent: number;
-  ariaLabel: string;
+interface StageRow {
+  name: string;
+  note: string;
+  tone: "done" | "active" | "idle";
 }
 
-function ModelMeter({ label, value, percent, ariaLabel }: Omit<Meter, "key">) {
-  const now = Math.max(0, Math.min(100, Math.round(percent)));
-  return (
-    <div className="model-meter">
-      <span className="model-meter-label">{label}</span>
-      <span className="model-meter-value">{value}</span>
-      <div
-        className="model-meter-track"
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={now}
-        aria-valuetext={value}
-        aria-label={ariaLabel}
-      >
-        <span className="model-meter-fill" style={{ width: `${now}%` }} />
-      </div>
-    </div>
-  );
+/** The one live progress surface: a label, the figure, a bar, a meta line,
+    and the expandable stage list beneath it. */
+interface ProgressView {
+  label: string;
+  value: string;
+  meta: string;
+  percent: number;
+  stages: StageRow[];
 }
+
+const EMPTY_PROGRESS: ProgressView = { label: "", value: "", meta: "", percent: 0, stages: [] };
 
 /**
- * Download, verify, activate, import, and export the on-device embedding
- * model. "Ready" is only shown after a real self-test inference on this
- * device; everything else surfaces as an explicit state with a next step.
- * The modal follows the review-settings dialog's shell and motion language.
+ * The Semantic Search panel, redesigned: a 640px surface split into the
+ * present tense (left — the orb, one true progress bar, an expandable stage
+ * list) and this device's facts (right). Downloading, verifying, activating,
+ * importing and exporting the on-device embedding model all live here;
+ * "Ready" is only shown after a real self-test inference on this device.
  */
 export function ModelSettingsModal({
   onClose,
@@ -122,7 +120,9 @@ export function ModelSettingsModal({
   onModelReady,
   semanticStatus = "off",
   semanticProgress = null,
-  semanticQueryProgress = null
+  semanticQueryProgress = null,
+  semanticQuery = "",
+  attend = 0
 }: ModelSettingsModalProps) {
   const { tr } = useI18n();
   const reducedMotion = useReducedMotion();
@@ -138,9 +138,16 @@ export function ModelSettingsModal({
   const [clearNote, setClearNote] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [stagesOpen, setStagesOpen] = useState(false);
+  const [advOpen, setAdvOpen] = useState(false);
 
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const progressBlockRef = useRef<HTMLDivElement>(null);
+  const stagesRegionRef = useRef<HTMLDivElement>(null);
+  const actionRegionRef = useRef<HTMLDivElement>(null);
+  const advRegionRef = useRef<HTMLDivElement>(null);
   const dismissTimer = useRef(0);
   const disposedRef = useRef(false);
   const readyReportedRef = useRef(false);
@@ -175,6 +182,7 @@ export function ModelSettingsModal({
       const detail = cause instanceof Error ? cause.message : String(cause);
       safeSetPhase({
         kind: "error",
+        origin: "activate",
         message: tr(`The model couldn't start on this device. (${detail})`, `模型在此设备上启动失败。（${detail}）`),
         failures: []
       });
@@ -195,6 +203,7 @@ export function ModelSettingsModal({
       if (cause instanceof ModelUnavailableError) {
         safeSetPhase({
           kind: "error",
+          origin: "download",
           message: tr("The model couldn't be downloaded from any source.", "无法从任何下载源获取模型。"),
           failures: cause.failures
         });
@@ -202,6 +211,7 @@ export function ModelSettingsModal({
         const detail = cause instanceof Error ? cause.message : String(cause);
         safeSetPhase({
           kind: "error",
+          origin: "download",
           message: tr(`The download failed. (${detail})`, `下载失败。（${detail}）`),
           failures: []
         });
@@ -261,7 +271,7 @@ export function ModelSettingsModal({
     }
   }
 
-  async function handleClearModel() {
+  const clearModel = useCallback(async () => {
     setConfirmingClear(false);
     setImportNote(null);
     setClearNote(null);
@@ -277,11 +287,12 @@ export function ModelSettingsModal({
       const detail = cause instanceof Error ? cause.message : String(cause);
       safeSetPhase({
         kind: "error",
+        origin: "clear",
         message: tr(`The model couldn't be cleared. (${detail})`, `无法清除模型。（${detail}）`),
         failures: []
       });
     }
-  }
+  }, [onModelCleared, safeSetPhase, tr]);
 
   async function handleExportFile(spec: ModelFileSpec) {
     const bytes = await readModelFileBytes(spec.requestPath);
@@ -296,176 +307,300 @@ export function ModelSettingsModal({
     window.setTimeout(() => URL.revokeObjectURL(url), 4000);
   }
 
-  const busy = phase.kind === "checking" || phase.kind === "downloading" || phase.kind === "activating" || phase.kind === "clearing";
-  const percent = phase.kind === "downloading" ? Math.min(100, Math.floor((phase.loadedBytes / TOTAL_BYTES) * 100)) : 0;
-  const storedBytes = MODEL_MANIFEST.files.reduce((sum, file) => sum + (present.has(file.requestPath) ? file.bytes : 0), 0);
-  const hasStoredFiles = present.size > 0;
-  const showRuntimeProgress = phase.kind === "activating" || semanticStatus === "preparing";
-  const runtimeStageText = (() => {
-    switch (runtimeProgress.stage) {
-      case "loading-code":
-        return tr("Loading the private search engine.", "正在加载本地搜索引擎。");
-      case "loading-files":
-        return tr("Reading verified model files from device storage.", "正在从设备存储读取已验证的模型文件。");
-      case "starting-runtime":
-      case "runtime-ready":
-        return tr("Starting the single-thread background inference worker.", "正在启动单线程后台推理 Worker。");
-      case "self-testing":
-        return tr("Checking multilingual results with a real inference.", "正在通过真实推理检查多语言结果。");
-      case "ready":
-        return tr("The on-device model is ready.", "本机模型已就绪。");
-      case "error":
-        return tr("The model runtime needs attention.", "模型运行时需要处理。");
-      case "idle":
-        return tr("Preparing the on-device model.", "正在准备本机模型。");
-    }
-  })();
-  const indexPercent =
-    semanticProgress && semanticProgress.total > 0 ? (semanticProgress.done / semanticProgress.total) * 100 : 0;
-  const queryPercent = semanticQueryProgress
-    ? semanticQueryProgress.stage === "waiting"
-      ? 4
-      : semanticQueryProgress.stage === "embedding"
-        ? 35
-        : semanticQueryProgress.total > 0
-          ? 50 + (semanticQueryProgress.done / semanticQueryProgress.total) * 50
-          : 100
-    : 0;
-  const queryLabel =
-    semanticQueryProgress?.stage === "waiting"
-      ? tr("Waiting To Search", "等待检索")
-      : semanticQueryProgress?.stage === "embedding"
-        ? tr("Understanding Query", "理解查询")
-        : tr("Ranking Current View", "排序当前范围");
-  const queryDetail =
-    semanticQueryProgress?.stage === "waiting"
-      ? tr("Queued", "已排队")
-      : semanticQueryProgress?.stage === "embedding"
-        ? tr("Step 1 Of 2", "第 1 / 2 步")
-        : `${semanticQueryProgress?.done ?? 0} / ${semanticQueryProgress?.total ?? 0} ${tr("Rows", "行")}`;
-  /**
-   * The orb marks work that builds toward semantic search — fetching the
-   * model, starting it, embedding memos, ranking a query. `solving` is the
-   * index being assembled band by band; `working` is every other step on
-   * that path. Inspection (checking) and teardown (clearing) keep the plain
-   * icon chip: both are brief, and neither is building anything.
-   */
-  const orbState: OrbState | null =
-    phase.kind === "downloading" || phase.kind === "activating"
-      ? "working"
-      : phase.kind !== "ready"
-        ? null
-        : semanticStatus === "indexing"
-          ? "solving"
-          : semanticStatus === "preparing" || semanticQueryProgress !== null
-            ? "working"
-            : null;
+  /* ---- the lifecycle, in the redesign's vocabulary ---------------------- */
 
-  const statusTitle =
+  const stateId: StateId =
     phase.kind === "checking"
-      ? tr("Checking Device", "正在检查设备")
+      ? "checking"
       : phase.kind === "idle"
-        ? phase.stored === "partial"
-          ? tr("Download Incomplete", "下载未完成")
-          : tr("Not Downloaded", "尚未下载")
+        ? "idle"
         : phase.kind === "downloading"
-          ? tr("Downloading Model", "正在下载模型")
+          ? "downloading"
           : phase.kind === "activating"
-            ? runtimeProgress.stage === "self-testing"
-              ? tr("Verifying Model", "正在验证模型")
-              : tr("Loading Model", "正在加载模型")
+            ? "loading"
             : phase.kind === "clearing"
-              ? tr("Clearing Model", "正在清除模型")
-              : phase.kind === "ready"
-                ? semanticStatus === "preparing"
-                  ? tr("Preparing Semantic Search", "正在准备语义搜索")
+              ? "clearing"
+              : phase.kind === "error"
+                ? "failed"
+                : semanticStatus === "preparing"
+                  ? "loading"
                   : semanticStatus === "indexing"
-                    ? tr("Building Search Index", "正在构建搜索索引")
+                    ? "indexing"
                     : semanticQueryProgress
-                      ? tr("Searching Current View", "正在搜索当前范围")
-                      : tr("Ready", "已就绪")
-                : tr("Action Needed", "需要处理");
+                      ? "searching"
+                      : "ready";
 
-  const statusText =
-    phase.kind === "checking"
-      ? tr("Looking for verified model files on this device.", "正在查找此设备上的已验证模型文件。")
-      : phase.kind === "idle"
-        ? phase.stored === "partial"
-          ? tr("Some verified files are present. Resume to finish the download.", "已有部分已验证文件，可以继续下载。")
-          : tr("Download the model to search your memos by meaning.", "下载模型后即可按意思搜索笔记。")
-        : phase.kind === "downloading"
-          ? tr(`${megabytes(phase.loadedBytes)} of ${megabytes(TOTAL_BYTES)}`, `${megabytes(phase.loadedBytes)} / ${megabytes(TOTAL_BYTES)}`)
-          : phase.kind === "activating"
-            ? runtimeStageText
-            : phase.kind === "clearing"
-              ? tr("Removing model files and the encrypted semantic index.", "正在删除模型文件和加密语义索引。")
-              : phase.kind === "ready"
-                ? semanticStatus === "preparing"
-                  ? runtimeStageText
-                  : semanticStatus === "indexing"
-                    ? tr(
-                        "Embedding memos in the background. Keyword search and the rest of the app remain available.",
-                        "正在后台为笔记生成向量；关键词搜索和应用其他功能仍可使用。"
-                      )
-                    : semanticQueryProgress?.stage === "ranking"
-                      ? tr("Ranking only memos inside the current view.", "仅对当前范围内的笔记进行排序。")
-                      : semanticQueryProgress
-                        ? tr("Understanding your query on this device.", "正在此设备上理解你的查询。")
-                        : tr("Verified on this device and available offline.", "已在此设备上验证，可离线使用。")
-                : phase.message;
+  const busy = phase.kind === "checking" || phase.kind === "downloading" || phase.kind === "activating" || phase.kind === "clearing";
+  const idlePartial = phase.kind === "idle" && phase.stored === "partial";
+  const failures = phase.kind === "error" ? phase.failures : [];
+  const errorOrigin = phase.kind === "error" ? phase.origin : null;
 
-  const statusIcon =
-    phase.kind === "ready" ? (
-      <Check size={17} aria-hidden="true" />
-    ) : phase.kind === "error" ? (
-      <CircleAlert size={17} aria-hidden="true" />
-    ) : busy ? (
-      <Loader2 size={17} className="spin" aria-hidden="true" />
-    ) : (
-      <Download size={17} aria-hidden="true" />
-    );
+  const headline =
+    stateId === "checking"
+      ? tr("Checking device", "正在检查设备")
+      : stateId === "idle"
+        ? idlePartial
+          ? tr("Download incomplete", "下载未完成")
+          : tr("Model not downloaded", "模型尚未下载")
+        : stateId === "downloading"
+          ? tr("Downloading model", "正在下载模型")
+          : stateId === "loading"
+            ? tr("Loading model", "正在加载模型")
+            : stateId === "ready"
+              ? tr("Ready", "已就绪")
+              : stateId === "indexing"
+                ? tr("Building index", "正在构建索引")
+                : stateId === "searching"
+                  ? tr("Searching this view", "正在搜索当前范围")
+                  : stateId === "clearing"
+                    ? tr("Clearing model", "正在清除模型")
+                    : errorOrigin === "activate"
+                      ? tr("Model couldn't start", "模型启动失败")
+                      : errorOrigin === "clear"
+                        ? tr("Couldn't clear the model", "无法清除模型")
+                        : tr("Download failed", "下载失败");
 
-  /* One ledger, one column of figures: whichever steps are live stack up in
-     the order the work happens, so a repeat reader always finds the number
-     they came back for in the same place. */
-  const meters: Meter[] = [];
-  if (phase.kind === "downloading") {
-    meters.push({
-      key: "download",
-      label: tr("Download Progress", "下载进度"),
-      value: `${percent}%`,
-      percent,
-      ariaLabel: tr("Download Progress", "下载进度")
-    });
-  } else if (showRuntimeProgress) {
-    meters.push({
-      key: "runtime",
-      label: tr("Model Loading Progress", "模型加载进度"),
-      value: `${runtimeProgress.percent}%`,
-      percent: runtimeProgress.percent,
-      ariaLabel: tr("Model Loading Progress", "模型加载进度")
-    });
+  const subline =
+    stateId === "checking"
+      ? tr("Looking for verified model files already stored here.", "正在查找此设备上已存储的已验证模型文件。")
+      : stateId === "idle"
+        ? idlePartial
+          ? tr("Some verified files are present. Resume to finish the download.", "已有部分已验证文件，可继续完成下载。")
+          : tr("Download the model once to search your memos by meaning.", "下载一次模型，即可按意思搜索笔记。")
+        : stateId === "downloading"
+          ? tr("Each file is verified against a pinned SHA-256 hash as it arrives.", "每个文件到达时都会核对固定的 SHA-256 哈希。")
+          : stateId === "loading"
+            ? tr("Starting the single-thread worker that keeps the interface responsive.", "正在启动保持界面流畅的单线程 Worker。")
+            : stateId === "ready"
+              ? tr("Verified on this device and available offline.", "已在此设备上验证，可离线使用。")
+              : stateId === "indexing"
+                ? tr(
+                    "Embedding memos in the background. Keyword search stays available throughout.",
+                    "正在后台为笔记生成向量；关键词搜索始终可用。"
+                  )
+                : stateId === "searching"
+                  ? tr("Ranking only the memos inside the current view.", "仅对当前范围内的笔记排序。")
+                  : stateId === "clearing"
+                    ? tr("Removing model files and the encrypted semantic index.", "正在删除模型文件和加密语义索引。")
+                    : failures.length > 0
+                      ? tr("No source could deliver the model. Keyword search is unaffected.", "所有下载源均无法提供模型；关键词搜索不受影响。")
+                      : phase.kind === "error"
+                        ? phase.message
+                        : "";
+
+  /* One true progress surface per working state, every figure real. */
+  const progress: ProgressView = (() => {
+    const row = (name: string, note: string, tone: StageRow["tone"]): StageRow => ({ name, note, tone });
+
+    if (stateId === "downloading" && phase.kind === "downloading") {
+      const loaded = phase.loadedBytes;
+      const pct = Math.min(100, Math.floor((loaded / TOTAL_BYTES) * 100));
+      let sum = 0;
+      const stages = MODEL_MANIFEST.files.map((file) => {
+        const start = sum;
+        sum += file.bytes;
+        if (loaded >= sum) return row(file.asset, tr("Verified", "已验证"), "done");
+        if (loaded > start) return row(file.asset, `${Math.floor(((loaded - start) / file.bytes) * 100)}%`, "active");
+        return row(file.asset, tr("Waiting", "等待中"), "idle");
+      });
+      return {
+        label: tr("Download", "下载"),
+        value: `${pct}%`,
+        meta: tr(
+          `${megabytes(loaded)} of ${megabytes(TOTAL_BYTES)} · verified as it arrives`,
+          `${megabytes(loaded)} / ${megabytes(TOTAL_BYTES)} · 到达即验证`
+        ),
+        percent: pct,
+        stages
+      };
+    }
+
+    if (stateId === "loading") {
+      /* The four runtime steps modelRuntime.ts actually publishes, in order. */
+      const steps = [
+        tr("Loading the private search engine", "加载本地搜索引擎"),
+        tr("Reading verified files from storage", "从存储读取已验证文件"),
+        tr("Starting the inference worker", "启动推理 Worker"),
+        tr("Checking results with a real inference", "通过真实推理检查结果")
+      ];
+      const step =
+        runtimeProgress.stage === "loading-files"
+          ? 1
+          : runtimeProgress.stage === "starting-runtime" || runtimeProgress.stage === "runtime-ready"
+            ? 2
+            : runtimeProgress.stage === "self-testing"
+              ? 3
+              : runtimeProgress.stage === "ready"
+                ? 4
+                : 0;
+      return {
+        label: tr("Model loading", "模型加载"),
+        value: `${runtimeProgress.percent}%`,
+        meta: step >= steps.length ? tr("The on-device model is ready.", "本机模型已就绪。") : `${steps[step]}.`,
+        percent: runtimeProgress.percent,
+        stages: steps.map((name, index) =>
+          index < step
+            ? row(name, tr("Done", "完成"), "done")
+            : index === step
+              ? row(name, tr("Running", "进行中"), "active")
+              : row(name, tr("Waiting", "等待中"), "idle")
+        )
+      };
+    }
+
+    if (stateId === "indexing") {
+      const done = semanticProgress?.done ?? 0;
+      const total = semanticProgress?.total ?? 0;
+      const batches = Math.max(1, Math.ceil(total / EMBED_BATCH_TEXTS));
+      const batch = Math.min(batches, Math.floor(done / EMBED_BATCH_TEXTS) + 1);
+      const fmt = (n: number) => n.toLocaleString("en-US");
+      const sealed = total > 0 && done >= total;
+      return {
+        label: tr("Semantic index", "语义索引"),
+        value: total > 0 ? `${fmt(done)} / ${fmt(total)}` : tr("Preparing", "准备中"),
+        meta: tr(
+          `Batch ${batch} of ${batches} · length-grouped, yielded between slices`,
+          `第 ${batch} / ${batches} 批 · 按长度分组，分片间让出主线程`
+        ),
+        percent: total > 0 ? (done / total) * 100 : 0,
+        stages: [
+          row(tr("Memos embedded", "已嵌入笔记"), tr(`${fmt(done)} of ${fmt(total)}`, `${fmt(done)} / ${fmt(total)}`), "active"),
+          row(tr("Batches written", "已写入批次"), tr(`${batch} of ${batches}`, `${batch} / ${batches}`), done > 0 ? "done" : "idle"),
+          row(tr("Sealed with the device key", "已用设备密钥加密"), sealed ? tr("Done", "完成") : tr("On write", "写入时"), sealed ? "done" : "idle")
+        ]
+      };
+    }
+
+    if (stateId === "searching" && semanticQueryProgress) {
+      const understand = tr("Understand query", "理解查询");
+      const rank = tr("Rank current view", "排序当前范围");
+      if (semanticQueryProgress.stage !== "ranking") {
+        const trimmed = semanticQuery.trim();
+        return {
+          label: tr("Understanding query", "理解查询"),
+          value: tr("Step 1 of 2", "第 1 / 2 步"),
+          meta: trimmed
+            ? tr(`Embedding “${trimmed}” on this device.`, `正在此设备上嵌入「${trimmed}」。`)
+            : tr("Embedding your query on this device.", "正在此设备上理解你的查询。"),
+          percent: 35,
+          stages: [row(understand, tr("Running", "进行中"), "active"), row(rank, tr("Waiting", "等待中"), "idle")]
+        };
+      }
+      const { done, total } = semanticQueryProgress;
+      const share = total > 0 ? done / total : 1;
+      const fmt = (n: number) => n.toLocaleString("en-US");
+      return {
+        label: tr("Ranking current view", "排序当前范围"),
+        value: `${fmt(done)} / ${fmt(total)}`,
+        meta: tr("Keyword hits keep their place; related memos are added below.", "关键词命中保持原位；意思相关的笔记补充在后。"),
+        percent: 50 + share * 50,
+        stages: [row(understand, tr("Done", "完成"), "done"), row(rank, `${Math.floor(share * 100)}%`, "active")]
+      };
+    }
+
+    return EMPTY_PROGRESS;
+  })();
+
+  const showProgress = progress.label !== "";
+  const showAction = stateId === "idle" || stateId === "failed";
+  const showFailures = stateId === "failed" && failures.length > 0;
+  const orbMute = stateId === "checking" || stateId === "idle" || stateId === "failed" || stateId === "clearing";
+
+  const actionLabel =
+    stateId === "failed"
+      ? errorOrigin === "clear"
+        ? tr("Try again", "重试")
+        : tr("Retry download", "重试下载")
+      : idlePartial
+        ? tr("Resume download", "继续下载")
+        : tr("Download model", "下载模型");
+  const storedBytes = MODEL_MANIFEST.files.reduce((sum, file) => sum + (present.has(file.requestPath) ? file.bytes : 0), 0);
+  const actionNote =
+    stateId === "failed"
+      ? errorOrigin === "clear"
+        ? ""
+        : tr(`About ${TOTAL_MB} MB`, `约 ${TOTAL_MB} MB`)
+      : idlePartial
+        ? tr(`About ${megabytes(TOTAL_BYTES - storedBytes)} remaining`, `还需约 ${megabytes(TOTAL_BYTES - storedBytes)}`)
+        : tr(`About ${TOTAL_MB} MB · one time`, `约 ${TOTAL_MB} MB · 仅需一次`);
+  const onAction = errorOrigin === "clear" ? () => void clearModel() : () => void download();
+
+  /* This device's facts. While a download runs, files count as stored the
+     moment their bytes are fully down (each is verified before storage), so
+     the right column ticks with the bar instead of jumping at the end. */
+  const displayStored: ReadonlySet<string> = (() => {
+    if (phase.kind !== "downloading") return present;
+    const stored = new Set<string>();
+    let sum = 0;
+    for (const file of MODEL_MANIFEST.files) {
+      sum += file.bytes;
+      if (phase.loadedBytes >= sum) stored.add(file.requestPath);
+    }
+    return stored;
+  })();
+  const displayStoredBytes = MODEL_MANIFEST.files.reduce(
+    (sum, file) => sum + (displayStored.has(file.requestPath) ? file.bytes : 0),
+    0
+  );
+  const fileCount = MODEL_MANIFEST.files.length;
+  const filesLine =
+    stateId === "checking"
+      ? tr("Checking…", "检查中…")
+      : displayStored.size === 0
+        ? tr("None stored yet", "尚未存储")
+        : tr(
+            `${displayStored.size} of ${fileCount} · ${megabytes(displayStoredBytes)}`,
+            `${displayStored.size} / ${fileCount} · ${megabytes(displayStoredBytes)}`
+          );
+  const storageLine =
+    displayStored.size < 1
+      ? tr(`0 of ${fileCount} files`, `0 / ${fileCount} 个文件`)
+      : tr(
+          `${displayStored.size} of ${fileCount} files · ${megabytes(displayStoredBytes)}`,
+          `${displayStored.size} / ${fileCount} 个文件 · ${megabytes(displayStoredBytes)}`
+        );
+
+  /* ---- headline swap: the outgoing line lifts away as the new one rises - */
+
+  const [oldHeadline, setOldHeadline] = useState<{ text: string; serial: number } | null>(null);
+  const swapSerialRef = useRef(0);
+  const lastHeadRef = useRef<{ id: StateId; text: string } | null>(null);
+  const lastHead = lastHeadRef.current;
+  if (lastHead !== null && lastHead.id !== stateId) {
+    // Render-phase capture, same pattern as SwapText: the previous headline
+    // becomes the exiting layer of this very render.
+    swapSerialRef.current += 1;
+    setOldHeadline({ text: lastHead.text, serial: swapSerialRef.current });
   }
-  if (semanticStatus === "indexing") {
-    meters.push({
-      key: "index",
-      label: tr("Semantic Index Progress", "语义索引进度"),
-      value: semanticProgress
-        ? `${semanticProgress.done} / ${semanticProgress.total} ${tr("Memos", "条笔记")}`
-        : tr("Preparing", "准备中"),
-      percent: indexPercent,
-      ariaLabel: tr("Semantic Index Progress", "语义索引进度")
+  lastHeadRef.current = { id: stateId, text: headline };
+
+  /* ---- attend: the Brain opened us to show this — wash and reveal it ---- */
+
+  useEffect(() => {
+    if (!attend) return;
+    const frame = requestAnimationFrame(() => {
+      const block = progressBlockRef.current;
+      const box = scrollRef.current;
+      if (block && box) box.scrollTop = Math.max(0, block.offsetTop - box.offsetTop - 24);
     });
-  }
-  if (semanticQueryProgress) {
-    meters.push({
-      key: "query",
-      label: queryLabel,
-      value: queryDetail,
-      percent: queryPercent,
-      ariaLabel: tr("Semantic Search Progress", "语义搜索进度")
-    });
-  }
+    return () => cancelAnimationFrame(frame);
+  }, [attend]);
+
+  /* Collapsed regions hold focusable controls; `inert` (assigned via the
+     DOM property — the JSX attribute lands with React 19) keeps them out of
+     the tab order and the accessibility tree while they are folded shut. */
+  useEffect(() => {
+    if (progressBlockRef.current) progressBlockRef.current.inert = !showProgress;
+  }, [showProgress]);
+  useEffect(() => {
+    if (stagesRegionRef.current) stagesRegionRef.current.inert = !(stagesOpen && showProgress);
+  }, [stagesOpen, showProgress]);
+  useEffect(() => {
+    if (actionRegionRef.current) actionRegionRef.current.inert = !showAction;
+  }, [showAction]);
+  useEffect(() => {
+    if (advRegionRef.current) advRegionRef.current.inert = !advOpen;
+  }, [advOpen]);
 
   return (
     <div
@@ -477,197 +612,278 @@ export function ModelSettingsModal({
       tabIndex={-1}
       onClick={requestClose}
     >
-      <div className="review-modal model-modal" onClick={(event) => event.stopPropagation()}>
-        <header className="review-head model-head">
-          <span className="review-head-logo" aria-hidden="true">
+      <div className="model-panel" onClick={(event) => event.stopPropagation()}>
+        <header className="model-panel-head">
+          <span className="model-panel-logo" aria-hidden="true">
             <Cpu size={15} />
           </span>
-          <div className="model-head-copy">
-            <h2>{tr("Semantic Search", "语义搜索")}</h2>
-            <p>{tr("Private, multilingual search on this device", "此设备上的私密多语言搜索")}</p>
-          </div>
-          <button ref={closeButtonRef} type="button" className="icon-button review-close" onClick={requestClose} aria-label={tr("Close", "关闭")}>
+          <h2 className="model-panel-title">{tr("Semantic Search", "语义搜索")}</h2>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            className="icon-button model-panel-close"
+            onClick={requestClose}
+            aria-label={tr("Close", "关闭")}
+          >
             <X size={18} aria-hidden="true" />
           </button>
         </header>
 
-        <div className="review-body model-body">
-          <section className="review-section model-overview">
-            {/* One surface for "what is happening now": the mark, the two
-                lines that name the state, and — while work runs — the ledger
-                measuring it. The live region is the copy alone, so a meter
-                ticking every frame never re-announces the whole card. */}
-            <div className={`model-status is-${orbState ? "working" : phase.kind}`}>
-              <div className="model-status-head">
-                <span className="model-status-mark">
-                  {orbState ? (
-                    <ThinkingOrb state={orbState} size={64} />
-                  ) : (
-                    <span className="model-status-icon" aria-hidden="true">
-                      {statusIcon}
-                    </span>
-                  )}
-                </span>
-                <span className="model-status-copy" role="status" aria-live="polite">
-                  <strong>{statusTitle}</strong>
-                  <span>{statusText}</span>
-                </span>
-              </div>
-              {meters.length > 0 ? (
-                <div className="model-status-ledger">
-                  {meters.map((meter) => (
-                    <ModelMeter
-                      key={meter.key}
-                      label={meter.label}
-                      value={meter.value}
-                      percent={meter.percent}
-                      ariaLabel={meter.ariaLabel}
-                    />
-                  ))}
-                </div>
-              ) : null}
-            </div>
-            {phase.kind === "error" && phase.failures.length > 0 ? (
-              <ul className="model-failures">
-                {phase.failures.slice(0, 3).map((failure) => (
-                  <li key={failure.url}>
-                    {failureHost(failure.url)} — {failure.reason}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            {phase.kind === "idle" ? (
-              <div className="model-actions">
-                <button type="button" className="accent-button" onClick={() => void download()}>
-                  <Download size={15} aria-hidden="true" />
-                  {phase.stored === "partial"
-                    ? tr("Resume Download", "继续下载")
-                    : tr("Download Model", "下载模型")}
-                </button>
-                <span className="model-action-size">{tr(`About ${TOTAL_MB} MB`, `约 ${TOTAL_MB} MB`)}</span>
-              </div>
-            ) : null}
-            {phase.kind === "error" ? (
-              <div className="model-actions">
-                <button type="button" className="accent-button" onClick={() => void download()}>
-                  <RefreshCw size={15} aria-hidden="true" />
-                  {tr("Retry Download", "重试下载")}
-                </button>
-              </div>
-            ) : null}
-            <div className="model-facts" role="list" aria-label={tr("Model Capabilities", "模型能力")}>
-              <span role="listitem">
-                <ShieldCheck size={14} aria-hidden="true" />
-                {tr("On Device", "本机运行")}
-              </span>
-              <span role="listitem">{tr("52 Languages", "52 种语言")}</span>
-              <span role="listitem">{tr("384 Dimensions", "384 维")}</span>
-            </div>
-            <p className="model-note model-privacy-note">
-              {tr(
-                "Every file is checked against a pinned SHA-256 hash before storage. Memo text and embeddings stay on this device.",
-                "每个文件都会在存储前核对固定的 SHA-256 哈希；笔记文本和向量始终留在此设备上。"
-              )}
-            </p>
-          </section>
-
-          <section className="review-section model-storage" style={{ animationDelay: "0.04s" }}>
-            <div className="model-section-head">
-              <h3 className="review-section-title">{tr("Device Storage", "设备存储")}</h3>
-              {/* The two figures carry the ink; the words that qualify them
-                  step back, so the pair reads at a glance from the title. */}
-              <span className="model-storage-total">
-                <span className="model-figure">
-                  {present.size}/{MODEL_MANIFEST.files.length}
-                </span>{" "}
-                {tr("Files", "个文件")}
-                <span className="model-total-sep" aria-hidden="true" />
-                <span className="model-figure">{megabytes(storedBytes)}</span>
-              </span>
-            </div>
-            <ul className="model-files">
-              {MODEL_MANIFEST.files.map((file) => {
-                const here = present.has(file.requestPath);
-                return (
-                  <li key={file.requestPath} className="model-file-row">
-                    <span className={`model-file-dot${here ? " is-present" : ""}`} aria-hidden="true" />
-                    <span className="model-file-name">{file.asset}</span>
-                    <span className="model-file-size">{fileSize(file.bytes)}</span>
-                    <button
-                      type="button"
-                      className="icon-button"
-                      disabled={!here || busy}
-                      onClick={() => void handleExportFile(file)}
-                      aria-label={tr(`Save ${file.asset} to a file`, `将 ${file.asset} 保存为文件`)}
-                    >
-                      <FileDown size={15} aria-hidden="true" />
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-            <div className="model-storage-actions">
-              <button type="button" className="ghost-button" disabled={busy} onClick={() => importInputRef.current?.click()}>
-                <Upload size={15} aria-hidden="true" />
-                {tr("Import Files", "导入文件")}
-              </button>
-              <button
-                type="button"
-                className="ghost-button model-clear-trigger"
-                disabled={!hasStoredFiles || busy}
-                onClick={() => setConfirmingClear(true)}
-              >
-                <Trash2 size={15} aria-hidden="true" />
-                {tr("Clear Model", "清除模型")}
-              </button>
-            </div>
-            {importNote ? (
-              <p className="model-note" role="status">
-                {importNote}
-              </p>
-            ) : null}
-            {clearNote ? (
-              <p className="model-note model-clear-note" role="status">
-                {clearNote}
-              </p>
-            ) : null}
-            {confirmingClear ? (
-              <div className="model-clear-confirm" role="group" aria-label={tr("Confirm Clear Model", "确认清除模型")}>
-                <span className="model-clear-confirm-icon" aria-hidden="true">
-                  <HardDrive size={17} />
-                </span>
-                <span className="model-clear-confirm-copy">
-                  <strong>{tr("Clear Model From This Device?", "从此设备清除模型？")}</strong>
-                  <span>
-                    {tr(
-                      "This removes the model files and encrypted semantic index. You can download them again later.",
-                      "这会删除模型文件和加密语义索引，之后仍可重新下载。"
-                    )}
+        <div ref={scrollRef} className="model-panel-scroll">
+          <div className="model-panel-columns">
+            <div className="model-stage-col">
+              <ThinkingOrb state={ORB[stateId]} size={112} mute={orbMute} />
+              {/* The live region is the two lines that name the state — a bar
+                  ticking every frame never re-announces the whole panel. */}
+              <div className="model-live" role="status" aria-live="polite">
+                <span className="model-headline-swap">
+                  <span key={stateId} className="model-headline">
+                    {headline}
                   </span>
+                  {oldHeadline ? (
+                    <span
+                      key={`out-${oldHeadline.serial}`}
+                      className="model-headline-prev"
+                      aria-hidden="true"
+                      onAnimationEnd={() => setOldHeadline(null)}
+                    >
+                      {oldHeadline.text}
+                    </span>
+                  ) : null}
                 </span>
-                <span className="model-clear-confirm-actions">
-                  <button type="button" className="ghost-button" onClick={() => setConfirmingClear(false)}>
-                    {tr("Cancel", "取消")}
-                  </button>
-                  <button type="button" className="danger-button" onClick={() => void handleClearModel()}>
-                    {tr("Clear Model", "清除模型")}
-                  </button>
-                </span>
+                <p key={`sub-${stateId}`} className="model-subline">
+                  {subline}
+                </p>
               </div>
-            ) : null}
-          </section>
+
+              <div className={`model-collapse model-fail-collapse${showFailures ? " is-open" : ""}`}>
+                <div>
+                  <ul className="model-failures">
+                    {failures.map((failure) => (
+                      <li key={failure.url}>
+                        {failureHost(failure.url)} — {failure.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              <div
+                ref={progressBlockRef}
+                className={`model-collapse model-progress-collapse${showProgress ? " is-open" : ""}`}
+              >
+                <div>
+                  <div className="model-progress-pad">
+                    <div
+                      key={`box-${stateId}-${attend}`}
+                      className={`model-progress-box${attend > 0 ? " is-attend" : ""}`}
+                    >
+                      <div className="model-progress-top">
+                        <span key={`label-${stateId}`} className="model-progress-label">
+                          {progress.label}
+                        </span>
+                        <span className="model-progress-value">{progress.value}</span>
+                      </div>
+                      <div
+                        className="model-progress-track"
+                        {...(showProgress
+                          ? {
+                              role: "progressbar",
+                              "aria-valuemin": 0,
+                              "aria-valuemax": 100,
+                              "aria-valuenow": Math.max(0, Math.min(100, Math.round(progress.percent))),
+                              "aria-valuetext": progress.value,
+                              "aria-label": progress.label
+                            }
+                          : {})}
+                      >
+                        <span
+                          className="model-progress-fill"
+                          style={{ width: `${Math.max(0, Math.min(100, progress.percent)).toFixed(2)}%` }}
+                        />
+                      </div>
+                      <p className="model-progress-meta">{progress.meta}</p>
+                    </div>
+
+                    <div className="model-stages">
+                      <button
+                        type="button"
+                        className="model-fold-toggle"
+                        aria-expanded={stagesOpen}
+                        aria-controls="model-stage-list"
+                        onClick={() => setStagesOpen((open) => !open)}
+                      >
+                        <ChevronDown size={14} className="model-caret" aria-hidden="true" />
+                        {tr("Stages", "阶段")}
+                      </button>
+                      <div
+                        ref={stagesRegionRef}
+                        id="model-stage-list"
+                        className={`model-collapse model-stages-collapse${stagesOpen && showProgress ? " is-open" : ""}`}
+                      >
+                        <div>
+                          <div key={`stages-${stateId}`} className="model-stage-list">
+                            {progress.stages.map((stage) => (
+                              <div key={stage.name} className="model-stage-row" data-tone={stage.tone}>
+                                <span className="model-stage-dot" aria-hidden="true" />
+                                <span className="model-stage-name">{stage.name}</span>
+                                <span className="model-stage-note">{stage.note}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                ref={actionRegionRef}
+                className={`model-collapse model-action-collapse${showAction ? " is-open" : ""}`}
+              >
+                <div>
+                  <div className="model-action-row">
+                    <button type="button" className="model-cta" onClick={onAction}>
+                      {stateId === "failed" ? (
+                        <RefreshCw size={15} aria-hidden="true" />
+                      ) : (
+                        <Download size={15} aria-hidden="true" />
+                      )}
+                      {actionLabel}
+                    </button>
+                    {actionNote ? <span className="model-action-note">{actionNote}</span> : null}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <aside className="model-device-col">
+              <span className="model-device-title">{tr("On this device", "本机")}</span>
+              <div className="model-device-field">
+                <span>{tr("Model", "模型")}</span>
+                <code>{MODEL_MANIFEST.version}</code>
+              </div>
+              <div className="model-device-field">
+                <span>{tr("Verified files", "已验证文件")}</span>
+                <b className="model-device-files">{filesLine}</b>
+              </div>
+              <span className="model-device-caps">{tr("52 languages · 384 dimensions", "52 种语言 · 384 维")}</span>
+              <p className="model-device-note">
+                {tr(
+                  "Every file is checked against a pinned SHA-256 hash before it is stored. Memo text and embeddings never leave this device.",
+                  "每个文件在存储前都会核对固定的 SHA-256 哈希；笔记文本和向量不会离开此设备。"
+                )}
+              </p>
+            </aside>
+          </div>
+
+          <div
+            ref={advRegionRef}
+            id="model-advanced"
+            className={`model-collapse model-adv-collapse${advOpen ? " is-open" : ""}`}
+          >
+            <div>
+              <div className="model-adv">
+                <div className="model-adv-head">
+                  <span className="model-adv-title">{tr("Device storage", "设备存储")}</span>
+                  <span className="model-adv-total">{storageLine}</span>
+                </div>
+                <div className="model-files">
+                  {MODEL_MANIFEST.files.map((file) => {
+                    const here = displayStored.has(file.requestPath);
+                    return (
+                      <div key={file.requestPath} className="model-file-row">
+                        <span className={`model-file-dot${here ? " is-present" : ""}`} aria-hidden="true" />
+                        <span className="model-file-name">{file.asset}</span>
+                        <span className="model-file-size">{fileSize(file.bytes)}</span>
+                        <button
+                          type="button"
+                          className={`icon-button model-file-save${here ? "" : " is-absent"}`}
+                          disabled={!present.has(file.requestPath) || busy}
+                          onClick={() => void handleExportFile(file)}
+                          aria-label={tr(`Save ${file.asset} to a file`, `将 ${file.asset} 保存为文件`)}
+                        >
+                          <FileDown size={15} aria-hidden="true" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="model-adv-actions">
+                  <button
+                    type="button"
+                    className="model-wash-button"
+                    disabled={busy}
+                    onClick={() => importInputRef.current?.click()}
+                  >
+                    <Upload size={15} aria-hidden="true" />
+                    {tr("Import files", "导入文件")}
+                  </button>
+                  <button
+                    type="button"
+                    className="model-wash-button is-danger"
+                    disabled={present.size === 0 || busy}
+                    onClick={() => setConfirmingClear(true)}
+                  >
+                    <Trash2 size={15} aria-hidden="true" />
+                    {tr("Clear model", "清除模型")}
+                  </button>
+                </div>
+                {importNote ? (
+                  <p className="model-note" role="status">
+                    {importNote}
+                  </p>
+                ) : null}
+                {clearNote ? (
+                  <p className="model-note model-clear-note" role="status">
+                    {clearNote}
+                  </p>
+                ) : null}
+                {confirmingClear ? (
+                  <div className="model-clear-confirm" role="group" aria-label={tr("Confirm clearing the model", "确认清除模型")}>
+                    <span className="model-clear-confirm-icon" aria-hidden="true">
+                      <HardDrive size={17} />
+                    </span>
+                    <span className="model-clear-confirm-copy">
+                      <strong>{tr("Clear model from this device?", "从此设备清除模型？")}</strong>
+                      <span>
+                        {tr(
+                          "This removes the model files and encrypted semantic index. You can download them again later.",
+                          "这会删除模型文件和加密语义索引，之后仍可重新下载。"
+                        )}
+                      </span>
+                    </span>
+                    <span className="model-clear-confirm-actions">
+                      <button type="button" className="ghost-button" onClick={() => setConfirmingClear(false)}>
+                        {tr("Cancel", "取消")}
+                      </button>
+                      <button type="button" className="danger-button" onClick={() => void clearModel()}>
+                        {tr("Clear model", "清除模型")}
+                      </button>
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
         </div>
 
-        <footer className="review-foot">
-          <div className="model-version">
-            <span>{tr("Model Version", "模型版本")}</span>
-            <code>{MODEL_MANIFEST.version}</code>
-          </div>
-          <div className="review-foot-actions">
-            <button type="button" className="ghost-button" onClick={requestClose}>
-              {tr("Close", "关闭")}
-            </button>
-          </div>
+        <footer className="model-panel-foot">
+          <button
+            type="button"
+            className="model-fold-toggle"
+            aria-expanded={advOpen}
+            aria-controls="model-advanced"
+            onClick={() => setAdvOpen((open) => !open)}
+          >
+            <ChevronDown size={14} className="model-caret" aria-hidden="true" />
+            {tr("Advanced", "高级")}
+          </button>
+          <span className="model-foot-spacer" />
+          <button type="button" className="model-foot-close" onClick={requestClose}>
+            {tr("Close", "关闭")}
+          </button>
         </footer>
 
         <input

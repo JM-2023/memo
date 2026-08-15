@@ -41,6 +41,7 @@ vi.mock("../src/lib/modelRuntime", () => ({
 }));
 
 vi.mock("../src/lib/semanticIndex", () => ({
+  EMBED_BATCH_TEXTS: 8,
   deleteSemanticIndexDb: mocks.deleteSemanticIndexDb
 }));
 
@@ -67,13 +68,17 @@ beforeEach(() => {
     }))
   });
   vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([new DOMRect(0, 0, 20, 20)] as unknown as DOMRectList);
-  // jsdom has no canvas backend; the orb only needs the calls it makes.
+  // jsdom has no canvas backend; the orb only needs the calls it makes
+  // (dots for every mark, moveTo/lineTo/stroke for connecting's web).
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
     setTransform: vi.fn(),
     clearRect: vi.fn(),
     beginPath: vi.fn(),
     arc: vi.fn(),
-    fill: vi.fn()
+    fill: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    stroke: vi.fn()
   } as unknown as CanvasRenderingContext2D);
   // Present but never firing: the orb paints its first frame and parks,
   // instead of running an unbounded rAF loop through the suite.
@@ -95,7 +100,7 @@ afterEach(() => {
 });
 
 describe("semantic search settings", () => {
-  it("uses scan-friendly Title Case labels and exposes model storage state", async () => {
+  it("names the panel, states the device facts, and lands on Ready", async () => {
     render(
       <LanguageProvider>
         <ModelSettingsModal onClose={vi.fn()} onModelCleared={vi.fn()} />
@@ -104,10 +109,12 @@ describe("semantic search settings", () => {
 
     expect(screen.getByRole("dialog", { name: "Semantic Search" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Semantic Search" })).toBeTruthy();
-    expect(screen.getByText("52 Languages")).toBeTruthy();
-    expect(screen.getByText("384 Dimensions")).toBeTruthy();
-    expect(screen.getByText("Device Storage")).toBeTruthy();
+    expect(screen.getByText("On this device")).toBeTruthy();
+    expect(screen.getByText("52 languages · 384 dimensions")).toBeTruthy();
+    expect(screen.getByText("Device storage")).toBeTruthy();
+    expect(screen.getByText(MODEL_MANIFEST.version)).toBeTruthy();
     expect(await screen.findByText("Ready")).toBeTruthy();
+    expect(screen.getByText("Verified on this device and available offline.")).toBeTruthy();
   });
 
   it("reports readiness once so an interrupted first Brain toggle can continue", async () => {
@@ -130,18 +137,18 @@ describe("semantic search settings", () => {
       </LanguageProvider>
     );
 
-    expect(await screen.findByText("Loading Model")).toBeTruthy();
+    expect(await screen.findByText("Loading model")).toBeTruthy();
     act(() => {
       mocks.runtime.current = { stage: "loading-files", percent: 45 };
       for (const listener of mocks.runtime.listeners) listener();
     });
 
-    const progress = screen.getByRole("progressbar", { name: "Model Loading Progress" });
+    const progress = screen.getByRole("progressbar", { name: "Model loading" });
     expect(progress.getAttribute("aria-valuenow")).toBe("45");
-    expect(screen.getByText("Reading verified model files from device storage.")).toBeTruthy();
+    expect(screen.getByText("Reading verified files from storage.")).toBeTruthy();
   });
 
-  it("shows indexing and live query-ranking progress in the same panel", async () => {
+  it("keeps one true progress surface: indexing outranks a queued query", async () => {
     render(
       <LanguageProvider>
         <ModelSettingsModal
@@ -154,14 +161,53 @@ describe("semantic search settings", () => {
       </LanguageProvider>
     );
 
-    expect(await screen.findByText("Building Search Index")).toBeTruthy();
-    expect(screen.getByRole("progressbar", { name: "Semantic Index Progress" }).getAttribute("aria-valuenow")).toBe("30");
-    expect(screen.getByRole("progressbar", { name: "Semantic Search Progress" }).getAttribute("aria-valuenow")).toBe("63");
-    expect(screen.getByText("3 / 10 Memos")).toBeTruthy();
-    expect(screen.getByText("25 / 100 Rows")).toBeTruthy();
+    expect(await screen.findByText("Building index")).toBeTruthy();
+    const bars = screen.getAllByRole("progressbar");
+    expect(bars).toHaveLength(1);
+    expect(bars[0].getAttribute("aria-label")).toBe("Semantic index");
+    expect(bars[0].getAttribute("aria-valuenow")).toBe("30");
+    expect(bars[0].getAttribute("aria-valuetext")).toBe("3 / 10");
   });
 
-  it("marks loading with the working orb, index building with solving, and rest with neither", async () => {
+  it("ranks the current view with live figures once the index is ready", async () => {
+    render(
+      <LanguageProvider>
+        <ModelSettingsModal
+          onClose={vi.fn()}
+          onModelCleared={vi.fn()}
+          semanticStatus="ready"
+          semanticQuery="fruit"
+          semanticQueryProgress={{ stage: "ranking", done: 25, total: 100 }}
+        />
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("Searching this view")).toBeTruthy();
+    const bar = screen.getByRole("progressbar", { name: "Ranking current view" });
+    expect(bar.getAttribute("aria-valuenow")).toBe("63");
+    expect(bar.getAttribute("aria-valuetext")).toBe("25 / 100");
+    expect(screen.getByText("Keyword hits keep their place; related memos are added below.")).toBeTruthy();
+  });
+
+  it("quotes the live query while it is being embedded on this device", async () => {
+    render(
+      <LanguageProvider>
+        <ModelSettingsModal
+          onClose={vi.fn()}
+          onModelCleared={vi.fn()}
+          semanticStatus="ready"
+          semanticQuery="fruit"
+          semanticQueryProgress={{ stage: "embedding", done: 0, total: 1 }}
+        />
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("Understanding query")).toBeTruthy();
+    expect(screen.getByText("Step 1 of 2")).toBeTruthy();
+    expect(screen.getByText("Embedding “fruit” on this device.")).toBeTruthy();
+  });
+
+  it("wears the lifecycle's orb marks — working, solving, connecting at rest", async () => {
     const orb = () => document.querySelector("canvas.thinking-orb");
     const panel = (status: "preparing" | "indexing" | "ready") => (
       <LanguageProvider>
@@ -170,21 +216,43 @@ describe("semantic search settings", () => {
     );
     const { rerender } = render(panel("preparing"));
 
-    expect(await screen.findByText("Preparing Semantic Search")).toBeTruthy();
+    expect(await screen.findByText("Loading model")).toBeTruthy();
     expect(orb()?.getAttribute("data-orb")).toBe("working");
     // Decorative: the state is already announced by the live status copy.
     expect(orb()?.getAttribute("aria-hidden")).toBe("true");
 
     rerender(panel("indexing"));
-    expect(await screen.findByText("Building Search Index")).toBeTruthy();
+    expect(await screen.findByText("Building index")).toBeTruthy();
     expect(orb()?.getAttribute("data-orb")).toBe("solving");
 
     rerender(panel("ready"));
     expect(await screen.findByText("Ready")).toBeTruthy();
-    expect(orb()).toBeNull();
+    expect(orb()?.getAttribute("data-orb")).toBe("connecting");
   });
 
-  it("confirms a standalone clear, disables semantic search, and clears both stores and runtime", async () => {
+  it("expands the stage ledger under the one progress bar", async () => {
+    const user = userEvent.setup();
+    render(
+      <LanguageProvider>
+        <ModelSettingsModal
+          onClose={vi.fn()}
+          onModelCleared={vi.fn()}
+          semanticStatus="indexing"
+          semanticProgress={{ done: 3, total: 10 }}
+        />
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("Building index")).toBeTruthy();
+    const toggle = screen.getByRole("button", { name: "Stages" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await user.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Memos embedded")).toBeTruthy();
+    expect(screen.getByText("Sealed with the device key")).toBeTruthy();
+  });
+
+  it("confirms a clear from Advanced, disables semantic search, and clears stores and runtime", async () => {
     const user = userEvent.setup();
     const onModelCleared = vi.fn();
     render(
@@ -194,12 +262,17 @@ describe("semantic search settings", () => {
     );
     expect(await screen.findByText("Ready")).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "Clear Model" }));
-    const confirmation = screen.getByRole("group", { name: "Confirm Clear Model" });
-    expect(within(confirmation).getByText("Clear Model From This Device?")).toBeTruthy();
-    await user.click(within(confirmation).getByRole("button", { name: "Clear Model" }));
+    const advanced = screen.getByRole("button", { name: "Advanced" });
+    expect(advanced.getAttribute("aria-expanded")).toBe("false");
+    await user.click(advanced);
+    expect(advanced.getAttribute("aria-expanded")).toBe("true");
 
-    await waitFor(() => expect(screen.getByText("Not Downloaded")).toBeTruthy());
+    await user.click(screen.getByRole("button", { name: "Clear model" }));
+    const confirmation = screen.getByRole("group", { name: "Confirm clearing the model" });
+    expect(within(confirmation).getByText("Clear model from this device?")).toBeTruthy();
+    await user.click(within(confirmation).getByRole("button", { name: "Clear model" }));
+
+    await waitFor(() => expect(screen.getByText("Model not downloaded")).toBeTruthy());
     expect(onModelCleared).toHaveBeenCalledOnce();
     expect(mocks.resetModelRuntime).toHaveBeenCalledOnce();
     expect(mocks.clearModelFiles).toHaveBeenCalledOnce();

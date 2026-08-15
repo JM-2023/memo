@@ -378,6 +378,10 @@ export default function App() {
   const [reviewDay, setReviewDay] = useState<ReviewDay | null>(loadReviewDay);
   const [reviewSettingsOpen, setReviewSettingsOpen] = useState(false);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
+  // Non-zero when the Brain button opened the panel to show unfinished work:
+  // the panel washes its progress block and scrolls it into view. Reset on
+  // close so a plain menu open stays quiet.
+  const [modelSettingsAttend, setModelSettingsAttend] = useState(0);
   // Remembers that the settings panel was opened by a failed first Brain
   // toggle. Once download + self-test succeeds, honour that original click
   // and begin indexing without asking for a second click.
@@ -537,6 +541,7 @@ export default function App() {
     setStatsOpen(false);
     setReviewSettingsOpen(false);
     setModelSettingsOpen(false);
+    setModelSettingsAttend(0);
     setEnableSemanticWhenReady(false);
     setChangingPasscode(false);
     setDrawerOpen(false);
@@ -2736,7 +2741,10 @@ export default function App() {
                       : tr("Semantic search — find memos by meaning", "语义搜索——按意思找笔记")
                 }
                 onClick={() => {
+                  // While work is unfinished the Brain is a monitor, not a
+                  // switch: it opens the panel and marks the progress block.
                   if (semanticBusy) {
+                    setModelSettingsAttend((count) => count + 1);
                     setModelSettingsOpen(true);
                     return;
                   }
@@ -2744,7 +2752,7 @@ export default function App() {
                 }}
               >
                 <Brain size={17} aria-hidden="true" />
-                {semantic.status === "preparing" || semantic.status === "indexing" ? (
+                {semanticBusy ? (
                   <Loader2 size={9} className="semantic-toggle-progress spin" aria-hidden="true" />
                 ) : null}
               </button>
@@ -2883,6 +2891,7 @@ export default function App() {
         <ModelSettingsModal
           onClose={() => {
             setModelSettingsOpen(false);
+            setModelSettingsAttend(0);
             setEnableSemanticWhenReady(false);
           }}
           onModelReady={() => {
@@ -2897,6 +2906,8 @@ export default function App() {
           semanticStatus={semantic.status}
           semanticProgress={semantic.progress}
           semanticQueryProgress={semantic.queryProgress}
+          semanticQuery={view === "memos" ? feedQuery : ""}
+          attend={modelSettingsAttend}
         />
       ) : null}
       <input

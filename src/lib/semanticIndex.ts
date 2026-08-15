@@ -108,7 +108,8 @@ export interface ReconcileCallbacks {
 // Eight similarly sized inputs keep memory and per-batch latency modest. ONNX
 // runs in a one-thread proxy worker, so smaller batches trade a little elapsed
 // time for steadier progress and a responsive UI without changing embeddings.
-const EMBED_BATCH_TEXTS = 8;
+// Exported so the settings panel can report "Batch N of M" truthfully.
+export const EMBED_BATCH_TEXTS = 8;
 const FLUSH_EVERY_ROWS = 256;
 const SEARCH_ROWS_PER_YIELD = 256;
 
