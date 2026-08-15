@@ -1345,7 +1345,7 @@ export default function App() {
     setReviewSettings(next);
     persistReviewSettings(next);
     setReviewSettingsOpen(false);
-    showToast(tr("Daily review settings saved", "每日回顾设置已保存"));
+    showToast(tr("Daily Review Settings saved", "每日回顾设置已保存"));
     if (reviewDayValid(reviewDay, next)) return;
     if (view === "review") {
       // Redraw immediately — after the dialog's exit has painted, so the

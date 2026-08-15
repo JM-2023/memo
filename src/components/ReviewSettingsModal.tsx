@@ -190,7 +190,7 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
       className={`overlay review-overlay${closing ? " is-closing" : ""}`}
       role="dialog"
       aria-modal="true"
-      aria-label={tr("Daily review settings", "每日回顾设置")}
+      aria-label={tr("Daily Review Settings", "每日回顾设置")}
       tabIndex={-1}
       onClick={requestClose}
     >
