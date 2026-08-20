@@ -113,7 +113,7 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
 
   return (
     <li className="tag-item" data-flip={node.path}>
-      <div className={`tag-row${isActive ? " is-active" : ""}${pinned ? " is-pinned" : ""}`} style={{ paddingLeft: `${8 + depth * 18}px` }}>
+      <div className={`tag-row${isActive ? " is-active" : ""}${pinned ? " is-pinned" : ""}`} style={{ paddingLeft: `${10 + depth * 18}px` }}>
         {hasChildren ? (
           <button
             type="button"

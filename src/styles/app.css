@@ -1073,7 +1073,9 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 7px 10px;
+  /* Left 13 sets the logo block on the sidebar's 36px content line (stat-panel
+     interior, nav icons); the right side stays snug around the chevron. */
+  padding: 7px 10px 7px 13px;
   border-radius: var(--r-md);
   font-size: var(--fs-md);
   font-weight: 700;
@@ -1360,7 +1362,11 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 .sidebar-nav,
 .tag-section { --row-cap: 232px; --count-gap: 12px; }
 
-.sidebar-nav { display: grid; margin: 14px 2px 4px; }
+/* Row boxes sit on the sidebar padding line — the same left edge as the stat
+   panel and the header button — so an active row's tint and the card above
+   share one edge. The 13px row padding then lands icons on the panel's inner
+   content line (padding 12 + 1px border). */
+.sidebar-nav { display: grid; margin: 14px 0 4px; }
 .nav-item {
   display: flex;
   align-items: center;
@@ -1368,7 +1374,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   min-width: var(--row-cap);
   max-width: 100%;
   min-height: 40px;
-  padding: 8px 11px;
+  padding: 8px 13px;
   color: var(--ink-soft);
   /* Undeclared, this row fell to the 16px default and outsized .tag-label,
      the list directly beneath it doing the same job. They are peers now. */
@@ -1396,31 +1402,34 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 }
 .nav-item.is-active .nav-count { color: var(--leaf); }
 
-.tag-section { margin: 8px 2px 0; }
+.tag-section { margin: 8px 0 0; }
 .tag-section-head {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 11px;
+  padding: 6px 13px;
   color: var(--muted);
   font-size: var(--fs-xs);
   font-weight: 700;
 }
-.tag-empty { margin: 4px 11px; color: var(--muted); font-size: var(--fs-sm); }
+.tag-empty { margin: 4px 13px; color: var(--muted); font-size: var(--fs-sm); }
 .tag-list, .tag-children ul { margin: 0; padding: 0; list-style: none; }
 .tag-item { display: grid; }
 .tag-row {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 2px;
+  /* 10px lead (inline in TagTree) + 22px chevron + this 3px + the label's 4px
+     pad = 39px, the nav rows' 13 + 16 + 10 — tag names and nav labels share
+     one text column. */
+  gap: 3px;
   width: fit-content;
   /* min-width would otherwise be auto — the whole nowrap row — so a long tag
      widened the row past the sidebar instead of letting .tag-name ellipsize. */
   min-width: var(--row-cap);
   max-width: 100%;
   min-height: 34px;
-  padding-right: 8px;
+  padding-right: 10px;
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease);
 }
@@ -1889,7 +1898,7 @@ button.crumb:active { background: var(--wash-strong); }
 @media (hover: hover) { .filter-mini-clear:hover { background: var(--wash); color: var(--ink); } }
 .filter-mini-clear:active { transform: scale(0.94); }
 
-.filter-dates { display: flex; align-items: center; gap: 6px; padding: 2px 9px 6px 11px; }
+.filter-dates { display: flex; align-items: center; gap: 6px; padding: 2px 11px 6px; }
 .filter-dates input {
   flex: 1;
   min-width: 0;
@@ -2030,7 +2039,9 @@ button.crumb:active { background: var(--wash-strong); }
   position: relative;
   display: grid;
   gap: 10px;
-  padding: 14px 14px 12px;
+  /* Sides 13, not 14: +1 border +2 textarea pad puts the typed text on 16,
+     the memo cards' own text inset — composer text over card text, one seam. */
+  padding: 14px 13px 12px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
@@ -2038,7 +2049,9 @@ button.crumb:active { background: var(--wash-strong); }
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
 .editor:focus-within { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring), var(--shadow); }
-.editor-edit { padding: 4px 2px 2px; background: transparent; border: 0; box-shadow: none; }
+/* No side padding: the tinted field box spans exactly the card's content
+   column, flush with the text it replaces. */
+.editor-edit { padding: 4px 0 2px; background: transparent; border: 0; box-shadow: none; }
 .editor-edit:focus-within { box-shadow: none; }
 .editor-edit textarea {
   padding: 10px 12px;
@@ -2383,7 +2396,9 @@ button.crumb:active { background: var(--wash-strong); }
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 0 2px;
+  /* No inset: the leading icon starts on the card-box line, the same anchor
+     the breadcrumb's home glyph uses one row up. */
+  padding: 0;
   color: var(--muted);
   font-size: var(--fs-sm);
   font-weight: 600;
@@ -3033,12 +3048,17 @@ button.memo-tag:active {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 12px;
-  padding: 15px 18px 12px;
+  /* 20px sides = .stats-body's, so the title stacks flush over the section
+     titles below the divider. */
+  padding: 15px 20px 12px;
   border-bottom: 1px solid var(--glass-rim);
 }
 .stats-head h2 { margin: 0; font-size: var(--fs-lg); font-weight: 700; letter-spacing: -0.01em; }
 .stats-year-nav { display: flex; align-items: center; gap: 4px; justify-self: center; }
-.stats-close { justify-self: end; }
+/* -6px pulls the ✕ box back to a 14px inset (its glyph ≈ the 20px content
+   line) without unbalancing the padding the year nav centers on. Every modal
+   close box sits at 14. */
+.stats-close { justify-self: end; margin-right: -6px; }
 .stats-year { min-width: 76px; text-align: center; font-size: var(--fs-md); font-weight: 700; animation: fade-up 0.18s var(--ease) both; }
 .stats-body {
   display: grid;
@@ -3463,7 +3483,9 @@ button.stats-tag-row:active { scale: 0.992; }
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 13px 12px 11px 18px;
+  /* Right 14 = .share-actions' inset, so the ✕ box shares a right edge with
+     the Download button at the other end of the dialog. */
+  padding: 13px 14px 11px 18px;
   border-bottom: 1px solid var(--glass-rim);
 }
 .share-head h2 { margin: 0; font-size: var(--fs-lg); font-weight: 700; letter-spacing: -0.01em; }
@@ -4085,7 +4107,7 @@ button.stats-tag-row:active { scale: 0.992; }
   }
   .stats-head h2 { grid-area: title; }
   .stats-year-nav { grid-area: year; }
-  .stats-close { grid-area: close; }
+  .stats-close { grid-area: close; margin-right: 0; }
   .bulk-tag-overlay { padding: 10px; }
   .bulk-tag-head { padding: 14px 12px 12px; }
   .bulk-tag-form { padding: 12px; }
