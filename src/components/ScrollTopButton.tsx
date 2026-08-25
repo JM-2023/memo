@@ -29,10 +29,12 @@ const flightMs = (distance: number) =>
 /**
  * Back-to-top disc — the ChatGPT scroll-to-bottom button mirrored: same
  * frosted glass, same slot choreography (quick shrink-away, deliberate
- * delayed rise-in), opposite direction. Scroll state stays local so wheel
- * events never re-render App. The slot lives at the end of the main column
- * and sticks to the viewport bottom, which keeps it centered on the content
- * column at every width for free.
+ * delayed drop-in), opposite direction and opposite edge: the button points
+ * up, so it floats just under the sticky topbar, where it takes you. Scroll
+ * state stays local so wheel events never re-render App. The slot lives at
+ * the end of the main column and pins near the viewport top (see
+ * .scroll-top-slot), which keeps it centered on the content column at every
+ * width for free.
  *
  * The glide is a hand-integrated critically damped spring rather than
  * scrollTo({behavior: "smooth"}): sweeping up through content-visibility:auto
