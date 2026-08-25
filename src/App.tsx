@@ -224,6 +224,16 @@ function MemoSlot({ vtName, entering, delay, children }: MemoSlotProps) {
 /** How many feed rows render before the scroll sentinel asks for more. */
 const FEED_PAGE = 80;
 
+/** At or under this many rows the feed renders every card for real instead
+ * of letting content-visibility hold unvisited slots at their estimated
+ * height. A small list — a tag with a handful of memos — must report its
+ * true height: placeholder estimates run about double a typical text card,
+ * so a 16-memo tag promised five screens of scroll and delivered three,
+ * with the difference materializing away under the reader. Rendering a
+ * couple dozen cards outright costs nothing; the skip optimization exists
+ * for hundred-row feeds, which stay above this line. */
+const SMALL_FEED = 24;
+
 /** Stable per-App action surface — what keeps FeedItem memoization honest. */
 interface FeedHandlers {
   startEdit: (id: string) => void;
@@ -2871,7 +2881,7 @@ export default function App() {
         </div>
 
         <section
-          className={`memo-feed${selectMode && view === "memos" ? " is-select" : ""}`}
+          className={`memo-feed${selectMode && view === "memos" ? " is-select" : ""}${renderedFeedMemos.length <= SMALL_FEED ? " is-small" : ""}`}
           aria-label={view === "trash" ? tr("Trash", "回收站") : view === "review" ? tr("Daily review", "每日回顾") : tr("Memo list", "笔记列表")}
         >
           {view === "review" && reviewDay && feedMemos.length > 0 ? (

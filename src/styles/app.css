@@ -2413,7 +2413,13 @@ button.crumb:active { background: var(--wash-strong); }
 .memo-slot {
   position: relative;
   content-visibility: auto;
-  contain-intrinsic-size: auto 240px;
+  /* The estimate stands in for slots never yet rendered, and it must err
+     SHORT: a page that under-promises grows as cards materialize (the
+     familiar infinite-scroll feel), while one that over-promises lets the
+     reader drag into phantom space that collapses under them. 120px sits on
+     the measured median text card (~115px; p90 128px) — the old 240px was
+     double that, so every fresh below-fold slot inflated the page 2×. */
+  contain-intrinsic-size: auto 120px;
   animation: rise-in 0.24s var(--ease-out) both;
   /* Carries the selection ring (see the multi-select section). */
   transition: box-shadow var(--t) var(--ease);
@@ -2431,6 +2437,10 @@ button.crumb:active { background: var(--wash-strong); }
    to .action-menu rather than .is-open: the panel outlives the open state
    through its closing morph, and re-clipping mid-close would cut it off. */
 .memo-slot:has(.action-menu) { z-index: 66; content-visibility: visible; }
+/* A small feed (App marks ≤ SMALL_FEED rows) renders every card for real:
+   the page's height is then exact, not an estimate — a tag holding a few
+   memos must not offer more scroll than it has content. */
+.memo-feed.is-small .memo-slot { content-visibility: visible; contain-intrinsic-size: none; }
 
 .memo-card {
   position: relative;
