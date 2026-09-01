@@ -95,6 +95,11 @@
   --danger-tint: #f8eeec;
 
   --ring: rgba(61, 122, 91, 0.22);
+  /* A text field's focus is its hairline border taking the accent — no ring,
+     no change of width, so a field never grows when it takes focus. One
+     declaration serves both themes: it resolves against whichever --primary
+     and --line the theme block set on this same element. */
+  --line-focus: color-mix(in srgb, var(--primary) 70%, var(--line));
 
   /* Elevation — four stops, each a contact line plus a tight, low-alpha
      ambient that stays smaller than what casts it. Hairline borders do the
@@ -512,8 +517,8 @@ button:disabled { cursor: default; opacity: 0.5; }
 
 :focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 78%, transparent); outline-offset: 2px; }
 button:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 78%, transparent); outline-offset: 2px; }
-/* Text fields carry their own focus treatment (accent border + soft ring),
-   so the detached rectangle never doubles up on them. */
+/* Text fields carry their own focus treatment (the hairline border takes
+   the accent, --line-focus), so the detached rectangle never doubles up. */
 input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; }
 
 a { color: var(--primary); text-decoration: none; }
@@ -1877,7 +1882,7 @@ button.crumb:active { background: var(--wash-strong); }
 .searchbox:has(.searchbox-clear) input { padding-right: 30px; }
 .searchbox input::placeholder { color: var(--muted); }
 @media (hover: hover) { .searchbox input:hover { border-color: var(--line-strong); } }
-.searchbox input:focus { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring); }
+.searchbox input:focus { border-color: var(--line-focus); }
 .searchbox-clear {
   position: absolute;
   right: 7px;
@@ -1941,7 +1946,7 @@ button.crumb:active { background: var(--wash-strong); }
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
 @media (hover: hover) { .filter-dates input:hover { border-color: var(--line-strong); } }
-.filter-dates input:focus { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring); }
+.filter-dates input:focus { border-color: var(--line-focus); }
 .filter-dates-sep { flex: none; color: var(--muted); font-size: var(--fs-sm); }
 
 /* Saved preset row: apply button + hover-revealed delete in one grid, so a
@@ -2076,7 +2081,7 @@ button.crumb:active { background: var(--wash-strong); }
   box-shadow: var(--shadow-sm);
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
-.editor:focus-within { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring), var(--shadow); }
+.editor:focus-within { border-color: var(--line-focus); box-shadow: var(--shadow); }
 /* No side padding: the tinted field box spans exactly the card's content
    column, flush with the text it replaces. */
 .editor-edit { padding: 4px 0 2px; background: transparent; border: 0; box-shadow: none; }
@@ -2088,7 +2093,7 @@ button.crumb:active { background: var(--wash-strong); }
   border-radius: var(--r-sm);
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), height 0.12s var(--ease);
 }
-.editor-edit textarea:focus { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring); }
+.editor-edit textarea:focus { border-color: var(--line-focus); }
 
 .editor textarea {
   width: 100%;
@@ -2308,7 +2313,7 @@ button.crumb:active { background: var(--wash-strong); }
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
 .link-pop-inner input::placeholder { color: var(--muted); }
-.link-pop-inner input:focus { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring); }
+.link-pop-inner input:focus { border-color: var(--line-focus); }
 .link-pop-add { padding: 7px 13px; color: var(--primary-dark); }
 
 .icon-button.is-active-tool { background: var(--primary-tint); color: var(--primary-dark); }
@@ -2879,7 +2884,7 @@ button.memo-tag:active {
   outline: none;
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
-.prompt-input:focus { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring); }
+.prompt-input:focus { border-color: var(--line-focus); }
 .prompt-note { margin: -2px 0 0; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); animation: fade-up 0.18s var(--ease) both; }
 .prompt-note.is-error { color: var(--danger); }
 .accent-button {
@@ -2943,8 +2948,7 @@ button.memo-tag:active {
 }
 .bulk-tag-field:focus-within {
   color: var(--primary-dark);
-  border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
-  box-shadow: 0 0 0 3px var(--ring);
+  border-color: var(--line-focus);
 }
 .bulk-tag-field.is-error { border-color: color-mix(in srgb, var(--danger) 58%, var(--line)); }
 .bulk-tag-field input {
