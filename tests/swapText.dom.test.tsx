@@ -20,6 +20,7 @@ function rect(width: number): DOMRect {
 
 describe("SwapText width motion", () => {
   let visualWidth: number;
+  let heightOf: (content: string | undefined) => number;
   let reduceMotion: boolean;
   let animateMock: ReturnType<typeof vi.fn>;
   let animations: { cancel: ReturnType<typeof vi.fn> }[];
@@ -27,6 +28,7 @@ describe("SwapText width motion", () => {
 
   beforeEach(() => {
     visualWidth = 200;
+    heightOf = () => 20;
     reduceMotion = false;
     animations = [];
     originalAnimate = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "animate");
@@ -50,6 +52,9 @@ describe("SwapText width motion", () => {
     vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function () {
       const current = this.querySelector<HTMLElement>(".swap-cur")?.textContent;
       return current === "Language" ? 200 : 80;
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function () {
+      return heightOf(this.querySelector<HTMLElement>(".swap-cur")?.textContent ?? undefined);
     });
 
     animateMock = vi.fn(() => {
@@ -91,6 +96,32 @@ describe("SwapText width motion", () => {
     expect(animateMock).toHaveBeenNthCalledWith(
       2,
       [{ width: "126.5px" }, { width: "200px" }],
+      { duration: 220, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
+    );
+  });
+
+  it("tweens height along with width when the incoming content takes another line", () => {
+    // The heatmap title folds its count under the date range once the sidebar
+    // runs out of room; the block must glide taller, not jump a line.
+    heightOf = (content) => (content?.includes("12 memos") ? 37 : 20);
+    const { rerender } = render(
+      <SwapText id="w0">
+        Aug 31 – Sep 6<span>2 memos</span>
+      </SwapText>
+    );
+
+    rerender(
+      <SwapText id="w1">
+        Sep 7 – Sep 13<span>12 memos</span>
+      </SwapText>
+    );
+
+    expect(animateMock).toHaveBeenCalledOnce();
+    expect(animateMock).toHaveBeenCalledWith(
+      [
+        { width: "200px", height: "20px" },
+        { width: "80px", height: "37px" }
+      ],
       { duration: 220, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
     );
   });

@@ -1250,12 +1250,20 @@ a:hover { text-decoration: underline; }
    aspect-ratio and are sized by their column track. */
 .heatmap { display: grid; min-width: 0; gap: 10px; margin-top: 2px; }
 .heatmap-head { display: flex; align-items: center; justify-content: space-between; }
-.heatmap-nav { width: 28px; height: 28px; border-radius: var(--r-xs); }
+/* The arrows keep their full hit area; only the title gives way. */
+.heatmap-nav { flex: none; width: 28px; height: 28px; border-radius: var(--r-xs); }
+/* min-width: 0 lets the button shrink to the row's remaining width when the
+   label outgrows it — an English week range plus its count needs ~170px, and
+   the row has ~157px at the sidebar's 302px floor. The swap below then folds
+   the count under the range instead of the swap layer clipping both ends of
+   the line. 8px side padding is the crumb pill's; it also fits a two-digit
+   week count on one line at 1280px. */
 .heatmap-title {
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
-  padding: 4px 12px;
+  min-width: 0;
+  padding: 4px 8px;
   color: var(--ink-soft);
   font-size: var(--fs-sm);
   font-weight: 700;
@@ -1265,9 +1273,21 @@ a:hover { text-decoration: underline; }
 @media (hover: hover) { .heatmap-title:hover { background: var(--wash); color: var(--ink); } }
 .heatmap-title:active { transform: scale(0.96); }
 .heatmap-total { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
-/* Title swaps as one block (label + count) in step with the grid slide. */
+/* Title swaps as one block (label + count) in step with the grid slide. When
+   the row is too narrow for both, the count wraps under the range (the text
+   itself never breaks: .swap is nowrap, so only the count span moves down);
+   SwapText tweens the block's height along with its width, so the grid below
+   glides when paging crosses that threshold instead of jumping a line. */
+.heatmap-title-swap { min-width: 0; max-width: 100%; }
 .heatmap-title-swap .swap-cur,
-.heatmap-title-swap .swap-old { display: inline-flex; align-items: baseline; gap: 8px; }
+.heatmap-title-swap .swap-old {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  align-content: start;
+  gap: 0 8px;
+}
 
 .heatmap-grid { display: grid; align-items: stretch; }
 /* Week + month: weekday header on top, weeks flowing as rows. */
