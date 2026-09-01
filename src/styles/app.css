@@ -2449,7 +2449,12 @@ button.crumb:active { background: var(--wash-strong); }
      double that, so every fresh below-fold slot inflated the page 2×. */
   contain-intrinsic-size: auto 120px;
   animation: rise-in 0.24s var(--ease-out) both;
-  /* Carries the selection ring (see the multi-select section). */
+  /* Carries the selection ring (see the multi-select section). The radius
+     is the card's, and it lives here at rest rather than with the ring: it
+     shapes the ring and the containment clip alike, and it has to outlast
+     the selection, since the ring keeps fading for --t after the card is
+     deselected and a shadow follows its box's corners. */
+  border-radius: var(--r-lg);
   transition: box-shadow var(--t) var(--ease);
   /* Tags card snapshots so arrivals can rise instead of the generic calm
      fade (see the view-transition section). */
@@ -2538,16 +2543,15 @@ button.crumb:active { background: var(--wash-strong); }
   background: color-mix(in srgb, var(--primary) 3.5%, var(--surface));
 }
 /* The ring rides the slot, not the card. The slot's content-visibility paint
-   containment clips its descendants to a square, zero-radius box, so a ring
-   drawn on the card is sliced off along the flat edges and survives only as a
-   hard corner wedge — square corners against the card's --r-lg ones. An
-   element's own decoration escapes its own paint containment, and the slot's
-   box is the card's box exactly, so drawing the ring here keeps it concentric
-   with the corner it hugs. Matching the radius rounds the clip to suit. */
-.memo-slot:has(.memo-card.is-selected) {
-  border-radius: var(--r-lg);
-  box-shadow: 0 0 0 3px var(--ring);
-}
+   containment clips its descendants to the slot's own box, so a ring drawn on
+   the card is sliced off along the flat edges and survives only as a corner
+   wedge. An element's own decoration escapes its own paint containment, and
+   the slot's box is the card's box exactly, so drawing the ring here keeps it
+   concentric with the corner it hugs. The radius is NOT set here: it sits on
+   .memo-slot at rest, because this selector lets go the instant the card is
+   deselected while the ring is still fading out — a radius that left with it
+   showed the ring square-cornered for its last frames. */
+.memo-slot:has(.memo-card.is-selected) { box-shadow: 0 0 0 3px var(--ring); }
 /* One transparent surface above everything in the card: any tap toggles. */
 .memo-select-overlay {
   position: absolute;
