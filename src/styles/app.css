@@ -1846,18 +1846,25 @@ button.crumb:active { background: var(--wash-strong); }
   transform: scale(0.96);
 }
 
+/* Closed, the box holds only the icon and its placeholder. "Search memos" is
+   102px in SF Pro at 15px; behind the 32px icon inset and inside a 12px right
+   inset, 160px leaves it 12px to spare for wider system fonts. The right
+   inset grows to clear the × only once there is a query — and a query keeps
+   the box open — so the closed width no longer reserves 30px for a control
+   that cannot be there, which is what used to cut the placeholder to
+   "Search mem". */
 .searchbox {
   position: relative;
   display: flex;
   align-items: center;
-  width: 150px;
+  width: 160px;
   transition: width 0.18s var(--ease-out);
 }
 .searchbox.is-open { width: min(240px, 40vw); }
 .searchbox-icon { position: absolute; left: 10px; color: var(--muted); pointer-events: none; }
 .searchbox input {
   width: 100%;
-  padding: 7px 30px 7px 32px;
+  padding: 7px 12px 7px 32px;
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--line);
@@ -1867,6 +1874,7 @@ button.crumb:active { background: var(--wash-strong); }
   box-shadow: var(--shadow-xs);
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
+.searchbox:has(.searchbox-clear) input { padding-right: 30px; }
 .searchbox input::placeholder { color: var(--muted); }
 @media (hover: hover) { .searchbox input:hover { border-color: var(--line-strong); } }
 .searchbox input:focus { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); box-shadow: 0 0 0 3px var(--ring); }
