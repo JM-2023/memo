@@ -1573,10 +1573,12 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 @media (hover: hover) { .tag-more:hover { background: var(--wash-strong); color: var(--ink); } }
 @media (hover: none) { .tag-more { opacity: 1; } }
 .tag-more.is-open { background: var(--wash-strong); color: var(--ink); }
-/* A subtree mounts when it opens and unmounts when it folds; the motion is
-   TagTree's (revealed rows settle in, the rows below glide on the FLIP). */
+/* A subtree's track unfolds from 0 to its height and folds back (TagTree
+   animates the height; the rows below ride the layout). A folding track
+   stays mounted, inert, until it has shut. */
 .tag-children { display: grid; }
 .tag-children > ul { min-height: 0; }
+.tag-children.is-closing { pointer-events: none; }
 
 /* =========================================================================
    Main column

@@ -125,30 +125,26 @@ interface TagRowProps extends TagCallbacks {
   depth: number;
   activeTag: string | null;
   pinnedTags: Map<string, string>;
+  /** Subtrees that are open — and the ones still folding shut (mounted, inert). */
+  openPaths: ReadonlySet<string>;
+  closingPaths: ReadonlySet<string>;
+  onToggle: (path: string) => void;
 }
 
-function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRenameTag, onRemoveTag }: TagRowProps) {
+/** Every ancestor path of a tag: "a/b/c" → ["a", "a/b"]. */
+function ancestorsOf(path: string | null): string[] {
+  if (!path) return [];
+  const parts = path.split("/");
+  return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/"));
+}
+
+function TagRow({ node, depth, activeTag, pinnedTags, openPaths, closingPaths, onToggle, onPickTag, onPinTag, onRenameTag, onRemoveTag }: TagRowProps) {
   const { count, formatNumber, tr } = useI18n();
   const rowRef = useRef<HTMLDivElement>(null);
   const hasChildren = node.children.length > 0;
   const isActive = activeTag === node.path;
-  // The lens sits somewhere below this row (a card chip, a crumb or a saved
-  // filter landed inside the subtree). The tree follows it open, so the
-  // selected row is never hidden under a folded parent.
-  const holdsActive = activeTag !== null && activeTag.startsWith(`${node.path}/`);
-  // Once open, a subtree stays open until folded by hand: the lens moving
-  // up to this row (or away altogether) must not fold it — that read as the
-  // tree slamming shut on a parent click, and reopening on the next child
-  // pick, so the unfold seemed to play twice. Derived in render, not in an
-  // effect, so the row opens in the same commit that moves the lens and
-  // takes part in that view transition.
-  const [open, setOpen] = useState(holdsActive);
-  const [wasHolding, setWasHolding] = useState(holdsActive);
-  if (holdsActive !== wasHolding) {
-    setWasHolding(holdsActive);
-    if (holdsActive) setOpen(true);
-  }
-  const expanded = open;
+  const expanded = openPaths.has(node.path);
+  const closing = closingPaths.has(node.path);
   const pinned = pinnedTags.has(node.path);
   const named = tr(`${node.name}, ${count(node.count, "memo")}`, `${node.name}，${count(node.count, "memo")}`);
   const label = pinned ? tr(`${named}, pinned`, `${named}，已置顶`) : named;
@@ -170,7 +166,7 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
           <button
             type="button"
             className={`tag-expand${expanded ? " is-expanded" : ""}`}
-            onClick={() => setOpen(!expanded)}
+            onClick={() => onToggle(node.path)}
             aria-expanded={expanded}
             aria-label={
               expanded ? tr(`Collapse tag ${node.path}`, `收起标签 ${node.path}`) : tr(`Expand tag ${node.path}`, `展开标签 ${node.path}`)
@@ -223,8 +219,19 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
           )}
         </Menu>
       </div>
-      {hasChildren && expanded ? (
-        <div className="tag-children is-open">
+      {/* A folding subtree stays mounted, inert, until its track has closed
+          (TagTree's effect removes it); a fresh one unfolds from 0. */}
+      {hasChildren && (expanded || closing) ? (
+        <div
+          className={`tag-children${closing ? " is-closing" : ""}`}
+          data-path={node.path}
+          ref={(el) => {
+            if (el) {
+              if (closing) el.setAttribute("inert", "");
+              else el.removeAttribute("inert");
+            }
+          }}
+        >
           <ul>
             {node.children.map((child) => (
               <TagRow
@@ -233,6 +240,9 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
                 depth={depth + 1}
                 activeTag={activeTag}
                 pinnedTags={pinnedTags}
+                openPaths={openPaths}
+                closingPaths={closingPaths}
+                onToggle={onToggle}
                 onPickTag={onPickTag}
                 onPinTag={onPinTag}
                 onRenameTag={onRenameTag}
@@ -246,44 +256,138 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
   );
 }
 
+const TRACK_EASING = "cubic-bezier(0.22, 0.9, 0.24, 1)";
+
 export function TagTree({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenameTag, onRemoveTag }: TagTreeProps) {
   const { tr } = useI18n();
   const listRef = useRef<HTMLUListElement>(null);
   const positionsRef = useRef(new Map<string, number>());
 
-  // FLIP: whenever the tree re-renders (pin/unpin reorders siblings, a
-  // subtree unfolds), rows glide from their previous position to the new one.
+  // Which subtrees are open lives here, not in the rows: a chevron toggle
+  // must re-render the whole tree, because the motion below is measured at
+  // tree level. (Kept per row, a toggle re-rendered that row alone, nothing
+  // was measured, and the next tree-wide render — picking a child — found
+  // the rows below still "at" their pre-unfold positions and glided them a
+  // second time.) A subtree opens when the lens lands inside it and stays
+  // open until folded by hand; folding parks it in `closing` while its track
+  // shuts, then the effect below drops it.
+  const [openPaths, setOpenPaths] = useState<ReadonlySet<string>>(() => new Set(ancestorsOf(activeTag)));
+  const [closingPaths, setClosingPaths] = useState<ReadonlySet<string>>(() => new Set());
+  const [seenTag, setSeenTag] = useState(activeTag);
+  if (activeTag !== seenTag) {
+    // Derived in render, so the subtree opens in the same commit that moves
+    // the lens and takes part in that view transition.
+    setSeenTag(activeTag);
+    const missing = ancestorsOf(activeTag).filter((path) => !openPaths.has(path));
+    if (missing.length > 0) {
+      setOpenPaths(new Set([...openPaths, ...missing]));
+      if (missing.some((path) => closingPaths.has(path))) setClosingPaths(new Set([...closingPaths].filter((path) => !missing.includes(path))));
+    }
+  }
+
+  const toggle = (path: string) => {
+    if (openPaths.has(path)) {
+      setOpenPaths(new Set([...openPaths].filter((p) => p !== path)));
+      setClosingPaths(new Set([...closingPaths, path]));
+    } else {
+      setOpenPaths(new Set([...openPaths, path]));
+      if (closingPaths.has(path)) setClosingPaths(new Set([...closingPaths].filter((p) => p !== path)));
+    }
+  };
+  const settle = (path: string) => setClosingPaths((current) => (current.has(path) ? new Set([...current].filter((p) => p !== path)) : current));
+
+  // Set while a fold has just finished: that render only removes the closed
+  // track, whose space the rows below already took while it shut.
+  const settlingRef = useRef(false);
+
+  // Motion, measured at tree level after every render:
+  //
+  // Subtree tracks unfold and fold as height — a fresh .tag-children grows
+  // from 0 to its own height, a closing one shrinks back — and the rows below
+  // ride the layout, so nothing there is animated separately. A toggle that
+  // reverses a track mid-flight takes over from its current height.
+  //
+  // FLIP: when the tree re-renders for another reason (pin/unpin reorders
+  // siblings), rows glide from their previous position to the new one.
   // Positions are taken relative to the list so sidebar scrolling never fakes
   // a move; nested rows subtract their parent's delta so a moving subtree
-  // doesn't double-animate. Rows with no previous position are the ones a
-  // fold just revealed (or a new tag): they settle in where they are — a short
-  // fade down into place, the siblings gliding out of their way — instead of
-  // popping in; a subtree's rows arrive one after another, top first.
+  // doesn't double-animate. A render that starts or settles a track skips the
+  // glides (the layout is doing the moving) but still records where rows
+  // ended up, so the next glide starts from the truth.
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const canAnimate = !reduced && typeof list.animate === "function";
+    // Rows are measured before any track starts moving: this is the layout the
+    // tracks animate towards, and what the next glide must start from.
     const rows = [...list.querySelectorAll<HTMLElement>("[data-flip]")];
     const listTop = list.getBoundingClientRect().top;
     for (const row of rows) {
       for (const animation of row.getAnimations()) {
-        if (animation.id === "flip" || animation.id === "reveal") animation.cancel();
+        if (animation.id === "flip") animation.cancel();
       }
     }
     const previous = positionsRef.current;
-    const firstPass = previous.size === 0;
     const next = new Map<string, number>();
     const deltas = new Map<HTMLElement, number>();
-    const revealed: HTMLElement[] = [];
     for (const row of rows) {
       const key = row.dataset.flip ?? "";
       const top = row.getBoundingClientRect().top - listTop;
       next.set(key, top);
       const before = previous.get(key);
-      if (before === undefined) revealed.push(row);
       deltas.set(row, before === undefined ? 0 : before - top);
     }
     positionsRef.current = next;
-    if (firstPass || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const tracks = [...list.querySelectorAll<HTMLElement>(".tag-children")];
+    // Nothing moves on the tree's first appearance (a lens restored inside a
+    // subtree shows it open, it doesn't unfold it).
+    const firstPass = positionsRef.current.size === 0;
+    let trackMoved = settlingRef.current;
+    settlingRef.current = false;
+    for (const track of tracks) {
+      const path = track.dataset.path ?? "";
+      const closing = track.classList.contains("is-closing");
+      const state = track.dataset.state ?? "";
+      if (state === (closing ? "closing" : "open")) continue;
+      trackMoved = true;
+      track.dataset.state = closing ? "closing" : "open";
+      if (firstPass && !closing) continue;
+      const running = track.getAnimations().find((animation) => animation.id === "track");
+      // Height as currently painted (mid-flight if reversing), before the
+      // running animation is cancelled and the track snaps to full height.
+      const fromHeight = running ? track.getBoundingClientRect().height : closing ? track.offsetHeight : 0;
+      running?.cancel();
+      if (!canAnimate) {
+        if (closing) {
+          settlingRef.current = true;
+          settle(path);
+        }
+        continue;
+      }
+      const fullHeight = track.offsetHeight;
+      const toHeight = closing ? 0 : fullHeight;
+      track.style.overflow = "hidden";
+      const animation = track.animate(
+        [
+          { height: `${fromHeight}px`, opacity: closing ? String(Math.max(0.2, fromHeight / Math.max(fullHeight, 1))) : String(fromHeight / Math.max(fullHeight, 1)) },
+          { height: `${toHeight}px`, opacity: closing ? 0 : 1 }
+        ],
+        { id: "track", duration: closing ? 180 : 220, easing: TRACK_EASING, fill: "backwards" }
+      );
+      void animation.finished.then(
+        () => {
+          track.style.overflow = "";
+          if (closing) {
+            settlingRef.current = true;
+            settle(path);
+          }
+        },
+        () => undefined
+      );
+    }
+
+    if (trackMoved || !canAnimate) return;
     for (const row of rows) {
       const parentFlip = row.parentElement?.closest<HTMLElement>("[data-flip]") ?? null;
       const delta = (deltas.get(row) ?? 0) - (parentFlip ? deltas.get(parentFlip) ?? 0 : 0);
@@ -291,22 +395,10 @@ export function TagTree({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRe
         row.animate([{ transform: `translateY(${delta}px)` }, { transform: "none" }], {
           id: "flip",
           duration: 220,
-          easing: "cubic-bezier(0.22, 0.9, 0.24, 1)"
+          easing: TRACK_EASING
         });
       }
     }
-    // Only the rows a fold revealed animate: a revealed row's own children
-    // ride inside it, or the subtree would fade twice over.
-    const arriving = revealed.filter((row) => !revealed.some((other) => other !== row && other.contains(row)));
-    arriving.forEach((row, index) => {
-      row.animate([{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }], {
-        id: "reveal",
-        duration: 200,
-        delay: Math.min(index, 5) * 22,
-        easing: "cubic-bezier(0.22, 0.9, 0.24, 1)",
-        fill: "backwards"
-      });
-    });
   });
 
   return (
@@ -326,6 +418,9 @@ export function TagTree({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRe
               depth={0}
               activeTag={activeTag}
               pinnedTags={pinnedTags}
+              openPaths={openPaths}
+              closingPaths={closingPaths}
+              onToggle={toggle}
               onPickTag={onPickTag}
               onPinTag={onPinTag}
               onRenameTag={onRenameTag}
