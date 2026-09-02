@@ -2454,6 +2454,42 @@ button.crumb:active { background: var(--wash-strong); }
 /* Invisible marker that asks for the next feed page when scrolled near. */
 .feed-sentinel { height: 1px; }
 
+/* The link to the server, when it needs saying: offline, or pulls failing
+   while online. One quiet line in the composer's column, in the masthead's
+   voice — words first, a glyph, and the one verb that helps. Not red: the
+   notebook is intact, it is the connection that is not. */
+.sync-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - var(--content-inset) * 2);
+  margin-top: 16px;
+  padding: 8px 12px;
+  color: var(--ink-soft);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  animation: rise-in 0.24s var(--ease-out) both;
+  view-transition-name: sync-notice;
+}
+.sync-notice > svg { flex: none; color: var(--muted); }
+.sync-notice-text { flex: 1; min-width: 0; }
+.sync-notice-retry {
+  flex: none;
+  padding: 4px 9px;
+  color: var(--primary-dark);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  border-radius: var(--r-xs);
+  transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+@media (hover: hover) { .sync-notice-retry:hover { background: var(--primary-tint); } }
+.sync-notice-retry:active { transform: scale(0.96); }
+/* The composer's own top margin follows; the notice keeps the 16px beat. */
+.sync-notice + .composer { margin-top: 12px; }
+
 /* Daily-review masthead: the day's date and batch size, quiet type above the
    cards. Its view-transition-name keeps it steady while a settings change
    swaps the batch beneath it. */

@@ -23,7 +23,9 @@ const mocks = vi.hoisted(() => ({
     setSyncEpoch: vi.fn(),
     runSync: vi.fn(async () => undefined),
     notifyPeers: vi.fn(),
-    notifyLogout: vi.fn()
+    notifyLogout: vi.fn(),
+    status: { online: true, degraded: false },
+    retryNow: vi.fn()
   }
 }));
 

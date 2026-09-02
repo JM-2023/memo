@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthRequiredError, syncSince, type SyncResponse } from "./api";
 import { adoptCacheKey } from "./cache";
 import type { Memo, TagMeta } from "./types";
@@ -21,9 +21,25 @@ type SyncChannelMessage =
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RETRY_MS = 60_000;
+/** Consecutive failed pulls before the feed is called stale out loud. One
+    miss is noise (a tab waking, a flaky hop); two in a row is a condition. */
+const DEGRADED_AFTER_FAILURES = 2;
+
+/** What the reader is told about the link to the server. */
+export interface SyncStatus {
+  /** navigator.onLine, tracked live. */
+  online: boolean;
+  /** Pulls keep failing while online: the feed shows the last good sync. */
+  degraded: boolean;
+}
+
+function initialSyncStatus(): SyncStatus {
+  return { online: typeof navigator === "undefined" || navigator.onLine !== false, degraded: false };
+}
 
 /** Incremental sync with serialized pulls, peer signals and bounded retries. */
 export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onServerReset }: UseSyncOptions) {
+  const [status, setStatus] = useState<SyncStatus>(initialSyncStatus);
   const cursorRef = useRef(0);
   const syncEpochRef = useRef("");
   const busyRef = useRef(false);
@@ -67,6 +83,9 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
     const base = Math.min(MAX_RETRY_MS, 1_000 * 2 ** attempt);
     const delay = Math.round(base * (0.75 + Math.random() * 0.5));
     failureCountRef.current += 1;
+    if (failureCountRef.current >= DEGRADED_AFTER_FAILURES) {
+      setStatus((current) => (current.degraded ? current : { ...current, degraded: true }));
+    }
     retryTimerRef.current = window.setTimeout(() => {
       retryTimerRef.current = 0;
       void runSyncRef.current();
@@ -115,6 +134,7 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
           }
           failureCountRef.current = 0;
           cancelRetry();
+          setStatus((current) => (current.degraded ? { ...current, degraded: false } : current));
           if (data.hasMore) {
             // A paginated endpoint must make progress or it would hot-loop.
             if (nextCursor <= requestedCursor) throw new Error("Sync page did not advance its cursor");
@@ -245,11 +265,19 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
     const onOnline = () => {
       failureCountRef.current = 0;
       cancelRetry();
+      setStatus({ online: true, degraded: false });
       scheduleSync(0);
+    };
+    const onOffline = () => {
+      // Nothing to retry against: the feed is the last good sync until the
+      // link returns. The offline word replaces the degraded one.
+      cancelRetry();
+      setStatus({ online: false, degraded: false });
     };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onFocus);
     window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") scheduleSync(0);
     }, 60_000);
@@ -262,6 +290,7 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
       window.clearInterval(timer);
       window.clearTimeout(triggerTimerRef.current);
       window.clearTimeout(coordinationFallbackRef.current);
@@ -273,5 +302,12 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
     };
   }, [enabled, scheduleSync, cancelRetry]);
 
-  return { setCursor, setSyncEpoch, runSync, notifyPeers, notifyLogout };
+  /** The reader's own "try again": restarts the backoff from zero. */
+  const retryNow = useCallback(() => {
+    failureCountRef.current = 0;
+    cancelRetry();
+    scheduleSync(0);
+  }, [cancelRetry, scheduleSync]);
+
+  return { setCursor, setSyncEpoch, runSync, notifyPeers, notifyLogout, status, retryNow };
 }

@@ -18,6 +18,7 @@ import {
   Sparkles,
   Tags,
   Trash2,
+  WifiOff,
   X
 } from "lucide-react";
 import { memo as reactMemo, startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -757,7 +758,7 @@ export default function App() {
     void invalidateSnapshot().finally(() => window.location.reload());
   }, []);
 
-  const { setCursor, setSyncEpoch, runSync, notifyPeers, notifyLogout } = useSync({
+  const { setCursor, setSyncEpoch, runSync, notifyPeers, notifyLogout, status: syncStatus, retryNow: retrySync } = useSync({
     // Changing the passcode rotates session_generation and the cookie. Abort
     // old-cookie heartbeats during that window so a legitimate success cannot
     // be followed by a stale 401 that drops every tab back to the gate.
@@ -3044,6 +3045,25 @@ export default function App() {
             </div>
           ) : null}
         </div>
+
+        {!syncStatus.online || syncStatus.degraded ? (
+          // The link to the server, said in words when it matters: offline,
+          // or pulls failing while online. Until it clears, the feed is the
+          // last good sync — which is still the whole notebook.
+          <div className="sync-notice" role="status">
+            {syncStatus.online ? <CloudOff size={14} aria-hidden="true" /> : <WifiOff size={14} aria-hidden="true" />}
+            <span className="sync-notice-text">
+              {syncStatus.online
+                ? tr("Can’t reach the server · showing your last synced memos", "无法连接服务器 · 显示上次同步的笔记")
+                : tr("Offline · showing your last synced memos", "离线 · 显示上次同步的笔记")}
+            </span>
+            {syncStatus.online ? (
+              <button type="button" className="sync-notice-retry" onClick={retrySync}>
+                {tr("Retry", "重试")}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="composer" hidden={view !== "memos"}>
           <Editor mode="create" knownTags={knownTags} contextTag={activeTag} busy={creating} onSubmit={handleCreate} />
