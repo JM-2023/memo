@@ -126,6 +126,36 @@ describe("SwapText width motion", () => {
     );
   });
 
+  it("pins both layers to their own widths for the length of the tween", async () => {
+    // Content that wraps would otherwise re-wrap at every intermediate width
+    // of the box: the incoming layer is laid out at the width it ends with,
+    // the outgoing at the width it left with (its own fractional rect).
+    visualWidth = 167.36;
+    let finish: (value: Animation) => void = () => undefined;
+    animateMock.mockImplementationOnce(() => {
+      const animation = { cancel: vi.fn() };
+      animations.push(animation);
+      return {
+        cancel: animation.cancel,
+        finished: new Promise<Animation>((resolve) => {
+          finish = resolve;
+        })
+      } as unknown as Animation;
+    });
+    const { container, rerender } = render(<SwapText id="en">Language</SwapText>);
+
+    rerender(<SwapText id="zh">语言</SwapText>);
+
+    const cur = container.querySelector<HTMLElement>(".swap-cur");
+    const old = container.querySelector<HTMLElement>(".swap-old");
+    expect(old?.style.width).toBe("167.36px");
+    expect(cur?.style.width).toBe("168px");
+
+    finish({} as Animation);
+    await Promise.resolve();
+    expect(cur?.style.width).toBe("");
+  });
+
   it("skips width motion when reduced motion is requested", () => {
     reduceMotion = true;
     const { rerender } = render(<SwapText id="en">Language</SwapText>);

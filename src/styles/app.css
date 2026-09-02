@@ -1266,6 +1266,9 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: baseline;
   justify-content: center;
+  /* SwapText pins the layer to the width it left with (see there); the auto
+     margins keep that pinned box centred while the container tweens. */
+  margin-inline: auto;
   pointer-events: none;
   animation: swap-out-fade 0.14s var(--ease) both;
 }
@@ -1280,6 +1283,7 @@ a:hover { text-decoration: underline; }
 .locale-swap .swap-cur.swap-anim { animation-duration: 0.2s; }
 .locale-swap .swap-old {
   justify-content: flex-start;
+  margin-inline: 0;
   animation-duration: 0.13s;
 }
 
@@ -1569,10 +1573,10 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 @media (hover: hover) { .tag-more:hover { background: var(--wash-strong); color: var(--ink); } }
 @media (hover: none) { .tag-more { opacity: 1; } }
 .tag-more.is-open { background: var(--wash-strong); color: var(--ink); }
-/* Animated expand: grid-rows 0fr -> 1fr glides open without measuring. */
-.tag-children { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 0.18s var(--ease), opacity 0.14s var(--ease); }
-.tag-children > ul { overflow: hidden; min-height: 0; }
-.tag-children.is-open { grid-template-rows: 1fr; opacity: 1; }
+/* A subtree mounts when it opens and unmounts when it folds; the motion is
+   TagTree's (revealed rows settle in, the rows below glide on the FLIP). */
+.tag-children { display: grid; }
+.tag-children > ul { min-height: 0; }
 
 /* =========================================================================
    Main column
@@ -1618,6 +1622,10 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
      ended. Lifting the bar into its own group (ordered above the cards in the
      view-transition section) keeps it pinned on top throughout. */
   view-transition-name: topbar;
+  /* The selection toolbar's tiers (see the responsive section) key off this
+     row's own width rather than the viewport's: the row is narrowest just
+     past the sidebar breakpoint, not on the smallest phone. */
+  container: topbar / inline-size;
 }
 .drawer-toggle { display: none; }
 
@@ -3515,7 +3523,7 @@ button.stats-tag-row:active { scale: 0.992; }
 
 /* =========================================================================
    Daily review settings dialog — Tier B floating surface. Sections rise in
-   with the stats modal's stagger; the tag picker unfolds on the tag-children
+   with the stats modal's stagger; the tag picker unfolds on an animated
    0fr→1fr track; the count wheel reuses the split-flap digits.
    ========================================================================= */
 .review-modal {
@@ -3594,7 +3602,7 @@ button.stats-tag-row:active { scale: 0.992; }
 .review-option.is-active .review-radio::after { transform: scale(1); }
 
 /* Tag picker: unfolds under the include/exclude choice on the animated
-   0fr→1fr track (the sidebar tag-children glide), never measuring. */
+   0fr→1fr track, never measuring. */
 .review-tagbox {
   display: grid;
   grid-template-rows: 0fr;
@@ -4328,9 +4336,19 @@ button.stats-tag-row:active { scale: 0.992; }
   .review-config-button span { display: none; }
   .crumb { max-width: 6.5em; padding: 5px 7px; }
   .loc-label { max-width: 6.5em; }
-  /* Selection mode needs the row for its pills — search yields the corner,
-     and the lens caption goes with it. */
-  .topbar:has(.select-bar) .search-tools { display: none; }
+}
+
+/* The selection toolbar gives way in steps as its row narrows. The steps are
+   container queries on the topbar because the row's width is not the
+   viewport's: beside the sidebar a 1000px window leaves the row ~640px, less
+   than a 720px phone has, so viewport breakpoints hid search on the phone and
+   let the pills run under it on the laptop. Each step drops the least-needed
+   text first — the lens caption, then the verbs' labels (their icons stay),
+   then search itself (it comes back with the breadcrumb), and only on a
+   narrow phone Select all / Cancel go icon-only. */
+/* Two thresholds per step: below 901px the drawer toggle takes 50px of
+   the same row, so the step comes 50px sooner there. */
+@container topbar (max-width: 700px) {
   .select-lens { display: none; }
   .select-bar { gap: 4px; }
   .select-count { padding-inline: 8px; }
@@ -4345,8 +4363,39 @@ button.stats-tag-row:active { scale: 0.992; }
   .select-tag span { display: none; }
   .select-delete span { display: none; }
 }
-
-@media (max-width: 360px) {
+@container topbar (max-width: 610px) {
+  .topbar:has(.select-bar) .search-tools { display: none; }
+}
+@media (max-width: 900px) {
+  @container topbar (max-width: 750px) {
+    .select-lens { display: none; }
+    .select-bar { gap: 4px; }
+    .select-count { padding-inline: 8px; }
+    .select-pill { padding-inline: 8px; }
+    .select-tag,
+    .select-delete {
+      justify-content: center;
+      width: 40px;
+      min-height: 40px;
+      padding-inline: 5px;
+    }
+    .select-tag span { display: none; }
+    .select-delete span { display: none; }
+  }
+  @container topbar (max-width: 660px) {
+    .topbar:has(.select-bar) .search-tools { display: none; }
+  }
+}
+@container topbar (max-width: 400px) {
+  .select-bar { gap: 3px; }
+  .select-count { padding-inline: 7px; font-size: var(--fs-xs); }
+  .select-pill,
+  .select-delete { font-size: var(--fs-xs); }
+  .select-pill { padding-inline: 6px; }
+  .select-tag,
+  .select-delete { width: 40px; padding-inline: 4px; }
+}
+@container topbar (max-width: 340px) {
   .select-all {
     justify-content: center;
     width: 40px;
@@ -4409,14 +4458,6 @@ button.stats-tag-row:active { scale: 0.992; }
   .editor-actions { min-width: 0; }
   .editor-bar { flex-wrap: wrap; }
   .editor-actions { margin-left: auto; }
-
-  .select-bar { gap: 3px; }
-  .select-count { padding-inline: 7px; font-size: var(--fs-xs); }
-  .select-pill,
-  .select-delete { font-size: var(--fs-xs); }
-  .select-pill { padding-inline: 6px; }
-  .select-tag,
-  .select-delete { width: 40px; padding-inline: 4px; }
 
   /* The sheet-setup track is one object and can't wrap: seven cells parted by
      four rules is wider than a narrow phone's dialog, and the modal clips

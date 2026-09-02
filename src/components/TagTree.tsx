@@ -136,13 +136,19 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
   // filter landed inside the subtree). The tree follows it open, so the
   // selected row is never hidden under a folded parent.
   const holdsActive = activeTag !== null && activeTag.startsWith(`${node.path}/`);
-  // null = follow the lens; a fold or unfold by hand overrides it until the
-  // lens next arrives inside this subtree.
-  const [manual, setManual] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (holdsActive) setManual(null);
-  }, [holdsActive, activeTag]);
-  const expanded = manual ?? holdsActive;
+  // Once open, a subtree stays open until folded by hand: the lens moving
+  // up to this row (or away altogether) must not fold it — that read as the
+  // tree slamming shut on a parent click, and reopening on the next child
+  // pick, so the unfold seemed to play twice. Derived in render, not in an
+  // effect, so the row opens in the same commit that moves the lens and
+  // takes part in that view transition.
+  const [open, setOpen] = useState(holdsActive);
+  const [wasHolding, setWasHolding] = useState(holdsActive);
+  if (holdsActive !== wasHolding) {
+    setWasHolding(holdsActive);
+    if (holdsActive) setOpen(true);
+  }
+  const expanded = open;
   const pinned = pinnedTags.has(node.path);
   const named = tr(`${node.name}, ${count(node.count, "memo")}`, `${node.name}，${count(node.count, "memo")}`);
   const label = pinned ? tr(`${named}, pinned`, `${named}，已置顶`) : named;
@@ -164,7 +170,7 @@ function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRen
           <button
             type="button"
             className={`tag-expand${expanded ? " is-expanded" : ""}`}
-            onClick={() => setManual(!expanded)}
+            onClick={() => setOpen(!expanded)}
             aria-expanded={expanded}
             aria-label={
               expanded ? tr(`Collapse tag ${node.path}`, `收起标签 ${node.path}`) : tr(`Expand tag ${node.path}`, `展开标签 ${node.path}`)
@@ -245,10 +251,14 @@ export function TagTree({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRe
   const listRef = useRef<HTMLUListElement>(null);
   const positionsRef = useRef(new Map<string, number>());
 
-  // FLIP: whenever the tree re-renders (pin/unpin reorders siblings), rows
-  // glide from their previous position to the new one. Positions are taken
-  // relative to the list so sidebar scrolling never fakes a move; nested rows
-  // subtract their parent's delta so a moving subtree doesn't double-animate.
+  // FLIP: whenever the tree re-renders (pin/unpin reorders siblings, a
+  // subtree unfolds), rows glide from their previous position to the new one.
+  // Positions are taken relative to the list so sidebar scrolling never fakes
+  // a move; nested rows subtract their parent's delta so a moving subtree
+  // doesn't double-animate. Rows with no previous position are the ones a
+  // fold just revealed (or a new tag): they settle in where they are — a short
+  // fade down into place, the siblings gliding out of their way — instead of
+  // popping in; a subtree's rows arrive one after another, top first.
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return;
@@ -256,21 +266,24 @@ export function TagTree({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRe
     const listTop = list.getBoundingClientRect().top;
     for (const row of rows) {
       for (const animation of row.getAnimations()) {
-        if (animation.id === "flip") animation.cancel();
+        if (animation.id === "flip" || animation.id === "reveal") animation.cancel();
       }
     }
     const previous = positionsRef.current;
+    const firstPass = previous.size === 0;
     const next = new Map<string, number>();
     const deltas = new Map<HTMLElement, number>();
+    const revealed: HTMLElement[] = [];
     for (const row of rows) {
       const key = row.dataset.flip ?? "";
       const top = row.getBoundingClientRect().top - listTop;
       next.set(key, top);
       const before = previous.get(key);
+      if (before === undefined) revealed.push(row);
       deltas.set(row, before === undefined ? 0 : before - top);
     }
     positionsRef.current = next;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (firstPass || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     for (const row of rows) {
       const parentFlip = row.parentElement?.closest<HTMLElement>("[data-flip]") ?? null;
       const delta = (deltas.get(row) ?? 0) - (parentFlip ? deltas.get(parentFlip) ?? 0 : 0);
@@ -282,6 +295,18 @@ export function TagTree({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRe
         });
       }
     }
+    // Only the rows a fold revealed animate: a revealed row's own children
+    // ride inside it, or the subtree would fade twice over.
+    const arriving = revealed.filter((row) => !revealed.some((other) => other !== row && other.contains(row)));
+    arriving.forEach((row, index) => {
+      row.animate([{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }], {
+        id: "reveal",
+        duration: 200,
+        delay: Math.min(index, 5) * 22,
+        easing: "cubic-bezier(0.22, 0.9, 0.24, 1)",
+        fill: "backwards"
+      });
+    });
   });
 
   return (

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Image } from "lucide-react";
 import type { ReactNode } from "react";
@@ -115,6 +115,29 @@ describe("tag tree", () => {
     renderTree("life/cooking");
     expect(screen.getByRole("button", { name: "Collapse tag life" }).getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: "cooking, 2 memos" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("stays open once the lens has opened it, until folded by hand", () => {
+    // Picking the parent (or leaving the subtree) must not slam it shut —
+    // that fold, and the reopen on the next child pick, read as the unfold
+    // playing twice.
+    const view = renderTree("life/cooking");
+    const rerenderWith = (activeTag: string | null) =>
+      view.rerender(
+        <Providers>
+          <TagTree tree={tree} activeTag={activeTag} pinnedTags={new Map()} onPickTag={vi.fn()} onPinTag={vi.fn()} onRenameTag={vi.fn()} onRemoveTag={vi.fn()} />
+        </Providers>
+      );
+    rerenderWith("life");
+    expect(screen.getByRole("button", { name: "Collapse tag life" }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "cooking, 2 memos" })).toBeTruthy();
+    rerenderWith(null);
+    expect(screen.getByRole("button", { name: "Collapse tag life" }).getAttribute("aria-expanded")).toBe("true");
+    // A fold by hand holds; the lens landing inside again opens it back up.
+    fireEvent.click(screen.getByRole("button", { name: "Collapse tag life" }));
+    expect(screen.queryByRole("button", { name: "cooking, 2 memos" })).toBeNull();
+    rerenderWith("life/garden");
+    expect(screen.getByRole("button", { name: "garden, 1 memo" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("stays folded when the lens is elsewhere", () => {
