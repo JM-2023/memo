@@ -47,6 +47,9 @@ interface Suggestion {
   query: string;
   items: string[];
   index: number;
+  /** The typed run already spells a known tag in full; Enter must not swap
+      it for a longer suggestion (e.g. `#life` → `#life/cooking`). */
+  exact: boolean;
 }
 
 /**
@@ -224,8 +227,16 @@ export function Editor({
       return;
     }
     const lowered = query.toLowerCase();
-    const items = knownTags.filter((tag) => tag.toLowerCase().includes(lowered) && tag !== query).slice(0, 6);
-    setSuggestion(items.length > 0 ? { tokenStart: hashStart, query, items, index: 0 } : null);
+    const exact = lowered.length > 0 && knownTags.some((tag) => tag.toLowerCase() === lowered);
+    // Tags that begin with the run lead the list, then any that contain it;
+    // the tag typed out in full is left off (nothing left to complete).
+    // knownTags arrives sorted, and the sort is stable, so each group stays
+    // alphabetical.
+    const items = knownTags
+      .filter((tag) => tag.toLowerCase().includes(lowered) && tag.toLowerCase() !== lowered)
+      .sort((a, b) => Number(!a.toLowerCase().startsWith(lowered)) - Number(!b.toLowerCase().startsWith(lowered)))
+      .slice(0, 6);
+    setSuggestion(items.length > 0 ? { tokenStart: hashStart, query, items, index: 0, exact } : null);
   }
 
   function applySuggestion(tag: string) {
@@ -409,7 +420,13 @@ export function Editor({
         setSuggestion({ ...suggestion, index: (suggestion.index + delta + suggestion.items.length) % suggestion.items.length });
         return;
       }
-      if (event.key === "Enter" || event.key === "Tab") {
+      if (event.key === "Enter" && suggestion.exact) {
+        // The run is already a tag: Enter keeps its ordinary meaning (a new
+        // line, a continued list) and only puts the list away. It used to
+        // take the first child instead — `#life` became `#life/cooking` and
+        // the line never broke. Tab still accepts the highlighted one.
+        setSuggestion(null);
+      } else if (event.key === "Enter" || event.key === "Tab") {
         event.preventDefault();
         applySuggestion(suggestion.items[suggestion.index]);
         return;
