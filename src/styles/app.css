@@ -93,6 +93,9 @@
 
   --danger: #b5483f;
   --danger-tint: #f8eeec;
+  /* Ink on a danger fill. Dark's --danger is pale, so the ink flips dark
+     there — the way --primary-ink already does for the accent. */
+  --danger-ink: #ffffff;
 
   --ring: rgba(61, 122, 91, 0.22);
   /* A text field's focus is its hairline border taking the accent — no ring,
@@ -273,6 +276,7 @@
 
     --danger: #e2837a;
     --danger-tint: #2c1a17;
+    --danger-ink: #2c1a17;
 
     --ring: rgba(158, 208, 181, 0.3);
 
@@ -381,6 +385,7 @@
 
   --danger: #e2837a;
   --danger-tint: #2c1a17;
+  --danger-ink: #2c1a17;
 
   --ring: rgba(158, 208, 181, 0.3);
 
@@ -753,9 +758,9 @@ a:hover { text-decoration: underline; }
 
 .danger-button {
   padding: 8px 16px;
-  color: #fff;
+  color: var(--danger-ink);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
   background: var(--danger);
   border-radius: var(--r-sm);
   box-shadow: var(--shadow-sm);
@@ -1785,7 +1790,7 @@ button.crumb:active { background: var(--wash-strong); }
 }
 @media (hover: hover) { .select-delete:hover:not(:disabled) { background: var(--danger-tint); } }
 .select-delete:active:not(:disabled) { transform: scale(0.95); }
-.select-delete.is-confirm { color: #fff; background: var(--danger); box-shadow: var(--shadow-sm); }
+.select-delete.is-confirm { color: var(--danger-ink); background: var(--danger); box-shadow: var(--shadow-sm); }
 @media (hover: hover) { .select-delete.is-confirm:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 88%, black); } }
 /* The pills trail in behind the morphing counter, breadcrumb-style. */
 .select-bar > :nth-child(2) { animation-delay: 0.025s; }
@@ -2028,7 +2033,7 @@ button.crumb:active { background: var(--wash-strong); }
 .trash-empty-button:active { transform: scale(0.95); }
 /* Armed state (first click): filled red, asking for the second click. */
 .trash-empty-button.is-confirm {
-  color: #fff;
+  color: var(--danger-ink);
   background: var(--danger);
   box-shadow: var(--shadow-sm);
 }
@@ -2671,11 +2676,17 @@ button.crumb:active { background: var(--wash-strong); }
   transition: border-color 0.16s var(--ease), background-color 0.16s var(--ease), transform 0.12s var(--ease);
 }
 .md-task-box::before { content: ""; position: absolute; inset: -6px; }
+/* The tick is a mask over the fill's ink rather than a white glyph: dark's
+   accent is pale, and white on it barely read (1.7:1). --primary-ink is what
+   every other mark on a primary fill already uses. */
 .md-task-box::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='4.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+  background-color: var(--primary-ink);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='4.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+    center / 9px 9px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='4.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
     center / 9px 9px no-repeat;
   opacity: 0;
   transform: scale(0.4);
