@@ -1100,7 +1100,13 @@ a:hover { text-decoration: underline; }
   display: flex;
   flex-direction: column;
   max-height: 100vh;
-  padding: 16px clamp(14px, 1.6vw, 24px) 24px;
+  /* Side inset as a share of the sidebar's own width, not the viewport's:
+     the sidebar stops shrinking at 302px (1208px viewports) but a vw inset
+     kept shrinking below that, so the content column *widened* as the window
+     narrowed — the heatmap title folded to two lines at 1200px and unfolded
+     again at 1000px. 6.4% is the old inset at both ends of the sidebar's
+     range (19px at 302, 25→24px at 392) and holds still on the floor. */
+  padding: 16px clamp(14px, 6.4%, 24px) 24px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -1262,13 +1268,18 @@ a:hover { text-decoration: underline; }
 .swap-cur.swap-anim.dir-back { animation-name: swap-in-back; }
 .swap-old {
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  /* SwapText pins the layer to the width it left with (see there), so its
+     line breaks hold; centred on the box's midline, it stays centred while
+     the box tweens (or jumps) to the new width, clipping evenly at both ends
+     if it is the wider of the two. `translate` composes with the exit
+     keyframes' transform. */
+  left: 50%;
+  translate: -50% 0;
   display: flex;
   align-items: baseline;
   justify-content: center;
-  /* SwapText pins the layer to the width it left with (see there); the auto
-     margins keep that pinned box centred while the container tweens. */
-  margin-inline: auto;
   pointer-events: none;
   animation: swap-out-fade 0.14s var(--ease) both;
 }
@@ -1282,8 +1293,9 @@ a:hover { text-decoration: underline; }
 .locale-swap { flex: none; justify-items: start; }
 .locale-swap .swap-cur.swap-anim { animation-duration: 0.2s; }
 .locale-swap .swap-old {
+  left: 0;
+  translate: none;
   justify-content: flex-start;
-  margin-inline: 0;
   animation-duration: 0.13s;
 }
 

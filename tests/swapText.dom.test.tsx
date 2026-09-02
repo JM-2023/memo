@@ -156,6 +156,28 @@ describe("SwapText width motion", () => {
     expect(cur?.style.width).toBe("");
   });
 
+  it("leaves the width alone when told to, tweening only the height", () => {
+    // The heatmap title sits centred between fixed arrows: a width tween
+    // there moves nothing, and forces the box through widths its content
+    // doesn't fit — the count on the right was clipped until it arrived.
+    heightOf = (content) => (content?.includes("12 memos") ? 37 : 20);
+    const { container, rerender } = render(
+      <SwapText id="w0" tweenWidth={false}>
+        Aug 31 – Sep 6<span>2 memos</span>
+      </SwapText>
+    );
+
+    rerender(
+      <SwapText id="w1" tweenWidth={false}>
+        Sep 7 – Sep 13<span>12 memos</span>
+      </SwapText>
+    );
+
+    expect(animateMock).toHaveBeenCalledOnce();
+    expect(animateMock).toHaveBeenCalledWith([{ height: "20px" }, { height: "37px" }], { duration: 220, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+    expect(container.querySelector<HTMLElement>(".swap-cur")?.style.width).toBe("");
+  });
+
   it("skips width motion when reduced motion is requested", () => {
     reduceMotion = true;
     const { rerender } = render(<SwapText id="en">Language</SwapText>);

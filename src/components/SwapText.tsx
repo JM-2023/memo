@@ -6,6 +6,13 @@ interface SwapTextProps {
   /** 1 = forward (old exits left, new enters from the right), -1 = back, 0 = crossfade. */
   dir?: number;
   className?: string;
+  /**
+   * Tween the box's width between the old and new content (default). Off
+   * for content that sits centred between fixed neighbours — the heatmap
+   * title between its arrows — where a width tween moves nothing but forces
+   * the box through widths the content doesn't fit, clipping its ends.
+   */
+  tweenWidth?: boolean;
   children: ReactNode;
 }
 
@@ -42,7 +49,7 @@ function dirClass(dir: number): string {
  * snapped back to one. Pinned, the box clips a few pixels at the edges mid-tween
  * instead of reflowing the text.
  */
-export function SwapText({ id, dir = 0, className, children }: SwapTextProps) {
+export function SwapText({ id, dir = 0, className, tweenWidth = true, children }: SwapTextProps) {
   const [old, setOld] = useState<OldLayer | null>(null);
   const boxRef = useRef<HTMLSpanElement>(null);
   const curRef = useRef<HTMLSpanElement>(null);
@@ -82,7 +89,7 @@ export function SwapText({ id, dir = 0, className, children }: SwapTextProps) {
     const to = { width: el.offsetWidth, height: el.offsetHeight };
     const start: Keyframe = {};
     const end: Keyframe = {};
-    if (Math.abs(to.width - from.width) >= 1) {
+    if (tweenWidth && Math.abs(to.width - from.width) >= 1) {
       start.width = `${from.width}px`;
       end.width = `${to.width}px`;
     }
@@ -97,7 +104,7 @@ export function SwapText({ id, dir = 0, className, children }: SwapTextProps) {
     // down, and a pin even a third of a pixel short of the natural width
     // wraps the last word. The pin comes off with the tween — the layer is
     // then sized by the box again, which has arrived at the same width.
-    const cur = curRef.current;
+    const cur = tweenWidth ? curRef.current : null;
     if (cur) cur.style.width = `${Math.ceil(el.getBoundingClientRect().width)}px`;
     const unpin = () => {
       if (cur) cur.style.width = "";
@@ -121,7 +128,7 @@ export function SwapText({ id, dir = 0, className, children }: SwapTextProps) {
       animation.cancel();
       sizeAnimationRef.current = null;
     };
-  }, [id]);
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const entered = serialRef.current > 0;
   return (

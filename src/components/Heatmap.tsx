@@ -343,7 +343,7 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
           }}
           onMouseLeave={tip.hide}
         >
-          <SwapText id={gridKey} dir={swapDir} className="heatmap-title-swap">
+          <SwapText id={gridKey} dir={swapDir} tweenWidth={false} className="heatmap-title-swap">
             {title}
             <span className="heatmap-total">{count(rangeTotal, "memo")}</span>
           </SwapText>
