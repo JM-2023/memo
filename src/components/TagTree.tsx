@@ -1,5 +1,5 @@
 import { ChevronRight, Hash, MoreHorizontal, Pencil, Pin, PinOff, Tag, Trash2, X } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useI18n } from "../lib/i18n";
 import type { TagNode } from "../lib/tags";
 import { Menu } from "./Menu";
@@ -104,21 +104,42 @@ interface TagRowProps extends TagCallbacks {
 
 function TagRow({ node, depth, activeTag, pinnedTags, onPickTag, onPinTag, onRenameTag, onRemoveTag }: TagRowProps) {
   const { count, formatNumber, tr } = useI18n();
-  const [expanded, setExpanded] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
   const hasChildren = node.children.length > 0;
   const isActive = activeTag === node.path;
+  // The lens sits somewhere below this row (a card chip, a crumb or a saved
+  // filter landed inside the subtree). The tree follows it open, so the
+  // selected row is never hidden under a folded parent.
+  const holdsActive = activeTag !== null && activeTag.startsWith(`${node.path}/`);
+  // null = follow the lens; a fold or unfold by hand overrides it until the
+  // lens next arrives inside this subtree.
+  const [manual, setManual] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (holdsActive) setManual(null);
+  }, [holdsActive, activeTag]);
+  const expanded = manual ?? holdsActive;
   const pinned = pinnedTags.has(node.path);
   const named = tr(`${node.name}, ${count(node.count, "memo")}`, `${node.name}，${count(node.count, "memo")}`);
   const label = pinned ? tr(`${named}, pinned`, `${named}，已置顶`) : named;
 
+  // Arriving from elsewhere, the row surfaces in the sidebar's own scroll —
+  // after the parents' children tracks have finished opening above it.
+  useEffect(() => {
+    if (!isActive) return;
+    const row = rowRef.current;
+    if (!row || typeof row.scrollIntoView !== "function") return;
+    const timer = window.setTimeout(() => row.scrollIntoView({ block: "nearest" }), 200);
+    return () => window.clearTimeout(timer);
+  }, [isActive]);
+
   return (
     <li className="tag-item" data-flip={node.path}>
-      <div className={`tag-row${isActive ? " is-active" : ""}${pinned ? " is-pinned" : ""}`} style={{ paddingLeft: `${10 + depth * 18}px` }}>
+      <div ref={rowRef} className={`tag-row${isActive ? " is-active" : ""}${pinned ? " is-pinned" : ""}`} style={{ paddingLeft: `${10 + depth * 18}px` }}>
         {hasChildren ? (
           <button
             type="button"
             className={`tag-expand${expanded ? " is-expanded" : ""}`}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={() => setManual(!expanded)}
             aria-expanded={expanded}
             aria-label={
               expanded ? tr(`Collapse tag ${node.path}`, `收起标签 ${node.path}`) : tr(`Expand tag ${node.path}`, `展开标签 ${node.path}`)
