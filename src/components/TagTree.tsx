@@ -373,14 +373,21 @@ export function TagTree({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRe
           { height: `${fromHeight}px`, opacity: closing ? String(Math.max(0.2, fromHeight / Math.max(fullHeight, 1))) : String(fromHeight / Math.max(fullHeight, 1)) },
           { height: `${toHeight}px`, opacity: closing ? 0 : 1 }
         ],
-        { id: "track", duration: closing ? 180 : 220, easing: TRACK_EASING, fill: "backwards" }
+        // fill: both — a closed track must hold at 0 until React removes it,
+        // or it springs back to full height for the frame in between (the
+        // folded rows flashed over the row below). An opened track's end
+        // state is its natural one, so that animation is dropped on finish
+        // rather than left pinning the height.
+        { id: "track", duration: closing ? 180 : 220, easing: TRACK_EASING, fill: "both" }
       );
       void animation.finished.then(
         () => {
-          track.style.overflow = "";
           if (closing) {
             settlingRef.current = true;
             settle(path);
+          } else {
+            animation.cancel();
+            track.style.overflow = "";
           }
         },
         () => undefined
