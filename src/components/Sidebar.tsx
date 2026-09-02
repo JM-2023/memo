@@ -59,7 +59,7 @@ const THEME_LABELS: Record<ThemeChoice, readonly [en: string, zh: string]> = {
 
 export function Sidebar(props: SidebarProps) {
   const { memos, tagTree, uniqueTagCount, countsByDay, activeTag, activeDay, filtersActive, view, trashCount, theme } = props;
-  const { language, setLanguage, tr, formatNumber, count } = useI18n();
+  const { language, setLanguage, tr, count } = useI18n();
   const tip = useTip();
   const [period, setPeriod] = useState<PeriodKind>("week");
 
@@ -292,19 +292,19 @@ export function Sidebar(props: SidebarProps) {
             onClick={props.onOpenStats}
             onMouseEnter={(event) =>
               tip.show(event.currentTarget, {
-                strong: tr(
-                  `${formatNumber(totals.activeDays)} active ${totals.activeDays === 1 ? "day" : "days"}`,
-                  `${count(totals.activeDays, "day")}活跃`
-                ),
-                text: tr(`Recorded across ${count(totals.daySpan, "day")}`, `记录跨度 ${count(totals.daySpan, "day")}`)
+                strong: tr("Days with at least one memo", "有笔记的天数"),
+                text: tr(`${count(totals.daySpan, "day")} since the first memo`, `距首条笔记 ${count(totals.daySpan, "day")}`)
               })
             }
             onMouseLeave={tip.hide}
           >
+            {/* Active days, not the calendar span since the first memo: a
+                span reads like a streak, and it was the one figure here that
+                grew whether or not anything was written. */}
             <span className="stat-number">
-              <RollingText value={totals.daySpan} />
+              <RollingText value={totals.activeDays} />
             </span>
-            <span className="stat-label">{tr("Days", "天")}</span>
+            <span className="stat-label">{tr("Active days", "活跃天数")}</span>
           </button>
         </div>
 

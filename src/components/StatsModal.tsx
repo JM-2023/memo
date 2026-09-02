@@ -4,7 +4,7 @@ import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { dateKey, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
-import { buildHeatMonth, computeStreaks, countsByDay, totalStats, wordCountOf, type HeatMonth } from "../lib/stats";
+import { buildHeatMonth, computeStreaks, countsByDay, localMaxima, totalStats, wordCountOf, type HeatMonth } from "../lib/stats";
 import type { StatsDrilldown } from "../lib/statsDrilldown";
 import { tagsOf } from "../lib/tags";
 import type { Memo } from "../lib/types";
@@ -27,15 +27,50 @@ interface BarChartProps {
   onPick: (index: number) => void;
 }
 
-/** Baseline-anchored bars that rise in with a slight stagger and drill down. */
+/**
+ * Baseline-anchored bars that rise in with a slight stagger and drill down.
+ * Each bar prints its count above itself, so the figures read without a
+ * pointer. When a chart is too narrow for every label to have its own room
+ * (measured, not guessed — the hour chart at middling widths), only the
+ * local peaks keep theirs, plus the hovered or focused bar; the tip still
+ * carries the full sentence.
+ */
 function BarChart({ label, values, max, labels, tips, onPick }: BarChartProps) {
-  const { count } = useI18n();
+  const { count, formatNumber } = useI18n();
   const tip = useTip();
   const summary = `${label}. ${tips.map((item, index) => `${item}: ${count(values[index], "memo")}`).join("; ")}`;
   const density = values.length >= 20 ? " is-dense" : values.length >= 10 ? " is-medium" : "";
+  const peaks = localMaxima(values);
+  const barsRef = useRef<HTMLDivElement>(null);
+  const [sparse, setSparse] = useState(false);
+  const signature = values.join(",");
+
+  useLayoutEffect(() => {
+    const bars = barsRef.current;
+    if (!bars) return;
+    const measure = () => {
+      const columns = bars.children;
+      // The grid gives every column the same width and gap, so the first two
+      // columns' offsets give the pitch.
+      const pitch = columns.length > 1 ? (columns[1] as HTMLElement).offsetLeft - (columns[0] as HTMLElement).offsetLeft : 0;
+      let widest = 0;
+      bars.querySelectorAll<HTMLElement>(".stats-bar-value").forEach((value) => {
+        widest = Math.max(widest, value.offsetWidth);
+      });
+      // Neighbouring labels keep a 4px gutter. Before layout (pitch 0, as in
+      // tests) every label shows.
+      setSparse(pitch > 0 && widest + 4 > pitch);
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(bars);
+    return () => observer?.disconnect();
+    // Label widths follow the values (and the locale); chart width is observed.
+  }, [signature, formatNumber]);
+
   return (
     <div className={`bar-chart${density}`} role="group" aria-label={summary}>
-      <div className="stats-bars">
+      <div ref={barsRef} className={`stats-bars${sparse ? " is-sparse" : ""}`}>
         {values.map((value, index) => (
           <button
             key={index}
@@ -59,7 +94,12 @@ function BarChart({ label, values, max, labels, tips, onPick }: BarChartProps) {
                   "--bar-d": `${Math.min(index, 6) * 0.008}s`
                 } as CSSProperties
               }
-            />
+            >
+              {/* Hidden from assistive tech: the button's name carries the count. */}
+              <span className={`stats-bar-value${peaks[index] ? " is-peak" : ""}`} aria-hidden="true">
+                {value > 0 ? formatNumber(value) : null}
+              </span>
+            </span>
           </button>
         ))}
       </div>
@@ -394,8 +434,9 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown }: Stat
     { label: tr("Total characters", "总字数"), value: allWords },
     { label: tr("Images", "图片"), value: allImages },
     { label: tr("Tags", "标签"), value: uniqueTagCount },
-    { label: tr("Days recorded", "记录天数"), value: totals.daySpan },
     { label: tr("Active days", "活跃天数"), value: totals.activeDays },
+    // The calendar span since the first memo — a duration, so it wears its unit.
+    { label: tr("Since first memo", "距首条笔记"), value: totals.daySpan, suffix: tr(totals.daySpan === 1 ? " day" : " days", " 天") },
     { label: tr("Longest streak", "最长连击"), value: streaks.longest, suffix: tr(streaks.longest === 1 ? " day" : " days", " 天") },
     { label: tr("Current streak", "当前连击"), value: streaks.current, suffix: tr(streaks.current === 1 ? " day" : " days", " 天") }
   ];
@@ -492,7 +533,24 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown }: Stat
           </section>
 
           <section className="stats-section" style={{ animationDelay: "0.02s" }}>
-            <h3 className="stats-section-title">{tr("Daily activity", "每日活跃")}</h3>
+            <div className="stats-section-head">
+              <h3 className="stats-section-title">{tr("Daily activity", "每日活跃")}</h3>
+              {/* The scale, built from the calendar's own cell classes so it
+                  recolours with them. The swatches are decoration; a screen
+                  reader gets the sentence instead. */}
+              <div className="heat-legend">
+                <span className="heat-legend-sr">
+                  {tr("Shade shows memos per day, from 1 to 5 or more.", "颜色深浅表示每天的笔记数，从 1 条到 5 条或更多。")}
+                </span>
+                <span aria-hidden="true">{tr("Less", "少")}</span>
+                <span className="heat-legend-cells" aria-hidden="true">
+                  {[0, 1, 2, 3, 4].map((level) => (
+                    <span key={level} className={`mini-cell level-${level}`} />
+                  ))}
+                </span>
+                <span aria-hidden="true">{tr("More", "多")}</span>
+              </div>
+            </div>
             <div className="months-grid">
               {yearData.months.map(({ month, count: memoCount, heat }) => (
                 <div key={month} className="mini-month">

@@ -228,11 +228,13 @@
   --wash: rgba(20, 27, 45, 0.05);
   --wash-strong: rgba(20, 27, 45, 0.08);
 
-  /* Heatmap ramp — GitHub greens, for activity intensity only. */
-  --heat-1: #9be9a8;
-  --heat-2: #40c463;
-  --heat-3: #30a14e;
-  --heat-4: #216e39;
+  /* Heatmap ramp — the one accent at four strengths, so a day's activity
+     reads in the same green as the rest of the page instead of bringing a
+     second family (the old GitHub greens) onto it. */
+  --heat-1: color-mix(in srgb, var(--primary) 30%, #ffffff);
+  --heat-2: color-mix(in srgb, var(--primary) 62%, #ffffff);
+  --heat-3: var(--primary);
+  --heat-4: color-mix(in srgb, var(--primary-dark) 78%, #000000);
 
   /* Sidebar accent — same sage family as --primary, kept as separate
      tokens so the sidebar's tints can be tuned independently. */
@@ -344,10 +346,12 @@
     --wash: rgba(255, 255, 255, 0.06);
     --wash-strong: rgba(255, 255, 255, 0.1);
 
-    --heat-1: #0e4429;
-    --heat-2: #006d32;
-    --heat-3: #26a641;
-    --heat-4: #39d353;
+    /* Dark grows brighter with activity: the pale accent at full strength
+       is the busiest day, the quiet days sink toward the surface. */
+    --heat-1: color-mix(in srgb, var(--primary) 26%, var(--surface-3));
+    --heat-2: color-mix(in srgb, var(--primary) 48%, var(--surface-3));
+    --heat-3: color-mix(in srgb, var(--primary) 76%, var(--surface-3));
+    --heat-4: var(--primary);
 
     --leaf: #9ed0b5;
     --leaf-tint: #1a2a21;
@@ -453,10 +457,10 @@
   --wash: rgba(255, 255, 255, 0.06);
   --wash-strong: rgba(255, 255, 255, 0.1);
 
-  --heat-1: #0e4429;
-  --heat-2: #006d32;
-  --heat-3: #26a641;
-  --heat-4: #39d353;
+  --heat-1: color-mix(in srgb, var(--primary) 26%, var(--surface-3));
+  --heat-2: color-mix(in srgb, var(--primary) 48%, var(--surface-3));
+  --heat-3: color-mix(in srgb, var(--primary) 76%, var(--surface-3));
+  --heat-4: var(--primary);
 
   --leaf: #9ed0b5;
   --leaf-tint: #1a2a21;
@@ -2902,8 +2906,8 @@ button.memo-tag:active {
   padding: 8px 16px;
   color: var(--primary-ink);
   font-size: var(--fs-sm);
-  font-weight: 700;
-  background: linear-gradient(145deg, var(--primary), var(--primary-dark));
+  font-weight: 600;
+  background: var(--primary);
   border-radius: var(--r-sm);
   box-shadow: var(--shadow-sm);
   transition: filter var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
@@ -3236,6 +3240,18 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
 .mini-cell.level-4 { background: var(--heat-4); }
 .mini-cell.is-today { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--heat-4) 85%, var(--ink)); }
 
+/* Heading row: the section title left, the calendar's key right. */
+.stats-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+/* Less ▢▢▢▢▢ More — five swatches wearing the calendar cells' own level
+   classes, so a retuned heat scale recolours the key with the grid. Set in
+   the axis labels' type; the swatches are decoration (see StatsModal). */
+.heat-legend { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; user-select: none; }
+.heat-legend-cells { display: inline-flex; gap: 3px; }
+.heat-legend .mini-cell { width: 10px; height: 10px; }
+/* The screen-reader sentence describing the scale: the standard clip recipe
+   (the sheet has no shared visually-hidden utility). */
+.heat-legend-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
 .bar-chart { display: grid; gap: 6px; }
 .stats-bars { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; align-items: end; height: 120px; }
 .stats-bar-col {
@@ -3243,8 +3259,12 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
   align-items: flex-end;
   justify-content: center;
   height: 100%;
-  padding: 0 2px;
-  overflow: hidden;
+  /* The value labels' row is reserved inside the chart's fixed height, so
+     labelling the bars neither grows a chart nor moves anything below it. */
+  padding: 16px 2px 0;
+  /* Clip vertically only: the entrance rises from under the baseline, while
+     a value wider than its column may spill into the gutters beside it. */
+  overflow: visible clip;
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease);
 }
@@ -3252,25 +3272,47 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
 .stats-bar-col:not(:disabled) { cursor: pointer; }
 .stats-bar-col:focus-visible { outline-offset: -2px; }
 .stats-bar {
+  position: relative;
   width: min(100%, 30px);
-  background: linear-gradient(180deg, var(--heat-2), var(--heat-3));
+  /* One accent: the tag bars' solid fill, no gradient. */
+  background: var(--primary);
   border-radius: 5px 5px 2px 2px;
   animation: bar-rise 0.24s var(--ease-out) both;
   /* Height and fill included so switching years glides the bars to their new
      size in a left-to-right ripple (--bar-d, set inline per column). */
-  transition: filter var(--t) var(--ease), height 0.22s var(--ease-out) var(--bar-d, 0s), background 0.2s var(--ease) var(--bar-d, 0s);
+  transition: height 0.22s var(--ease-out) var(--bar-d, 0s), background 0.2s var(--ease) var(--bar-d, 0s);
 }
-/* Hover = the tag rows' neutral column wash + the heat cells' saturation lift.
+/* Hover = the tag rows' neutral column wash + the accent's own emphasis step.
    Bars are baseline-anchored, so nothing lifts, scales or moves: the pointer
-   only tints the column it is over and warms the bar inside it. */
+   only tints the column it is over and deepens the bar inside it. */
 @media (hover: hover) {
   .stats-bar-col:hover:not(:disabled) { background: var(--wash); }
-  .stats-bar-col:hover:not(:disabled) .stats-bar { filter: saturate(1.16) brightness(1.05); }
+  .stats-bar-col:hover:not(:disabled) .stats-bar { background: var(--primary-dark); }
 }
-.stats-bar-col:focus-visible:not(:disabled) .stats-bar { filter: saturate(1.16) brightness(1.05); }
-.stats-bar-col:active:not(:disabled) .stats-bar { filter: saturate(1.05) brightness(0.9); }
-/* Two-stop gradient (not a flat color) so zero↔nonzero can crossfade. */
-.stats-bar.is-zero { background: linear-gradient(180deg, var(--surface-3), var(--surface-3)); }
+.stats-bar-col:focus-visible:not(:disabled) .stats-bar { background: var(--primary-dark); }
+.stats-bar-col:active:not(:disabled) .stats-bar { background: color-mix(in srgb, var(--primary-dark) 82%, var(--ink)); }
+.stats-bar.is-zero { background: var(--surface-3); }
+/* The count above each bar, in the axis labels' type. Anchored to the bar's
+   top, so it rides the entrance and the year-switch height glide for free. */
+.stats-bar-value {
+  position: absolute;
+  bottom: calc(100% + 3px);
+  left: 50%;
+  z-index: 1;
+  color: var(--muted);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  transition: opacity var(--t) var(--ease);
+}
+/* Too narrow for every value (BarChart measures): only the local peaks keep
+   theirs, plus the bar under the pointer or focus. */
+.stats-bars.is-sparse .stats-bar-value { opacity: 0; }
+.stats-bars.is-sparse .stats-bar-value.is-peak,
+.stats-bars.is-sparse .stats-bar-col:focus-visible .stats-bar-value { opacity: 1; }
+@media (hover: hover) { .stats-bars.is-sparse .stats-bar-col:hover:not(:disabled) .stats-bar-value { opacity: 1; } }
 .stats-bar-labels {
   display: grid;
   grid-auto-flow: column;

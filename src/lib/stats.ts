@@ -124,6 +124,20 @@ export function levelFor(count: number): number {
   return 4;
 }
 
+/**
+ * Which bars of a series keep their value label when there is no room for
+ * all of them: every local maximum, counting only the first bar of a plateau
+ * so two labelled bars are never neighbours. Zero bars never qualify.
+ */
+export function localMaxima(values: number[]): boolean[] {
+  return values.map((value, index) => {
+    if (value <= 0) return false;
+    const left = index > 0 ? values[index - 1] : -1;
+    const right = index < values.length - 1 ? values[index + 1] : -1;
+    return value > left && value >= right;
+  });
+}
+
 export interface StreakInfo {
   /** Longest run of consecutive active days, ever. */
   longest: number;
