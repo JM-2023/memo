@@ -559,8 +559,8 @@ a:hover { text-decoration: underline; }
 /* Dialogs: a damped swell — no overshoot, the long tail does the settling. */
 @keyframes modal-in { from { opacity: 0; transform: scale(0.96) translateY(14px); } to { opacity: 1; transform: none; } }
 @keyframes modal-out { to { opacity: 0; transform: scale(0.977) translateY(6px); } }
-@keyframes toast-in { from { opacity: 0; transform: translate(-50%, -14px) scale(0.97); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
-@keyframes toast-out { to { opacity: 0; transform: translate(-50%, -12px) scale(0.98); } }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-14px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes toast-out { to { opacity: 0; transform: translateY(-12px) scale(0.98); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
@@ -3983,25 +3983,40 @@ button.stats-tag-row:active { scale: 0.992; }
 /* =========================================================================
    Toast
    ========================================================================= */
-.toast {
+/* The stack: up to three, newest at the bottom, so a toast already up never
+   moves when another lands. Pointer or focus on the stack holds every clock
+   (App pauses them); each toast keeps its own stay, paced to its length. */
+.toast-stack {
   position: fixed;
-  top: 18px;
+  top: max(18px, env(safe-area-inset-top));
   left: 50%;
   z-index: 200;
-  /* Toasts quote user text — tag paths and saved-filter names. Centred on
-     left:50%, the box could only shrink-to-fit the half-viewport to its
-     right, so a spaceless name grew past BOTH edges and lost its ends.
-     max-content frees it from that half; the cap then reins it back in.
-     640px is measured, not picked: it is the first cap that leaves every
-     built-in string byte-identical on desktop (the decryption error, the
-     widest, sits at 621), so this rule only ever acts on text long enough
-     to leave the screen. break-word, not anywhere: it only splits a run
-     that cannot fit a line alone, so #work/projects/2026 breaks between
-     segments instead of mid-year. */
-  width: max-content;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
   max-width: min(640px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  pointer-events: none;
+  /* Own snapshot group (lifted in the view-transition section): flattened
+     into the root snapshot, the toast slid UNDER the topbar-action pill
+     whenever a view switch ran while it was up. */
+  view-transition-name: toast;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Toasts quote user text — tag paths and saved-filter names. The stack
+     caps the width at 640px, measured: the first cap that leaves every
+     built-in string byte-identical on desktop (the decryption error, the
+     widest, sits at 621), so it only ever acts on text long enough to leave
+     the screen. break-word, not anywhere: it only splits a run that cannot
+     fit a line alone, so #work/projects/2026 breaks between segments
+     instead of mid-year. */
+  width: max-content;
+  max-width: 100%;
   overflow-wrap: break-word;
-  padding: 9px 18px;
+  padding: 8px 14px 8px 18px;
   color: var(--ink);
   background: var(--menu-fill);
   border: 1px solid var(--glass-rim-strong);
@@ -4009,16 +4024,45 @@ button.stats-tag-row:active { scale: 0.992; }
   /* ~38px tall — mid elevation keeps the shadow smaller than the toast. */
   box-shadow: var(--menu-highlight), var(--shadow);
   font-size: var(--fs-md);
-  font-weight: 700;
-  transform: translateX(-50%);
+  font-weight: 600;
+  pointer-events: auto;
   animation: toast-in 0.22s var(--ease-pop) both;
-  /* Own snapshot group (lifted in the view-transition section): flattened
-     into the root snapshot, the toast slid UNDER the topbar-action pill
-     whenever a view switch ran while it was up. */
-  view-transition-name: toast;
 }
-.toast.is-leaving { animation: toast-out 0.16s var(--ease) both; }
-.toast.is-error { color: var(--danger); }
+.toast.is-leaving { animation: toast-out 0.16s var(--ease) both; pointer-events: none; }
+.toast-text { min-width: 0; }
+/* An error keeps the sentence in ink — the weight already reads first —
+   and says its tone with the mark and a warmed hairline, not by turning the
+   whole line red. */
+.toast.is-error { border-color: color-mix(in srgb, var(--danger) 38%, var(--glass-rim-strong)); }
+.toast-mark { flex: none; color: var(--danger); }
+/* The one verb a toast can offer, parted from the sentence by a hairline. */
+.toast-action {
+  flex: none;
+  margin-left: 4px;
+  padding: 4px 9px;
+  color: var(--primary-dark);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  border-left: 1px solid var(--glass-rim);
+  border-radius: 0 var(--r-xs) var(--r-xs) 0;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+@media (hover: hover) { .toast-action:hover { background: var(--primary-tint); } }
+.toast-action:active { transform: scale(0.96); }
+.toast-dismiss {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: 0 -4px 0 -2px;
+  color: var(--muted);
+  border-radius: 50%;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+@media (hover: hover) { .toast-dismiss:hover { background: var(--wash-strong); color: var(--ink); } }
+.toast-dismiss:active { transform: scale(0.85); }
 
 /* =========================================================================
    View transitions — feed filter/sort changes run inside

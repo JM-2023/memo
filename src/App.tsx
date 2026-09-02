@@ -6,6 +6,8 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  CircleAlert,
+  CloudOff,
   Home,
   ListChecks,
   Loader2,
@@ -119,12 +121,90 @@ import { tuneFeedTransitionNames, withViewTransition } from "./lib/viewTransitio
 type Phase = "checking" | "error" | "login" | "ready";
 type View = "memos" | "trash" | "review";
 
+interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
 interface ToastState {
   id: number;
   text: string;
   tone: "info" | "error";
+  /** One verb the toast offers — Undo, mostly. Runs once, then dismisses. */
+  action?: ToastAction;
   /** Plays the exit animation before the node unmounts. */
   leaving?: boolean;
+}
+
+interface ToastOptions {
+  action?: ToastAction;
+  /** Overrides the length-derived stay, in ms. */
+  duration?: number;
+}
+
+/** Toasts up at once; past this the oldest steps off. */
+const TOAST_LIMIT = 3;
+const TOAST_LEAVE_MS = 170;
+
+/**
+ * How long a toast stays: a reading pace for its length, with floors for an
+ * error (it has to be read, not glimpsed) and for anything offering an
+ * action (the hand needs time to reach it). Hovering or focusing the stack
+ * holds every toast where it is.
+ */
+function toastDuration(text: string, tone: "info" | "error", hasAction: boolean): number {
+  const reading = 2_600 + Math.max(0, text.length - 32) * 40;
+  const floor = hasAction ? 6_000 : tone === "error" ? 5_000 : 0;
+  return Math.min(10_000, Math.max(floor, reading));
+}
+
+interface ToastStackProps {
+  toasts: ToastState[];
+  dismissLabel: string;
+  onDismiss: (id: number) => void;
+  onPause: () => void;
+  onResume: () => void;
+}
+
+/**
+ * The toasts, newest at the bottom so a toast already up never moves when
+ * another lands. An error is an alert (assertive) and carries a mark; every
+ * other toast is a status. Text and weight say what happened — the tone is
+ * carried by the mark and the hairline, not by recolouring the sentence.
+ */
+function ToastStack({ toasts, dismissLabel, onDismiss, onPause, onResume }: ToastStackProps) {
+  if (toasts.length === 0) return null;
+  return (
+    <div className="toast-stack" onPointerEnter={onPause} onPointerLeave={onResume} onFocus={onPause} onBlur={onResume}>
+      {toasts.map((toast) => (
+        <div
+          key={toast.id}
+          className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`}
+          role={toast.tone === "error" ? "alert" : "status"}
+        >
+          {toast.tone === "error" ? <CircleAlert size={15} className="toast-mark" aria-hidden="true" /> : null}
+          <span className="toast-text">{toast.text}</span>
+          {toast.action ? (
+            <button
+              type="button"
+              className="toast-action"
+              onClick={() => {
+                toast.action?.run();
+                onDismiss(toast.id);
+              }}
+            >
+              {toast.action.label}
+            </button>
+          ) : null}
+          {toast.action || toast.tone === "error" ? (
+            <button type="button" className="toast-dismiss" aria-label={dismissLabel} onClick={() => onDismiss(toast.id)}>
+              <X size={13} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 interface PendingBatchTag {
@@ -484,10 +564,21 @@ export default function App() {
   const [changingPasscode, setChangingPasscode] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerClosing, setDrawerClosing] = useState(false);
-  const [toast, setToast] = useState<ToastState | null>(null);
+  const [toasts, setToasts] = useState<ToastState[]>([]);
   const [reveal, setReveal] = useState(false);
+  // The panel a lens chip reopens; bumping the counter opens it.
+  const [filterOpenRequest, setFilterOpenRequest] = useState(0);
 
-  const toastTimer = useRef(0);
+  // Per-toast clocks. A paused entry (pointer or focus on the stack) keeps
+  // only its remaining time; resuming re-arms from there.
+  const toastTimersRef = useRef(new Map<number, { timer: number; expiresAt: number; remaining: number }>());
+  const toastSeqRef = useRef(0);
+  const toastsPausedRef = useRef(false);
+  const toastsRef = useRef(toasts);
+  toastsRef.current = toasts;
+  // The selection-pruned notice replaces itself rather than stacking up
+  // while a search is being typed.
+  const selectionNoticeRef = useRef(0);
   const bootAttemptRef = useRef(0);
   const drawerCloseTimerRef = useRef(0);
   const drawerCallbackFrameRef = useRef(0);
@@ -497,18 +588,66 @@ export default function App() {
   const errorMessageRef = useRef(errorMessage);
   errorMessageRef.current = errorMessage;
 
-  const showToast = useCallback((text: string, tone: "info" | "error" = "info") => {
-    window.clearTimeout(toastTimer.current);
-    setToast({ id: Date.now(), text, tone });
-    toastTimer.current = window.setTimeout(() => {
-      setToast((current) => (current ? { ...current, leaving: true } : current));
-      toastTimer.current = window.setTimeout(() => setToast(null), 170);
-    }, 2400);
+  const dismissToast = useCallback((id: number) => {
+    const entry = toastTimersRef.current.get(id);
+    if (entry) window.clearTimeout(entry.timer);
+    toastTimersRef.current.delete(id);
+    setToasts((current) => (current.some((toast) => toast.id === id && !toast.leaving) ? current.map((toast) => (toast.id === id ? { ...toast, leaving: true } : toast)) : current));
+    window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), TOAST_LEAVE_MS);
+  }, []);
+
+  const armToast = useCallback(
+    (id: number, ms: number) => {
+      const timer = window.setTimeout(() => dismissToast(id), ms);
+      toastTimersRef.current.set(id, { timer, expiresAt: Date.now() + ms, remaining: ms });
+    },
+    [dismissToast]
+  );
+
+  const showToast = useCallback(
+    (text: string, tone: "info" | "error" = "info", options: ToastOptions = {}) => {
+      const id = ++toastSeqRef.current;
+      const duration = options.duration ?? toastDuration(text, tone, Boolean(options.action));
+      // Newest last: a toast already up never moves when another lands.
+      // Past the cap the oldest steps off first.
+      const live = toastsRef.current.filter((toast) => !toast.leaving);
+      for (const stale of live.slice(0, Math.max(0, live.length + 1 - TOAST_LIMIT))) dismissToast(stale.id);
+      setToasts((current) => [...current, { id, text, tone, action: options.action }]);
+      if (toastsPausedRef.current) toastTimersRef.current.set(id, { timer: 0, expiresAt: 0, remaining: duration });
+      else armToast(id, duration);
+      return id;
+    },
+    [armToast, dismissToast]
+  );
+
+  const pauseToasts = useCallback(() => {
+    if (toastsPausedRef.current) return;
+    toastsPausedRef.current = true;
+    const now = Date.now();
+    for (const [id, entry] of toastTimersRef.current) {
+      if (entry.timer) window.clearTimeout(entry.timer);
+      // Leaving the stack always grants a beat to finish reading.
+      const remaining = entry.timer ? Math.max(800, entry.expiresAt - now) : entry.remaining;
+      toastTimersRef.current.set(id, { timer: 0, expiresAt: 0, remaining });
+    }
+  }, []);
+
+  const resumeToasts = useCallback(() => {
+    if (!toastsPausedRef.current) return;
+    toastsPausedRef.current = false;
+    for (const [id, entry] of toastTimersRef.current) if (!entry.timer) armToast(id, entry.remaining);
+  }, [armToast]);
+
+  const clearToasts = useCallback(() => {
+    for (const entry of toastTimersRef.current.values()) window.clearTimeout(entry.timer);
+    toastTimersRef.current.clear();
+    toastsPausedRef.current = false;
+    selectionNoticeRef.current = 0;
+    setToasts([]);
   }, []);
 
   const resetSessionUi = useCallback(() => {
-    window.clearTimeout(toastTimer.current);
-    toastTimer.current = 0;
+    clearToasts();
     window.clearTimeout(drawerCloseTimerRef.current);
     window.cancelAnimationFrame(drawerCallbackFrameRef.current);
     drawerAfterCloseRef.current = [];
@@ -556,9 +695,9 @@ export default function App() {
     setChangingPasscode(false);
     setDrawerOpen(false);
     setDrawerClosing(false);
-    setToast(null);
+    setFilterOpenRequest(0);
     setReveal(false);
-  }, []);
+  }, [clearToasts]);
 
   const resetLocalWorkspaceState = useCallback(() => {
     setTheme("system");
@@ -1304,7 +1443,12 @@ export default function App() {
   const deleteSavedFilter = useCallback(
     (item: SavedFilter) => {
       setSavedFilters((current) => current.filter((entry) => entry.id !== item.id));
-      showToast(tr(`Deleted “${item.name}”`, `已删除「${item.name}」`));
+      showToast(tr(`Deleted “${item.name}”`, `已删除「${item.name}」`), "info", {
+        action: {
+          label: tr("Undo", "撤销"),
+          run: () => setSavedFilters((current) => (current.some((entry) => entry.id === item.id) ? current : [...current, item]))
+        }
+      });
     },
     [showToast, tr]
   );
@@ -1435,7 +1579,7 @@ export default function App() {
     setReviewSettings(next);
     persistReviewSettings(next);
     setReviewSettingsOpen(false);
-    showToast(tr("Saved Daily Review Settings", "已保存每日回顾设置"));
+    showToast(tr("Saved review settings", "已保存回顾设置"));
     if (reviewDayValid(reviewDay, next)) return;
     if (view === "review") {
       // Redraw immediately — after the dialog's exit has painted, so the
@@ -2411,11 +2555,7 @@ export default function App() {
     return (
       <>
         <LoginScreen needsSetup={needsSetup} onLogin={handleLogin} onSetup={handleSetup} />
-        {toast ? (
-          <div key={toast.id} className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`} role="status">
-            {toast.text}
-          </div>
-        ) : null}
+        <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} onDismiss={dismissToast} onPause={pauseToasts} onResume={resumeToasts} />
       </>
     );
   }
@@ -3117,11 +3257,7 @@ export default function App() {
           }}
         />
       ) : null}
-      {toast ? (
-        <div key={toast.id} className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`} role="status">
-          {toast.text}
-        </div>
-      ) : null}
+      <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} onDismiss={dismissToast} onPause={pauseToasts} onResume={resumeToasts} />
     </div>
   );
 }
