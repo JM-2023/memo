@@ -1,4 +1,5 @@
 import { Bookmark, BookmarkPlus, Check, Image, Link2, ListFilter, ListTodo, Tags, X, type LucideIcon } from "lucide-react";
+import { addDays, dateKey } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import type { SavedFilter } from "../lib/savedFilters";
 import type { FacetKey, FeedFilters } from "../lib/search";
@@ -14,6 +15,25 @@ export const FACET_ROWS: { key: FacetKey; icon: LucideIcon; en: string; zh: stri
   { key: "hasOpenTask", icon: ListTodo, en: "With open tasks", zh: "含未完成任务" }
 ];
 
+interface RangePreset {
+  key: string;
+  en: string;
+  zh: string;
+  from: string;
+  to: string;
+}
+
+/** The notebook's usual asks, one tap each; all end today (local days). */
+function rangePresets(now = new Date()): RangePreset[] {
+  const to = dateKey(now);
+  return [
+    { key: "week", en: "Last 7 days", zh: "最近 7 天", from: dateKey(addDays(now, -6)), to },
+    { key: "month30", en: "Last 30 days", zh: "最近 30 天", from: dateKey(addDays(now, -29)), to },
+    { key: "month", en: "This month", zh: "本月", from: dateKey(new Date(now.getFullYear(), now.getMonth(), 1)), to },
+    { key: "year", en: "This year", zh: "今年", from: dateKey(new Date(now.getFullYear(), 0, 1)), to }
+  ];
+}
+
 interface SearchFilterProps {
   filters: FeedFilters;
   saved: SavedFilter[];
@@ -22,8 +42,14 @@ interface SearchFilterProps {
   /** True while anything (search, tag, day, filters) is worth saving. */
   canSave: boolean;
   disabled: boolean;
+  /** The tag lens, if any: "No tags" can only ever be empty inside one. */
+  activeTag?: string | null;
+  /** Bump to open the panel from outside (a chip's edit half). */
+  openRequest?: number;
   onToggleFacet: (key: FacetKey) => void;
   onDateChange: (patch: Partial<Pick<FeedFilters, "dateFrom" | "dateTo">>) => void;
+  /** A whole range at once (quick-range chips): one morph, not two edits. */
+  onPresetRange?: (from: string, to: string) => void;
   onClearDates: () => void;
   onApplySaved: (item: SavedFilter) => void;
   onDeleteSaved: (item: SavedFilter) => void;
@@ -44,6 +70,8 @@ export function SearchFilter(props: SearchFilterProps) {
   const rangeOn = filters.dateFrom !== null || filters.dateTo !== null;
   const isActive = rangeOn || FACET_ROWS.some((row) => filters[row.key]);
   const showSaved = props.saved.length > 0 || props.canSave;
+  const activeTag = props.activeTag ?? null;
+  const presets = rangePresets();
 
   return (
     <Menu
@@ -52,6 +80,7 @@ export function SearchFilter(props: SearchFilterProps) {
       className="filter-root"
       panelClassName="filter-panel"
       panelLabel={tr("Search filters", "搜索筛选")}
+      openSignal={props.openRequest}
       trigger={(open) => (
         <button
           type="button"
@@ -75,17 +104,26 @@ export function SearchFilter(props: SearchFilterProps) {
           {FACET_ROWS.map((row) => {
             const RowIcon = row.icon;
             const active = filters[row.key];
+            // Inside a tag every memo carries that tag, so "No tags" could
+            // only ever answer with an empty feed: the row stays, idle, and
+            // says why.
+            const idle = row.key === "noTags" && activeTag !== null;
             return (
               <button
                 key={row.key}
                 type="button"
                 aria-pressed={active}
+                disabled={idle}
                 className={active ? "is-selected" : ""}
                 onClick={() => props.onToggleFacet(row.key)}
               >
                 <RowIcon size={16} aria-hidden="true" />
                 {tr(row.en, row.zh)}
-                {active ? <Check size={15} className="menu-check" aria-hidden="true" /> : null}
+                {idle ? (
+                  <span className="filter-row-note">{tr(`not inside #${activeTag}`, `#${activeTag} 内不可用`)}</span>
+                ) : active ? (
+                  <Check size={15} className="menu-check" aria-hidden="true" />
+                ) : null}
               </button>
             );
           })}
@@ -98,6 +136,24 @@ export function SearchFilter(props: SearchFilterProps) {
               </button>
             ) : null}
           </span>
+          {props.onPresetRange ? (
+            <div className="filter-presets" role="group" aria-label={tr("Quick ranges", "快捷范围")}>
+              {presets.map((preset) => {
+                const picked = filters.dateFrom === preset.from && filters.dateTo === preset.to;
+                return (
+                  <button
+                    key={preset.key}
+                    type="button"
+                    className={`filter-preset${picked ? " is-active" : ""}`}
+                    aria-pressed={picked}
+                    onClick={() => (picked ? props.onClearDates() : props.onPresetRange?.(preset.from, preset.to))}
+                  >
+                    {tr(preset.en, preset.zh)}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
           <div className="filter-dates">
             <input
               type="date"

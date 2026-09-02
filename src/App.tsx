@@ -2931,9 +2931,11 @@ export default function App() {
                     icon={CalendarRange}
                     label={rangeChipLabel}
                     clearLabel={tr(`Clear date range: ${rangeChipLabel}`, `清除日期范围：${rangeChipLabel}`)}
+                    editLabel={tr(`Edit date range: ${rangeChipLabel}`, `编辑日期范围：${rangeChipLabel}`)}
                     transitionName="range-filter-chip"
                     delay={chipDelay("range")}
                     onClear={clearDateRange}
+                    onEdit={() => setFilterOpenRequest((n) => n + 1)}
                   />
                 ) : null}
                 {FACET_ROWS.filter((row) => filters[row.key]).map((row) => (
@@ -2942,9 +2944,11 @@ export default function App() {
                     icon={row.icon}
                     label={tr(row.en, row.zh)}
                     clearLabel={tr(`Clear “${row.en}” filter`, `清除「${row.zh}」筛选`)}
+                    editLabel={tr(`Edit filters: “${row.en}”`, `编辑筛选：「${row.zh}」`)}
                     transitionName={`facet-chip-${row.key}`}
                     delay={chipDelay(row.key)}
                     onClear={() => toggleFacet(row.key)}
+                    onEdit={() => setFilterOpenRequest((n) => n + 1)}
                   />
                 ))}
               </>
@@ -3034,9 +3038,12 @@ export default function App() {
                 saved={savedFilters}
                 activeSavedId={activeSavedId}
                 canSave={filtersActive && statsDrilldown === null}
-                disabled={editingId !== null}
+                disabled={false}
+                activeTag={activeTag}
+                openRequest={filterOpenRequest}
                 onToggleFacet={toggleFacet}
                 onDateChange={patchDateRange}
+                onPresetRange={applyPresetRange}
                 onClearDates={clearDateRange}
                 onApplySaved={applySavedFilter}
                 onDeleteSaved={deleteSavedFilter}

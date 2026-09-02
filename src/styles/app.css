@@ -1882,6 +1882,40 @@ button.crumb:active { background: var(--wash-strong); }
   background: color-mix(in srgb, var(--primary) 15%, var(--primary-tint));
   transform: scale(0.96);
 }
+/* A chip whose lens lives in the filter panel splits into two targets: the
+   label reopens that panel, the nub removes the lens. Same pill, same tint —
+   the outer box is a span now and the buttons inside inherit its voice. */
+.filter-chip.is-editable { padding: 0; }
+.filter-chip.is-editable:active { transform: none; }
+.filter-chip-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 5px 4px 5px 9px;
+  color: inherit;
+  font: inherit;
+  border-radius: var(--r-sm) 0 0 var(--r-sm);
+  transition: transform var(--t-fast) var(--ease);
+}
+.filter-chip-main > svg { flex: none; stroke-width: 1.75; opacity: 0.75; transition: opacity var(--t) var(--ease); }
+.filter-chip-main:active { transform: scale(0.97); }
+.filter-chip.is-editable > .filter-chip-x {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 3px;
+  padding: 0;
+  color: color-mix(in srgb, var(--primary-dark) 60%, transparent);
+  border-radius: 50%;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+.filter-chip.is-editable > .filter-chip-x:active { transform: scale(0.85); }
+@media (hover: hover) {
+  .filter-chip.is-editable:hover .filter-chip-main > svg { opacity: 1; }
+  .filter-chip.is-editable > .filter-chip-x:hover { color: var(--primary-dark); background: color-mix(in srgb, var(--primary) 14%, transparent); }
+}
 
 /* Closed, the box holds only the icon and its placeholder. "Search memos" is
    102px in SF Pro at 15px; behind the 32px icon inset and inside a 12px right
@@ -1962,6 +1996,29 @@ button.crumb:active { background: var(--wash-strong); }
 }
 @media (hover: hover) { .filter-mini-clear:hover { background: var(--wash); color: var(--ink); } }
 .filter-mini-clear:active { transform: scale(0.94); }
+
+/* A facet the current lens rules out ("No tags" inside a tag) keeps its
+   row, idle, and says why in the caption voice. */
+.filter-row-note { margin-left: auto; padding-left: 10px; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; }
+
+/* Quick ranges above the two date fields: the notebook's usual asks, one
+   tap each. Keypad chips (Tier C); the picked one wears the accent tint the
+   way a picked review chip does. */
+.filter-presets { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 11px 8px; }
+.filter-preset {
+  padding: 4px 9px;
+  color: var(--ink-soft);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  background: var(--chip-fill);
+  border: 1px solid var(--chip-rim);
+  border-radius: var(--r-sm);
+  box-shadow: var(--chip-shadow);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), border-color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+@media (hover: hover) { .filter-preset:hover:not(.is-active) { color: var(--ink); background: var(--chip-hover-fill); } }
+.filter-preset:active { transform: scale(0.95); }
+.filter-preset.is-active { color: var(--primary-dark); background: var(--primary-tint); border-color: color-mix(in srgb, var(--primary) 38%, transparent); }
 
 .filter-dates { display: flex; align-items: center; gap: 6px; padding: 2px 11px 6px; }
 .filter-dates input {

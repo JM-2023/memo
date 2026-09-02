@@ -28,6 +28,12 @@ interface MenuProps {
    * near the bottom edge; any scroll closes it.
    */
   portal?: boolean;
+  /**
+   * Opens the menu from outside: bump the number and the panel opens as if
+   * its trigger had been clicked (a filter chip handing the reader back to
+   * the panel it came from). 0 / undefined never opens.
+   */
+  openSignal?: number;
 }
 
 interface PortalPos {
@@ -55,7 +61,7 @@ const PAGE_FOCUSABLE = [
  * Closing holds the panel one beat in a "closing" phase so it can play the
  * reverse morph before unmounting.
  */
-export function Menu({ trigger, children, align = "right", className, panelClassName, portal = false, kind = "menu", panelLabel }: MenuProps) {
+export function Menu({ trigger, children, align = "right", className, panelClassName, portal = false, kind = "menu", panelLabel, openSignal }: MenuProps) {
   const [phase, setPhase] = useState<"closed" | "open" | "closing">("closed");
   const [pos, setPos] = useState<PortalPos | null>(null);
   const reducedMotion = useReducedMotion();
@@ -100,6 +106,16 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     restoreTriggerRef.current = false;
     setPhase("open");
   }
+
+  // Only a bump after mount opens: a menu that (re)mounts while the counter
+  // already stands at 3 was not asked to open — the view it lives in was.
+  const seenOpenSignalRef = useRef(openSignal);
+  useEffect(() => {
+    if (openSignal === seenOpenSignalRef.current) return;
+    seenOpenSignalRef.current = openSignal;
+    if (openSignal) requestOpen("first");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one open per bump
+  }, [openSignal]);
 
   useEffect(() => {
     if (phase !== "closing") return;
