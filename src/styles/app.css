@@ -878,6 +878,20 @@ a:hover { text-decoration: underline; }
   line-height: 1.45;
 }
 
+/* Under a removal question: the sub-tags that go with it, named. */
+.action-menu__prompt-detail {
+  display: block;
+  max-width: 236px;
+  margin-top: -3px;
+  padding: 0 11px 6px;
+  color: var(--muted);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 /* Non-interactive menu row hosting an inline control (language switch). */
 .action-menu__row {
   display: flex;

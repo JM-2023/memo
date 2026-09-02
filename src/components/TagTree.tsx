@@ -4,6 +4,15 @@ import { useI18n } from "../lib/i18n";
 import type { TagNode } from "../lib/tags";
 import { Menu } from "./Menu";
 
+/** Every path under `node`, depth-first — what a removal takes with it. */
+function descendantPaths(node: TagNode): string[] {
+  const paths: string[] = [];
+  for (const child of node.children) {
+    paths.push(child.path, ...descendantPaths(child));
+  }
+  return paths;
+}
+
 interface TagMenuBodyProps {
   close: () => void;
   node: TagNode;
@@ -23,11 +32,27 @@ function TagMenuBody({ close, node, pinned, onPinTag, onRenameTag, onRemoveTag }
   const [confirming, setConfirming] = useState(false);
 
   if (confirming) {
+    // Removal matches the tag and everything under it (tagMatches on the
+    // server), so the question names that whole reach — and lists it.
+    const below = descendantPaths(node);
+    const shown = below.slice(0, 3);
+    const more = below.length - shown.length;
     return (
       <>
         <span className="action-menu__prompt" role="presentation">
-          {tr(`Remove #${node.path} from ${count(node.count, "memo")}? The memos stay.`, `从 ${count(node.count, "memo")}中移除 #${node.path}？笔记本身保留`)}
+          {below.length === 0
+            ? tr(`Remove #${node.path} from ${count(node.count, "memo")}? The memos stay.`, `从 ${count(node.count, "memo")}中移除 #${node.path}？笔记本身保留`)
+            : tr(
+                `Remove #${node.path} and the ${count(below.length, "tag")} under it from ${count(node.count, "memo")}? The memos stay.`,
+                `从 ${count(node.count, "memo")}中移除 #${node.path} 及其下的 ${count(below.length, "tag")}？笔记本身保留`
+              )}
         </span>
+        {below.length > 0 ? (
+          <span className="action-menu__prompt-detail" role="presentation">
+            {shown.map((path) => `#${path}`).join(" · ")}
+            {more > 0 ? tr(` · ${more} more`, ` · 还有 ${more} 个`) : null}
+          </span>
+        ) : null}
         <button
           type="button"
           role="menuitem"
