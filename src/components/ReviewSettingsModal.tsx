@@ -1,4 +1,4 @@
-import { Minus, Plus, Sparkles, X } from "lucide-react";
+import { Minus, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
@@ -196,9 +196,6 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
     >
       <div className="review-modal" onClick={(event) => event.stopPropagation()}>
         <header className="review-head">
-          <span className="review-head-logo" aria-hidden="true">
-            <Sparkles size={15} />
-          </span>
           <h2>{tr("Daily review", "每日回顾")}</h2>
           <button ref={closeButtonRef} type="button" className="icon-button review-close" onClick={requestClose} aria-label={tr("Close", "关闭")}>
             <X size={18} aria-hidden="true" />

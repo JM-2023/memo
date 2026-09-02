@@ -3078,21 +3078,11 @@ button.memo-tag:active {
 }
 .bulk-tag-head {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   gap: 11px;
   padding: 16px 14px 14px 16px;
   border-bottom: 1px solid var(--glass-rim);
-}
-.bulk-tag-mark {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  color: var(--primary-dark);
-  background: var(--primary-tint);
-  border-radius: var(--r-md);
-  animation: pop-in 0.2s var(--ease-pop) 0.03s both;
 }
 .bulk-tag-head h2 { margin: 1px 0 2px; font-size: var(--fs-lg); font-weight: 700; letter-spacing: -0.01em; }
 .bulk-tag-head p { margin: 0; color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; }
@@ -3547,18 +3537,6 @@ button.stats-tag-row:active { scale: 0.992; }
   border-bottom: 1px solid var(--glass-rim);
 }
 .review-head h2 { flex: 1; margin: 0; font-size: var(--fs-lg); font-weight: 700; letter-spacing: -0.01em; }
-/* The feature's mark: the sidebar logo recipe wearing the review spark. */
-.review-head-logo {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  color: #f3f9f5;
-  background: var(--leaf-logo);
-  border-radius: var(--r-sm);
-  box-shadow: var(--shadow-sm);
-}
 .review-close { flex: none; }
 
 .review-body {

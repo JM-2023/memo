@@ -129,9 +129,6 @@ export function BulkTagDialog({ selectedCount, scope = "selection", knownTags, o
     >
       <div className="confirm-card bulk-tag-card" onClick={(event) => event.stopPropagation()}>
         <header className="bulk-tag-head">
-          <span className="bulk-tag-mark" aria-hidden="true">
-            <Tags size={17} />
-          </span>
           <div>
             <h2>{tr("Add a tag", "添加标签")}</h2>
             <p>
