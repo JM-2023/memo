@@ -1824,6 +1824,20 @@ button.crumb:active { background: var(--wash-strong); }
 .select-bar > :nth-child(3) { animation-delay: 0.05s; }
 .select-bar > :nth-child(4) { animation-delay: 0.075s; }
 .select-bar > :nth-child(5) { animation-delay: 0.1s; }
+.select-bar > :nth-child(6) { animation-delay: 0.1s; }
+/* What "all" is of: the lenses the toolbar replaced, in the caption voice.
+   Ellipsized rather than wrapped — the verbs to its right keep their row. */
+.select-lens {
+  min-width: 0;
+  max-width: 22em;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: crumb-in 0.22s var(--ease-out) backwards;
+}
 
 /* Filter chips — the trail's refinement clause. The breadcrumb says WHERE
    (⌂ / tag / pill); the chips say THROUGH WHAT: each active lens (heatmap
@@ -2122,6 +2136,28 @@ button.crumb:active { background: var(--wash-strong); }
   box-shadow: var(--shadow-sm);
 }
 @media (hover: hover) { .trash-empty-button.is-confirm:hover { background: color-mix(in srgb, var(--danger) 88%, black); } }
+
+/* Select — Trash's way into multi-select, beside Empty Trash: the same ghost
+   pill, neutral, since it destroys nothing by itself. */
+.trash-select-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  color: var(--ink-soft);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  border-radius: var(--r-sm);
+  animation: crumb-in 0.22s var(--ease-out) backwards;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+.trash-select-button svg { color: var(--muted); transition: color var(--t) var(--ease); }
+@media (hover: hover) {
+  .trash-select-button:hover { background: var(--wash); color: var(--ink); }
+  .trash-select-button:hover svg { color: var(--ink); }
+}
+.trash-select-button:active { transform: scale(0.95); }
 
 /* 回顾设置 — the review view's counterpart of Empty Trash: identical ghost
    pill in the same slot, neutral tint (it opens a dialog, destroys nothing).
@@ -4311,8 +4347,10 @@ button.stats-tag-row:active { scale: 0.992; }
   .review-config-button span { display: none; }
   .crumb { max-width: 6.5em; padding: 5px 7px; }
   .loc-label { max-width: 6.5em; }
-  /* Selection mode needs the row for its pills — search yields the corner. */
+  /* Selection mode needs the row for its pills — search yields the corner,
+     and the lens caption goes with it. */
   .topbar:has(.select-bar) .search-tools { display: none; }
+  .select-lens { display: none; }
   .select-bar { gap: 4px; }
   .select-count { padding-inline: 8px; }
   .select-pill { padding-inline: 8px; }

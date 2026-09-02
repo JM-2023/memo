@@ -13,6 +13,7 @@ import {
   Loader2,
   Menu as MenuIcon,
   NotebookPen,
+  RotateCcw,
   Search,
   SlidersHorizontal,
   Sparkles,
@@ -1973,7 +1974,9 @@ export default function App() {
       const result = await guard(() => trashMemo(memo.id, memo.seq));
       if (!result) return;
       applyRemoval([result.memo], []);
-      showToast(tr("Moved to Trash", "已移入回收站"));
+      // Reversible, so the toast carries the reverse — the trashed memo's
+      // own seq, since the trip to Trash bumped it.
+      showToast(tr("Moved to Trash", "已移入回收站"), "info", { action: { label: tr("Undo", "撤销"), run: () => void handleRestore(result.memo) } });
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
       showToast(errorMessage(cause, "Couldn’t delete the memo.", "删除笔记失败"), "error");
@@ -2033,20 +2036,29 @@ export default function App() {
     }
   }
 
-  /**
-   * Batch delete rides the same removal choreography as a single delete: one
-   * view transition in which every selected card recedes while the survivors
-   * (and the selection toolbar collapsing back into the breadcrumb) glide.
-   */
-  async function handleBatchTrash() {
-    const targets = [...visibleSelected]
+  /** The selected memos as live objects — the batch actions' targets. */
+  function selectedMemos(inTrash: boolean): Memo[] {
+    return [...visibleSelected]
       .map((id) => syncStateRef.current.memos.get(id))
-      .filter((memo): memo is Memo => Boolean(memo && !memo.deletedAt));
+      .filter((memo): memo is Memo => Boolean(memo && Boolean(memo.deletedAt) === inTrash));
+  }
+
+  /**
+   * One batch of memo mutations, settled together: the survivors' cards and
+   * the selection toolbar move in one view transition, the failures stay
+   * selected so a retry is one tap away, and the toast reports the outcome.
+   * Trash ↔ restore share this shape; each hands the other over as Undo.
+   */
+  async function settleBatch(
+    targets: Memo[],
+    mutate: (memo: Memo) => Promise<{ memo: Memo }>,
+    { fromSelection, done, failed }: { fromSelection: boolean; done: (changed: Memo[]) => void; failed: (failedCount: number) => string }
+  ) {
     if (targets.length === 0 || batchBusy) return;
     const sessionEpoch = sessionEpochRef.current;
     setBatchBusy(true);
     try {
-      const results = await mapSettledWithLimit(targets, 4, (memo) => trashMemo(memo.id, memo.seq));
+      const results = await mapSettledWithLimit(targets, 4, mutate);
       if (sessionEpoch !== sessionEpochRef.current) return;
       const changed: Memo[] = [];
       const failedIds: string[] = [];
@@ -2067,8 +2079,10 @@ export default function App() {
         withViewTransition(() =>
           flushSync(() => {
             applySyncChanges(changed, [], []);
+            if (!fromSelection) return;
             if (failedIds.length === 0) {
               // Job done — leave select mode in the same breath.
+              restoreLocationFocusRef.current = true;
               setSelectMode(false);
               setSelected(new Set());
             } else {
@@ -2080,11 +2094,81 @@ export default function App() {
         void runSync();
         notifyPeers();
       }
-      if (failedIds.length > 0) {
-        showToast(tr(`Couldn’t delete ${count(failedIds.length, "memo")}.`, `有 ${count(failedIds.length, "memo")}删除失败`), "error");
-      } else {
-        showToast(tr(`Moved ${count(changed.length, "memo")} to Trash`, `已将 ${count(changed.length, "memo")}移入回收站`));
+      if (failedIds.length > 0) showToast(failed(failedIds.length), "error");
+      else done(changed);
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  /**
+   * Batch trash rides the same removal choreography as a single delete: one
+   * view transition in which every selected card recedes while the survivors
+   * (and the selection toolbar collapsing back into the breadcrumb) glide.
+   * Reversible, so its toast carries the reverse.
+   */
+  function trashMany(targets: Memo[], fromSelection: boolean) {
+    return settleBatch(targets, (memo) => trashMemo(memo.id, memo.seq), {
+      fromSelection,
+      failed: (n) => tr(`Couldn’t move ${count(n, "memo")} to Trash.`, `有 ${count(n, "memo")}未能移入回收站`),
+      done: (changed) =>
+        showToast(tr(`Moved ${count(changed.length, "memo")} to Trash`, `已将 ${count(changed.length, "memo")}移入回收站`), "info", {
+          action: { label: tr("Undo", "撤销"), run: () => void restoreMany(changed, false) }
+        })
+    });
+  }
+
+  function restoreMany(targets: Memo[], fromSelection: boolean) {
+    return settleBatch(targets, (memo) => restoreMemo(memo.id, memo.seq), {
+      fromSelection,
+      failed: (n) => tr(`Couldn’t restore ${count(n, "memo")}.`, `有 ${count(n, "memo")}恢复失败`),
+      done: (changed) =>
+        showToast(tr(`Restored ${count(changed.length, "memo")}`, `已恢复 ${count(changed.length, "memo")}`), "info", {
+          action: { label: tr("Undo", "撤销"), run: () => void trashMany(changed, false) }
+        })
+    });
+  }
+
+  /** Permanent, so no Undo — the armed pill asked twice. */
+  async function purgeMany(targets: Memo[]) {
+    if (targets.length === 0 || batchBusy) return;
+    const sessionEpoch = sessionEpochRef.current;
+    setBatchBusy(true);
+    try {
+      const results = await mapSettledWithLimit(targets, 4, (memo) => purgeMemo(memo.id, memo.seq));
+      if (sessionEpoch !== sessionEpochRef.current) return;
+      const purged: PurgedMemo[] = [];
+      const failedIds: string[] = [];
+      let authLost = false;
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") purged.push(...result.value.purged);
+        else {
+          failedIds.push(targets[index].id);
+          if (result.reason instanceof AuthRequiredError) authLost = true;
+          else reconcileVersionConflict(result.reason);
+        }
+      });
+      if (authLost) {
+        dropToLogin();
+        return;
       }
+      if (purged.length > 0) {
+        withViewTransition(() =>
+          flushSync(() => {
+            applySyncChanges([], purged, []);
+            if (failedIds.length === 0) {
+              setSelectMode(false);
+              setSelected(new Set());
+            } else {
+              setSelected(new Set(failedIds));
+            }
+          })
+        );
+        void runSync();
+        notifyPeers();
+      }
+      if (failedIds.length > 0) showToast(tr(`Couldn’t delete ${count(failedIds.length, "memo")}.`, `有 ${count(failedIds.length, "memo")}删除失败`), "error");
+      else showToast(tr(`Permanently deleted ${count(purged.length, "memo")}`, `已彻底删除 ${count(purged.length, "memo")}`));
     } finally {
       setBatchBusy(false);
     }
@@ -2392,20 +2476,31 @@ export default function App() {
   }, [selectMode, exitSelectMode]);
 
   // A filter change can hide a selected memo. Prune against the rendered feed
-  // so a later batch action can never affect a card the user can no longer see.
+  // so a later batch action can never affect a card the user can no longer
+  // see — and say so, since the picks left the count without a click.
   useEffect(() => {
     if (!selectMode) return;
     const next = selectionWithinVisibleIds(selected, visibleFeedIds);
     const unchanged = next.size === selected.size && [...next].every((id) => selected.has(id));
-    if (!unchanged) setSelected(next);
-    // A sync can delete or filter away every failed retry target. Do not
-    // strand the toolbar in an inert "0 selected" state.
-    if (selected.size > 0 && next.size === 0) {
+    if (unchanged) return;
+    setSelected(next);
+    setConfirmBatchDelete(false);
+    const dropped = selected.size - next.size;
+    if (selectionNoticeRef.current) dismissToast(selectionNoticeRef.current);
+    if (next.size === 0) {
+      // A sync can delete or filter away every failed retry target. Do not
+      // strand the toolbar in an inert "0 selected" state.
       restoreLocationFocusRef.current = true;
       setSelectMode(false);
+      selectionNoticeRef.current = showToast(
+        tr("Selection cleared — the selected memos are no longer in view", "所选笔记已不在当前视图，选择已清除")
+      );
+    } else {
+      selectionNoticeRef.current = showToast(
+        tr(`${count(dropped, "memo")} left the selection — no longer in view`, `${count(dropped, "memo")}已不在当前视图，已从选择中移除`)
+      );
     }
-    setConfirmBatchDelete(false);
-  }, [selectMode, selected, visibleFeedIds]);
+  }, [selectMode, selected, visibleFeedIds, showToast, dismissToast, count, tr]);
 
   useLayoutEffect(() => {
     if (selectMode || !restoreLocationFocusRef.current) return;
@@ -2595,6 +2690,9 @@ export default function App() {
 
   const visibleSelectedCount = visibleSelected.size;
   const allVisibleSelected = feedMemos.length > 0 && visibleSelectedCount === feedMemos.length;
+  // Select mode is a view's own: memos or Trash, each with its own verbs.
+  const selectingTrash = selectMode && view === "trash";
+  const selectingFeed = selectMode && (view === "memos" || view === "trash");
 
   function toggleSelectAll() {
     mutateSelection(() => {
@@ -2603,6 +2701,8 @@ export default function App() {
     });
   }
 
+  // Two-step: the first click arms the pill (it names the count), the second
+  // fires — Trash in the feed, permanent deletion inside Trash.
   function handleBatchDeleteClick() {
     if (batchBusy) return;
     if (!confirmBatchDelete) {
@@ -2610,8 +2710,24 @@ export default function App() {
       return;
     }
     setConfirmBatchDelete(false);
-    void handleBatchTrash();
+    if (selectingTrash) void purgeMany(selectedMemos(true));
+    else void trashMany(selectedMemos(false), true);
   }
+
+  // What "all" means while selecting: the lenses the toolbar replaced. The
+  // count says how many; this says of what.
+  const selectLens: string[] = [];
+  if (selectMode && view === "memos") {
+    if (activeTag) selectLens.push(`#${activeTag}`);
+    if (activeDay) selectLens.push(formatDayLabel(activeDay, locale));
+    if (statsChipLabel) selectLens.push(statsChipLabel);
+    if (rangeChipLabel) selectLens.push(rangeChipLabel);
+    for (const row of FACET_ROWS) if (filters[row.key]) selectLens.push(tr(row.en, row.zh));
+    if (trimmedQuery) selectLens.push(`“${query.trim()}”`);
+  }
+  const armedDeleteLabel = selectingTrash
+    ? tr(`Delete ${count(visibleSelectedCount, "memo")} forever?`, `彻底删除 ${count(visibleSelectedCount, "memo")}？`)
+    : tr(`Move ${count(visibleSelectedCount, "memo")} to Trash?`, `将 ${count(visibleSelectedCount, "memo")}移入回收站？`);
 
   return (
     <div className={`app-shell${reveal ? " first-reveal" : ""}`}>
@@ -2693,7 +2809,103 @@ export default function App() {
             <MenuIcon size={18} aria-hidden="true" />
           </button>
           <div className="breadcrumb">
-            {view === "trash" ? (
+            {selectMode && (view === "memos" || view === "trash") ? (
+              // Multi-select toolbar. The count pill inherits the fused
+              // pill's view-transition-name, so entering the mode morphs the
+              // location label into the live counter; the sibling pills
+              // cascade in with the breadcrumb language. Inside Trash the
+              // verbs are Restore and Delete forever.
+              <div className="select-bar">
+                <span className="select-count" aria-live="polite">
+                  {language === "zh-CN" ? (
+                    <>
+                      已选 <RollingText value={visibleSelectedCount} className="select-count-num" /> 条
+                    </>
+                  ) : (
+                    <>
+                      <RollingText value={visibleSelectedCount} className="select-count-num" /> selected
+                    </>
+                  )}
+                </span>
+                {selectLens.length > 0 ? (
+                  <span className="select-lens" title={selectLens.join(" · ")}>
+                    {tr("in ", "范围：")}
+                    {selectLens.join(" · ")}
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  className="select-pill select-all"
+                  disabled={feedMemos.length === 0}
+                  aria-label={allVisibleSelected ? tr("Clear selection", "清除选择") : tr("Select all memos", "全选笔记")}
+                  onClick={toggleSelectAll}
+                >
+                  <ListChecks size={14} className="select-all-icon" aria-hidden="true" />
+                  <span className="select-all-label">
+                    <SwapText id={allVisibleSelected ? "clear" : "all"}>
+                      {allVisibleSelected ? tr("Clear", "清除") : tr("Select all", "全选")}
+                    </SwapText>
+                  </span>
+                </button>
+                {selectingTrash ? (
+                  <button
+                    type="button"
+                    className="select-pill select-tag select-restore"
+                    disabled={visibleSelectedCount === 0 || batchBusy}
+                    aria-label={tr("Restore selected memos", "恢复所选笔记")}
+                    onClick={() => void restoreMany(selectedMemos(true), true)}
+                  >
+                    <RotateCcw size={14} aria-hidden="true" />
+                    <span>{tr("Restore", "恢复")}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="select-pill select-tag"
+                    disabled={visibleSelectedCount === 0 || batchBusy}
+                    aria-haspopup="dialog"
+                    aria-label={tr("Add a tag to selected memos", "为所选笔记添加标签")}
+                    onClick={() => {
+                      setConfirmBatchDelete(false);
+                      pendingBatchTagRef.current = null;
+                      setBulkTagOpen(true);
+                    }}
+                  >
+                    <Tags size={14} aria-hidden="true" />
+                    <span>{tr("Add tag", "加标签")}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={`select-delete${confirmBatchDelete ? " is-confirm" : ""}`}
+                  disabled={visibleSelectedCount === 0 || batchBusy}
+                  aria-label={
+                    confirmBatchDelete
+                      ? armedDeleteLabel
+                      : selectingTrash
+                        ? tr("Delete selected memos forever", "彻底删除所选笔记")
+                        : tr("Move selected memos to Trash", "将所选笔记移入回收站")
+                  }
+                  onClick={handleBatchDeleteClick}
+                  onBlur={() => setConfirmBatchDelete(false)}
+                >
+                  {batchBusy ? <Loader2 size={14} className="spin" aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
+                  <span>
+                    {batchBusy
+                      ? tr("Working…", "处理中…")
+                      : confirmBatchDelete
+                        ? armedDeleteLabel
+                        : selectingTrash
+                          ? tr("Delete forever", "彻底删除")
+                          : tr("Trash", "移入回收站")}
+                  </span>
+                </button>
+                <button type="button" className="select-pill select-exit" onClick={exitSelectMode} aria-label={tr("Cancel selection", "取消多选")}>
+                  <X size={14} className="select-exit-icon" aria-hidden="true" />
+                  <span className="select-exit-label">{tr("Cancel", "取消")}</span>
+                </button>
+              </div>
+            ) : view === "trash" ? (
               // Trash reuses the tag-drilldown breadcrumb language: ⌂ / 回收站,
               // same cascade-in, ⌂ steps back out to All memos.
               <nav className="crumbs" aria-label={tr("Location", "当前位置")}>
@@ -2719,78 +2931,6 @@ export default function App() {
                   {tr("Daily review", "每日回顾")}
                 </span>
               </nav>
-            ) : selectMode ? (
-              // Multi-select toolbar. The count pill inherits the fused
-              // pill's view-transition-name, so entering the mode morphs the
-              // location label into the live counter; the sibling pills
-              // cascade in with the breadcrumb language.
-              <div className="select-bar">
-                <span className="select-count" aria-live="polite">
-                  {language === "zh-CN" ? (
-                    <>
-                      已选 <RollingText value={visibleSelectedCount} className="select-count-num" /> 条
-                    </>
-                  ) : (
-                    <>
-                      <RollingText value={visibleSelectedCount} className="select-count-num" /> selected
-                    </>
-                  )}
-                </span>
-                <button
-                  type="button"
-                  className="select-pill select-all"
-                  disabled={feedMemos.length === 0}
-                  aria-label={allVisibleSelected ? tr("Clear selection", "清除选择") : tr("Select all memos", "全选笔记")}
-                  onClick={toggleSelectAll}
-                >
-                  <ListChecks size={14} className="select-all-icon" aria-hidden="true" />
-                  <span className="select-all-label">
-                    <SwapText id={allVisibleSelected ? "clear" : "all"}>
-                      {allVisibleSelected ? tr("Clear", "清除") : tr("Select all", "全选")}
-                    </SwapText>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="select-pill select-tag"
-                  disabled={visibleSelectedCount === 0 || batchBusy}
-                  aria-haspopup="dialog"
-                  aria-label={tr("Add a tag to selected memos", "为所选笔记添加标签")}
-                  onClick={() => {
-                    setConfirmBatchDelete(false);
-                    pendingBatchTagRef.current = null;
-                    setBulkTagOpen(true);
-                  }}
-                >
-                  <Tags size={14} aria-hidden="true" />
-                  <span>{tr("Add tag", "加标签")}</span>
-                </button>
-                <button
-                  type="button"
-                  className={`select-delete${confirmBatchDelete ? " is-confirm" : ""}`}
-                  disabled={visibleSelectedCount === 0 || batchBusy}
-                  aria-label={
-                    confirmBatchDelete
-                      ? tr(`Delete ${count(visibleSelectedCount, "memo")}?`, `删除 ${count(visibleSelectedCount, "memo")}？`)
-                      : tr("Delete selected memos", "删除所选笔记")
-                  }
-                  onClick={handleBatchDeleteClick}
-                  onBlur={() => setConfirmBatchDelete(false)}
-                >
-                  {batchBusy ? <Loader2 size={14} className="spin" aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
-                  <span>
-                    {batchBusy
-                      ? tr("Deleting…", "删除中…")
-                      : confirmBatchDelete
-                        ? tr(`Delete ${count(visibleSelectedCount, "memo")}?`, `删除 ${count(visibleSelectedCount, "memo")}？`)
-                        : tr("Delete", "删除")}
-                  </span>
-                </button>
-                <button type="button" className="select-pill select-exit" onClick={exitSelectMode} aria-label={tr("Cancel selection", "取消多选")}>
-                  <X size={14} className="select-exit-icon" aria-hidden="true" />
-                  <span className="select-exit-label">{tr("Cancel", "取消")}</span>
-                </button>
-              </div>
             ) : (
               // The location trail. Its last stop — "全部笔记" at the root, the
               // current tag inside one — IS the dropdown trigger: label and
@@ -2853,7 +2993,15 @@ export default function App() {
                 </Menu>
               </Crumbs>
             )}
-            {view === "trash" && trashedMemos.length > 0 ? (
+            {view === "trash" && trashedMemos.length > 0 && !selectMode ? (
+              // Select is Trash's way into multi-select (the feed's sits in
+              // its location menu): pick several, restore or purge at once.
+              <button type="button" className="trash-select-button" aria-label={tr("Select memos", "多选笔记")} onClick={enterSelectMode}>
+                <ListChecks size={14} aria-hidden="true" />
+                <span>{tr("Select", "多选")}</span>
+              </button>
+            ) : null}
+            {view === "trash" && trashedMemos.length > 0 && !selectMode ? (
               // Empty Trash lives in the same slot as Sort (and shares its
               // view-transition-name), so swapping views morphs one pill into
               // the other.
@@ -3077,7 +3225,7 @@ export default function App() {
         </div>
 
         <section
-          className={`memo-feed${selectMode && view === "memos" ? " is-select" : ""}${renderedFeedMemos.length <= SMALL_FEED ? " is-small" : ""}`}
+          className={`memo-feed${selectingFeed ? " is-select" : ""}${renderedFeedMemos.length <= SMALL_FEED ? " is-small" : ""}`}
           aria-label={view === "trash" ? tr("Trash", "回收站") : view === "review" ? tr("Daily review", "每日回顾") : tr("Memo list", "笔记列表")}
         >
           {view === "review" && reviewDay && feedMemos.length > 0 ? (
@@ -3135,8 +3283,8 @@ export default function App() {
                 editing={editingId === memo.id}
                 savingEdit={editingId === memo.id && savingEdit}
                 editConflict={editingId === memo.id && editConflictId === memo.id}
-                selecting={selectMode && view === "memos"}
-                selected={selectMode && selected.has(memo.id)}
+                selecting={selectingFeed}
+                selected={selectingFeed && selected.has(memo.id)}
                 taskFlips={pendingTaskFlips.get(memo.id)}
                 vtName={index < 32 ? `memo-${memo.id}` : undefined}
                 getEntering={getEntering}
