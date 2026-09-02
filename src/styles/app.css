@@ -47,12 +47,15 @@
      than as levels. Prose keeps its own headings in em so they scale with
      the body they belong to.
 
-     Weight is a four-rung ladder, used the same way everywhere: 400 prose,
-     600 labels and meta, 700 emphasis and titles, 800 the display voice —
-     the wordmark and the two headline figures, nothing else. The 650/750
-     rungs this replaced only resolved on a variable face; on Segoe UI or
-     PingFang SC they snapped to a neighbour, so the distinction they drew
-     showed up on some machines and vanished on others.
+     Weight is a five-rung ladder, used the same way everywhere: 400 prose
+     and hints, 500 the chrome — labels, meta, counts, rows, chips, pills,
+     the frame around the notes — 600 the current or selected item, section
+     titles and filled buttons, 700 dialog titles and the headline figures,
+     800 the display voice: the wordmark and the year's figure, nothing
+     else. The chrome sits a rung below the emphasis it used to share, so
+     the frame no longer out-shouts the memo it holds. (A 650/750 pair
+     resolves only on a variable face; on Segoe UI or PingFang SC it snaps
+     to a neighbour, so the ladder keeps to the named rungs.)
      ----------------------------------------------------------------------- */
   font-family:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui,
@@ -722,13 +725,13 @@ a:hover { text-decoration: underline; }
   -webkit-backdrop-filter: blur(6px) saturate(1.15);
   backdrop-filter: blur(6px) saturate(1.15);
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.2;
   white-space: nowrap;
   transform: translate(calc(-50% + var(--tip-dx, 0px)), calc(-100% - 9px));
 }
 .tip.is-below .tip-bubble { transform: translate(calc(-50% + var(--tip-dx, 0px)), 9px); }
-.tip-bubble b { color: var(--tip-ink); font-weight: 700; }
+.tip-bubble b { color: var(--tip-ink); font-weight: 600; }
 
 /* =========================================================================
    Shared controls
@@ -815,7 +818,7 @@ a:hover { text-decoration: underline; }
   gap: 10px;
   padding: 8px 11px;
   color: var(--ink-soft);
-  font-weight: 600;
+  font-weight: 500;
   font-size: var(--fs-md);
   text-align: left;
   white-space: nowrap;
@@ -851,7 +854,7 @@ a:hover { text-decoration: underline; }
   padding: 4px 11px 5px;
   color: var(--muted);
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.45;
   user-select: none;
 }
@@ -862,7 +865,7 @@ a:hover { text-decoration: underline; }
   padding: 5px 11px 1px;
   color: var(--muted);
   font-size: var(--fs-2xs);
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.04em;
   user-select: none;
 }
@@ -874,7 +877,7 @@ a:hover { text-decoration: underline; }
   padding: 6px 11px 4px;
   color: var(--muted);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.45;
 }
 
@@ -901,7 +904,7 @@ a:hover { text-decoration: underline; }
   padding: 6px 8px 6px 11px;
   color: var(--ink-soft);
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
 }
 .action-menu__row > svg { flex: none; color: var(--muted); stroke-width: 1.75; }
@@ -943,7 +946,7 @@ a:hover { text-decoration: underline; }
   padding: 3px 10px;
   color: var(--seg-muted);
   font-size: var(--fs-xs);
-  font-weight: 700;
+  font-weight: 600;
   text-align: center;
   background: transparent;
   border: 0;
@@ -1048,7 +1051,7 @@ a:hover { text-decoration: underline; }
   min-height: 60px;
   color: var(--ink);
   font-size: var(--fs-xl);
-  font-weight: 600;
+  font-weight: 500;
   background: var(--chip-fill);
   border: 1.25px solid var(--chip-rim);
   border-radius: var(--r-md);
@@ -1115,7 +1118,7 @@ a:hover { text-decoration: underline; }
   padding: 7px 10px 7px 13px;
   border-radius: var(--r-md);
   font-size: var(--fs-md);
-  font-weight: 700;
+  font-weight: 600;
   transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .user-button:hover { background: var(--wash); } }
@@ -1156,8 +1159,8 @@ a:hover { text-decoration: underline; }
 }
 @media (hover: hover) { .stat-cell:hover { background: var(--wash); } }
 .stat-cell:active { transform: scale(0.94); }
-.stat-number { font-size: var(--fs-xl); font-weight: 800; letter-spacing: -0.02em; animation: fade-up 0.2s var(--ease) both; }
-.stat-label { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
+.stat-number { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -0.02em; animation: fade-up 0.2s var(--ease) both; }
+.stat-label { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
 
 .period-panel { display: grid; gap: 8px; }
 .period-seg {
@@ -1190,13 +1193,13 @@ a:hover { text-decoration: underline; }
   padding: 5px 0;
   color: var(--muted);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 500;
   border-radius: calc(var(--r-md) - 2px);
   transition: color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .period-seg button:hover:not(.is-active) { color: var(--ink-soft); } }
 .period-seg button:active { transform: scale(0.95); }
-.period-seg button.is-active { color: var(--ink); }
+.period-seg button.is-active { color: var(--ink); font-weight: 600; }
 .period-figures {
   display: flex;
   align-items: center;
@@ -1206,7 +1209,7 @@ a:hover { text-decoration: underline; }
   font-size: var(--fs-sm);
   animation: fade-up 0.18s var(--ease) both;
 }
-.period-figures strong { color: var(--ink); font-size: var(--fs-md); font-weight: 700; }
+.period-figures strong { color: var(--ink); font-size: var(--fs-md); font-weight: 600; }
 .period-sep { width: 1px; height: 12px; background: var(--line-strong); }
 
 /* ---- Rolling digits (split-flap) ----
@@ -1303,13 +1306,13 @@ a:hover { text-decoration: underline; }
   padding: 4px 8px;
   color: var(--ink-soft);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .heatmap-title:hover { background: var(--wash); color: var(--ink); } }
 .heatmap-title:active { transform: scale(0.96); }
-.heatmap-total { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
+.heatmap-total { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
 /* Title swaps as one block (label + count) in step with the grid slide. When
    the row is too narrow for both, the count wraps under the range (the text
    itself never breaks: .swap is nowrap, so only the count span moves down);
@@ -1350,7 +1353,7 @@ a:hover { text-decoration: underline; }
   padding-bottom: 1px;
   color: var(--muted);
   font-size: var(--fs-2xs);
-  font-weight: 600;
+  font-weight: 500;
   user-select: none;
 }
 /* Year = two stacked half-year bands; the split doubles the cell size a
@@ -1362,7 +1365,7 @@ a:hover { text-decoration: underline; }
 .heat-months span {
   color: var(--muted);
   font-size: var(--fs-2xs);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.1;
   white-space: nowrap;
   overflow: visible;
@@ -1436,14 +1439,14 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   /* Undeclared, this row fell to the 16px default and outsized .tag-label,
      the list directly beneath it doing the same job. They are peers now. */
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: 500;
   border-radius: var(--r-md);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 .nav-item svg { flex: none; margin-right: 10px; color: var(--muted); transition: color var(--t) var(--ease); }
 @media (hover: hover) { .nav-item:hover { background: var(--wash); color: var(--ink); } }
 .nav-item:active { transform: scale(0.98); }
-.nav-item.is-active { color: var(--leaf); background: var(--leaf-tint); }
+.nav-item.is-active { color: var(--leaf); background: var(--leaf-tint); font-weight: 600; }
 .nav-item.is-active svg { color: var(--leaf); }
 /* auto margin parks the count at the row's right edge — which is now the floor,
    not the sidebar. padding-left is the guaranteed separation for names long
@@ -1455,7 +1458,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   padding-left: var(--count-gap);
   color: var(--muted);
   font-size: var(--fs-xs);
-  font-weight: 700;
+  font-weight: 500;
 }
 .nav-item.is-active .nav-count { color: var(--leaf); }
 
@@ -1467,7 +1470,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   padding: 6px 13px;
   color: var(--muted);
   font-size: var(--fs-xs);
-  font-weight: 700;
+  font-weight: 600;
 }
 .tag-empty { margin: 4px 13px; color: var(--muted); font-size: var(--fs-sm); }
 .tag-list, .tag-children ul { margin: 0; padding: 0; list-style: none; }
@@ -1511,7 +1514,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   animation: tick-in 0.2s var(--ease-pop) both;
 }
 .tag-row.is-active { background: var(--leaf-tint); }
-.tag-row.is-active .tag-label { color: var(--leaf); font-weight: 700; }
+.tag-row.is-active .tag-label { color: var(--leaf); font-weight: 600; }
 .tag-expand {
   display: grid;
   place-items: center;
@@ -1536,7 +1539,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   padding: 6px 4px;
   color: var(--ink-soft);
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: 500;
   text-align: left;
   border-radius: var(--r-xs);
   transition: color var(--t) var(--ease), transform var(--t-fast) var(--ease);
@@ -1546,7 +1549,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 /* Only the name gives way: a long tag ellipsizes instead of pushing its own
    count off the row, so pin mark and count survive at any sidebar width. */
 .tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tag-count { flex: none; margin-left: auto; padding-left: var(--count-gap); color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
+.tag-count { flex: none; margin-left: auto; padding-left: var(--count-gap); color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
 /* Row action menu trigger — surfaces on row hover / focus / touch. */
 .tag-more {
   display: grid;
@@ -1650,7 +1653,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   padding: 5px 9px;
   color: var(--ink-soft);
   font-size: var(--fs-md);
-  font-weight: 700;
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1658,7 +1661,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   animation: crumb-in 0.18s var(--ease-out) both;
   transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
-.crumb.is-current { color: var(--ink); }
+.crumb.is-current { color: var(--ink); font-weight: 600; }
 .crumb-home { flex: none; padding: 6px 8px; color: var(--muted); }
 /* Trash location crumb: same geometry as a tag crumb, danger-tinted icon. */
 .crumb-trash { gap: 5px; }
@@ -1733,7 +1736,7 @@ button.crumb:active { background: var(--wash-strong); }
   padding: 5px 7px 5px 10px;
   color: var(--ink);
   font-size: var(--fs-md);
-  font-weight: 700;
+  font-weight: 600;
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
   view-transition-name: topbar-action;
@@ -1768,17 +1771,17 @@ button.crumb:active { background: var(--wash-strong); }
      keeps one constant corner instead of tweening 999px→10px. */
   border-radius: var(--r-sm);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
   white-space: nowrap;
   view-transition-name: topbar-action;
 }
-.select-count-num { flex: none; min-width: 0.62em; font-weight: 700; }
+.select-count-num { flex: none; min-width: 0.62em; font-weight: 600; }
 .select-pill {
   flex: none;
   padding: 5px 11px;
   color: var(--muted);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 500;
   white-space: nowrap;
   border-radius: var(--r-sm);
   animation: crumb-in 0.22s var(--ease-out) backwards;
@@ -1808,7 +1811,7 @@ button.crumb:active { background: var(--wash-strong); }
   padding: 5px 11px;
   color: var(--danger);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 500;
   white-space: nowrap;
   border-radius: var(--r-sm);
   animation: crumb-in 0.22s var(--ease-out) backwards;
@@ -1863,7 +1866,7 @@ button.crumb:active { background: var(--wash-strong); }
   background: var(--primary-tint);
   border-radius: var(--r-sm);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 500;
   white-space: nowrap;
   animation: crumb-in 0.22s var(--ease-out) backwards;
   transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease), transform var(--t-fast) var(--ease);
@@ -2003,7 +2006,7 @@ button.crumb:active { background: var(--wash-strong); }
   padding: 2px 7px;
   color: var(--muted);
   font-size: var(--fs-2xs);
-  font-weight: 700;
+  font-weight: 600;
   border-radius: var(--r-xs);
   animation: fade-in 0.2s var(--ease) both;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
@@ -2064,7 +2067,7 @@ button.crumb:active { background: var(--wash-strong); }
   gap: 10px;
   padding: 8px 11px;
   color: var(--ink-soft);
-  font-weight: 600;
+  font-weight: 500;
   font-size: var(--fs-md);
   text-align: left;
   white-space: nowrap;
@@ -2103,7 +2106,7 @@ button.crumb:active { background: var(--wash-strong); }
   padding: 4px 11px 3px;
   color: var(--muted);
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 400;
   line-height: 1.55;
   white-space: normal;
   user-select: none;
@@ -2121,7 +2124,7 @@ button.crumb:active { background: var(--wash-strong); }
   padding: 5px 11px;
   color: var(--danger);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
   white-space: nowrap;
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
@@ -2170,7 +2173,7 @@ button.crumb:active { background: var(--wash-strong); }
   padding: 5px 11px;
   color: var(--ink-soft);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 500;
   white-space: nowrap;
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
@@ -2252,7 +2255,7 @@ button.crumb:active { background: var(--wash-strong); }
   background: var(--primary-tint);
   border-radius: var(--r-xs);
   font-size: var(--fs-xs);
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.25;
   view-transition-name: composer-context-tag;
 }
@@ -2295,7 +2298,7 @@ button.crumb:active { background: var(--wash-strong); }
 .editor-count {
   color: var(--muted);
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   animation: fade-up 0.2s var(--ease) both;
 }
 .editor-count.is-over { color: var(--danger); }
@@ -2320,7 +2323,7 @@ button.crumb:active { background: var(--wash-strong); }
   padding: 7px 10px;
   color: var(--ink-soft);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2367,7 +2370,7 @@ button.crumb:active { background: var(--wash-strong); }
 @media (hover: hover) { .attachment-remove:hover { background: var(--danger); } }
 .attachment-remove:active { transform: scale(0.85); }
 
-.editor-error { margin: 0; color: var(--danger); font-size: var(--fs-sm); font-weight: 600; animation: fade-up 0.2s var(--ease) both; }
+.editor-error { margin: 0; color: var(--danger); font-size: var(--fs-sm); font-weight: 500; animation: fade-up 0.2s var(--ease) both; }
 .editor-conflict {
   display: flex;
   align-items: center;
@@ -2379,7 +2382,7 @@ button.crumb:active { background: var(--wash-strong); }
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 8%, transparent);
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
 }
 .editor-conflict p { margin: 0; }
 .editor-conflict .ghost-button { flex: 0 0 auto; }
@@ -2395,7 +2398,7 @@ button.crumb:active { background: var(--wash-strong); }
   gap: 8px;
   color: var(--primary-dark);
   font-size: var(--fs-md);
-  font-weight: 700;
+  font-weight: 600;
   background: color-mix(in srgb, var(--primary-tint) 90%, transparent);
   border: 2px dashed color-mix(in srgb, var(--primary) 55%, transparent);
   border-radius: var(--r-md);
@@ -2470,7 +2473,7 @@ button.crumb:active { background: var(--wash-strong); }
   padding: var(--py) var(--px);
   color: var(--ink);
   font-size: var(--fs-md);
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.01em;
   background: var(--dl-fill);
   -webkit-backdrop-filter: var(--dl-sampling);
@@ -2595,7 +2598,7 @@ button.crumb:active { background: var(--wash-strong); }
   padding: 0;
   color: var(--muted);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   animation: rise-in 0.24s var(--ease-out) both;
   view-transition-name: review-banner;
 }
@@ -2776,7 +2779,7 @@ button.crumb:active { background: var(--wash-strong); }
 .memo-feed.is-select .memo-slot:nth-child(n + 8) { --sbd: 0.09s; }
 
 .memo-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; }
-.memo-time { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
+.memo-time { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
 .memo-head-right { display: flex; align-items: center; gap: 4px; }
 .memo-pin-mark { color: var(--primary); animation: pop-in 0.18s var(--ease-pop) both; }
 .memo-menu-trigger { width: 26px; height: 26px; opacity: 0; }
@@ -2881,7 +2884,7 @@ button.md-task-box:active { transform: scale(0.88); }
   border-bottom: 1px solid var(--line);
   font-variant-numeric: tabular-nums;
 }
-.md-tr.is-th { font-weight: 700; border-bottom: none; }
+.md-tr.is-th { font-weight: 600; border-bottom: none; }
 .md-trule { display: flex; align-items: center; min-height: 9px; }
 .md-trule::before { content: ""; width: 100%; height: 1px; background: var(--line-strong); }
 
@@ -2918,7 +2921,7 @@ button.md-task-box:active { transform: scale(0.88); }
   background: var(--primary-tint);
   border-radius: var(--r-sm);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.5;
   box-shadow: inset 0 0 0 1px transparent;
   transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease), color var(--t) var(--ease);
@@ -2984,7 +2987,7 @@ button.memo-tag:active {
   padding: 10px;
   color: var(--muted);
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   text-align: center;
   background: var(--surface-2);
   border: 1px dashed var(--line-strong);
@@ -3003,7 +3006,7 @@ button.memo-tag:active {
 .feed-empty-action { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; border: 1px solid var(--line-strong); }
 .feed-empty-action svg { color: var(--muted); }
 .feed-empty p { margin: 0; }
-.feed-empty-title { color: var(--ink-soft); font-size: var(--fs-lg); font-weight: 700; }
+.feed-empty-title { color: var(--ink-soft); font-size: var(--fs-lg); font-weight: 600; }
 
 /* =========================================================================
    Overlays: confirm dialog + lightbox
@@ -3052,7 +3055,7 @@ button.memo-tag:active {
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
 .prompt-input:focus { border-color: var(--line-focus); }
-.prompt-note { margin: -2px 0 0; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); animation: fade-up 0.18s var(--ease) both; }
+.prompt-note { margin: -2px 0 0; font-size: var(--fs-xs); font-weight: 500; color: var(--muted); animation: fade-up 0.18s var(--ease) both; }
 .prompt-note.is-error { color: var(--danger); }
 .accent-button {
   padding: 8px 16px;
@@ -3121,11 +3124,11 @@ button.memo-tag:active {
   min-height: 1.35em;
   color: var(--muted);
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.35;
 }
 .bulk-tag-note > span { display: inline-block; animation: fade-up 0.16s var(--ease) both; }
-.bulk-tag-note strong { color: var(--primary-dark); font-weight: 700; overflow-wrap: anywhere; }
+.bulk-tag-note strong { color: var(--primary-dark); font-weight: 600; overflow-wrap: anywhere; }
 .bulk-tag-note .is-error { color: var(--danger); }
 .bulk-tag-suggestions-shell {
   display: grid;
@@ -3157,7 +3160,7 @@ button.memo-tag:active {
   background: var(--surface-2);
   border-radius: var(--r-sm);
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
   animation: tag-row-in 0.18s var(--ease-out) both;
@@ -3209,7 +3212,7 @@ button.memo-tag:active {
   background: rgba(12, 14, 19, 0.55);
   border-radius: var(--r-sm);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
 }
 .lightbox-source {
   position: absolute;
@@ -3223,7 +3226,7 @@ button.memo-tag:active {
   background: rgba(12, 14, 19, 0.55);
   border-radius: var(--r-sm);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
   transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .lightbox-source:hover { background: rgba(12, 14, 19, 0.78); text-decoration: none; } }
@@ -3262,7 +3265,7 @@ button.memo-tag:active {
    line) without unbalancing the padding the year nav centers on. Every modal
    close box sits at 14. */
 .stats-close { justify-self: end; margin-right: -6px; }
-.stats-year { min-width: 76px; text-align: center; font-size: var(--fs-md); font-weight: 700; animation: fade-up 0.18s var(--ease) both; }
+.stats-year { min-width: 76px; text-align: center; font-size: var(--fs-md); font-weight: 600; animation: fade-up 0.18s var(--ease) both; }
 .stats-body {
   display: grid;
   gap: 18px;
@@ -3273,7 +3276,7 @@ button.memo-tag:active {
 /* One entrance per section (staggered inline in the JSX), so the modal reads
    top-down — hero, calendar, charts, footnotes — instead of raining tiles. */
 .stats-section { display: grid; gap: 10px; animation: rise-in 0.2s var(--ease-out) both; }
-.stats-section-title { margin: 0; color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 700; }
+.stats-section-title { margin: 0; color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 600; }
 
 /* Tier 1: the year's headline figure, set in type — no card frame. The
    supporting figures share one muted line beneath it. */
@@ -3293,7 +3296,7 @@ button.memo-tag:active {
 @media (hover: hover) { .stats-hero-main:hover:not(:disabled) { color: var(--primary-dark); background: var(--wash); } }
 .stats-hero-main:active:not(:disabled) { transform: scale(0.985); }
 .stats-hero-value { font-size: var(--fs-display); font-weight: 800; letter-spacing: -0.03em; line-height: 1.15; }
-.stats-hero-unit { color: var(--ink-soft); font-size: var(--fs-md); font-weight: 700; }
+.stats-hero-unit { color: var(--ink-soft); font-size: var(--fs-md); font-weight: 600; }
 .stats-drill-cue {
   flex: none;
   align-self: center;
@@ -3305,9 +3308,9 @@ button.memo-tag:active {
 @media (hover: hover) {
   .stats-hero-main:hover:not(:disabled) .stats-drill-cue { opacity: 0.9; transform: translateX(0); }
 }
-.stats-hero-figs { display: flex; flex-wrap: wrap; gap: 4px 18px; color: var(--muted); font-size: var(--fs-sm); font-weight: 600; }
+.stats-hero-figs { display: flex; flex-wrap: wrap; gap: 4px 18px; color: var(--muted); font-size: var(--fs-sm); font-weight: 500; }
 .stats-fig { white-space: nowrap; }
-.stats-fig .roll { color: var(--ink-soft); font-weight: 700; }
+.stats-fig .roll { color: var(--ink-soft); font-weight: 600; }
 
 .months-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 14px 18px; }
 /* Tier 2: twelve bare calendar textures on the section's shared surface —
@@ -3321,7 +3324,7 @@ button.memo-tag:active {
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease);
 }
-.mini-month-head { display: flex; align-items: baseline; justify-content: space-between; font-size: var(--fs-xs); font-weight: 700; }
+.mini-month-head { display: flex; align-items: baseline; justify-content: space-between; font-size: var(--fs-xs); font-weight: 600; }
 .mini-month-pick {
   display: inline-flex;
   align-items: center;
@@ -3462,7 +3465,7 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
   gap: 6px;
   color: var(--muted);
   font-size: var(--fs-2xs);
-  font-weight: 600;
+  font-weight: 500;
   text-align: center;
 }
 .stats-chart-row { display: grid; grid-template-columns: 2fr 3fr; gap: 18px; align-items: start; }
@@ -3495,20 +3498,20 @@ button.stats-tag-row:active { scale: 0.992; }
   animation: tag-row-out 0.15s var(--ease) both;
 }
 .stats-tag-name-box { flex: none; width: min(170px, 36%); min-width: 0; }
-.stats-tag-name { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 600; }
+.stats-tag-name { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 500; }
 .stats-tag-track { flex: 1; height: 4px; background: var(--surface-3); border-radius: 2px; }
 .stats-tag-fill { display: block; height: 100%; max-width: 100%; background: var(--primary); border-radius: inherit; transition: width 0.22s var(--ease-out); }
-.stats-tag-count { flex: none; min-width: 2em; color: var(--muted); font-size: var(--fs-xs); font-weight: 700; text-align: right; }
-.stats-tags-empty { margin: 0; padding: 5px 2px; color: var(--muted); font-size: var(--fs-sm); font-weight: 600; animation: fade-up 0.2s var(--ease-out) both; }
+.stats-tag-count { flex: none; min-width: 2em; color: var(--muted); font-size: var(--fs-xs); font-weight: 500; text-align: right; }
+.stats-tags-empty { margin: 0; padding: 5px 2px; color: var(--muted); font-size: var(--fs-sm); font-weight: 500; animation: fade-up 0.2s var(--ease-out) both; }
 
 /* Tier 4, all-time footnotes: a hairline ledger — rows, not boxes. */
 .stats-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); column-gap: 28px; }
 .stats-fact { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 8px 2px; border-top: 1px solid var(--glass-rim); }
 .stats-fact.is-wide { grid-column: 1 / -1; }
-.stats-fact-label { color: var(--muted); font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; }
-.stats-fact-value { font-size: var(--fs-md); font-weight: 700; white-space: nowrap; }
+.stats-fact-label { color: var(--muted); font-size: var(--fs-sm); font-weight: 500; white-space: nowrap; }
+.stats-fact-value { font-size: var(--fs-md); font-weight: 600; white-space: nowrap; }
 /* A suffix qualifying the figure it sits inside, so it steps down from it. */
-.stats-fact-sub { color: var(--muted); font-size: var(--fs-sm); font-weight: 600; }
+.stats-fact-sub { color: var(--muted); font-size: var(--fs-sm); font-weight: 500; }
 
 /* =========================================================================
    Daily review settings dialog — Tier B floating surface. Sections rise in
@@ -3547,7 +3550,7 @@ button.stats-tag-row:active { scale: 0.992; }
   scrollbar-width: thin;
 }
 .review-section { display: grid; gap: 8px; animation: rise-in 0.2s var(--ease-out) both; }
-.review-section-title { margin: 0; color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 700; }
+.review-section-title { margin: 0; color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 600; }
 
 /* Scope — a radio column speaking the sidebar nav's active language. */
 .review-scope { display: grid; gap: 2px; }
@@ -3559,14 +3562,14 @@ button.stats-tag-row:active { scale: 0.992; }
   padding: 8px 10px;
   color: var(--ink-soft);
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: 500;
   text-align: left;
   border-radius: var(--r-md);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .review-option:hover { background: var(--wash); color: var(--ink); } }
 .review-option:active { transform: scale(0.99); }
-.review-option.is-active { color: var(--leaf); font-weight: 700; background: var(--leaf-tint); }
+.review-option.is-active { color: var(--leaf); font-weight: 600; background: var(--leaf-tint); }
 .review-radio {
   display: grid;
   flex: none;
@@ -3617,7 +3620,7 @@ button.stats-tag-row:active { scale: 0.992; }
   padding: 5px 11px;
   color: var(--ink-soft);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   background: var(--chip-fill);
   border: 1px solid var(--chip-rim);
   border-radius: var(--r-sm);
@@ -3665,9 +3668,9 @@ button.stats-tag-row:active { scale: 0.992; }
   place-items: center;
   min-width: 40px;
   font-size: var(--fs-md);
-  font-weight: 700;
+  font-weight: 600;
 }
-.review-count-unit { color: var(--muted); font-size: var(--fs-sm); font-weight: 600; }
+.review-count-unit { color: var(--muted); font-size: var(--fs-sm); font-weight: 500; }
 
 .review-foot {
   display: flex;
@@ -3677,8 +3680,8 @@ button.stats-tag-row:active { scale: 0.992; }
   border-top: 1px solid var(--glass-rim);
 }
 /* Live pool figure — rolls as the draft changes; warns when it hits zero. */
-.review-note { flex: 1; min-width: 0; color: var(--muted); font-size: var(--fs-xs); font-weight: 600; transition: color var(--t) var(--ease); }
-.review-note .roll { color: var(--ink-soft); font-weight: 700; }
+.review-note { flex: 1; min-width: 0; color: var(--muted); font-size: var(--fs-xs); font-weight: 500; transition: color var(--t) var(--ease); }
+.review-note .roll { color: var(--ink-soft); font-weight: 600; }
 .review-note.is-warn, .review-note.is-warn .roll { color: var(--danger); }
 .review-foot-actions { display: flex; flex: none; gap: 8px; }
 
@@ -3791,7 +3794,7 @@ button.stats-tag-row:active { scale: 0.992; }
   margin: 12px 0 0;
   color: var(--muted);
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   text-align: center;
 }
 /* -------------------------------------------------------------------------
@@ -3978,7 +3981,7 @@ button.stats-tag-row:active { scale: 0.992; }
   min-width: 0;
   padding: 0 11px 0 9px;
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 /* The two exits, and nothing else. Last in the cascade of arrivals: frame,
@@ -4653,10 +4656,10 @@ button.stats-tag-row:active { scale: 0.992; }
   min-width: 0;
   color: var(--muted);
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   animation: model-swap-in 0.3s var(--ease-out) both;
 }
-.model-progress-value { flex: none; font-size: var(--fs-md); font-weight: 700; font-variant-numeric: tabular-nums; }
+.model-progress-value { flex: none; font-size: var(--fs-md); font-weight: 600; font-variant-numeric: tabular-nums; }
 .model-progress-track {
   height: 6px;
   margin-top: 10px;
@@ -4692,7 +4695,7 @@ button.stats-tag-row:active { scale: 0.992; }
   border-radius: var(--r-md);
   font: inherit;
   font-size: var(--fs-xs);
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
   transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
@@ -4720,13 +4723,13 @@ button.stats-tag-row:active { scale: 0.992; }
 .model-stage-row[data-tone="done"] .model-stage-dot { background: var(--primary); }
 .model-stage-row[data-tone="active"] .model-stage-dot { background: var(--ink); }
 .model-stage-name { flex: 1; min-width: 0; font-size: var(--fs-xs); font-weight: 400; }
-.model-stage-row[data-tone="active"] .model-stage-name { font-weight: 700; }
+.model-stage-row[data-tone="active"] .model-stage-name { font-weight: 600; }
 .model-stage-row[data-tone="idle"] .model-stage-name { color: var(--muted); }
 .model-stage-note {
   flex: none;
   color: var(--muted);
   font-size: var(--fs-2xs);
-  font-weight: 600;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
@@ -4749,13 +4752,13 @@ button.stats-tag-row:active { scale: 0.992; }
   box-shadow: var(--chip-pop);
   font: inherit;
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
   transition: filter var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .model-cta:hover { filter: brightness(1.06); } }
 .model-cta:active { transform: scale(0.98); }
-.model-action-note { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; }
+.model-action-note { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; font-variant-numeric: tabular-nums; }
 
 /* Rebuilding the index: the quiet standing action of the Ready state, in the
    space the download CTA vacates. It folds away the instant the rebuild
@@ -4780,7 +4783,7 @@ button.stats-tag-row:active { scale: 0.992; }
 @media (hover: hover) { .model-rebuild-button:hover .model-rebuild-icon { transform: rotate(180deg); } }
 .model-rebuild-button:active .model-rebuild-icon { transform: rotate(180deg); }
 /* The ask replaces the button in place: same row, same height, no jump. */
-.model-rebuild-ask { color: var(--ink); font-size: var(--fs-sm); font-weight: 600; font-variant-numeric: tabular-nums; }
+.model-rebuild-ask { color: var(--ink); font-size: var(--fs-sm); font-weight: 500; font-variant-numeric: tabular-nums; }
 .model-rebuild-actions { display: inline-flex; align-items: center; gap: 6px; }
 .model-rebuild-cancel { padding: 8px 10px; }
 .model-rebuild-go {
@@ -4790,7 +4793,7 @@ button.stats-tag-row:active { scale: 0.992; }
   border-radius: var(--r-sm);
   box-shadow: var(--chip-pop);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
   transition: filter var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .model-rebuild-go:hover { filter: brightness(1.06); } }
@@ -4804,9 +4807,9 @@ button.stats-tag-row:active { scale: 0.992; }
   padding: 32px 20px 28px 28px;
   border-left: 1px solid var(--hairline);
 }
-.model-device-title { color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
+.model-device-title { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
 .model-device-field { display: grid; gap: 3px; }
-.model-device-field > span { color: var(--muted); font-size: var(--fs-2xs); font-weight: 600; }
+.model-device-field > span { color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; }
 /* Mono is for the identifier — the version is matched character by
    character against a manifest, never compared for size. */
 .model-device-field code,
@@ -4816,8 +4819,8 @@ button.stats-tag-row:active { scale: 0.992; }
   overflow-wrap: anywhere;
 }
 .model-device-field code { color: var(--ink-soft); line-height: 1.5; }
-.model-device-files { font-size: var(--fs-xs); font-weight: 700; font-variant-numeric: tabular-nums; }
-.model-device-caps { color: var(--muted); font-size: var(--fs-2xs); font-weight: 600; font-variant-numeric: tabular-nums; }
+.model-device-files { font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; }
+.model-device-caps { color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; font-variant-numeric: tabular-nums; }
 .model-device-note { margin: 16px 0 0; color: var(--muted); font-size: var(--fs-2xs); line-height: 1.65; text-wrap: pretty; }
 
 /* ---- advanced: the storage ledger, folded until asked for ---- */
@@ -4830,11 +4833,11 @@ button.stats-tag-row:active { scale: 0.992; }
   gap: 12px;
   margin-bottom: 6px;
 }
-.model-adv-title { color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
+.model-adv-title { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
 .model-adv-total {
   color: var(--muted);
   font-size: var(--fs-2xs);
-  font-weight: 600;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 .model-files { display: grid; }
@@ -4859,7 +4862,7 @@ button.stats-tag-row:active { scale: 0.992; }
 .model-file-size {
   color: var(--muted);
   font-size: var(--fs-2xs);
-  font-weight: 600;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   text-align: right;
@@ -4899,7 +4902,7 @@ button.stats-tag-row:active { scale: 0.992; }
   border-radius: var(--r-md);
   font: inherit;
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
   transition: background var(--t) var(--ease), opacity var(--t) var(--ease);
 }
@@ -4907,7 +4910,7 @@ button.stats-tag-row:active { scale: 0.992; }
 .model-wash-button:disabled { opacity: 0.55; cursor: default; }
 .model-wash-button.is-danger { color: var(--danger); }
 .model-note { margin: 10px 0 0; color: var(--ink-soft); font-size: var(--fs-xs); line-height: 1.5; }
-.model-clear-note { color: var(--primary-dark); font-weight: 600; animation: fade-up 0.18s var(--ease-out) both; }
+.model-clear-note { color: var(--primary-dark); font-weight: 500; animation: fade-up 0.18s var(--ease-out) both; }
 .model-clear-confirm {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
@@ -4930,7 +4933,7 @@ button.stats-tag-row:active { scale: 0.992; }
   border-radius: var(--r-sm);
 }
 .model-clear-confirm-copy { display: grid; gap: 2px; }
-.model-clear-confirm-copy strong { color: var(--ink); font-size: var(--fs-sm); font-weight: 700; }
+.model-clear-confirm-copy strong { color: var(--ink); font-size: var(--fs-sm); font-weight: 600; }
 .model-clear-confirm-copy > span { color: var(--ink-soft); font-size: var(--fs-xs); line-height: 1.45; }
 .model-clear-confirm-actions { display: flex; grid-column: 2; justify-content: flex-end; gap: 6px; }
 .model-clear-confirm-actions .danger-button { padding: 8px 14px; }
@@ -4952,7 +4955,7 @@ button.stats-tag-row:active { scale: 0.992; }
   border-radius: var(--r-md);
   font: inherit;
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
   transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
