@@ -1321,15 +1321,31 @@ export default function App() {
     setQuery(next);
   }, []);
 
-  const blockNavigationWhileEditing = useCallback(() => {
-    if (!editingId) return false;
-    showToast(tr("Save or cancel the open edit before changing views.", "请先保存或取消当前编辑，再切换视图"), "error");
-    return true;
-  }, [editingId, showToast, tr]);
+  /**
+   * The lenses — tag, day, search, facets, sort, presets — change freely
+   * while a memo is being edited: the feed keeps the editing row mounted
+   * through every swap (filterPreservingId, renderedFeedMemos), so nothing is
+   * lost. Only the views that would unmount the editor — Trash, Daily review,
+   * select mode — wait for it, and they say so as a note, not an error: the
+   * open editor is where the reader's attention goes back.
+   */
+  const holdForOpenEdit = useCallback(
+    (destinationEn: string, destinationZh: string) => {
+      if (!editingId) return false;
+      showToast(tr(`Save or cancel the memo you’re editing, then ${destinationEn}.`, `先保存或取消正在编辑的笔记，再${destinationZh}`));
+      const area = document.querySelector<HTMLTextAreaElement>(".editor-edit textarea");
+      if (area) {
+        const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        area.scrollIntoView?.({ block: "center", behavior: reduced ? "auto" : "smooth" });
+        area.focus({ preventScroll: true });
+      }
+      return true;
+    },
+    [editingId, showToast, tr]
+  );
 
   const pickTag = useCallback(
     (path: string | null) => {
-      if (blockNavigationWhileEditing()) return;
       if (view === "memos" && activeTag === path) {
         return;
       }
@@ -1337,14 +1353,16 @@ export default function App() {
         setActiveTag(path);
         setStatsDrilldown(null);
         setView("memos");
+        // Inside a tag every memo carries it, so "No tags" would only ever
+        // answer with an empty feed; the chip folds away with the move.
+        if (path) setFilters((current) => (current.noTags ? { ...current, noTags: false } : current));
       });
     },
-    [view, activeTag, changeFeed, blockNavigationWhileEditing]
+    [view, activeTag, changeFeed]
   );
 
   const pickDay = useCallback(
     (key: string | null) => {
-      if (blockNavigationWhileEditing()) return;
       if (view === "memos" && activeDay === key) {
         return;
       }
@@ -1354,11 +1372,10 @@ export default function App() {
         setView("memos");
       });
     },
-    [view, activeDay, changeFeed, blockNavigationWhileEditing]
+    [view, activeDay, changeFeed]
   );
 
   const showAll = useCallback(() => {
-    if (blockNavigationWhileEditing()) return;
     if (view === "memos" && activeTag === null && activeDay === null && statsDrilldown === null && query.length === 0 && !hasActiveFilters(filters)) {
       return;
     }
@@ -1368,46 +1385,49 @@ export default function App() {
       setStatsDrilldown(null);
       swapQuery("");
       setFilters(EMPTY_FILTERS);
+      // A selection belongs to the view it was made in.
+      if (view !== "memos") {
+        setSelectMode(false);
+        setSelected(new Set());
+        setConfirmBatchDelete(false);
+      }
       setView("memos");
     });
-  }, [view, activeTag, activeDay, statsDrilldown, query, filters, changeFeed, swapQuery, blockNavigationWhileEditing]);
+  }, [view, activeTag, activeDay, statsDrilldown, query, filters, changeFeed, swapQuery]);
 
   /** Facet on/off is a discrete choice — it rides the same feed morph as a
       tag or sort change, whether it comes from the panel or a chip's ×. */
   const toggleFacet = useCallback(
     (key: FacetKey) => {
-      if (blockNavigationWhileEditing()) return;
       changeFeed(() => setFilters((current) => ({ ...current, [key]: !current[key] })));
     },
-    [changeFeed, blockNavigationWhileEditing]
+    [changeFeed]
   );
 
   // Date edits arrive segment-by-segment from the native inputs — update in
   // place like search keystrokes instead of morphing per keypress.
-  const patchDateRange = useCallback(
-    (patch: Partial<Pick<FeedFilters, "dateFrom" | "dateTo">>) => {
-      if (blockNavigationWhileEditing()) return;
-      setFilters((current) => ({ ...current, ...patch }));
+  const patchDateRange = useCallback((patch: Partial<Pick<FeedFilters, "dateFrom" | "dateTo">>) => {
+    setFilters((current) => ({ ...current, ...patch }));
+  }, []);
+
+  /** A quick range lands whole, so it morphs like a facet does. */
+  const applyPresetRange = useCallback(
+    (from: string, to: string) => {
+      changeFeed(() => setFilters((current) => ({ ...current, dateFrom: from, dateTo: to })));
     },
-    [blockNavigationWhileEditing]
+    [changeFeed]
   );
 
   const clearDateRange = useCallback(() => {
-    if (blockNavigationWhileEditing()) return;
     changeFeed(() => setFilters((current) => ({ ...current, dateFrom: null, dateTo: null })));
-  }, [changeFeed, blockNavigationWhileEditing]);
+  }, [changeFeed]);
 
   const clearStatsDrilldown = useCallback(() => {
-    if (blockNavigationWhileEditing()) return;
     changeFeed(() => setStatsDrilldown(null));
-  }, [blockNavigationWhileEditing, changeFeed]);
+  }, [changeFeed]);
 
   const openStatsDrilldown = useCallback(
     (drilldown: StatsDrilldown) => {
-      if (blockNavigationWhileEditing()) {
-        setStatsOpen(false);
-        return;
-      }
       changeFeed(() => {
         setStatsOpen(false);
         setStatsDrilldown(drilldown);
@@ -1421,13 +1441,12 @@ export default function App() {
         setConfirmBatchDelete(false);
       });
     },
-    [blockNavigationWhileEditing, changeFeed, swapQuery]
+    [changeFeed, swapQuery]
   );
 
   /** A preset restores the whole feed context in one morph. */
   const applySavedFilter = useCallback(
     (item: SavedFilter) => {
-      if (blockNavigationWhileEditing()) return;
       changeFeed(() => {
         setView("memos");
         setActiveTag(item.tag);
@@ -1437,7 +1456,7 @@ export default function App() {
         setFilters(item.filters);
       });
     },
-    [changeFeed, swapQuery, blockNavigationWhileEditing]
+    [changeFeed, swapQuery]
   );
 
   const deleteSavedFilter = useCallback(
@@ -1516,8 +1535,8 @@ export default function App() {
   const chipDelay = (key: string) => (prevChips.includes(key) ? undefined : `${Math.min(newChipCount++, 3) * 0.02}s`);
 
   const openTrash = useCallback(() => {
-    if (blockNavigationWhileEditing()) return;
     if (view === "trash") return;
+    if (holdForOpenEdit("open Trash", "打开回收站")) return;
     changeFeed(() => {
       setView("trash");
       setStatsDrilldown(null);
@@ -1527,7 +1546,7 @@ export default function App() {
       setSelected(new Set());
       setConfirmBatchDelete(false);
     });
-  }, [view, changeFeed, blockNavigationWhileEditing]);
+  }, [view, changeFeed, holdForOpenEdit]);
 
   /**
    * Opening 每日回顾 is what draws the batch: the first visit of a local day
@@ -1537,7 +1556,7 @@ export default function App() {
    * their new positions instead of replaying entrances.
    */
   const openReview = useCallback(() => {
-    if (blockNavigationWhileEditing()) return;
+    if (view !== "review" && holdForOpenEdit("open Daily review", "打开每日回顾")) return;
     let next = reviewDay;
     if (!reviewDayValid(next, reviewSettings)) {
       next = buildReviewDay(activeMemos, reviewSettings);
@@ -1554,7 +1573,7 @@ export default function App() {
       setSelected(new Set());
       setConfirmBatchDelete(false);
     });
-  }, [view, reviewDay, reviewSettings, activeMemos, changeFeed, blockNavigationWhileEditing]);
+  }, [view, reviewDay, reviewSettings, activeMemos, changeFeed, holdForOpenEdit]);
 
   // Crossing midnight while the review view sits open: returning focus (or
   // visibility) re-checks the frozen batch and deals the new day in a morph.
@@ -1601,7 +1620,7 @@ export default function App() {
    * while the card checkboxes pop in via their own CSS transitions.
    */
   const enterSelectMode = useCallback(() => {
-    if (blockNavigationWhileEditing()) return;
+    if (holdForOpenEdit("select memos", "多选笔记")) return;
     withViewTransition(() =>
       flushSync(() => {
         setSelectMode(true);
@@ -1612,7 +1631,7 @@ export default function App() {
         pendingBatchTagRef.current = null;
       })
     );
-  }, [blockNavigationWhileEditing]);
+  }, [holdForOpenEdit]);
 
   const exitSelectMode = useCallback(() => {
     withViewTransition(() =>
@@ -1784,10 +1803,23 @@ export default function App() {
         })
       );
       if (!result?.memo) return false;
-      commitMutation({ memos: [result.memo] });
-      setEditingId(null);
-      setEditConflictId(null);
-      editingBaseSeqRef.current = null;
+      const saved = result.memo;
+      // The lenses may have moved on while the memo was open (they are free
+      // to now): a memo the current view no longer shows recedes in the
+      // feed's own removal choreography rather than vanishing under the
+      // reader when the editor closes.
+      const leavesView =
+        view === "memos" && !(memoMatchesSearchScope(saved, { activeTag, activeDay, statsDrilldown, filters }) && memoMatchesQuery(saved, parsedQuery));
+      const land = () => {
+        applySyncChanges([saved], [], []);
+        setEditingId(null);
+        setEditConflictId(null);
+        editingBaseSeqRef.current = null;
+      };
+      if (leavesView) withViewTransition(() => flushSync(land));
+      else land();
+      void runSync();
+      notifyPeers();
       showToast(tr("Saved", "已保存"));
       return true;
     } catch (cause) {
@@ -2236,7 +2268,7 @@ export default function App() {
     startEdit: (id: string) => {
       const currentEditing = editingIdRef.current;
       if (currentEditing && currentEditing !== id) {
-        showToast(tr("Save or cancel the open edit before editing another memo.", "请先保存或取消当前编辑，再编辑其他笔记"), "error");
+        showToast(tr("Save or cancel the open edit before editing another memo.", "请先保存或取消当前编辑，再编辑其他笔记"));
         return;
       }
       editingBaseSeqRef.current = syncStateRef.current.memos.get(id)?.seq ?? null;
@@ -2265,7 +2297,7 @@ export default function App() {
     startEdit: (id: string) => {
       const currentEditing = editingIdRef.current;
       if (currentEditing && currentEditing !== id) {
-        showToast(tr("Save or cancel the open edit before editing another memo.", "请先保存或取消当前编辑，再编辑其他笔记"), "error");
+        showToast(tr("Save or cancel the open edit before editing another memo.", "请先保存或取消当前编辑，再编辑其他笔记"));
         return;
       }
       editingBaseSeqRef.current = syncStateRef.current.memos.get(id)?.seq ?? null;
@@ -2926,7 +2958,6 @@ export default function App() {
                   value={query}
                   placeholder={tr("Search memos", "搜索笔记")}
                   title={tr("Space separates keywords; “quotes” match an exact phrase", "空格分隔多个关键词；“引号”匹配完整短语")}
-                  disabled={editingId !== null}
                   onChange={(event) => typeQuery(event.target.value)}
                   onFocus={() => setSearchOpen(true)}
                   onBlur={() => setSearchOpen(false)}
@@ -2936,7 +2967,6 @@ export default function App() {
                     type="button"
                     className="searchbox-clear"
                     aria-label={tr("Clear search", "清空搜索")}
-                    disabled={editingId !== null}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => {
                       // The same restoration the home pill performs, so it
@@ -2953,7 +2983,6 @@ export default function App() {
                 type="button"
                 className={`icon-button semantic-toggle${semanticOn ? " is-active" : ""}`}
                 aria-pressed={semanticOn}
-                disabled={editingId !== null}
                 aria-label={tr("Semantic Search", "语义搜索")}
                 title={
                   semantic.status === "error"
