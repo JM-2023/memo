@@ -1,27 +1,22 @@
-import { ChevronDown, Cpu, Download, FileDown, HardDrive, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import { ChevronDown, Download, FileDown, HardDrive, RefreshCw, Trash2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import type { SemanticQueryProgress, SemanticSearchStatus } from "../hooks/useSemanticSearch";
 import { useI18n } from "../lib/i18n";
 import {
-  clearModelFiles,
-  ensureModelFiles,
-  importModelFiles,
-  ModelUnavailableError,
-  presentModelFiles,
-  readModelFileBytes,
-  storedModelState,
-  type MirrorFailure
-} from "../lib/modelLoader";
+  cancelModelDownload,
+  classifyModelFailure,
+  getModelDownloadSnapshot,
+  isModelWorkInFlight,
+  resetModelDownload,
+  startModelDownload,
+  useModelDownload,
+  type ModelFailureCause
+} from "../lib/modelDownload";
+import { clearModelFiles, importModelFiles, presentModelFiles, readModelFileBytes, type MirrorFailure } from "../lib/modelLoader";
 import { MODEL_MANIFEST, modelTotalBytes, type ModelFileSpec } from "../lib/modelManifest";
-import {
-  getEmbedder,
-  getModelRuntimeProgress,
-  resetModelRuntime,
-  runModelSelfTest,
-  subscribeModelRuntimeProgress
-} from "../lib/modelRuntime";
+import { getModelRuntimeProgress, resetModelRuntime, subscribeModelRuntimeProgress } from "../lib/modelRuntime";
 import { deleteSemanticIndexDb, EMBED_BATCH_TEXTS, type SemanticIndexProgress } from "../lib/semanticIndex";
 import type { OrbState } from "../lib/thinkingOrb";
 import { ThinkingOrb } from "./ThinkingOrb";
@@ -52,10 +47,22 @@ interface ModelSettingsModalProps {
   attend?: number;
 }
 
-type Phase =
+/** What only this panel instance knows: it is still reading the device, or
+    it is clearing it. Downloading and activating belong to the app-level
+    store (src/lib/modelDownload.ts), which outlives the panel. */
+type Local =
+  | { kind: "checking" }
+  | { kind: "settled" }
+  | { kind: "clearing" }
+  | { kind: "clear-error"; message: string };
+
+/** The panel's own view of the model, folded from the local phase, the
+    download store and the files actually present on this device. */
+type View =
   | { kind: "checking" }
   | { kind: "idle"; stored: "none" | "partial" }
-  | { kind: "downloading"; loadedBytes: number }
+  | { kind: "paused" }
+  | { kind: "downloading" }
   | { kind: "activating" }
   | { kind: "clearing" }
   | { kind: "ready" }
@@ -65,6 +72,7 @@ type Phase =
 type StateId =
   | "checking"
   | "idle"
+  | "paused"
   | "downloading"
   | "loading"
   | "ready"
@@ -79,6 +87,8 @@ type StateId =
 const ORB: Record<StateId, OrbState> = {
   checking: "working",
   idle: "shaping",
+  // A pause is a rest, not a fault: the same mark as "not downloaded".
+  paused: "shaping",
   downloading: "working",
   loading: "working",
   ready: "connecting",
@@ -91,7 +101,6 @@ const ORB: Record<StateId, OrbState> = {
 };
 
 const TOTAL_BYTES = modelTotalBytes();
-const TOTAL_MB = Math.round(TOTAL_BYTES / 1e6);
 
 function megabytes(bytes: number): string {
   return `${(bytes / 1e6).toFixed(1)} MB`;
@@ -134,6 +143,8 @@ const EMPTY_PROGRESS: ProgressView = { label: "", value: "", meta: "", percent: 
  * list) and this device's facts (right). Downloading, verifying, activating,
  * importing and exporting the on-device embedding model all live here;
  * "Ready" is only shown after a real self-test inference on this device.
+ * The download itself belongs to the app, not the panel: closing this
+ * surface leaves it running, and reopening picks the live progress back up.
  */
 export function ModelSettingsModal({
   onClose,
@@ -150,15 +161,16 @@ export function ModelSettingsModal({
   semanticQuery = "",
   attend = 0
 }: ModelSettingsModalProps) {
-  const { tr } = useI18n();
+  const { tr, formatNumber } = useI18n();
   const reducedMotion = useReducedMotion();
   const runtimeProgress = useSyncExternalStore(
     subscribeModelRuntimeProgress,
     getModelRuntimeProgress,
     getModelRuntimeProgress
   );
+  const download = useModelDownload();
 
-  const [phase, setPhase] = useState<Phase>({ kind: "checking" });
+  const [local, setLocal] = useState<Local>({ kind: "checking" });
   const [present, setPresent] = useState<ReadonlySet<string>>(() => new Set());
   const [importNote, setImportNote] = useState<string | null>(null);
   const [clearNote, setClearNote] = useState<string | null>(null);
@@ -174,19 +186,21 @@ export function ModelSettingsModal({
   const progressBlockRef = useRef<HTMLDivElement>(null);
   const stagesRegionRef = useRef<HTMLDivElement>(null);
   const actionRegionRef = useRef<HTMLDivElement>(null);
+  const actionButtonRef = useRef<HTMLButtonElement>(null);
   const rebuildRegionRef = useRef<HTMLDivElement>(null);
   const rebuildConfirmRef = useRef<HTMLButtonElement>(null);
   const advRegionRef = useRef<HTMLDivElement>(null);
   const dismissTimer = useRef(0);
   const disposedRef = useRef(false);
   const readyReportedRef = useRef(false);
+  const cancelledHereRef = useRef(false);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const modelReadyRef = useRef(onModelReady);
   modelReadyRef.current = onModelReady;
 
-  const safeSetPhase = useCallback((next: Phase) => {
-    if (!disposedRef.current) setPhase(next);
+  const safeSetLocal = useCallback((next: Local) => {
+    if (!disposedRef.current) setLocal(next);
   }, []);
 
   const refreshPresence = useCallback(async () => {
@@ -195,73 +209,40 @@ export function ModelSettingsModal({
     return files;
   }, []);
 
-  const activate = useCallback(async () => {
-    safeSetPhase({ kind: "activating" });
-    try {
-      await getEmbedder();
-      await runModelSelfTest();
-      if (!disposedRef.current) {
-        setPhase({ kind: "ready" });
-        if (!readyReportedRef.current) {
-          readyReportedRef.current = true;
-          modelReadyRef.current?.();
-        }
-      }
-    } catch (cause) {
-      const detail = cause instanceof Error ? cause.message : String(cause);
-      safeSetPhase({
-        kind: "error",
-        origin: "activate",
-        message: tr(`The model couldn't start on this device. (${detail})`, `模型在此设备上启动失败。（${detail}）`),
-        failures: []
-      });
-    }
-  }, [safeSetPhase, tr]);
-
-  const download = useCallback(async () => {
-    setClearNote(null);
-    safeSetPhase({ kind: "downloading", loadedBytes: 0 });
-    try {
-      await ensureModelFiles((progress) => {
-        safeSetPhase({ kind: "downloading", loadedBytes: progress.loadedBytes });
-      });
-      await refreshPresence();
-      await activate();
-    } catch (cause) {
-      await refreshPresence();
-      if (cause instanceof ModelUnavailableError) {
-        safeSetPhase({
-          kind: "error",
-          origin: "download",
-          message: tr("The model couldn't be downloaded from any source.", "无法从任何下载源获取模型。"),
-          failures: cause.failures
-        });
-      } else {
-        const detail = cause instanceof Error ? cause.message : String(cause);
-        safeSetPhase({
-          kind: "error",
-          origin: "download",
-          message: tr(`The download failed. (${detail})`, `下载失败。（${detail}）`),
-          failures: []
-        });
-      }
-    }
-  }, [activate, refreshPresence, safeSetPhase, tr]);
-
   useEffect(() => {
     disposedRef.current = false;
     void (async () => {
-      await refreshPresence();
-      const stored = await storedModelState();
+      const files = await refreshPresence();
       if (disposedRef.current) return;
-      if (stored === "complete") await activate();
-      else safeSetPhase({ kind: "idle", stored });
+      const complete = MODEL_MANIFEST.files.every((file) => files.has(file.requestPath));
+      // Every file here: activate (a no-op when the runtime is already live,
+      // and the same promise when a download is finishing right now). Files
+      // gone while the store still says ready — a logout cleared them — and
+      // the store's word is stale.
+      if (complete) void startModelDownload();
+      else if (getModelDownloadSnapshot().phase === "ready") resetModelDownload();
+      setLocal({ kind: "settled" });
     })();
     return () => {
       disposedRef.current = true;
       window.clearTimeout(dismissTimer.current);
     };
-  }, [activate, refreshPresence, safeSetPhase]);
+  }, [refreshPresence]);
+
+  /* The device column follows the store: once bytes stop moving — landed,
+     paused, failed, reset — the key listing is the fact, and the bar's
+     arithmetic was only ever a preview of it. */
+  const downloadPhase = download.phase;
+  useEffect(() => {
+    if (downloadPhase === "downloading" || downloadPhase === "activating") return;
+    void refreshPresence();
+  }, [downloadPhase, refreshPresence]);
+
+  useEffect(() => {
+    if (downloadPhase !== "ready" || readyReportedRef.current) return;
+    readyReportedRef.current = true;
+    modelReadyRef.current?.();
+  }, [downloadPhase]);
 
   const requestClose = useCallback(() => {
     if (closing) return;
@@ -294,7 +275,7 @@ export function ModelSettingsModal({
       }
       if (!disposedRef.current) setImportNote(notes.join(" ") || null);
       const complete = MODEL_MANIFEST.files.every((file) => files.has(file.requestPath));
-      if (complete && phase.kind !== "ready") await activate();
+      if (complete) void startModelDownload();
     } catch {
       if (!disposedRef.current) setImportNote(tr("Couldn't read those files.", "无法读取所选文件。"));
     }
@@ -304,24 +285,21 @@ export function ModelSettingsModal({
     setConfirmingClear(false);
     setImportNote(null);
     setClearNote(null);
-    safeSetPhase({ kind: "clearing" });
+    safeSetLocal({ kind: "clearing" });
     onModelCleared();
     try {
       await Promise.all([resetModelRuntime(), clearModelFiles(), deleteSemanticIndexDb()]);
+      // The store's word about the model goes with the model — whether or
+      // not this panel is still open to see it.
+      resetModelDownload();
       if (disposedRef.current) return;
       setPresent(new Set());
       setClearNote(tr("Model and semantic index cleared from this device.", "已从此设备清除模型和语义索引。"));
-      safeSetPhase({ kind: "idle", stored: "none" });
+      safeSetLocal({ kind: "settled" });
     } catch (cause) {
-      const detail = cause instanceof Error ? cause.message : String(cause);
-      safeSetPhase({
-        kind: "error",
-        origin: "clear",
-        message: tr(`The model couldn't be cleared. (${detail})`, `无法清除模型。（${detail}）`),
-        failures: []
-      });
+      safeSetLocal({ kind: "clear-error", message: cause instanceof Error ? cause.message : String(cause) });
     }
-  }, [onModelCleared, safeSetPhase, tr]);
+  }, [onModelCleared, safeSetLocal, tr]);
 
   async function handleExportFile(spec: ModelFileSpec) {
     const bytes = await readModelFileBytes(spec.requestPath);
@@ -338,37 +316,142 @@ export function ModelSettingsModal({
 
   /* ---- the lifecycle, in the redesign's vocabulary ---------------------- */
 
-  const stateId: StateId =
-    phase.kind === "checking"
-      ? "checking"
-      : phase.kind === "idle"
-        ? "idle"
-        : phase.kind === "downloading"
-          ? "downloading"
-          : phase.kind === "activating"
-            ? "loading"
-            : phase.kind === "clearing"
-              ? "clearing"
-              : phase.kind === "error"
-                ? "failed"
-                : semanticStatus === "error"
-                  ? "failed"
-                  : // A rebuild owns both of its phases: the moment spent
-                    // clearing the store is not the model loading again.
-                    semanticRebuilding && (semanticStatus === "preparing" || semanticStatus === "indexing")
-                    ? "rebuilding"
-                    : semanticStatus === "preparing"
-                      ? "loading"
-                      : semanticStatus === "indexing"
-                        ? "indexing"
-                        : semanticQueryProgress
-                          ? "searching"
-                          : "ready";
+  const filesComplete = MODEL_MANIFEST.files.every((file) => present.has(file.requestPath));
 
-  const busy = phase.kind === "checking" || phase.kind === "downloading" || phase.kind === "activating" || phase.kind === "clearing";
-  const idlePartial = phase.kind === "idle" && phase.stored === "partial";
-  const failures = phase.kind === "error" ? phase.failures : [];
-  const errorOrigin = phase.kind === "error" ? phase.origin : semanticStatus === "error" ? "semantic" : null;
+  const view: View = (() => {
+    if (local.kind === "checking") return { kind: "checking" };
+    if (local.kind === "clearing") return { kind: "clearing" };
+    if (local.kind === "clear-error") return { kind: "error", origin: "clear", message: local.message, failures: [] };
+    switch (download.phase) {
+      case "downloading":
+        return { kind: "downloading" };
+      case "activating":
+        return { kind: "activating" };
+      case "ready":
+        return { kind: "ready" };
+      case "cancelled":
+        return { kind: "paused" };
+      case "error":
+        return {
+          kind: "error",
+          origin: download.error?.origin ?? "download",
+          message: download.error?.message ?? "",
+          failures: download.error?.failures ?? []
+        };
+      default:
+        // Idle with every file present is the instant before activation
+        // starts; anything else is a device waiting for its download.
+        return filesComplete ? { kind: "checking" } : { kind: "idle", stored: present.size > 0 ? "partial" : "none" };
+    }
+  })();
+
+  const stateId: StateId =
+    view.kind === "checking"
+      ? "checking"
+      : view.kind === "idle"
+        ? "idle"
+        : view.kind === "paused"
+          ? "paused"
+          : view.kind === "downloading"
+            ? "downloading"
+            : view.kind === "activating"
+              ? "loading"
+              : view.kind === "clearing"
+                ? "clearing"
+                : view.kind === "error"
+                  ? "failed"
+                  : semanticStatus === "error"
+                    ? "failed"
+                    : // A rebuild owns both of its phases: the moment spent
+                      // clearing the store is not the model loading again.
+                      semanticRebuilding && (semanticStatus === "preparing" || semanticStatus === "indexing")
+                      ? "rebuilding"
+                      : semanticStatus === "preparing"
+                        ? "loading"
+                        : semanticStatus === "indexing"
+                          ? "indexing"
+                          : semanticQueryProgress
+                            ? "searching"
+                            : "ready";
+
+  const busy = local.kind === "checking" || local.kind === "clearing" || isModelWorkInFlight(download);
+  const idlePartial = view.kind === "idle" && view.stored === "partial";
+  const errorOrigin = view.kind === "error" ? view.origin : semanticStatus === "error" ? "semantic" : null;
+  /* The cause, sorted into the handful the panel has words for. The raw
+     reason stays out of the headline; Advanced carries it as detail. */
+  const failureCause: ModelFailureCause | null =
+    view.kind === "error"
+      ? view.origin === "clear"
+        ? null
+        : classifyModelFailure(view.origin, view.message, view.failures)
+      : semanticStatus === "error"
+        ? classifyModelFailure("semantic", semanticError ?? "")
+        : null;
+  const errorDetail: { message: string; failures: readonly MirrorFailure[] } | null =
+    view.kind === "error"
+      ? { message: view.message, failures: view.failures }
+      : semanticStatus === "error" && semanticError
+        ? { message: semanticError, failures: [] }
+        : null;
+
+  const wholeMb = (bytes: number) => formatNumber(Math.round(bytes / 1e6));
+  const storedBytes = MODEL_MANIFEST.files.reduce((sum, file) => sum + (present.has(file.requestPath) ? file.bytes : 0), 0);
+  // Right after a cancel the store already knows what was kept; the key
+  // listing catches up a beat later.
+  const keptBytes = view.kind === "paused" ? Math.max(storedBytes, download.loadedBytes) : storedBytes;
+  const keptLine = tr(
+    `${wholeMb(keptBytes)} of ${wholeMb(TOTAL_BYTES)} MB kept. Resume to finish the download.`,
+    `已保留 ${wholeMb(keptBytes)} / ${wholeMb(TOTAL_BYTES)} MB，继续下载即可完成。`
+  );
+
+  /* "How long": from the store's smoothed rate, and only once it has one —
+     a guess would be worse than the plain promise that search keeps working. */
+  const etaLine = (() => {
+    if (view.kind !== "downloading" || !download.bytesPerSecond) return "";
+    const seconds = Math.max(0, download.totalBytes - download.loadedBytes) / download.bytesPerSecond;
+    if (seconds < 45) return tr("Less than a minute left.", "不到 1 分钟。");
+    if (seconds < 90) return tr("About a minute left.", "预计还需约 1 分钟。");
+    const minutes = formatNumber(Math.ceil(seconds / 60));
+    return tr(`About ${minutes} minutes left.`, `预计还需约 ${minutes} 分钟。`);
+  })();
+
+  const failureLine = (cause: ModelFailureCause): string => {
+    switch (cause.kind) {
+      case "offline":
+        return tr("Couldn't reach the download server. Check your connection and try again.", "无法连接下载服务器，请检查网络后重试。");
+      case "http":
+        return tr(
+          `The download server returned an error (${cause.status}). Try again later.`,
+          `下载服务器返回错误（${cause.status}），请稍后重试。`
+        );
+      case "verify":
+        return tr("A file didn't verify. Try the download again.", "有文件未通过校验，请重新下载。");
+      case "storage":
+        return errorOrigin === "semantic"
+          ? tr("The index couldn't be saved. Not enough storage, or this is a private window.", "索引无法保存：存储空间不足，或当前是无痕窗口。")
+          : tr("Not enough storage to keep the model, or this is a private window.", "存储空间不足以保留模型，或当前是无痕窗口。");
+      case "activate":
+        return tr("The model couldn't start on this device.", "模型无法在此设备上启动。");
+      default:
+        return errorOrigin === "semantic"
+          ? tr("Semantic search ran into a problem. Retry to start it again.", "语义搜索遇到问题，请重试。")
+          : tr("The download failed. Try again.", "下载失败，请重试。");
+    }
+  };
+
+  const indexLine = (rebuilding: boolean): string => {
+    const done = semanticProgress?.done ?? 0;
+    const total = semanticProgress?.total ?? 0;
+    if (total > 0) {
+      return tr(
+        `${formatNumber(done)} of ${formatNumber(total)} memos · keyword search keeps working.`,
+        `已处理 ${formatNumber(done)} / ${formatNumber(total)} 条笔记 · 关键词搜索不受影响。`
+      );
+    }
+    return rebuilding
+      ? tr("Keyword search keeps working while the index rebuilds.", "重建索引期间，关键词搜索不受影响。")
+      : tr("Keyword search keeps working while the index builds.", "建立索引期间，关键词搜索不受影响。");
+  };
 
   const headline =
     stateId === "checking"
@@ -377,73 +460,69 @@ export function ModelSettingsModal({
         ? idlePartial
           ? tr("Download incomplete", "下载未完成")
           : tr("Model not downloaded", "模型尚未下载")
-        : stateId === "downloading"
-          ? tr("Downloading model", "正在下载模型")
-          : stateId === "loading"
-            ? tr("Loading model", "正在加载模型")
-            : stateId === "ready"
-              ? tr("Ready", "已就绪")
-              : stateId === "indexing"
-                ? tr("Building index", "正在构建索引")
-                : stateId === "rebuilding"
-                  ? tr("Rebuilding index", "正在重建索引")
-                  : stateId === "searching"
-                    ? tr("Searching this view", "正在搜索当前范围")
-                    : stateId === "clearing"
-                      ? tr("Clearing model", "正在清除模型")
-                      : errorOrigin === "semantic"
-                        ? tr("Semantic search stopped", "语义搜索已停止")
-                        : errorOrigin === "activate"
-                          ? tr("Model couldn't start", "模型启动失败")
-                          : errorOrigin === "clear"
-                            ? tr("Couldn't clear the model", "无法清除模型")
-                            : tr("Download failed", "下载失败");
+        : stateId === "paused"
+          ? tr("Download paused", "已暂停下载")
+          : stateId === "downloading"
+            ? tr("Downloading the model", "正在下载模型")
+            : stateId === "loading"
+              ? tr("Starting up", "正在启动")
+              : stateId === "ready"
+                ? tr("Ready", "已就绪")
+                : stateId === "indexing"
+                  ? tr("Indexing your memos", "正在为笔记建立索引")
+                  : stateId === "rebuilding"
+                    ? tr("Rebuilding the index", "正在重建索引")
+                    : stateId === "searching"
+                      ? tr("Searching this view", "正在搜索当前范围")
+                      : stateId === "clearing"
+                        ? tr("Clearing model", "正在清除模型")
+                        : errorOrigin === "semantic"
+                          ? tr("Semantic search stopped", "语义搜索已停止")
+                          : errorOrigin === "activate"
+                            ? tr("Model couldn't start", "模型启动失败")
+                            : errorOrigin === "clear"
+                              ? tr("Couldn't clear the model", "无法清除模型")
+                              : tr("Download failed", "下载失败");
 
+  /* The second line answers "what can I do now, and how long": the work
+     that is on, what it costs, and what keeps working meanwhile. */
   const subline =
     stateId === "checking"
-      ? tr("Looking for verified model files already stored here.", "正在查找此设备上已存储的已验证模型文件。")
+      ? tr("Looking for model files already on this device.", "正在查找此设备上已有的模型文件。")
       : stateId === "idle"
         ? idlePartial
-          ? tr("Some verified files are present. Resume to finish the download.", "已有部分已验证文件，可继续完成下载。")
+          ? keptLine
           : tr("Download the model once to search your memos by meaning.", "下载一次模型，即可按意思搜索笔记。")
-        : stateId === "downloading"
-          ? tr("Each file is verified against a pinned SHA-256 hash as it arrives.", "每个文件到达时都会核对固定的 SHA-256 哈希。")
-          : stateId === "loading"
-            ? tr("Starting the single-thread worker that keeps the interface responsive.", "正在启动保持界面流畅的单线程 Worker。")
-            : stateId === "ready"
-              ? tr("Verified on this device and available offline.", "已在此设备上验证，可离线使用。")
-              : stateId === "indexing"
-                ? tr(
-                    "Embedding memos in the background. Keyword search stays available throughout.",
-                    "正在后台为笔记生成向量；关键词搜索始终可用。"
-                  )
-                : stateId === "rebuilding"
-                  ? tr(
-                      "Every stored vector was discarded; your memos are being embedded again from scratch.",
-                      "已丢弃全部已存向量，正在从零开始重新嵌入笔记。"
-                    )
-                  : stateId === "searching"
-                    ? tr("Ranking only the memos inside the current view.", "仅对当前范围内的笔记排序。")
-                    : stateId === "clearing"
-                      ? tr("Removing model files and the encrypted semantic index.", "正在删除模型文件和加密语义索引。")
-                      : errorOrigin === "semantic"
-                        ? tr(
-                            `Semantic search hit an error. ${semanticError || "Retry to start it again."}`,
-                            `语义搜索遇到错误。${semanticError || "请重试以重新启动。"}`
-                          )
-                        : failures.length > 0
-                          ? tr("No source could deliver the model. Keyword search is unaffected.", "所有下载源均无法提供模型；关键词搜索不受影响。")
-                          : phase.kind === "error"
-                            ? phase.message
+        : stateId === "paused"
+          ? keptLine
+          : stateId === "downloading"
+            ? tr(`Keyword search keeps working.${etaLine ? ` ${etaLine}` : ""}`, `关键词搜索不受影响。${etaLine}`)
+            : stateId === "loading"
+              ? tr("Almost ready.", "马上就好。")
+              : stateId === "ready"
+                ? tr("Verified on this device and available offline.", "已在此设备上验证，可离线使用。")
+                : stateId === "indexing"
+                  ? indexLine(false)
+                  : stateId === "rebuilding"
+                    ? indexLine(true)
+                    : stateId === "searching"
+                      ? tr("Ranking only the memos inside the current view.", "仅对当前范围内的笔记排序。")
+                      : stateId === "clearing"
+                        ? tr("Removing the model files and the semantic index.", "正在删除模型文件和语义索引。")
+                        : errorOrigin === "clear"
+                          ? tr("The model couldn't be cleared. Try again.", "无法清除模型，请重试。")
+                          : failureCause
+                            ? failureLine(failureCause)
                             : "";
 
   /* One true progress surface per working state, every figure real. */
   const progress: ProgressView = (() => {
     const row = (name: string, note: string, tone: StageRow["tone"]): StageRow => ({ name, note, tone });
 
-    if (stateId === "downloading" && phase.kind === "downloading") {
-      const loaded = phase.loadedBytes;
-      const pct = Math.min(100, Math.floor((loaded / TOTAL_BYTES) * 100));
+    if (stateId === "downloading") {
+      const loaded = download.loadedBytes;
+      const total = download.totalBytes || TOTAL_BYTES;
+      const pct = Math.min(100, Math.floor((loaded / total) * 100));
       let sum = 0;
       const stages = MODEL_MANIFEST.files.map((file) => {
         const start = sum;
@@ -456,8 +535,8 @@ export function ModelSettingsModal({
         label: tr("Download", "下载"),
         value: `${pct}%`,
         meta: tr(
-          `${megabytes(loaded)} of ${megabytes(TOTAL_BYTES)} · verified as it arrives`,
-          `${megabytes(loaded)} / ${megabytes(TOTAL_BYTES)} · 到达即验证`
+          `${megabytes(loaded)} of ${megabytes(total)} · ${download.filesDone} of ${download.filesTotal} files`,
+          `${megabytes(loaded)} / ${megabytes(total)} · ${download.filesDone} / ${download.filesTotal} 个文件`
         ),
         percent: pct,
         stages
@@ -505,27 +584,26 @@ export function ModelSettingsModal({
       const totalChunks = semanticProgress?.totalChunks ?? 0;
       const batches = Math.max(1, Math.ceil(totalChunks / EMBED_BATCH_TEXTS));
       const completedBatches = Math.min(batches, Math.ceil(doneChunks / EMBED_BATCH_TEXTS));
-      const batch = doneChunks >= totalChunks ? batches : Math.min(batches, Math.floor(doneChunks / EMBED_BATCH_TEXTS) + 1);
-      const fmt = (n: number) => n.toLocaleString("en-US");
       const sealed = total > 0 && done >= total;
       return {
         label: rebuilding ? tr("Index rebuild", "索引重建") : tr("Semantic index", "语义索引"),
-        value: total > 0 ? `${fmt(done)} / ${fmt(total)}` : tr("Preparing", "准备中"),
-        // Before the first batch lands there is no batch to report; saying so
-        // beats printing "Batch 1 of 1" over a corpus nobody has counted yet.
+        value: total > 0 ? `${formatNumber(done)} / ${formatNumber(total)}` : tr("Preparing", "准备中"),
+        // Before the first batch lands there is no count to report; the
+        // batches themselves are ledger detail, not the line under the bar.
         meta:
           total > 0
-            ? tr(
-                `Batch ${batch} of ${batches} · length-grouped, yielded between slices`,
-                `第 ${batch} / ${batches} 批 · 按长度分组，分片间让出主线程`
-              )
+            ? tr("Runs in the background. Close this panel whenever you like.", "在后台进行，随时可以关闭此面板。")
             : rebuilding
-              ? tr("The old index is gone; every memo is queued for embedding.", "旧索引已清除，所有笔记正在排队等待嵌入。")
-              : tr("Counting the memos that still need embedding.", "正在统计仍需嵌入的笔记。"),
+              ? tr("Every memo is queued for indexing.", "所有笔记已排队等待索引。")
+              : tr("Counting the memos that still need indexing.", "正在统计仍需索引的笔记。"),
         percent: total > 0 ? (done / total) * 100 : 0,
         stages: [
           ...(rebuilding ? [row(tr("Previous index discarded", "已丢弃旧索引"), tr("Done", "完成"), "done")] : []),
-          row(tr("Memos embedded", "已嵌入笔记"), tr(`${fmt(done)} of ${fmt(total)}`, `${fmt(done)} / ${fmt(total)}`), "active"),
+          row(
+            tr("Memos embedded", "已嵌入笔记"),
+            tr(`${formatNumber(done)} of ${formatNumber(total)}`, `${formatNumber(done)} / ${formatNumber(total)}`),
+            "active"
+          ),
           row(
             tr("Batches processed", "已处理批次"),
             tr(`${completedBatches} of ${batches}`, `${completedBatches} / ${batches}`),
@@ -553,10 +631,9 @@ export function ModelSettingsModal({
       }
       const { done, total } = semanticQueryProgress;
       const share = total > 0 ? done / total : 1;
-      const fmt = (n: number) => n.toLocaleString("en-US");
       return {
         label: tr("Ranking current view", "排序当前范围"),
-        value: `${fmt(done)} / ${fmt(total)}`,
+        value: `${formatNumber(done)} / ${formatNumber(total)}`,
         meta: tr("Keyword hits keep their place; related memos are added below.", "关键词命中保持原位；意思相关的笔记补充在后。"),
         percent: 50 + share * 50,
         stages: [row(understand, tr("Done", "完成"), "done"), row(rank, `${Math.floor(share * 100)}%`, "active")]
@@ -567,9 +644,9 @@ export function ModelSettingsModal({
   })();
 
   const showProgress = progress.label !== "";
-  const showAction = stateId === "idle" || stateId === "failed";
-  const showFailures = stateId === "failed" && failures.length > 0;
-  const orbMute = stateId === "checking" || stateId === "idle" || stateId === "failed" || stateId === "clearing";
+  const showAction = stateId === "idle" || stateId === "paused" || stateId === "failed";
+  const canCancel = view.kind === "downloading";
+  const orbMute = stateId === "checking" || stateId === "idle" || stateId === "paused" || stateId === "failed" || stateId === "clearing";
 
   /* Rebuilding is offered only where it can actually run and where it would
      not flicker: the model is live on this device, semantic search is on, and
@@ -578,10 +655,10 @@ export function ModelSettingsModal({
      it sits under the retry as the heavier second option. */
   const showRebuild =
     Boolean(onSemanticReindex) &&
-    phase.kind === "ready" &&
+    view.kind === "ready" &&
     (stateId === "ready" || stateId === "failed") &&
     (semanticStatus === "ready" || semanticStatus === "error");
-  const indexedCount = semanticIndexedMemos.toLocaleString("en-US");
+  const indexedCount = formatNumber(semanticIndexedMemos);
   const rebuildNote =
     semanticIndexedMemos > 0
       ? tr(`${indexedCount} memos indexed`, `已索引 ${indexedCount} 条笔记`)
@@ -595,40 +672,39 @@ export function ModelSettingsModal({
 
   const actionLabel =
     stateId === "failed"
-      ? errorOrigin === "clear"
-        ? tr("Try again", "重试")
+      ? errorOrigin === "download"
+        ? tr("Retry download", "重试下载")
         : errorOrigin === "semantic"
           ? tr("Retry semantic search", "重试语义搜索")
-          : tr("Retry download", "重试下载")
-      : idlePartial
+          : tr("Try again", "重试")
+      : stateId === "paused" || idlePartial
         ? tr("Resume download", "继续下载")
         : tr("Download model", "下载模型");
-  const storedBytes = MODEL_MANIFEST.files.reduce((sum, file) => sum + (present.has(file.requestPath) ? file.bytes : 0), 0);
-  const actionNote =
-    stateId === "failed"
-      ? errorOrigin === "clear" || errorOrigin === "semantic"
-        ? ""
-        : tr(`About ${TOTAL_MB} MB`, `约 ${TOTAL_MB} MB`)
-      : idlePartial
-        ? tr(`About ${megabytes(TOTAL_BYTES - storedBytes)} remaining`, `还需约 ${megabytes(TOTAL_BYTES - storedBytes)}`)
-        : tr(`About ${TOTAL_MB} MB · one time`, `约 ${TOTAL_MB} MB · 仅需一次`);
+  /* The size note appears only where bytes will actually move: a failed
+     start has every file already, and says so by leaving the note off. */
+  const needsDownload = stateId === "idle" || stateId === "paused" || (stateId === "failed" && errorOrigin === "download");
+  const actionNote = !needsDownload
+    ? ""
+    : keptBytes > 0
+      ? tr(`About ${wholeMb(TOTAL_BYTES - keptBytes)} MB remaining`, `还需约 ${wholeMb(TOTAL_BYTES - keptBytes)} MB`)
+      : tr(`About ${wholeMb(TOTAL_BYTES)} MB · one time`, `约 ${wholeMb(TOTAL_BYTES)} MB · 仅需一次`);
   const onAction =
     errorOrigin === "clear"
       ? () => void clearModel()
       : errorOrigin === "semantic"
         ? () => onSemanticRetry?.()
-        : () => void download();
+        : () => void startModelDownload();
 
   /* This device's facts. While a download runs, files count as stored the
      moment their bytes are fully down (each is verified before storage), so
      the right column ticks with the bar instead of jumping at the end. */
   const displayStored: ReadonlySet<string> = (() => {
-    if (phase.kind !== "downloading") return present;
+    if (view.kind !== "downloading") return present;
     const stored = new Set<string>();
     let sum = 0;
     for (const file of MODEL_MANIFEST.files) {
       sum += file.bytes;
-      if (phase.loadedBytes >= sum) stored.add(file.requestPath);
+      if (download.loadedBytes >= sum) stored.add(file.requestPath);
     }
     return stored;
   })();
@@ -648,7 +724,7 @@ export function ModelSettingsModal({
           );
   /* The index is a device fact too, and the only one the rebuild acts on —
      so it is named beside the model files rather than left implicit. */
-  const indexLine =
+  const indexFact =
     semanticStatus === "off"
       ? tr("Not in use", "未启用")
       : semanticIndexedMemos > 0
@@ -709,6 +785,15 @@ export function ModelSettingsModal({
     if (advRegionRef.current) advRegionRef.current.inert = !advOpen;
   }, [advOpen]);
 
+  /* Cancel folds away with the progress block it sat in; keyboard focus
+     carries over to the Resume it made room for. (After the inert effects,
+     so the action region is already open to receive it.) */
+  useEffect(() => {
+    if (downloadPhase !== "cancelled" || !cancelledHereRef.current) return;
+    cancelledHereRef.current = false;
+    actionButtonRef.current?.focus({ preventScroll: true });
+  }, [downloadPhase]);
+
   /* The confirm replaces the button that opened it, so keyboard focus has to
      be carried across; Cancel takes it, because the affirmative here spends
      minutes of this device's CPU and should never be one stray Space away.
@@ -732,9 +817,6 @@ export function ModelSettingsModal({
     >
       <div className="model-panel" onClick={(event) => event.stopPropagation()}>
         <header className="model-panel-head">
-          <span className="model-panel-logo" aria-hidden="true">
-            <Cpu size={15} />
-          </span>
           <h2 className="model-panel-title">{tr("Semantic Search", "语义搜索")}</h2>
           <button
             ref={closeButtonRef}
@@ -772,18 +854,6 @@ export function ModelSettingsModal({
                 <p key={`sub-${stateId}`} className="model-subline">
                   {subline}
                 </p>
-              </div>
-
-              <div className={`model-collapse model-fail-collapse${showFailures ? " is-open" : ""}`}>
-                <div>
-                  <ul className="model-failures">
-                    {failures.map((failure) => (
-                      <li key={failure.url}>
-                        {failureHost(failure.url)} — {failure.reason}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
               </div>
 
               <div
@@ -824,16 +894,33 @@ export function ModelSettingsModal({
                     </div>
 
                     <div className="model-stages">
-                      <button
-                        type="button"
-                        className="model-fold-toggle"
-                        aria-expanded={stagesOpen}
-                        aria-controls="model-stage-list"
-                        onClick={() => setStagesOpen((open) => !open)}
-                      >
-                        <ChevronDown size={14} className="model-caret" aria-hidden="true" />
-                        {tr("Stages", "阶段")}
-                      </button>
+                      <div className="model-stages-bar">
+                        <button
+                          type="button"
+                          className="model-fold-toggle"
+                          aria-expanded={stagesOpen}
+                          aria-controls="model-stage-list"
+                          onClick={() => setStagesOpen((open) => !open)}
+                        >
+                          <ChevronDown size={14} className="model-caret" aria-hidden="true" />
+                          {tr("Stages", "阶段")}
+                        </button>
+                        {/* Stopping is a pause, not a loss — verified files
+                            stay — so it wears the quiet ghost, never red. */}
+                        {canCancel ? (
+                          <button
+                            type="button"
+                            className="ghost-button model-cancel-download"
+                            aria-label={tr("Cancel the download", "取消下载")}
+                            onClick={() => {
+                              cancelledHereRef.current = true;
+                              cancelModelDownload();
+                            }}
+                          >
+                            {tr("Cancel", "取消")}
+                          </button>
+                        ) : null}
+                      </div>
                       <div
                         ref={stagesRegionRef}
                         id="model-stage-list"
@@ -862,7 +949,7 @@ export function ModelSettingsModal({
               >
                 <div>
                   <div className="model-action-row">
-                    <button type="button" className="model-cta" onClick={onAction}>
+                    <button ref={actionButtonRef} type="button" className="model-cta" onClick={onAction}>
                       {stateId === "failed" ? (
                         <RefreshCw size={15} aria-hidden="true" />
                       ) : (
@@ -942,9 +1029,9 @@ export function ModelSettingsModal({
               </div>
               <div className="model-device-field">
                 <span>{tr("Semantic index", "语义索引")}</span>
-                <b className="model-device-files">{indexLine}</b>
+                <b className="model-device-files">{indexFact}</b>
               </div>
-              <span className="model-device-caps">{tr("52 languages · 384 dimensions", "52 种语言 · 384 维")}</span>
+              <span className="model-device-caps">{tr("Understands 52 languages", "支持 52 种语言")}</span>
               <p className="model-device-note">
                 {tr(
                   "Every file is checked against a pinned SHA-256 hash before it is stored. Memo text and embeddings never leave this device.",
@@ -986,6 +1073,25 @@ export function ModelSettingsModal({
                     );
                   })}
                 </div>
+                <span className="model-adv-caps">{tr("384 dimensions · 8-bit quantized", "384 维 · 8 位量化")}</span>
+                {errorDetail ? (
+                  /* The raw reason, for whoever needs it — beside the ledger,
+                     never in the headline. */
+                  <div className="model-error-detail">
+                    <span className="model-error-detail-label">{tr("Last error", "最近一次错误")}</span>
+                    <ul className="model-failures">
+                      {errorDetail.failures.length > 0 ? (
+                        errorDetail.failures.map((failure) => (
+                          <li key={failure.url}>
+                            {failureHost(failure.url)} — {failure.reason}
+                          </li>
+                        ))
+                      ) : (
+                        <li>{errorDetail.message}</li>
+                      )}
+                    </ul>
+                  </div>
+                ) : null}
                 <div className="model-adv-actions">
                   <button
                     type="button"

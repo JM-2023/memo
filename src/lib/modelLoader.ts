@@ -4,9 +4,11 @@
 // store, and later activations read the freeze. A mirror that 404s, hangs,
 // or serves the wrong content is just skipped; when every mirror fails the
 // error names each attempt so the UI can show something actionable. There is
-// deliberately no resume (25 MB retries are fine), no auto-update polling
-// (model changes are deliberate releases), and no concurrent download (the
-// ONNX dominates, and one stream keeps progress honest).
+// deliberately no byte-range resume (25 MB retries are fine), no auto-update
+// polling (model changes are deliberate releases), and no concurrent download
+// (the ONNX dominates, and one stream keeps progress honest). A caller can
+// cancel through an AbortSignal: the transfer stops, every file already
+// verified stays stored, and the next run picks up at that file boundary.
 
 import {
   MODEL_MANIFEST,
@@ -54,6 +56,11 @@ export interface ModelLoaderOptions {
   mirrorUrls?: (file: ModelFileSpec, manifest: ModelManifest) => string[];
   /** Maximum silence while opening or reading one mirror before failover. */
   stallTimeoutMs?: number;
+  /**
+   * Cancels the download. The rejection is an error named "AbortError" —
+   * not a failure to report — and files verified before it stay stored.
+   */
+  signal?: AbortSignal;
 }
 
 const MODEL_FETCH_STALL_TIMEOUT_MS = 30_000;
@@ -65,11 +72,24 @@ const MODEL_FETCH_STALL_TIMEOUT_MS = 30_000;
 const memoryFiles = new Map<string, ArrayBuffer>();
 let storageGeneration = 0;
 
-class ModelFilesClearedError extends Error {
+export class ModelFilesClearedError extends Error {
   constructor() {
     super("Model files were cleared during this operation");
     this.name = "ModelFilesClearedError";
   }
+}
+
+/** True for the rejection a cancelled download ends with, whichever layer raised it. */
+export function isAbortError(cause: unknown): boolean {
+  return typeof cause === "object" && cause !== null && (cause as { name?: unknown }).name === "AbortError";
+}
+
+function abortError(): Error {
+  return new DOMException("The model download was cancelled", "AbortError");
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw abortError();
 }
 
 function assertStorageGeneration(generation: number): void {
@@ -124,23 +144,45 @@ async function fetchExactBytes(
   url: string,
   expectedBytes: number,
   onChunk: (bytes: number) => void,
-  stallTimeoutMs: number
+  stallTimeoutMs: number,
+  signal?: AbortSignal
 ): Promise<ArrayBuffer> {
+  throwIfAborted(signal);
+  // One controller ends the transfer for either reason — the caller's cancel,
+  // relayed from `signal`, or the stall watchdog below.
   const controller = new AbortController();
+  const relayAbort = () => controller.abort();
+  signal?.addEventListener("abort", relayAbort, { once: true });
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   const waitForNetwork = <T>(operation: Promise<T>): Promise<T> =>
     new Promise<T>((resolve, reject) => {
+      // A cancel that landed between two waits — after the last listener was
+      // removed, before this one is added — would otherwise never be heard,
+      // and a body that never emits would keep the run open forever.
+      if (signal?.aborted) {
+        reject(abortError());
+        return;
+      }
       const timer = setTimeout(() => {
         controller.abort();
         reject(new Error(`stalled for ${stallTimeoutMs} ms`));
       }, stallTimeoutMs);
+      // A cancel settles the wait at once, even when the operation itself
+      // never does (a fetch implementation or body that ignores the signal).
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(abortError());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
       operation.then(
         (value) => {
           clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
           resolve(value);
         },
         (cause) => {
           clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
           reject(cause);
         }
       );
@@ -176,7 +218,11 @@ async function fetchExactBytes(
   } catch (cause) {
     controller.abort();
     if (reader) void reader.cancel().catch(() => {});
-    throw cause;
+    // Whatever the transport reported on the way down, a cancelled download
+    // is a cancel — never a mirror failure to fail over from.
+    throw signal?.aborted ? abortError() : cause;
+  } finally {
+    signal?.removeEventListener("abort", relayAbort);
   }
 }
 
@@ -199,7 +245,9 @@ async function keepBytes(manifest: ModelManifest, file: ModelFileSpec, buffer: A
  * what is missing (which is also what makes an interrupted download resume
  * for free). Progress covers already-present files, so the bar starts where
  * the device really is. Rejects with ModelUnavailableError when some file
- * cannot be obtained from any mirror.
+ * cannot be obtained from any mirror, and with an "AbortError" when
+ * `options.signal` cancels it — after which every file verified so far is
+ * still stored.
  */
 export async function ensureModelFiles(
   onProgress?: (progress: ModelProgress) => void,
@@ -209,7 +257,9 @@ export async function ensureModelFiles(
   const fetchImpl = options.fetchImpl ?? fetch;
   const urlsFor = options.mirrorUrls ?? modelMirrorUrls;
   const stallTimeoutMs = options.stallTimeoutMs ?? MODEL_FETCH_STALL_TIMEOUT_MS;
+  const signal = options.signal;
   if (!Number.isFinite(stallTimeoutMs) || stallTimeoutMs <= 0) throw new RangeError("stallTimeoutMs must be a positive number");
+  throwIfAborted(signal);
   const generation = storageGeneration;
 
   await purgeOtherModelVersions(manifest.version);
@@ -223,6 +273,7 @@ export async function ensureModelFiles(
   emit(null);
   for (const file of manifest.files) {
     assertStorageGeneration(generation);
+    throwIfAborted(signal);
     if (await readModelFileBytes(file.requestPath, manifest)) {
       loadedBytes += file.bytes;
       emit(null);
@@ -233,6 +284,7 @@ export async function ensureModelFiles(
     const failures: MirrorFailure[] = [];
     let buffer: ArrayBuffer | null = null;
     for (const url of urlsFor(file, manifest)) {
+      throwIfAborted(signal);
       emit(file.requestPath);
       try {
         const candidate = await fetchExactBytes(
@@ -243,7 +295,8 @@ export async function ensureModelFiles(
             loadedBytes += chunkBytes;
             emit(file.requestPath);
           },
-          stallTimeoutMs
+          stallTimeoutMs,
+          signal
         );
         assertStorageGeneration(generation);
         if (!(await verifyModelBytes(file, candidate))) throw new Error("SHA-256 mismatch");
@@ -251,11 +304,12 @@ export async function ensureModelFiles(
         buffer = candidate;
         break;
       } catch (cause) {
-        if (cause instanceof ModelFilesClearedError) throw cause;
         // Roll progress back to the file boundary so a retry on the next
-        // mirror never shows the bar moving backwards mid-chunk.
+        // mirror never shows the bar moving backwards mid-chunk — and so a
+        // cancel reports exactly the bytes that were kept.
         loadedBytes = fileStart;
         emit(null);
+        if (cause instanceof ModelFilesClearedError || isAbortError(cause)) throw cause;
         const reason = cause instanceof Error ? cause.message : String(cause);
         console.warn(`Model mirror failed for ${file.requestPath}: ${url} (${reason})`);
         failures.push({ url, reason });

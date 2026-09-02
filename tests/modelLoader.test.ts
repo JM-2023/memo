@@ -31,6 +31,7 @@ import {
   clearModelFiles,
   ensureModelFiles,
   importModelFiles,
+  isAbortError,
   ModelUnavailableError,
   readModelFileBytes,
   storedModelState,
@@ -291,5 +292,83 @@ describe("model loader", () => {
     expect(second.alreadyPresent).toEqual(["onnx/model.onnx"]);
     expect(second.imported).toEqual(["config.json"]);
     expect(await storedModelState(manifest)).toBe("complete");
+  });
+
+  it("stops at the file boundary on cancel, keeps every verified file, and resumes from there", async () => {
+    const { manifest, bodies } = await makeManifest("v-cancel", {
+      "config.json": "config-body",
+      "onnx/model.onnx": "weights-body"
+    });
+    const controller = new AbortController();
+    const calls: string[] = [];
+    const weightsRequested = deferred<void>();
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith("config.json")) return new Response(bodies.get("config.json")!);
+      // A body that never yields a byte and is wired to no signal: only the
+      // caller's cancel can end this wait, and it must not need the stall
+      // watchdog (a minute away) to do it.
+      weightsRequested.resolve();
+      return new Response(new ReadableStream<Uint8Array>({ start() {} }));
+    }) as typeof fetch;
+
+    const events: ModelProgress[] = [];
+    const pending = ensureModelFiles((progress) => events.push(progress), {
+      manifest,
+      fetchImpl: impl,
+      mirrorUrls,
+      stallTimeoutMs: 60_000,
+      signal: controller.signal
+    });
+    await weightsRequested.promise;
+    controller.abort();
+
+    const failure = await pending.catch((cause: unknown) => cause);
+    expect(isAbortError(failure)).toBe(true);
+    expect((failure as Error).name).toBe("AbortError");
+    // A cancel is not a mirror failure: the fallback mirror was never tried.
+    expect(calls).toEqual(["https://primary.test/config.json", "https://primary.test/model.onnx"]);
+    // Progress was rolled back to the boundary of what is actually kept.
+    expect(events.at(-1)).toEqual({ loadedBytes: manifest.files[0].bytes, totalBytes: manifest.files[0].bytes + manifest.files[1].bytes, currentFile: null });
+    expect(await storedModelState(manifest)).toBe("partial");
+    const kept = await readModelFileBytes("config.json", manifest);
+    expect(kept && new TextDecoder().decode(kept)).toBe("config-body");
+
+    const { impl: retry, calls: retryCalls } = fetchStub({
+      "https://primary.test/model.onnx": () => new Response(bodies.get("model.onnx")!)
+    });
+    await ensureModelFiles(undefined, { manifest, fetchImpl: retry, mirrorUrls });
+    expect(retryCalls).toEqual(["https://primary.test/model.onnx"]);
+    expect(await storedModelState(manifest)).toBe("complete");
+  });
+
+  it("rejects an already-cancelled request before touching the network", async () => {
+    const { manifest } = await makeManifest("v-cancelled-early", { "config.json": "never-fetched" });
+    const controller = new AbortController();
+    controller.abort();
+    const { impl, calls } = fetchStub({});
+
+    const failure = await ensureModelFiles(undefined, { manifest, fetchImpl: impl, mirrorUrls, signal: controller.signal }).catch(
+      (cause: unknown) => cause
+    );
+    expect(isAbortError(failure)).toBe(true);
+    expect(calls).toEqual([]);
+    expect(await storedModelState(manifest)).toBe("none");
+  });
+
+  it("reports a cancel as a cancel even when the transport fails first", async () => {
+    const { manifest } = await makeManifest("v-cancel-transport", { "config.json": "never-served" });
+    const controller = new AbortController();
+    const impl = ((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new TypeError("Failed to fetch")), { once: true });
+      })) as typeof fetch;
+
+    const pending = ensureModelFiles(undefined, { manifest, fetchImpl: impl, mirrorUrls, signal: controller.signal });
+    controller.abort();
+
+    const failure = await pending.catch((cause: unknown) => cause);
+    expect(isAbortError(failure)).toBe(true);
   });
 });

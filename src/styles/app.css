@@ -4576,18 +4576,6 @@ button.stats-tag-row:active { scale: 0.992; }
   padding: 14px 14px 14px 20px;
   border-bottom: 1px solid var(--hairline);
 }
-/* The feature's mark: the sidebar logo recipe wearing the on-device chip. */
-.model-panel-logo {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  color: #f3f9f5;
-  background: var(--leaf-logo);
-  border-radius: var(--r-md);
-  box-shadow: var(--chip-pop);
-}
 .model-panel-title {
   flex: 1;
   min-width: 0;
@@ -4664,22 +4652,7 @@ button.stats-tag-row:active { scale: 0.992; }
 .model-collapse.is-open { grid-template-rows: 1fr; opacity: 1; }
 .model-collapse > div { overflow: hidden; min-height: 0; }
 
-.model-fail-collapse,
 .model-action-collapse { width: 100%; }
-.model-failures {
-  display: grid;
-  gap: 4px;
-  margin: 24px 0 0;
-  padding: 10px 12px;
-  list-style: none;
-  color: var(--danger);
-  background: var(--danger-tint);
-  border-radius: var(--r-md);
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: var(--fs-2xs);
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
 
 /* The progress block bleeds past the column padding so the attend wash can
    read as a full-width surface behind the bar. */
@@ -4746,7 +4719,14 @@ button.stats-tag-row:active { scale: 0.992; }
   transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
 @media (hover: hover) { .model-fold-toggle:hover { background: var(--wash); color: var(--ink); } }
-.model-stages > .model-fold-toggle { margin-left: -8px; }
+.model-stages-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.model-stages-bar > .model-fold-toggle { margin-left: -8px; }
+.model-cancel-download {
+  margin-right: -10px;
+  padding: 5px 10px;
+  font-size: var(--fs-xs);
+  animation: model-swap-in 0.26s var(--ease-out) both;
+}
 .model-caret { transform: rotate(-90deg); transition: transform 0.3s var(--ease-out); }
 .model-fold-toggle[aria-expanded="true"] .model-caret { transform: rotate(0deg); }
 
@@ -4907,7 +4887,29 @@ button.stats-tag-row:active { scale: 0.992; }
   text-align: right;
 }
 .model-file-save.is-absent { opacity: 0.35; }
+.model-adv-caps {
+  display: block;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
 .model-adv-actions { display: flex; gap: 8px; margin-top: 16px; }
+.model-error-detail { display: grid; gap: 4px; margin-top: 14px; }
+.model-error-detail-label { color: var(--muted); font-size: var(--fs-2xs); font-weight: 600; }
+.model-failures {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-soft);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .model-wash-button {
   display: inline-flex;
   align-items: center;

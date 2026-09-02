@@ -74,6 +74,7 @@ import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow }
 import { useI18n } from "./lib/i18n";
 import { clearLocalDeviceData } from "./lib/logoutCleanup";
 import { splitTaskLine } from "./lib/markdown";
+import { isModelWorkInFlight, useModelDownload } from "./lib/modelDownload";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
 import {
   buildReviewDay,
@@ -1084,7 +1085,12 @@ export default function App() {
   // switch, and the swap animating that click has to see the keyword-only
   // list it is switching back to.
   const semanticResults = semanticOn && view === "memos" ? semantic.results : null;
-  const semanticBusy = semantic.status === "preparing" || semantic.status === "indexing" || semantic.queryProgress !== null;
+  // The model download lives at app level (it outlives the settings panel),
+  // so the Brain shows it as unfinished work too: closing the panel never
+  // hides a running download.
+  const modelDownload = useModelDownload();
+  const modelBusy = isModelWorkInFlight(modelDownload);
+  const semanticBusy = modelBusy || semantic.status === "preparing" || semantic.status === "indexing" || semantic.queryProgress !== null;
   // This query's ranking is still on its way. The keyword tier answers within
   // the keystroke, meaning answers a beat later, so a feed with nothing in it
   // yet is "still looking" — saying "no matching memos" there makes the app
@@ -3140,6 +3146,11 @@ export default function App() {
                 title={
                   semantic.status === "error"
                     ? tr("Semantic search stopped — open details", "语义搜索已停止——打开详情")
+                    : modelBusy
+                      ? tr(
+                          modelDownload.phase === "downloading" ? "Downloading the semantic model — open progress" : "Starting the semantic model — open progress",
+                          modelDownload.phase === "downloading" ? "语义模型下载中——打开进度" : "语义模型启动中——打开进度"
+                        )
                     : semantic.status === "indexing"
                       ? tr(
                           `Semantic search — indexing${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}; keyword search remains available`,
