@@ -952,9 +952,18 @@ a:hover { text-decoration: underline; }
   white-space: nowrap;
 }
 @media (hover: hover) { .lang-seg button:hover:not(.is-active) { color: var(--ink-soft); } }
-.lang-seg button:focus-visible { outline: none; background: var(--wash-strong); }
+/* The ring sits inside the cell so it never clips on the track's edge. */
+.lang-seg button:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 78%, transparent); outline-offset: -2px; }
 .lang-seg button:active { transform: scale(0.96); }
 .lang-seg button.is-active { color: var(--ink); }
+/* Theme takes the same track, three cells wide, one glyph per choice —
+   follow the system, light, dark. Label and state are one control, where
+   the old row showed the current theme and quietly cycled to the next. */
+.theme-seg .lang-seg-thumb { width: calc((100% - 4px) / 3); }
+.theme-seg[data-theme-choice="light"] .lang-seg-thumb { transform: translateX(100%); }
+.theme-seg[data-theme-choice="dark"] .lang-seg-thumb { transform: translateX(200%); }
+.theme-seg button { display: grid; place-items: center; min-width: 34px; padding: 4px 0; }
+.theme-seg button svg { stroke-width: 1.9; }
 
 /* =========================================================================
    Splash + login gate

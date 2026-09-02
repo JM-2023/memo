@@ -111,7 +111,7 @@ import { feedQueryForStatsDrilldown, memoMatchesStatsDrilldown, statsDrilldownLa
 import { applySyncDelta, createSyncState, memosOf, purgedOf, tagsOfState, type PurgedMemo } from "./lib/syncState";
 import { appendTagToContent, buildTagTree, inheritTagContext, isValidTagPath, tagMatches, tagRenamePathsOverlap, tagsOf } from "./lib/tags";
 import { applyTaskFlips, freshestTaskMemo, type TaskFlipQueue } from "./lib/taskFlips";
-import { applyTheme, loadTheme, nextTheme, type ThemeChoice } from "./lib/theme";
+import { applyTheme, loadTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, NewImagePayload, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
 import { tuneFeedTransitionNames, withViewTransition } from "./lib/viewTransition";
@@ -2493,7 +2493,7 @@ export default function App() {
             })
           }
           onOpenStats={() => closeDrawer(() => setStatsOpen(true))}
-          onCycleTheme={() => setTheme((value) => nextTheme(value))}
+          onSetTheme={setTheme}
           onChangePasscode={() => {
             closeDrawer(() => {
               sessionEpochRef.current += 1;

@@ -1,4 +1,4 @@
-import { ChevronDown, Cpu, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sparkles, Sun, Trash2, Upload } from "lucide-react";
+import { ChevronDown, Cpu, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sparkles, Sun, SunMoon, Trash2, Upload, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useI18n } from "../lib/i18n";
 import { dayKeyOf, periodStats, totalStats, type PeriodKind } from "../lib/stats";
@@ -35,7 +35,7 @@ interface SidebarProps {
   onOpenReviewSettings: () => void;
   onOpenModelSettings: () => void;
   onOpenStats: () => void;
-  onCycleTheme: () => void;
+  onSetTheme: (choice: ThemeChoice) => void;
   onChangePasscode: () => void;
   onExportData: () => void;
   onImportData: () => void;
@@ -51,11 +51,13 @@ const PERIODS: { kind: PeriodKind; en: string; zh: string }[] = [
   { kind: "year", en: "Year", zh: "年" }
 ];
 
-const THEME_LABELS: Record<ThemeChoice, readonly [en: string, zh: string]> = {
-  system: ["System Theme", "跟随系统"],
-  light: ["Light Theme", "浅色模式"],
-  dark: ["Dark Theme", "深色模式"]
-};
+/* One cell per choice, in the order the eye reads them: follow the system,
+   then the two fixed looks. */
+const THEME_OPTIONS: { choice: ThemeChoice; icon: LucideIcon; en: string; zh: string }[] = [
+  { choice: "system", icon: Monitor, en: "Follow system", zh: "跟随系统" },
+  { choice: "light", icon: Sun, en: "Light", zh: "浅色" },
+  { choice: "dark", icon: Moon, en: "Dark", zh: "深色" }
+];
 
 export function Sidebar(props: SidebarProps) {
   const { memos, tagTree, uniqueTagCount, countsByDay, activeTag, activeDay, filtersActive, view, trashCount, theme } = props;
@@ -88,8 +90,6 @@ export function Sidebar(props: SidebarProps) {
   }, [memos]);
 
   const periodIndex = PERIODS.findIndex((option) => option.kind === period);
-  const ThemeIcon = theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
-  const [themeLabelEn, themeLabelZh] = THEME_LABELS[theme];
 
   function onPeriodKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
     let next = index;
@@ -131,18 +131,39 @@ export function Sidebar(props: SidebarProps) {
         >
           {(close) => (
             <>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  props.onCycleTheme();
-                }}
-              >
-                <ThemeIcon size={16} aria-hidden="true" />
+              {/* Theme is a choice among three, so it is shown as one — the
+                  same track the language row uses — instead of a button that
+                  named the current theme and quietly stepped to the next. */}
+              <div className="action-menu__row" role="group" aria-label={tr("Theme", "主题")}>
+                <SunMoon size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
-                  {tr(themeLabelEn, themeLabelZh)}
+                  {tr("Theme", "主题")}
                 </SwapText>
-              </button>
+                <span className="lang-seg theme-seg" data-theme-choice={theme}>
+                  <span className="lang-seg-thumb" aria-hidden="true" />
+                  {THEME_OPTIONS.map((option) => {
+                    const Icon = option.icon;
+                    const active = theme === option.choice;
+                    return (
+                      <button
+                        key={option.choice}
+                        type="button"
+                        role="menuitemradio"
+                        className={active ? "is-active" : ""}
+                        aria-checked={active}
+                        aria-label={tr(option.en, option.zh)}
+                        onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr(option.en, option.zh) })}
+                        onMouseLeave={tip.hide}
+                        onFocus={(event) => tip.show(event.currentTarget, { text: tr(option.en, option.zh) })}
+                        onBlur={tip.hide}
+                        onClick={() => props.onSetTheme(option.choice)}
+                      >
+                        <Icon size={14} aria-hidden="true" />
+                      </button>
+                    );
+                  })}
+                </span>
+              </div>
               <div className="action-menu__row" role="group" aria-label={tr("Language", "语言")}>
                 <Languages size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
