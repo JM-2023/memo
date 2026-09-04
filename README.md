@@ -76,11 +76,14 @@ External image URLs are rendered remotely and cost no storage at all.
 
 ### Markdown that stays plain text
 
-Memos render per-line Markdown: `#`–`###` headings, bullet and numbered lists with
+Memos render Markdown: `#`–`###` headings, bullet and numbered lists with
 nesting, `- [ ]` task checkboxes you can tick from the card, `>` quotes, `---`
 dividers, tables, and inline **bold**, *italic*, ~~strikethrough~~, ==highlight==,
 `code`, and `[links](https://example.com)` — with `#tags` still clickable inside
-styled text.
+styled text. Fenced code blocks preserve diagram spacing. Math supports `$…$`,
+`\(…\)`, and single- or multi-line `$$…$$` / `\[…\]` formulas. Reference
+links and tables with optional outer pipes also render in feed and share cards.
+The original Markdown stays editable as plain text.
 
 ![A memo with an attached wireframe image above a memo rendering a three-column Markdown table](docs/screenshots/markdown.png)
 

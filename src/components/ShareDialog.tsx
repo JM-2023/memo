@@ -1,3 +1,4 @@
+import { MathFormula } from "./MathFormula";
 import {
   Calendar,
   Check,
@@ -142,6 +143,8 @@ interface ShareDialogProps {
 function cardInline(nodes: Inline[], ink: CardInk): ReactNode[] {
   return nodes.map((node, index): ReactNode => {
     switch (node.t) {
+      case "math":
+        return <MathFormula key={index} text={node.text} />;
       case "code":
         return (
           <code key={index} className="sc-code">
@@ -235,6 +238,8 @@ function CardLine({ raw, nextRaw, ink }: { raw: string; nextRaw?: string; ink: C
   }
 
   const block = parseBlock(raw);
+  if (block.kind === "codeblock") return <div className="md-codeblock"><code>{block.text}</code></div>;
+  if (block.kind === "math") return <div className="md-math-block"><MathFormula text={block.text} display /></div>;
   if (block.kind === "hr") return <div className="sc-hr" />;
   if (block.kind === "trule") return <div className="sc-trule" />;
   if (block.kind === "trow") {

@@ -1,3 +1,4 @@
+import { MathFormula } from "./MathFormula";
 import { Fragment, type CSSProperties, type ReactNode } from "react";
 import { tokenizeLine } from "../lib/content";
 import { useI18n } from "../lib/i18n";
@@ -40,6 +41,8 @@ interface MemoLineProps {
 function renderInline(nodes: Inline[], tagMode: TagMode, onPickTag?: (path: string) => void): ReactNode[] {
   return nodes.map((node, index): ReactNode => {
     switch (node.t) {
+      case "math":
+        return <MathFormula key={index} text={node.text} />;
       case "code":
         return <code key={index}>{node.text}</code>;
       case "strong":
@@ -85,7 +88,7 @@ function renderInline(nodes: Inline[], tagMode: TagMode, onPickTag?: (path: stri
 }
 
 /**
- * One rendered memo line: per-line markdown (block prefix + inline marks).
+ * One rendered visual row: prose, a complete formula, or a fenced code block.
  * Callers feed it lines from visualLinesOf(), so the image-only-collapse case
  * never appears here; the null branch stays as a guard. The collapse decision
  * below stays on tokenizeLine — lineRenders() in lib/lineDiff mirrors it
@@ -103,6 +106,8 @@ export function MemoLine({ raw, nextRaw, tagMode, onPickTag, onToggleTask, taskC
   }
 
   const block = parseBlock(raw);
+  if (block.kind === "codeblock") return <p className="md-codeblock"><code>{block.text}</code></p>;
+  if (block.kind === "math") return <p className="md-math-block"><MathFormula text={block.text} display /></p>;
   if (block.kind === "hr") return <p className="md-hr" role="separator" />;
   if (block.kind === "trule") return <p className="md-trule" role="separator" />;
   if (block.kind === "trow") {

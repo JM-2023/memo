@@ -2,6 +2,7 @@
 // card's *visual* lines (image-only lines collapse out of the text flow), so
 // diff ops map 1:1 onto rendered <p> rows in .memo-content.
 
+import { markdownRows } from "./markdownDocument";
 import { tokenizeLine } from "./content";
 import { splitTaskLine } from "./markdown";
 
@@ -27,7 +28,7 @@ export function lineRenders(line: string): boolean {
 /** The lines that actually render, in order, with their original indices. */
 export function visualLinesOf(content: string): VisualLine[] {
   const lines: VisualLine[] = [];
-  content.split("\n").forEach((raw, key) => {
+  markdownRows(content).forEach(({ raw, key }) => {
     if (lineRenders(raw)) lines.push({ raw, key });
   });
   return lines;

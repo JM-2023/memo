@@ -88,7 +88,17 @@ export function tokenizeLine(line: string): ContentToken[] {
 export function externalImagesOf(content: string): string[] {
   const urls: string[] = [];
   const seen = new Set<string>();
+  let fence: { marker: string; size: number } | null = null;
   for (const line of content.split("\n")) {
+    if (fence) {
+      if (new RegExp(`^ {0,3}${fence.marker}{${fence.size},}\\s*$`).test(line)) fence = null;
+      continue;
+    }
+    const opening = /^ {0,3}(`{3,}|~{3,})[^`]*$/.exec(line);
+    if (opening) {
+      fence = { marker: opening[1][0], size: opening[1].length };
+      continue;
+    }
     for (const token of tokenizeLine(line)) {
       if (token.kind === "image" && !seen.has(token.url)) {
         seen.add(token.url);

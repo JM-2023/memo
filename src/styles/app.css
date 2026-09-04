@@ -5079,3 +5079,11 @@ button.stats-tag-row:active { scale: 0.992; }
 @media (hover: hover) {
   .semantic-toggle.is-active:hover:not(:disabled) { background: var(--primary-tint-strong); color: var(--primary-dark); }
 }
+
+/* Shared with exported cards: code preserves diagram spacing; long formulas scroll. */
+.md-codeblock { white-space: pre; overflow-x: auto; padding: 12px; border-radius: 8px; background: rgba(128,128,128,.08); tab-size: 4; }
+.md-codeblock code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; background: none; padding: 0; }
+.md-math-block { overflow-x: auto; overflow-y: hidden; padding: .5em 0; }
+.md-math math { font-family: math; }
+/* Chromium does not draw MathML menclose boxes natively. */
+.md-math menclose[notation="box"] { border: 1px solid currentColor; padding: .2em .4em; }

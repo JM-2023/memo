@@ -1,6 +1,6 @@
 {
   "name": "memo",
-  "version": "2.5.34",
+  "version": "2.5.35",
   "private": true,
   "type": "module",
   "engines": {
@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "4.2.0",
+    "katex": "0.16.22",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -30,6 +31,7 @@
     "@cloudflare/workers-types": "^5.20260712.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
+    "@types/katex": "^0.16.8",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.7.0",

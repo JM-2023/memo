@@ -1,19 +1,12 @@
-// Per-line markdown for memo cards. The whole grammar is deliberately
-// line-stateless: cards render, diff and replay their content as independent
-// visual lines (lineDiff.ts), so every construct here derives from one raw
-// line alone — block syntax from the line's prefix, inline syntax within the
-// remainder. No cross-line constructs (fenced code blocks, setext headings,
-// real <ul>/<ol> grouping): those would need context the replay's per-line
-// clones cannot carry. Tables fit the rule because every "|" row is its own
-// equal-column grid — no shared <table> box, so a lone row renders the same
-// as a row among siblings. Block parsing changes HOW a line renders, never
-// WHETHER it renders — the collapse decision stays with tokenizeLine /
-// lineRenders.
+// Document constructs are grouped into self-contained visual rows before
+// rendering, so feed, share cards and edit replay use the same grammar.
 
 import { inlineCodeSpanEnd, isImageUrl, splitTrailingPunct } from "./content";
 
 export type Block =
   | { kind: "p"; text: string }
+  | { kind: "math"; text: string }
+  | { kind: "codeblock"; text: string }
   | { kind: "heading"; level: 1 | 2 | 3; text: string }
   | { kind: "bullet"; depth: number; text: string }
   | { kind: "ordered"; depth: number; ordinal: string; text: string }
@@ -98,6 +91,15 @@ export function splitTaskLine(raw: string): TaskLineParts | null {
 }
 
 export function parseBlock(raw: string): Block {
+  const fenced = /^ {0,3}(`{3,}|~{3,})[^\n]*\n([\s\S]*)$/.exec(raw);
+  if (fenced) {
+    const body = fenced[2].split("\n");
+    const close = new RegExp(`^ {0,3}${fenced[1][0]}{${fenced[1].length},}\\s*$`);
+    if (close.test(body.at(-1) ?? "")) body.pop();
+    return { kind: "codeblock", text: body.join("\n") };
+  }
+  const math = /^(?:\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\])\s*$/.exec(raw.trim());
+  if (math) return { kind: "math", text: (math[1] ?? math[2]).trim() };
   if (raw.includes("|")) {
     const cells = parseTableCells(raw);
     if (cells) return isTableRule(cells) ? { kind: "trule", cols: cells.length } : { kind: "trow", cells };
@@ -119,6 +121,7 @@ export function parseBlock(raw: string): Block {
 export type Inline =
   | { t: "text"; text: string }
   | { t: "code"; text: string }
+  | { t: "math"; text: string }
   | { t: "strong"; kids: Inline[] }
   | { t: "em"; kids: Inline[] }
   | { t: "del"; kids: Inline[] }
@@ -201,6 +204,20 @@ export function parseInline(text: string, depth = 0, plain = false): Inline[] {
       }
       buffer += ch;
       i += 1;
+      continue;
+    }
+
+    // TeX is opaque: its underscores, backslashes and # never become markup.
+    const math = mathAt(text, i);
+    if (math) {
+      flush();
+      out.push({ t: "math", text: math.text });
+      i += math.raw.length;
+      continue;
+    }
+    if (ch === "\\" && text[i + 1] === "$") {
+      buffer += "$";
+      i += 2;
       continue;
     }
 
@@ -296,4 +313,17 @@ export function parseInline(text: string, depth = 0, plain = false): Inline[] {
 
   flush();
   return out;
+}
+
+/** A paired inline formula, excluding escaped dollars and currency spacing. */
+export function mathAt(text: string, at: number): { raw: string; text: string } | null {
+  if (text[at] !== "$" && !(text[at] === "\\" && text[at + 1] === "(")) return null;
+  const source = text.slice(at);
+  const paren = /^\\\(([^\n]+?)\\\)/.exec(source);
+  if (paren) return { raw: paren[0], text: paren[1] };
+  const dollar = /^\$(?!\$)([^\s$](?:\\[^\n]|[^$\n\\])*?)\$(?![\d$])/.exec(source);
+  if (dollar && !/\s$/.test(dollar[1]) && text[at - 1] !== "$" && text[at - 1] !== "\\") {
+    return { raw: dollar[0], text: dollar[1] };
+  }
+  return null;
 }
