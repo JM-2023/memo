@@ -2656,11 +2656,11 @@ button.crumb:active { background: var(--wash-strong); }
    rise-in` replays the whole entrance whenever React reorders kept rows,
    because insertBefore restarts CSS animations. */
 .memo-slot.no-enter { animation: none; }
-/* While the ⋯ panel is mounted, lift the slot's containment (so the panel
-   can spill past a short card) and raise the slot above its siblings. Keyed
+/* While a card menu or tag suggestion list is mounted, lift the slot's
+   containment so the popover can spill past the card and above its siblings. Keyed
    to .action-menu rather than .is-open: the panel outlives the open state
    through its closing morph, and re-clipping mid-close would cut it off. */
-.memo-slot:has(.action-menu) { z-index: 66; content-visibility: visible; }
+.memo-slot:has(.action-menu, .tag-suggest) { z-index: 66; content-visibility: visible; }
 /* A small feed (App marks ≤ SMALL_FEED rows) renders every card for real:
    the page's height is then exact, not an estimate — a tag holding a few
    memos must not offer more scroll than it has content. */
@@ -2687,6 +2687,8 @@ button.crumb:active { background: var(--wash-strong); }
    work; the lone height tween is the only property touching layout. */
 .card-stage { position: relative; }
 .card-stage.is-morphing { overflow: clip; }
+/* Typing can open suggestions before the entrance morph has finished. */
+.card-stage.is-morphing:has(.is-edit:not(.is-out) .tag-suggest) { overflow: visible; }
 /* Scenes replicate the card's own grid, so a lone scene is layout-identical
    to the pre-stage card body. */
 .stage-scene { display: grid; gap: 8px; }
