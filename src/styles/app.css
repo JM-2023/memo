@@ -4124,8 +4124,10 @@ button.stats-tag-row:active { scale: 0.992; }
   left: 50%;
   z-index: 200;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   justify-items: center;
   gap: 8px;
+  width: max-content;
   max-width: min(640px, calc(100vw - 32px));
   transform: translateX(-50%);
   pointer-events: none;
@@ -4148,20 +4150,23 @@ button.stats-tag-row:active { scale: 0.992; }
   width: max-content;
   max-width: 100%;
   overflow-wrap: break-word;
-  padding: 8px 14px 8px 18px;
+  min-height: 40px;
+  padding: 8px 14px;
   color: var(--ink);
   background: var(--menu-fill);
   border: 1px solid var(--glass-rim-strong);
-  border-radius: var(--r-lg);
-  /* ~38px tall — mid elevation keeps the shadow smaller than the toast. */
+  border-radius: var(--r-md);
+  /* Mid elevation keeps the shadow smaller than the toast. */
   box-shadow: var(--menu-highlight), var(--shadow);
   font-size: var(--fs-md);
   font-weight: 600;
+  line-height: 20px;
   pointer-events: auto;
   animation: toast-in 0.22s var(--ease-pop) both;
 }
 .toast.is-leaving { animation: toast-out 0.16s var(--ease) both; pointer-events: none; }
 .toast-text { min-width: 0; }
+.toast-text:only-child { text-align: center; }
 /* An error keeps the sentence in ink — the weight already reads first —
    and says its tone with the mark and a warmed hairline, not by turning the
    whole line red. */
@@ -4188,7 +4193,7 @@ button.stats-tag-row:active { scale: 0.992; }
   place-items: center;
   width: 24px;
   height: 24px;
-  margin: 0 -4px 0 -2px;
+  margin: 0;
   color: var(--muted);
   border-radius: 50%;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
