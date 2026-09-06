@@ -7,6 +7,7 @@ import type { Memo } from "../lib/types";
 import type { ThemeChoice } from "../lib/theme";
 import { Heatmap } from "./Heatmap";
 import { Menu } from "./Menu";
+import { CompactNumber } from "./CompactNumber";
 import { RollingText } from "./RollingText";
 import { SwapText } from "./SwapText";
 import { TagTree } from "./TagTree";
@@ -90,6 +91,10 @@ export function Sidebar(props: SidebarProps) {
   }, [memos]);
 
   const periodIndex = PERIODS.findIndex((option) => option.kind === period);
+  const periodTip = {
+    strong: `${count(stats.memoCount, "memo")} · ${count(stats.wordSum, "character")}`,
+    text: tr(PERIODS[periodIndex].en, PERIODS[periodIndex].zh)
+  };
 
   function onPeriodKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
     let next = index;
@@ -287,11 +292,13 @@ export function Sidebar(props: SidebarProps) {
             type="button"
             className="stat-cell"
             onClick={props.onOpenStats}
-            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("View detailed statistics", "查看详细统计") })}
+            onMouseEnter={(event) => tip.show(event.currentTarget, { strong: count(totals.memoCount, "memo"), text: tr("View detailed statistics", "查看详细统计") })}
+            onFocus={(event) => tip.show(event.currentTarget, { strong: count(totals.memoCount, "memo"), text: tr("View detailed statistics", "查看详细统计") })}
+            onBlur={tip.hide}
             onMouseLeave={tip.hide}
           >
             <span className="stat-number">
-              <RollingText value={totals.memoCount} />
+              <CompactNumber value={totals.memoCount} />
             </span>
             <span className="stat-label">{tr("Memos", "笔记")}</span>
           </button>
@@ -299,11 +306,13 @@ export function Sidebar(props: SidebarProps) {
             type="button"
             className="stat-cell"
             onClick={props.onOpenStats}
-            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("View detailed statistics", "查看详细统计") })}
+            onMouseEnter={(event) => tip.show(event.currentTarget, { strong: count(uniqueTagCount, "tag"), text: tr("View detailed statistics", "查看详细统计") })}
+            onFocus={(event) => tip.show(event.currentTarget, { strong: count(uniqueTagCount, "tag"), text: tr("View detailed statistics", "查看详细统计") })}
+            onBlur={tip.hide}
             onMouseLeave={tip.hide}
           >
             <span className="stat-number">
-              <RollingText value={uniqueTagCount} />
+              <CompactNumber value={uniqueTagCount} />
             </span>
             <span className="stat-label">{tr("Tags", "标签")}</span>
           </button>
@@ -313,17 +322,19 @@ export function Sidebar(props: SidebarProps) {
             onClick={props.onOpenStats}
             onMouseEnter={(event) =>
               tip.show(event.currentTarget, {
-                strong: tr("Days with at least one memo", "有笔记的天数"),
+                strong: tr(`${count(totals.activeDays, "day")} with at least one memo`, `有笔记的天数：${count(totals.activeDays, "day")}`),
                 text: tr(`${count(totals.daySpan, "day")} since the first memo`, `距首条笔记 ${count(totals.daySpan, "day")}`)
               })
             }
+            onFocus={(event) => tip.show(event.currentTarget, { strong: count(totals.activeDays, "day"), text: tr(`${count(totals.daySpan, "day")} since the first memo`, `距首条笔记 ${count(totals.daySpan, "day")}`) })}
+            onBlur={tip.hide}
             onMouseLeave={tip.hide}
           >
             {/* Active days, not the calendar span since the first memo: a
                 span reads like a streak, and it was the one figure here that
                 grew whether or not anything was written. */}
             <span className="stat-number">
-              <RollingText value={totals.activeDays} />
+              <CompactNumber value={totals.activeDays} />
             </span>
             <span className="stat-label">{tr("Active days", "活跃天数")}</span>
           </button>
@@ -347,10 +358,18 @@ export function Sidebar(props: SidebarProps) {
               </button>
             ))}
           </div>
-          <div className="period-figures">
+          <button
+            type="button"
+            className="period-figures"
+            onClick={(event) => tip.show(event.currentTarget, periodTip)}
+            onMouseEnter={(event) => tip.show(event.currentTarget, periodTip)}
+            onFocus={(event) => tip.show(event.currentTarget, periodTip)}
+            onMouseLeave={tip.hide}
+            onBlur={tip.hide}
+          >
             <span>
               <strong>
-                <RollingText value={stats.memoCount} />
+                <CompactNumber value={stats.memoCount} />
               </strong>{" "}
               {/* Keyed by language: a locale switch swaps instantly like the
                   rest of the UI; only plural changes roll. */}
@@ -364,7 +383,7 @@ export function Sidebar(props: SidebarProps) {
             <span className="period-sep" aria-hidden="true" />
             <span>
               <strong>
-                <RollingText value={stats.wordSum} />
+                <CompactNumber value={stats.wordSum} />
               </strong>{" "}
               <RollingText
                 key={language}
@@ -373,7 +392,7 @@ export function Sidebar(props: SidebarProps) {
                 align="left"
               />
             </span>
-          </div>
+          </button>
         </div>
 
         <Heatmap countsByDay={countsByDay} minDay={minDay} activeDay={activeDay} period={period} onPickDay={props.onPickDay} />
@@ -389,7 +408,7 @@ export function Sidebar(props: SidebarProps) {
           <Inbox size={16} aria-hidden="true" />
           <span className="nav-label">{tr("All memos", "全部笔记")}</span>
           <span className="nav-count">
-            <RollingText value={totals.memoCount} />
+            <CompactNumber value={totals.memoCount} />
           </span>
         </button>
         <button

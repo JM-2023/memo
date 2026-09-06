@@ -1153,9 +1153,10 @@ a:hover { text-decoration: underline; }
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-xs);
 }
-.stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.stat-row { container-type: inline-size; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
 /* The stat cells are buttons — they open the detailed statistics modal. */
 .stat-cell {
+  min-width: 0;
   display: grid;
   justify-items: center;
   gap: 1px;
@@ -1166,9 +1167,12 @@ a:hover { text-decoration: underline; }
 @media (hover: hover) { .stat-cell:hover { background: var(--wash); } }
 .stat-cell:active { transform: scale(0.94); }
 .stat-number { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -0.02em; animation: fade-up 0.2s var(--ease) both; }
-.stat-label { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
+.stat-label { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; white-space: nowrap; }
+@container (max-width: 260px) {
+  .stat-label { font-size: var(--fs-2xs); }
+}
 
-.period-panel { display: grid; gap: 8px; }
+.period-panel { display: grid; gap: 8px; container-type: inline-size; }
 .period-seg {
   position: relative;
   display: grid;
@@ -1214,6 +1218,16 @@ a:hover { text-decoration: underline; }
   color: var(--muted);
   font-size: var(--fs-sm);
   animation: fade-up 0.18s var(--ease) both;
+}
+/* The breakpoint depends only on available space, so changing counts cannot
+   flip the row layout halfway through a drum animation. */
+.compact-number { display: inline-block; white-space: nowrap; }
+.compact-number > span { display: inline-flex; align-items: baseline; }
+.period-figures { width: 100%; min-width: 0; border-radius: var(--r-sm); }
+.period-figures > span:not(.period-sep) { white-space: nowrap; }
+@container (max-width: 290px) {
+  .period-figures { flex-direction: column; gap: 2px; }
+  .period-figures .period-sep { display: none; }
 }
 .period-figures strong { color: var(--ink); font-size: var(--fs-md); font-weight: 600; }
 .period-sep { width: 1px; height: 12px; background: var(--line-strong); }
@@ -3529,11 +3543,11 @@ button.stats-tag-row:active { scale: 0.992; }
 .stats-tags-empty { margin: 0; padding: 5px 2px; color: var(--muted); font-size: var(--fs-sm); font-weight: 500; animation: fade-up 0.2s var(--ease-out) both; }
 
 /* Tier 4, all-time footnotes: a hairline ledger — rows, not boxes. */
-.stats-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); column-gap: 28px; }
-.stats-fact { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 8px 2px; border-top: 1px solid var(--glass-rim); }
+.stats-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); column-gap: 28px; }
+.stats-fact { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 10px; padding: 8px 2px; border-top: 1px solid var(--glass-rim); }
 .stats-fact.is-wide { grid-column: 1 / -1; }
 .stats-fact-label { color: var(--muted); font-size: var(--fs-sm); font-weight: 500; white-space: nowrap; }
-.stats-fact-value { font-size: var(--fs-md); font-weight: 600; white-space: nowrap; }
+.stats-fact-value { margin-left: auto; max-width: 100%; overflow-wrap: anywhere; font-size: var(--fs-md); font-weight: 600; white-space: normal; }
 /* A suffix qualifying the figure it sits inside, so it steps down from it. */
 .stats-fact-sub { color: var(--muted); font-size: var(--fs-sm); font-weight: 500; }
 

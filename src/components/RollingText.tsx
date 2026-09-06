@@ -93,6 +93,10 @@ export function RollingText({ value, text, align = "right", className }: Rolling
         };
       });
     setSt({ value, text: display, slots, serial });
+  } else if (st.value !== value) {
+    // Compact text can hold still while the underlying count changes.
+    // Remember it without restarting the current drum animation.
+    setSt({ ...st, value });
   }
 
   // Ghosts and roll flags normally clear themselves on animationend; this
