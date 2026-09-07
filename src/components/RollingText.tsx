@@ -118,7 +118,7 @@ export function RollingText({ value, text, align = "right", className }: Rolling
             }
           : state
       );
-    }, 400);
+    }, 640 + Math.max(0, ...st.slots.map((slot) => slot.key)) * 45 + 100);
     return () => window.clearTimeout(timer);
   }, [st.serial]);
 
@@ -150,9 +150,14 @@ export function RollingText({ value, text, align = "right", className }: Rolling
           <span
             key={slot.key}
             className={`roll-slot${slot.char === null ? " is-collapse" : ""}${slot.grew ? " is-grow" : ""}`}
-            style={{ "--ri": Math.min(slot.key, 6) } as CSSProperties}
+            style={{ "--ri": align === "right" && /[0-9]/.test(st.text)
+              ? st.slots.filter((other) => other.key < slot.key && /[0-9]/.test(other.char ?? other.ghosts.at(-1)?.char ?? "")).length
+              : slot.key } as CSSProperties}
           >
             <span className="roll-pane">
+              {/* Only the destination sets the column width; outgoing faces
+                  must not keep punctuation as wide as the previous digit. */}
+              <span className="roll-measure">{slot.char ?? slot.ghosts.at(-1)?.char}</span>
               {slot.ghosts.map((ghost) => (
                 <span
                   key={`g${ghost.serial}`}

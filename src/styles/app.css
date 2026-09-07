@@ -144,7 +144,7 @@
      motion stays continuous (no keyframed mid-flight jumps). */
   --ease-pop: cubic-bezier(0.3, 1.42, 0.52, 1);
   /* Split-flap wheel step: ~4% overshoot reads as the flap's damped click. */
-  --ease-drum: cubic-bezier(0.3, 1.36, 0.44, 1);
+  --ease-drum: cubic-bezier(0.22, 1, 0.36, 1);
 
   /* ----- Liquid glass material ----- */
   --lx: 26%;
@@ -589,7 +589,7 @@ a:hover { text-decoration: underline; }
 @keyframes heat-arrive { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: none; } }
 /* Split-flap digits: the old and new characters ride one rigid drum — same
    duration, same easing, a constant ~84° apart — so a step reads as a single
-   wheel-click that settles with the easing's damped overshoot. The numbers
+   wheel-click that settles with a smooth ease-out. The numbers
    model a cylinder of radius 0.62em: y = r·sin84°, scale ≈ depth recession.
    Opacity windows overlap so the cell never reads blank mid-roll: the old
    face stays lit while it tips over the horizon, the new face lights early. */
@@ -1244,13 +1244,14 @@ a:hover { text-decoration: underline; }
 .roll-slot {
   display: inline-grid;
   grid-template-columns: 1fr;
-  transition: grid-template-columns 0.22s var(--ease-out) calc(var(--ri) * 0.01s);
+  transition: grid-template-columns 0.64s var(--ease-drum);
 }
 .roll-slot.is-collapse { grid-template-columns: 0fr; }
 @starting-style {
   .roll-slot.is-grow { grid-template-columns: 0fr; }
 }
 .roll-pane {
+  position: relative;
   display: grid;
   min-width: 0;
   /* Clip sideways while a column melts away; stay open vertically so the
@@ -1259,9 +1260,10 @@ a:hover { text-decoration: underline; }
   /* Em-based so the wheel's depth reads the same at every type size. */
   perspective: 5.5em;
 }
-.roll-char { grid-area: 1 / 1; white-space: pre; backface-visibility: hidden; }
+.roll-measure { grid-area: 1 / 1; visibility: hidden; white-space: pre; }
+.roll-char { position: absolute; inset: 0; text-align: center; white-space: pre; backface-visibility: hidden; }
 .roll-char-in,
-.roll-char-out { animation: roll-char-in-up 0.22s var(--ease-drum) both; animation-delay: calc(var(--ri) * 0.01s); }
+.roll-char-out { animation: roll-char-in-up 0.64s var(--ease-drum) both; animation-delay: calc(var(--ri) * 0.045s); }
 .roll-char-out { animation-name: roll-char-out-up; pointer-events: none; }
 .roll-char-in.is-down { animation-name: roll-char-in-down; }
 .roll-char-out.is-down { animation-name: roll-char-out-down; }
