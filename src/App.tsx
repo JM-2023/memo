@@ -180,30 +180,33 @@ function ToastStack({ toasts, dismissLabel, onDismiss, onPause, onResume }: Toas
   return (
     <div className="toast-stack" onPointerEnter={onPause} onPointerLeave={onResume} onFocus={onPause} onBlur={onResume}>
       {toasts.map((toast) => (
-        <div
-          key={toast.id}
-          className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`}
-          role={toast.tone === "error" ? "alert" : "status"}
-        >
-          {toast.tone === "error" ? <CircleAlert size={15} className="toast-mark" aria-hidden="true" /> : null}
-          <span className="toast-text">{toast.text}</span>
-          {toast.action ? (
-            <button
-              type="button"
-              className="toast-action"
-              onClick={() => {
-                toast.action?.run();
-                onDismiss(toast.id);
-              }}
+        <div key={toast.id} className={`toast-slot${toast.leaving ? " is-leaving" : ""}`}>
+          <div className="toast-clip">
+            <div
+              className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`}
+              role={toast.tone === "error" ? "alert" : "status"}
             >
-              {toast.action.label}
-            </button>
-          ) : null}
-          {toast.action || toast.tone === "error" ? (
-            <button type="button" className="toast-dismiss" aria-label={dismissLabel} onClick={() => onDismiss(toast.id)}>
-              <X size={13} aria-hidden="true" />
-            </button>
-          ) : null}
+              {toast.tone === "error" ? <CircleAlert size={15} className="toast-mark" aria-hidden="true" /> : null}
+              <span className="toast-text">{toast.text}</span>
+              {toast.action ? (
+                <button
+                  type="button"
+                  className="toast-action"
+                  onClick={() => {
+                    toast.action?.run();
+                    onDismiss(toast.id);
+                  }}
+                >
+                  {toast.action.label}
+                </button>
+              ) : null}
+              {toast.action || toast.tone === "error" ? (
+                <button type="button" className="toast-dismiss" aria-label={dismissLabel} onClick={() => onDismiss(toast.id)}>
+                  <X size={13} aria-hidden="true" />
+                </button>
+              ) : null}
+            </div>
+          </div>
         </div>
       ))}
     </div>

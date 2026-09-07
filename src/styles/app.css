@@ -4185,6 +4185,20 @@ button.stats-tag-row:active { scale: 0.992; }
   pointer-events: auto;
   animation: toast-in 0.22s var(--ease-pop) both;
 }
+.toast-stack { gap: 0; }
+.toast-slot {
+  display: grid;
+  grid-template-rows: 1fr;
+  padding-bottom: 8px;
+  width: max-content;
+  min-width: 0;
+  max-width: 100%;
+  transition: grid-template-rows 0.16s var(--ease), padding-bottom 0.16s var(--ease);
+}
+.toast-slot:last-child { padding-bottom: 0; }
+.toast-slot.is-leaving { grid-template-rows: 0fr; padding-bottom: 0; pointer-events: none; }
+.toast-clip { min-height: 0; min-width: 0; }
+.toast-slot.is-leaving .toast-clip { overflow: hidden; }
 .toast.is-leaving { animation: toast-out 0.16s var(--ease) both; pointer-events: none; }
 .toast-text { min-width: 0; }
 .toast-text:only-child { text-align: center; }
