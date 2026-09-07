@@ -297,7 +297,7 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
     // Paging slides sideways; period switches crossfade (dir 0). Height is
     // read during render, while the DOM still shows the outgoing grid.
     const dir = lastGrid.period === period ? direction : 0;
-    leaveHeightRef.current = viewportRef.current?.offsetHeight ?? null;
+    leaveHeightRef.current = viewportRef.current?.getBoundingClientRect().height ?? null;
     leaveSerialRef.current += 1;
     enterDirRef.current = dir;
     setLeaving({ node: lastGrid.node, dir, serial: leaveSerialRef.current });
@@ -310,12 +310,15 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
     leaveHeightRef.current = null;
     if (!el || from === null) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const to = el.offsetHeight;
+    const to = el.getBoundingClientRect().height;
     if (Math.abs(to - from) < 1) return;
-    el.animate([{ height: `${from}px` }, { height: `${to}px` }], {
+    const animation = el.animate([{ height: `${from}px` }, { height: `${to}px` }], {
       duration: 220,
       easing: "cubic-bezier(0.16, 1, 0.3, 1)"
     });
+    // Render captures the current painted height before this cleanup runs.
+    // Cancel before the next effect measures the new grid's natural height.
+    return () => animation.cancel();
   }, [gridKey]);
 
   const enterDir = enterDirRef.current;
