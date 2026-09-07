@@ -2235,7 +2235,7 @@ button.crumb:active { background: var(--wash-strong); }
    position:relative + z-index because its entrance animation leaves a
    stacking context behind — without the bump, the tag-suggest popover would
    paint underneath the first memo card. */
-.composer { position: relative; z-index: 30; width: calc(100% - var(--content-inset) * 2); margin: 20px 0 6px; animation: rise-in 0.28s var(--ease-out) both; }
+.composer { position: relative; z-index: 30; width: calc(100% - var(--content-inset) * 2); margin: 20px 0 6px; animation: rise-in 0.28s var(--ease-out) both; view-transition-name: composer; }
 
 .editor {
   position: relative;
@@ -4253,6 +4253,10 @@ button.stats-tag-row:active { scale: 0.992; }
    banners and feed-empty keep the calm fade; browsers without class support
    fall back to it too. */
 ::view-transition-new(.memo-card):only-child { animation: rise-in 0.24s var(--ease-out) 0.03s both; }
+/* The composer enters in its own snapshot, outside the root cross-fade. */
+::view-transition-new(composer):only-child { animation: rise-in 0.28s var(--ease-out) both; }
+::view-transition-group(composer),
+::view-transition-group(composer-context-tag) { z-index: 1; }
 /* Removing a filter chip folds it back the way dropped crumbs leave the
    trail — without this the only-child fallback above would play card-depart,
    the cards' language, on a trail element. */
@@ -4297,7 +4301,7 @@ button.stats-tag-row:active { scale: 0.992; }
                                 so no pill can glide over it mid-transition
    Natural-size snapshots on the pills/toast keep labels of different widths
    from stretching as they morph. */
-::view-transition-group(topbar) { z-index: 1; }
+::view-transition-group(topbar) { z-index: 2; }
 ::view-transition-group(topbar-action),
 ::view-transition-group(select-delete),
 ::view-transition-group(day-filter-chip),
@@ -4307,8 +4311,8 @@ button.stats-tag-row:active { scale: 0.992; }
 ::view-transition-group(facet-chip-hasImage),
 ::view-transition-group(facet-chip-hasLink),
 ::view-transition-group(facet-chip-hasOpenTask),
-::view-transition-group(loc-sep) { z-index: 2; }
-::view-transition-group(toast) { z-index: 3; }
+::view-transition-group(loc-sep) { z-index: 3; }
+::view-transition-group(toast) { z-index: 4; }
 ::view-transition-old(toast),
 ::view-transition-new(toast) { inline-size: auto; block-size: 100%; }
 

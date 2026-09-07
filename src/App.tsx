@@ -1291,7 +1291,7 @@ export default function App() {
    */
   const swapFeed = useCallback(
     (apply: () => void, { rewind }: { rewind: boolean }) => {
-      const update = () => {
+      const update = (animated = false) => {
         enterSuppressRef.current = true;
         try {
           flushSync(() => {
@@ -1300,6 +1300,14 @@ export default function App() {
           });
         } finally {
           enterSuppressRef.current = false;
+        }
+        // Capture the composer at its final opacity/position. Its named
+        // snapshot plays the entrance; hidden -> visible also restarts the
+        // ordinary CSS entrance, which would otherwise animate underneath it.
+        if (animated) {
+          document.querySelector(".composer")?.getAnimations().forEach((animation) => {
+            if (animation instanceof CSSAnimation && animation.animationName === "rise-in") animation.finish();
+          });
         }
         tuneFeedTransitionNames(rewind ? 0 : window.scrollY);
         if (rewind) window.scrollTo(0, 0);

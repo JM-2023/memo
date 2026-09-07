@@ -3,15 +3,17 @@
  * outgoing DOM morphs/cross-fades into the incoming one (choreographed by
  * the ::view-transition rules in app.css). The callback must leave the DOM
  * in its final state before it returns — React callers wrap their setState
- * in flushSync themselves. Falls back to calling the update directly when
+ * in flushSync themselves. The callback receives whether a snapshot transition
+ * is being attempted, so local entrances can hand motion to their snapshots.
+ * Falls back to calling the update directly when
  * the API is unavailable or the user prefers reduced motion.
  */
-export function withViewTransition(update: () => void): void {
+export function withViewTransition(update: (animated: boolean) => void): void {
   if (!document.startViewTransition || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    update();
+    update(false);
     return;
   }
-  const transition = document.startViewTransition(update);
+  const transition = document.startViewTransition(() => update(true));
   // A transition can be skipped — another one starting on top of it, the tab
   // going non-visible mid-capture — and a skip rejects `ready`. The DOM update
   // still lands (that is all `update` does), so the only thing left to do with
