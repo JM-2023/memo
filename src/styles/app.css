@@ -1244,7 +1244,7 @@ a:hover { text-decoration: underline; }
 .roll-slot {
   display: inline-grid;
   grid-template-columns: 1fr;
-  transition: grid-template-columns 0.64s var(--ease-drum);
+  transition: grid-template-columns 0.32s var(--ease-drum);
 }
 .roll-slot.is-collapse { grid-template-columns: 0fr; }
 @starting-style {
@@ -1263,7 +1263,7 @@ a:hover { text-decoration: underline; }
 .roll-measure { grid-area: 1 / 1; visibility: hidden; white-space: pre; }
 .roll-char { position: absolute; inset: 0; text-align: center; white-space: pre; backface-visibility: hidden; }
 .roll-char-in,
-.roll-char-out { animation: roll-char-in-up 0.64s var(--ease-drum) both; animation-delay: calc(var(--ri) * 0.045s); }
+.roll-char-out { animation: roll-char-in-up 0.32s var(--ease-drum) both; animation-delay: calc(var(--ri) * 0.02s); }
 .roll-char-out { animation-name: roll-char-out-up; pointer-events: none; }
 .roll-char-in.is-down { animation-name: roll-char-in-down; }
 .roll-char-out.is-down { animation-name: roll-char-out-down; }

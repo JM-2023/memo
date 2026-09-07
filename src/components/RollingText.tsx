@@ -118,7 +118,7 @@ export function RollingText({ value, text, align = "right", className }: Rolling
             }
           : state
       );
-    }, 640 + Math.max(0, ...st.slots.map((slot) => slot.key)) * 45 + 100);
+    }, 320 + Math.max(0, ...st.slots.map((slot) => slot.key)) * 20 + 100);
     return () => window.clearTimeout(timer);
   }, [st.serial]);
 
