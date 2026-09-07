@@ -1529,8 +1529,9 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   min-height: 34px;
   padding-right: 10px;
   border-radius: var(--r-sm);
-  transition: background var(--t) var(--ease);
+  transition: transform var(--t-fast) var(--ease);
 }
+.tag-row:has(.tag-label:active, .tag-expand:active, .tag-more:active) { transform: scale(0.98); }
 @media (hover: hover) { .tag-row:hover::after { background: var(--wash); } }
 /* Pinned: an accent tick in the row's own margin, not a glyph among the name,
    count and ⋯. Pinning lifts a tag above its siblings at every level, so a
@@ -1577,10 +1578,9 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   font-weight: 500;
   text-align: left;
   border-radius: var(--r-xs);
-  transition: color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+  transition: color var(--t) var(--ease);
 }
 @media (hover: hover) { .tag-label:hover { color: var(--ink); } }
-.tag-label:active { transform: scale(0.98); }
 /* Only the name gives way: a long tag ellipsizes instead of pushing its own
    count off the row, so pin mark and count survive at any sidebar width. */
 .tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
