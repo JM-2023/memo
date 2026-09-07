@@ -1119,8 +1119,8 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   gap: 9px;
-  /* Left 13 sets the logo block on the sidebar's 36px content line (stat-panel
-     interior, nav icons); the right side stays snug around the chevron. */
+  /* Left 13 aligns the logo with the stat-panel interior;
+     the right side stays snug around the chevron. */
   padding: 7px 10px 7px 13px;
   border-radius: var(--r-md);
   font-size: var(--fs-md);
@@ -1439,29 +1439,23 @@ a:hover { text-decoration: underline; }
 button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 
 /* ---- Sidebar nav + tags ---- */
-/* Every row in both lists is shrink-to-fit with a floor, rather than a band
-   stretched across whatever width the sidebar happens to have. Two things come
-   out of that: the hover wash and the active tint read as a pill around the
-   label instead of a bar reaching the far edge of a 392px sidebar, and the
-   count rides in at the row's own right edge instead of the sidebar's.
-   --row-cap is the floor. It is what actually sets how far a short name sits
-   from its count, and it keeps every count in one column down the list; without
-   it a two-character tag would pull its number right up against itself.
-   --count-gap is only the closest they may ever get, for names long enough to
-   push past the floor. */
+/* Navigation and tags share a compact column centered under the stat panel.
+   Cap the column at the available width so narrow drawers can still shrink. */
 .sidebar-nav,
-.tag-section { --row-cap: 232px; --count-gap: 12px; }
+.tag-section {
+  --count-gap: 12px;
+  align-self: center;
+  width: 232px;
+  max-width: 100%;
+  min-width: 0;
+}
 
-/* Row boxes sit on the sidebar padding line — the same left edge as the stat
-   panel and the header button — so an active row's tint and the card above
-   share one edge. The 13px row padding then lands icons on the panel's inner
-   content line (padding 12 + 1px border). */
 .sidebar-nav { display: grid; margin: 14px 0 4px; }
 .nav-item {
   display: flex;
   align-items: center;
-  width: fit-content;
-  min-width: var(--row-cap);
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
   min-height: 40px;
   padding: 8px 13px;
@@ -1478,9 +1472,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 .nav-item:active { transform: scale(0.98); }
 .nav-item.is-active { color: var(--leaf); background: var(--leaf-tint); font-weight: 600; }
 .nav-item.is-active svg { color: var(--leaf); }
-/* auto margin parks the count at the row's right edge — which is now the floor,
-   not the sidebar. padding-left is the guaranteed separation for names long
-   enough that there is no slack left for the auto margin to spend. */
+/* Keep counts at the column's right edge with a minimum gap after labels. */
 .nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-count {
   flex: none;
@@ -1513,10 +1505,9 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
      pad = 39px, the nav rows' 13 + 16 + 10 — tag names and nav labels share
      one text column. */
   gap: 3px;
-  width: fit-content;
-  /* min-width would otherwise be auto — the whole nowrap row — so a long tag
-     widened the row past the sidebar instead of letting .tag-name ellipsize. */
-  min-width: var(--row-cap);
+  width: 100%;
+  /* Let long tag names ellipsize within the shared column. */
+  min-width: 0;
   max-width: 100%;
   min-height: 34px;
   padding-right: 10px;
@@ -1557,10 +1548,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 .tag-expand.is-expanded { transform: rotate(90deg); }
 @media (hover: hover) { .tag-expand:hover { background: var(--wash-strong); color: var(--ink); } }
 .tag-expand-spacer { display: grid; place-items: center; width: 22px; height: 22px; color: var(--muted); opacity: 0.75; }
-/* flex: auto, not flex: 1 — a 0% basis would contribute nothing to the row's
-   fit-content width and collapse every row onto the floor. Basis auto lets a
-   long name size the row, and the label still fills the slack so the blank
-   space beside a short name stays a hit target. */
+/* The label fills the space between the chevron and row actions. */
 .tag-label {
   display: flex;
   flex: auto;
