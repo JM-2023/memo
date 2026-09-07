@@ -323,26 +323,27 @@ export function TagTree({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRe
     // tracks animate towards, and what the next glide must start from.
     const rows = [...list.querySelectorAll<HTMLElement>("[data-flip]")];
     const listTop = list.getBoundingClientRect().top;
+    const painted = new Map(rows.map((row) => [row, row.getBoundingClientRect().top - listTop]));
     for (const row of rows) {
       for (const animation of row.getAnimations()) {
         if (animation.id === "flip") animation.cancel();
       }
     }
     const previous = positionsRef.current;
+    const firstPass = previous.size === 0;
     const next = new Map<string, number>();
     const deltas = new Map<HTMLElement, number>();
     for (const row of rows) {
       const key = row.dataset.flip ?? "";
       const top = row.getBoundingClientRect().top - listTop;
       next.set(key, top);
-      const before = previous.get(key);
+      const before = previous.has(key) ? previous.get(key)! + (painted.get(row)! - top) : undefined;
       deltas.set(row, before === undefined ? 0 : before - top);
     }
     positionsRef.current = next;
     const tracks = [...list.querySelectorAll<HTMLElement>(".tag-children")];
     // Nothing moves on the tree's first appearance (a lens restored inside a
     // subtree shows it open, it doesn't unfold it).
-    const firstPass = positionsRef.current.size === 0;
     let trackMoved = settlingRef.current;
     settlingRef.current = false;
     for (const track of tracks) {
