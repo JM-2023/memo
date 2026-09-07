@@ -12,6 +12,7 @@ import {
   paintLines,
   parseHexRgb,
   type OrbInk,
+  type OrbField,
   type OrbState
 } from "../lib/thinkingOrb";
 
@@ -43,6 +44,11 @@ function readInk(el: HTMLElement, mute: boolean): OrbInk {
 
 interface OrbTarget {
   state: OrbState;
+  ink: OrbInk;
+}
+
+interface PaintedOrb {
+  field: OrbField;
   ink: OrbInk;
 }
 
@@ -78,7 +84,8 @@ export function ThinkingOrb({ state, size = 64, mute = false }: ThinkingOrbProps
 
   // The mark on screen right now, and — during a morph — where it came from.
   const targetRef = useRef<OrbTarget | null>(null);
-  const fromRef = useRef<(OrbTarget & { at: number }) | null>(null);
+  const fromRef = useRef<{ source: OrbTarget | PaintedOrb; at: number } | null>(null);
+  const paintedRef = useRef<PaintedOrb | null>(null);
 
   useEffect(() => {
     const bump = () => setThemeEpoch((epoch) => epoch + 1);
@@ -107,7 +114,10 @@ export function ThinkingOrb({ state, size = 64, mute = false }: ThinkingOrbProps
     const previous = targetRef.current;
     const next: OrbTarget = { state, ink };
     if (previous && (previous.state !== state || JSON.stringify(previous.ink) !== JSON.stringify(ink)) && !reduced) {
-      fromRef.current = { ...previous, at: performance.now() };
+      // A second change must start from the blended frame actually on screen.
+      // Uninterrupted morphs still let the original collector keep moving.
+      const source = fromRef.current && paintedRef.current ? paintedRef.current : previous;
+      fromRef.current = { source, at: performance.now() };
     }
     targetRef.current = next;
 
@@ -130,17 +140,23 @@ export function ThinkingOrb({ state, size = 64, mute = false }: ThinkingOrbProps
       // 0.6s in: past the entrance, with the orbits spread and a band mid-turn.
       const cur = ORB_MARKS[target.state].collect(size, still ? 0.6 : clock(target.state));
       if (!fromRef.current) {
+        paintedRef.current = { field: cur, ink: target.ink };
         paintLines(ctx, cur.lines, target.ink);
         paintDots(ctx, cur.dots, target.ink, cur.rMin);
         return;
       }
 
-      const from = fromRef.current;
-      const old = ORB_MARKS[from.state].collect(size, clock(from.state));
+      const from = fromRef.current.source;
+      const old = "field" in from ? from.field : ORB_MARKS[from.state].collect(size, clock(from.state));
       const blended = blendInk(from.ink, target.ink, k);
-      paintLines(ctx, fadeLines(old.lines, 1 - k), blended);
-      paintLines(ctx, fadeLines(cur.lines, k), blended);
-      paintDots(ctx, blendDots(old.dots, cur.dots, k, size), blended, lerp(old.rMin, cur.rMin, k));
+      const field = k === 0 ? old : {
+        dots: blendDots(old.dots, cur.dots, k, size),
+        lines: [...fadeLines(old.lines, 1 - k), ...fadeLines(cur.lines, k)],
+        rMin: lerp(old.rMin, cur.rMin, k)
+      };
+      paintedRef.current = { field, ink: blended };
+      paintLines(ctx, field.lines, blended);
+      paintDots(ctx, field.dots, blended, field.rMin);
     };
 
     if (reduced) {
