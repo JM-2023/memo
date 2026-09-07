@@ -1439,12 +1439,11 @@ a:hover { text-decoration: underline; }
 button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 
 /* ---- Sidebar nav + tags ---- */
-/* Full-width rows share content baselines; only their background is inset. */
+/* Full-width rows share a left text baseline; their backgrounds are inset. */
 .sidebar-nav,
 .tag-section {
   --count-gap: 12px;
   --row-background-inset: 6px;
-  --row-count-inset: 45px;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -1460,15 +1459,14 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   min-width: 0;
   max-width: 100%;
   min-height: 40px;
-  /* Reserve the same trailing space as the tag action button below. */
-  padding: 8px var(--row-count-inset) 8px 13px;
+  padding: 8px 13px;
   color: var(--ink-soft);
   /* Undeclared, this row fell to the 16px default and outsized .tag-label,
      the list directly beneath it doing the same job. They are peers now. */
   font-size: var(--fs-md);
   font-weight: 500;
   border-radius: var(--r-md);
-  transition: color var(--t) var(--ease);
+  transition: color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 .nav-item::after,
 .tag-row::after {
@@ -1478,16 +1476,16 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   z-index: -1;
   border-radius: inherit;
   pointer-events: none;
-  transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
+  transition: background var(--t) var(--ease);
 }
 .nav-item svg { flex: none; margin-right: 10px; color: var(--muted); transition: color var(--t) var(--ease); }
 @media (hover: hover) {
   .nav-item:hover { color: var(--ink); }
   .nav-item:hover::after { background: var(--wash); }
 }
-.nav-item:active::after { transform: scale(0.98); }
+.nav-item:active { transform: scale(0.98); }
 .nav-item.is-active { color: var(--leaf); font-weight: 600; }
-.nav-item.is-active::after { background: var(--wash-strong); }
+.nav-item.is-active::after { background: var(--leaf-tint); }
 .nav-item.is-active svg { color: var(--leaf); }
 /* Keep counts at the column's right edge with a minimum gap after labels. */
 .nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1553,7 +1551,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   transform: translateY(-50%);
   animation: tick-in 0.2s var(--ease-pop) both;
 }
-.tag-row.is-active::after { background: var(--wash-strong); }
+.tag-row.is-active::after { background: var(--leaf-tint); }
 .tag-row.is-active .tag-label { color: var(--leaf); font-weight: 600; }
 .tag-expand {
   display: grid;
