@@ -13,7 +13,11 @@ export function withViewTransition(update: (animated: boolean) => void): void {
     update(false);
     return;
   }
-  const transition = document.startViewTransition(() => update(true));
+  tuneFeedTransitionNames(window.scrollY);
+  const transition = document.startViewTransition(() => {
+    update(true);
+    tuneFeedTransitionNames(window.scrollY);
+  });
   // A transition can be skipped — another one starting on top of it, the tab
   // going non-visible mid-capture — and a skip rejects `ready`. The DOM update
   // still lands (that is all `update` does), so the only thing left to do with
@@ -43,10 +47,13 @@ export function withViewTransition(update: (animated: boolean) => void): void {
 export function tuneFeedTransitionNames(viewportTop: number): void {
   const height = window.innerHeight;
   const margin = height / 2;
+  let remaining = 32;
   document.querySelectorAll<HTMLElement>(".memo-slot").forEach((slot) => {
     const rect = slot.getBoundingClientRect();
     const top = rect.top + window.scrollY;
     const near = top + rect.height >= viewportTop - margin && top <= viewportTop + height + margin;
-    slot.style.viewTransitionName = near ? slot.dataset.vt ?? "" : "";
+    const name = near && remaining > 0 ? slot.dataset.vt ?? "" : "";
+    slot.style.viewTransitionName = name;
+    if (name) remaining -= 1;
   });
 }

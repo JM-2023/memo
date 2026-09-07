@@ -119,7 +119,7 @@ import { applyTaskFlips, freshestTaskMemo, type TaskFlipQueue } from "./lib/task
 import { applyTheme, loadTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, NewImagePayload, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
-import { tuneFeedTransitionNames, withViewTransition } from "./lib/viewTransition";
+import { withViewTransition } from "./lib/viewTransition";
 
 type Phase = "checking" | "error" | "login" | "ready";
 type View = "memos" | "trash" | "review";
@@ -289,7 +289,7 @@ function MemoSlot({ vtName, entering, delay, children }: MemoSlotProps) {
   return (
     <div
       className={`memo-slot${intro && !entered ? "" : " no-enter"}`}
-      style={{ ...intro, viewTransitionName: vtName }}
+      style={intro ?? undefined}
       data-vt={vtName}
       onAnimationEnd={
         intro && !entered
@@ -1309,12 +1309,10 @@ export default function App() {
             if (animation instanceof CSSAnimation && animation.animationName === "rise-in") animation.finish();
           });
         }
-        tuneFeedTransitionNames(rewind ? 0 : window.scrollY);
         if (rewind) window.scrollTo(0, 0);
       };
       if (drawerOpen) update();
       else {
-        tuneFeedTransitionNames(window.scrollY);
         withViewTransition(update);
       }
     },
@@ -3305,7 +3303,7 @@ export default function App() {
                 selecting={selectingFeed}
                 selected={selectingFeed && selected.has(memo.id)}
                 taskFlips={pendingTaskFlips.get(memo.id)}
-                vtName={index < 32 ? `memo-${memo.id}` : undefined}
+                vtName={`memo-${memo.id}`}
                 getEntering={getEntering}
                 delay={Math.min(index, 6) * 0.008}
                 handlers={feedHandlers}

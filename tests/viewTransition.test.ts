@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from "vitest";
-import { tuneFeedTransitionNames } from "../src/lib/viewTransition";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { tuneFeedTransitionNames, withViewTransition } from "../src/lib/viewTransition";
 
 const VIEWPORT = 800;
 const SLOT_HEIGHT = 200;
@@ -81,4 +81,34 @@ describe("tuneFeedTransitionNames", () => {
 
     expect(named(slots)).toEqual([]);
   });
+});
+
+it("names visible cards beyond the first 32 rows and bounds snapshot work", () => {
+  const slots = feed(100, 70 * SLOT_HEIGHT);
+  tuneFeedTransitionNames(window.scrollY);
+  expect(named(slots)).toContain(70);
+  expect(named(slots)).not.toContain(0);
+  window.innerHeight = 100_000;
+  tuneFeedTransitionNames(0);
+  expect(named(slots)).toHaveLength(32);
+});
+
+it("refreshes both captures for mutation callers without their own feed tuning", () => {
+  const slots = feed(100, 70 * SLOT_HEIGHT);
+  const originalStart = document.startViewTransition;
+  const originalMatch = window.matchMedia;
+  window.matchMedia = vi.fn(() => ({ matches: false }) as MediaQueryList);
+  document.startViewTransition = ((update: () => void) => {
+    expect(named(slots)).toContain(70);
+    update();
+    expect(named(slots)).toContain(0);
+    expect(named(slots)).not.toContain(70);
+    return { ready: Promise.resolve() };
+  }) as typeof document.startViewTransition;
+  try {
+    withViewTransition(() => { window.scrollY = 0; });
+  } finally {
+    document.startViewTransition = originalStart;
+    window.matchMedia = originalMatch;
+  }
 });
