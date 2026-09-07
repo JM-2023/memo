@@ -1439,38 +1439,55 @@ a:hover { text-decoration: underline; }
 button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 
 /* ---- Sidebar nav + tags ---- */
-/* Navigation and tags share a compact column centered under the stat panel.
-   Cap the column at the available width so narrow drawers can still shrink. */
+/* Full-width rows share content baselines; only their background is inset. */
 .sidebar-nav,
 .tag-section {
   --count-gap: 12px;
-  align-self: center;
-  width: 232px;
+  --row-background-inset: 6px;
+  --row-count-inset: 45px;
+  width: 100%;
   max-width: 100%;
   min-width: 0;
 }
 
 .sidebar-nav { display: grid; margin: 14px 0 4px; }
 .nav-item {
+  position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   width: 100%;
   min-width: 0;
   max-width: 100%;
   min-height: 40px;
-  padding: 8px 13px;
+  /* Reserve the same trailing space as the tag action button below. */
+  padding: 8px var(--row-count-inset) 8px 13px;
   color: var(--ink-soft);
   /* Undeclared, this row fell to the 16px default and outsized .tag-label,
      the list directly beneath it doing the same job. They are peers now. */
   font-size: var(--fs-md);
   font-weight: 500;
   border-radius: var(--r-md);
-  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+  transition: color var(--t) var(--ease);
+}
+.nav-item::after,
+.tag-row::after {
+  content: "";
+  position: absolute;
+  inset: 0 var(--row-background-inset);
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 .nav-item svg { flex: none; margin-right: 10px; color: var(--muted); transition: color var(--t) var(--ease); }
-@media (hover: hover) { .nav-item:hover { background: var(--wash); color: var(--ink); } }
-.nav-item:active { transform: scale(0.98); }
-.nav-item.is-active { color: var(--leaf); background: var(--leaf-tint); font-weight: 600; }
+@media (hover: hover) {
+  .nav-item:hover { color: var(--ink); }
+  .nav-item:hover::after { background: var(--wash); }
+}
+.nav-item:active::after { transform: scale(0.98); }
+.nav-item.is-active { color: var(--leaf); font-weight: 600; }
+.nav-item.is-active::after { background: var(--wash-strong); }
 .nav-item.is-active svg { color: var(--leaf); }
 /* Keep counts at the column's right edge with a minimum gap after labels. */
 .nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1488,17 +1505,19 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 .tag-section-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  /* 13px inset + 13px icon + 13px gap matches the 39px text baseline. */
+  gap: 13px;
   padding: 6px 13px;
   color: var(--muted);
   font-size: var(--fs-xs);
   font-weight: 600;
 }
-.tag-empty { margin: 4px 13px; color: var(--muted); font-size: var(--fs-sm); }
+.tag-empty { margin: 4px 13px 4px 39px; color: var(--muted); font-size: var(--fs-sm); }
 .tag-list, .tag-children ul { margin: 0; padding: 0; list-style: none; }
 .tag-item { display: grid; }
 .tag-row {
   position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   /* 10px lead (inline in TagTree) + 22px chevron + this 3px + the label's 4px
@@ -1514,7 +1533,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease);
 }
-@media (hover: hover) { .tag-row:hover { background: var(--wash); } }
+@media (hover: hover) { .tag-row:hover::after { background: var(--wash); } }
 /* Pinned: an accent tick in the row's own margin, not a glyph among the name,
    count and ⋯. Pinning lifts a tag above its siblings at every level, so a
    nested pin never gathers into a visible group and the state has to read per
@@ -1534,7 +1553,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   transform: translateY(-50%);
   animation: tick-in 0.2s var(--ease-pop) both;
 }
-.tag-row.is-active { background: var(--leaf-tint); }
+.tag-row.is-active::after { background: var(--wash-strong); }
 .tag-row.is-active .tag-label { color: var(--leaf); font-weight: 600; }
 .tag-expand {
   display: grid;
