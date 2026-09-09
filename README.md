@@ -13,7 +13,7 @@ and small enough to live comfortably inside Cloudflare's Free plan.
 
 ![The MEMO feed: a month heatmap in the sidebar, the composer on top, memos below](docs/screenshots/feed.png)
 
-<sub>Every screenshot on this page is the real build, captured against a demo notebook of fictional memos.</sub>
+<sub>Captured from v2.5.35 with a fictional September 2026 notebook. The <a href="docs/demo/notebook.json">demo notebook</a> and <a href="docs/demo/README.md">capture notes</a> are included for future screenshot updates.</sub>
 
 ---
 
@@ -85,7 +85,7 @@ styled text. Fenced code blocks preserve diagram spacing. Math supports `$…$`,
 links and tables with optional outer pipes also render in feed and share cards.
 The original Markdown stays editable as plain text.
 
-![A memo with an attached wireframe image above a memo rendering a three-column Markdown table](docs/screenshots/markdown.png)
+![Reading-corner notes rendering a Markdown table, highlighted text, a math formula, and a list](docs/screenshots/markdown.png)
 
 The composer helps you write it and then gets out of the way: <kbd>Enter</kbd>
 continues a list (and exits on an empty item), tables are built row by row,
@@ -111,12 +111,14 @@ tasks, plus a date range — and any combination can be saved as a named filter.
 
 ![The filter panel: filter by no tags, with images, with links, with open tasks, plus a date range](docs/screenshots/filters.png)
 
-Turn on the brain toggle beside the search box and the same query also finds memos
-related by meaning. Searching **fruit** returns the memo that says "fruit" first,
-then the farmers' market note about apples, pears and peaches — which never uses
-the word.
+Keyword search finds the notes that contain **fruit**.
 
-![Searching "fruit" with semantic search on: the literal match first, then apples, pears, tomatoes and pesto](docs/screenshots/search.png)
+![Keyword search for "fruit", returning the kitchen and breakfast notes](docs/screenshots/search.png)
+
+Turn on the brain toggle beside the search box and the same query can also find
+memos related by meaning, such as a market note about apples, pears and peaches
+that never uses the word "fruit". The screenshot above shows keyword search;
+semantic search is off in this demo.
 
 The ranking is deliberately two-tier: a keyword hit scores `2 + similarity`, a
 semantic-only hit scores its raw similarity, and results are sorted descending. A
@@ -131,7 +133,7 @@ dimensions), quantized to about 123 MB across four files. It is downloaded once 
 a pinned Hugging Face revision, each file checked against a SHA-256 hash baked into
 the app, and executed through same-origin WebAssembly.
 
-![The Semantic Search panel showing Ready, 4 of 4 verified files, and 93 memos indexed](docs/screenshots/semantic-model.png)
+![The Semantic Search panel before download, with model details and download and local-import controls](docs/screenshots/semantic-model.png)
 
 No memo text ever leaves the device. The vector index is derived from your memos, so
 it is sealed with the same server-held key as the local snapshot; logging out deletes
@@ -173,7 +175,7 @@ browser. The layout collapses to a single column with a drawer on phones.
 <p align="center">
   <img src="docs/screenshots/feed-dark.png" width="74%" alt="The same feed in dark mode">
   &nbsp;
-  <img src="docs/screenshots/mobile.png" width="22%" alt="MEMO on a phone-sized screen">
+  <img src="docs/screenshots/mobile.png" width="22%" alt="The Chinese interface on a phone-sized screen, finding a bilingual journal note">
 </p>
 
 Deleting a memo moves it to Trash with its attachments intact; permanent deletion
@@ -350,7 +352,7 @@ encrypted rows.
 - Encryption at rest protects the database layer — dumps, backups, the D1 console — not
   someone who controls the Cloudflare account itself.
 - `.dev.vars` and `wrangler.toml` are ignored by Git. Never commit them, session
-  secrets, passcode hashes, or exported notebook data.
+  secrets, passcode hashes, or private exported notebook data.
 - A numeric passcode is a lightweight gate for a personal notebook. For a publicly
   discoverable or higher-risk deployment, put Cloudflare Access or an equivalent
   authentication layer in front of it.

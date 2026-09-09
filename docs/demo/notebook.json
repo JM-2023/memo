@@ -1,0 +1,899 @@
+{
+  "format": "memo-backup",
+  "version": 1,
+  "exportedAt": "2026-09-10T02:30:00.000Z",
+  "memos": [
+    {
+      "id": "demo-week",
+      "content": "## A little room for September\nFinish the reading corner, then spend some time in it.\n\n- [x] Move the desk beside the window\n- [ ] Put up the small oak shelf\n- [ ] Choose a book for Sunday morning\n\n#work/studio",
+      "createdAt": "2026-09-10T00:40:00.000Z",
+      "updatedAt": "2026-09-10T00:40:00.000Z",
+      "pinnedAt": "2026-09-10T00:40:00.000Z",
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-attention",
+      "content": "> Leave a little space in the day for something you did not plan.\n\nA walk with no headphones. A page with no deadline. #quotes",
+      "createdAt": "2026-09-10T01:20:00.000Z",
+      "updatedAt": "2026-09-10T01:20:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-fruit-bowl",
+      "content": "The fruit bowl belongs beside the kettle. A small change to the kitchen, and I reach for an apple while the water boils. #life/cooking",
+      "createdAt": "2026-09-09T23:45:00.000Z",
+      "updatedAt": "2026-09-09T23:45:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-market",
+      "content": "Saturday market list: crisp apples, ripe pears, the last peaches of summer. Bring the canvas bag and take the long way home. #life/cooking",
+      "createdAt": "2026-09-09T10:30:00.000Z",
+      "updatedAt": "2026-09-09T10:30:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-table",
+      "content": "## Reading corner · material notes\nA small desk, warm light, and somewhere to leave a book open.\n\n| Detail | Choice | Reason |\n| --- | --- | --- |\n| Shelf | Solid oak | Ages well |\n| Lamp | Warm white | Softer in the evening |\n| Chair | Woven seat | Light enough to move |\n\n==Keep the first version simple.== #work/notebook",
+      "createdAt": "2026-09-09T07:20:00.000Z",
+      "updatedAt": "2026-09-09T07:20:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-math",
+      "content": "### A page at a time\nTwenty minutes of reading a day adds up.\n\n$$20 \\times 365 = 7{,}300\\text{ minutes} \\approx 122\\text{ hours}$$\n\n- Keep a pencil in the book.\n- Write **one sentence** worth returning to.\n- Revisit it on Sunday.\n\n#learning/reading #work/notebook",
+      "createdAt": "2026-09-09T06:10:00.000Z",
+      "updatedAt": "2026-09-09T06:10:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-pesto",
+      "content": "Basil, toasted walnuts, lemon zest, olive oil. Save a mug of pasta water before draining; loosen the pesto in the warm pan. #life/cooking",
+      "createdAt": "2026-09-08T11:10:00.000Z",
+      "updatedAt": "2026-09-08T11:10:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-walk",
+      "content": "The river path was almost empty after the rain. Five easy kilometres, a heron by the bridge, and breakfast before opening the laptop. #life/running",
+      "createdAt": "2026-09-08T00:10:00.000Z",
+      "updatedAt": "2026-09-08T00:10:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-fruit-toast",
+      "content": "Sunday breakfast: yogurt, a little honey, and whatever fruit is ready. Toast the oats in a dry pan for two minutes. #life/cooking",
+      "createdAt": "2026-09-07T01:15:00.000Z",
+      "updatedAt": "2026-09-07T01:15:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-garden",
+      "content": "The mint has found its way out of the pot again. Next spring: give it a container of its own and let the thyme have the sunny corner. #life/garden",
+      "createdAt": "2026-09-06T23:30:00.000Z",
+      "updatedAt": "2026-09-06T23:30:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-studio",
+      "content": "Desk sketch: leave the wall above the lamp empty. The room already has enough lines; one clear patch makes it feel quieter. #work/studio",
+      "createdAt": "2026-09-06T08:40:00.000Z",
+      "updatedAt": "2026-09-06T08:40:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-tomatoes",
+      "content": "Roast the tomatoes slowly with garlic and thyme. Spoon over white beans, finish with parsley, eat with the good bread. #life/cooking",
+      "createdAt": "2026-09-06T04:20:00.000Z",
+      "updatedAt": "2026-09-06T04:20:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-reading",
+      "content": "A useful reading note has two parts: what the author said, and where it touches something I have seen. Leave room between them. #learning/reading",
+      "createdAt": "2026-09-05T13:15:00.000Z",
+      "updatedAt": "2026-09-05T13:15:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-links",
+      "content": "A weekend exercise: build a tiny page with [semantic HTML](https://developer.mozilla.org/en-US/docs/Glossary/Semantics). Use headings to make its outline readable before adding colour. #learning/web",
+      "createdAt": "2026-09-05T03:25:00.000Z",
+      "updatedAt": "2026-09-05T03:25:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-palette",
+      "content": "Palette for the reading corner: paper, oak, a little moss green. Test the paint against the wall at breakfast and again after sunset. #ideas/design",
+      "createdAt": "2026-09-04T07:50:00.000Z",
+      "updatedAt": "2026-09-04T07:50:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-pear-toast",
+      "content": "Ripe pears on toast with ricotta and black pepper. The pear does all the work; cut thick slices and keep the rest simple. #life/cooking",
+      "createdAt": "2026-09-04T00:05:00.000Z",
+      "updatedAt": "2026-09-04T00:05:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-bilingual",
+      "content": "今天把书桌移到了窗边。傍晚的光落在空白页上，刚好适合写几句话。\n\nMoved the desk to the window. The evening light makes a good invitation to write. #journal",
+      "createdAt": "2026-09-03T12:10:00.000Z",
+      "updatedAt": "2026-09-03T12:10:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-soup",
+      "content": "First cool evening: lentils, carrots, cumin, stock. Add lemon at the table. Freeze two portions before going back for seconds. #life/cooking",
+      "createdAt": "2026-09-03T10:35:00.000Z",
+      "updatedAt": "2026-09-03T10:35:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-code",
+      "content": "### A small loop\n```text\nnotice → write → revisit\n   ↑                │\n   └────────────────┘\n```\nThe second visit is where a passing thought becomes useful. #ideas/notes",
+      "createdAt": "2026-09-02T06:10:00.000Z",
+      "updatedAt": "2026-09-02T06:10:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-september",
+      "content": "September intention: leave ten quiet minutes between finishing work and deciding what comes next. Tea is a perfectly good plan. #journal",
+      "createdAt": "2026-09-01T01:00:00.000Z",
+      "updatedAt": "2026-09-01T01:00:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-001",
+      "content": "A notebook on the kitchen table catches different thoughts from one beside a keyboard. #ideas/notes",
+      "createdAt": "2026-09-09T02:00:00.000Z",
+      "updatedAt": "2026-09-09T02:00:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-002",
+      "content": "The first cool morning arrived with the smell of toast from the bakery downstairs. #journal",
+      "createdAt": "2026-09-09T09:13:00.000Z",
+      "updatedAt": "2026-09-09T09:13:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-003",
+      "content": "Keep the shoes by the door. Starting a walk should take less effort than talking myself out of one. #life/running",
+      "createdAt": "2026-09-09T01:26:00.000Z",
+      "updatedAt": "2026-09-09T01:26:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-004",
+      "content": "A chapter before breakfast feels longer than three chapters after midnight. #learning/reading",
+      "createdAt": "2026-09-08T08:39:00.000Z",
+      "updatedAt": "2026-09-08T08:39:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-005",
+      "content": "The best part of growing basil is rubbing a leaf between my fingers on the way past. #life/garden",
+      "createdAt": "2026-09-08T00:52:00.000Z",
+      "updatedAt": "2026-09-08T00:52:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-006",
+      "content": "A pinch of salt and a little vinegar woke up the pot of beans. #life/cooking",
+      "createdAt": "2026-09-08T07:05:00.000Z",
+      "updatedAt": "2026-09-08T07:05:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-007",
+      "content": "Leave the sketch rough enough that changing it still feels easy. #ideas/design",
+      "createdAt": "2026-09-07T14:18:00.000Z",
+      "updatedAt": "2026-09-07T14:18:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-008",
+      "content": "The lamp only needs to light the page. The rest of the room can stay soft. #work/studio",
+      "createdAt": "2026-09-07T06:31:00.000Z",
+      "updatedAt": "2026-09-07T06:31:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-009",
+      "content": "Rain on the awning, a pot of tea, and no particular need to go anywhere. #journal",
+      "createdAt": "2026-09-07T13:44:00.000Z",
+      "updatedAt": "2026-09-07T13:44:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-010",
+      "content": "Read the paragraph out loud when its rhythm feels wrong. #learning/writing",
+      "createdAt": "2026-09-06T05:57:00.000Z",
+      "updatedAt": "2026-09-06T05:57:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-011",
+      "content": "Use the smallest bowl that fits the ingredients. Less washing up, more room on the counter. #life/cooking",
+      "createdAt": "2026-09-06T12:10:00.000Z",
+      "updatedAt": "2026-09-06T12:10:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-012",
+      "content": "An empty margin is a place for a future thought. #quotes",
+      "createdAt": "2026-09-06T04:23:00.000Z",
+      "updatedAt": "2026-09-06T04:23:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-013",
+      "content": "The rosemary survived the week away. The parsley would like a word. #life/garden",
+      "createdAt": "2026-09-05T11:36:00.000Z",
+      "updatedAt": "2026-09-05T11:36:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-014",
+      "content": "Sketch the shelf at full size on scrap paper before cutting any wood. #work/studio",
+      "createdAt": "2026-09-05T03:49:00.000Z",
+      "updatedAt": "2026-09-05T03:49:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-015",
+      "content": "The river looks different when I take the path in the opposite direction. #life/running",
+      "createdAt": "2026-09-05T10:02:00.000Z",
+      "updatedAt": "2026-09-05T10:02:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-016",
+      "content": "Keep a list of questions next to the list of books. #learning/reading",
+      "createdAt": "2026-09-04T02:15:00.000Z",
+      "updatedAt": "2026-09-04T02:15:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-017",
+      "content": "A little mustard in the dressing makes yesterday's potatoes a very good lunch. #life/cooking",
+      "createdAt": "2026-09-04T09:28:00.000Z",
+      "updatedAt": "2026-09-04T09:28:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-018",
+      "content": "Took the early train and watched the city give way to fields. #journal",
+      "createdAt": "2026-09-04T01:41:00.000Z",
+      "updatedAt": "2026-09-04T01:41:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-019",
+      "content": "Make the thing I need this week. Write down the rest for later. #work/decisions",
+      "createdAt": "2026-09-03T08:54:00.000Z",
+      "updatedAt": "2026-09-03T08:54:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-020",
+      "content": "A good label says what will happen when I press it. #ideas/design",
+      "createdAt": "2026-09-03T00:07:00.000Z",
+      "updatedAt": "2026-09-03T00:07:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-021",
+      "content": "The first tomato was smaller than expected and tasted like the whole summer. #life/garden",
+      "createdAt": "2026-09-03T07:20:00.000Z",
+      "updatedAt": "2026-09-03T07:20:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-022",
+      "content": "Ten minutes of stretching after a slow run made the stairs easier the next morning. #life/running",
+      "createdAt": "2026-09-02T14:33:00.000Z",
+      "updatedAt": "2026-09-02T14:33:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-023",
+      "content": "Save the sentence that made me stop, then write why I stopped. #learning/reading",
+      "createdAt": "2026-08-29T06:46:00.000Z",
+      "updatedAt": "2026-08-29T06:46:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-024",
+      "content": "Cold noodles, cucumber, sesame, and the last spoonful of chili oil. #life/cooking",
+      "createdAt": "2026-08-24T13:59:00.000Z",
+      "updatedAt": "2026-08-24T13:59:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-025",
+      "content": "Two chairs by the window make the room feel like an invitation. #work/studio",
+      "createdAt": "2026-08-18T05:12:00.000Z",
+      "updatedAt": "2026-08-18T05:12:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-026",
+      "content": "The afternoon disappeared into sanding the edge of a shelf. A useful kind of disappearance. #journal",
+      "createdAt": "2026-08-12T12:25:00.000Z",
+      "updatedAt": "2026-08-12T12:25:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-027",
+      "content": "Choose a line length that lets the eye find its way back. #learning/web",
+      "createdAt": "2026-08-06T04:38:00.000Z",
+      "updatedAt": "2026-08-06T04:38:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-028",
+      "content": "Small rituals give an ordinary Tuesday its shape. #quotes",
+      "createdAt": "2026-07-31T11:51:00.000Z",
+      "updatedAt": "2026-07-31T11:51:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-029",
+      "content": "Water the soil, not the leaves, and check the pot before reaching for the jug. #life/garden",
+      "createdAt": "2026-07-25T03:04:00.000Z",
+      "updatedAt": "2026-07-25T03:04:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-030",
+      "content": "Toast the spices first. The kitchen tells me when they are ready. #life/cooking",
+      "createdAt": "2026-07-19T10:17:00.000Z",
+      "updatedAt": "2026-07-19T10:17:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-031",
+      "content": "The same route, ten minutes earlier, had entirely different light. #life/running",
+      "createdAt": "2026-07-13T02:30:00.000Z",
+      "updatedAt": "2026-07-13T02:30:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-032",
+      "content": "The second draft can begin by removing the first sentence. #learning/writing",
+      "createdAt": "2026-07-07T09:43:00.000Z",
+      "updatedAt": "2026-07-07T09:43:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-033",
+      "content": "Move the calendar out of the corner where I never look. #work/decisions",
+      "createdAt": "2026-07-01T01:56:00.000Z",
+      "updatedAt": "2026-07-01T01:56:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-034",
+      "content": "Put the question at the top of the page and let the notes gather beneath it. #ideas/notes",
+      "createdAt": "2026-06-26T08:09:00.000Z",
+      "updatedAt": "2026-06-26T08:09:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-035",
+      "content": "The market stall had radishes with their leaves still attached. Both went into lunch. #life/cooking",
+      "createdAt": "2026-06-20T00:22:00.000Z",
+      "updatedAt": "2026-06-20T00:22:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-036",
+      "content": "The shelf is level; the old wall is not. Leave a little room for the house. #work/studio",
+      "createdAt": "2026-06-14T07:35:00.000Z",
+      "updatedAt": "2026-06-14T07:35:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-037",
+      "content": "A book can wait on the table for a week and still be good company. #learning/reading",
+      "createdAt": "2026-06-08T14:48:00.000Z",
+      "updatedAt": "2026-06-08T14:48:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-038",
+      "content": "Found a quiet bench behind the library, under a tree I cannot name yet. #journal",
+      "createdAt": "2026-06-02T06:01:00.000Z",
+      "updatedAt": "2026-06-02T06:01:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-039",
+      "content": "Plant fewer seeds and give each one enough room. #life/garden",
+      "createdAt": "2026-05-27T13:14:00.000Z",
+      "updatedAt": "2026-05-27T13:14:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-040",
+      "content": "Add a keyboard path before polishing the hover effect. #learning/web",
+      "createdAt": "2026-05-21T05:27:00.000Z",
+      "updatedAt": "2026-05-21T05:27:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-041",
+      "content": "Make an extra portion of rice. Tomorrow's lunch begins tonight. #life/cooking",
+      "createdAt": "2026-05-15T12:40:00.000Z",
+      "updatedAt": "2026-05-15T12:40:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-042",
+      "content": "A pocket notebook is an excellent reason to stop at a bench. #ideas/notes",
+      "createdAt": "2026-05-09T04:53:00.000Z",
+      "updatedAt": "2026-05-09T04:53:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-043",
+      "content": "The workshop window faces north. The light barely changes while I work. #work/studio",
+      "createdAt": "2026-05-03T11:06:00.000Z",
+      "updatedAt": "2026-05-03T11:06:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-044",
+      "content": "Easy pace means I can still describe the view in complete sentences. #life/running",
+      "createdAt": "2026-04-28T03:19:00.000Z",
+      "updatedAt": "2026-04-28T03:19:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-045",
+      "content": "The chapter became clearer after I drew its argument as three boxes. #learning/reading",
+      "createdAt": "2026-04-22T10:32:00.000Z",
+      "updatedAt": "2026-04-22T10:32:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-046",
+      "content": "Yellow leaves do not always mean more water. Check the roots and the light. #life/garden",
+      "createdAt": "2026-04-16T02:45:00.000Z",
+      "updatedAt": "2026-04-16T02:45:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-047",
+      "content": "The soup wanted acidity, not another handful of salt. #life/cooking",
+      "createdAt": "2026-04-10T09:58:00.000Z",
+      "updatedAt": "2026-04-10T09:58:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-048",
+      "content": "Walked home with the first warm breeze of the year at my back. #journal",
+      "createdAt": "2026-04-04T01:11:00.000Z",
+      "updatedAt": "2026-04-04T01:11:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-049",
+      "content": "Make a small paper model to see where the shadow falls. #ideas/design",
+      "createdAt": "2026-03-29T08:24:00.000Z",
+      "updatedAt": "2026-03-29T08:24:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-050",
+      "content": "Try the handle with a full mug in the other hand. #work/decisions",
+      "createdAt": "2026-03-23T00:37:00.000Z",
+      "updatedAt": "2026-03-23T00:37:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-051",
+      "content": "Underline less. Write more in my own words. #learning/reading",
+      "createdAt": "2026-03-17T07:50:00.000Z",
+      "updatedAt": "2026-03-17T07:50:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-052",
+      "content": "Roasted carrots, tahini, lemon. Keep a little bite in the middle. #life/cooking",
+      "createdAt": "2026-03-11T14:03:00.000Z",
+      "updatedAt": "2026-03-11T14:03:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-053",
+      "content": "A quiet room is full of small sounds once I stop adding to them. #quotes",
+      "createdAt": "2026-03-05T06:16:00.000Z",
+      "updatedAt": "2026-03-05T06:16:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-054",
+      "content": "The seedlings lean toward the window. Turn the tray after breakfast. #life/garden",
+      "createdAt": "2026-02-28T13:29:00.000Z",
+      "updatedAt": "2026-02-28T13:29:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-055",
+      "content": "Ran past the bridge instead of turning at it. An extra view, an easy way back. #life/running",
+      "createdAt": "2026-02-22T05:42:00.000Z",
+      "updatedAt": "2026-02-22T05:42:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-056",
+      "content": "Begin the project note with the decision it needs to support. #work/decisions",
+      "createdAt": "2026-02-16T12:55:00.000Z",
+      "updatedAt": "2026-02-16T12:55:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-057",
+      "content": "A list can hold an idea until I have time to give it a paragraph. #ideas/notes",
+      "createdAt": "2026-02-10T04:08:00.000Z",
+      "updatedAt": "2026-02-10T04:08:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-058",
+      "content": "One good orange made a grey afternoon feel less grey. #journal",
+      "createdAt": "2026-02-04T11:21:00.000Z",
+      "updatedAt": "2026-02-04T11:21:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-059",
+      "content": "Use a real heading element. The page should have an outline even with the styles removed. #learning/web",
+      "createdAt": "2026-01-29T03:34:00.000Z",
+      "updatedAt": "2026-01-29T03:34:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-060",
+      "content": "A tray by the door finally gave the keys somewhere to belong. #work/studio",
+      "createdAt": "2026-01-23T10:47:00.000Z",
+      "updatedAt": "2026-01-23T10:47:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-061",
+      "content": "Apples soften slowly with a splash of water and a cinnamon stick. Good with porridge. #life/cooking",
+      "createdAt": "2026-01-17T02:00:00.000Z",
+      "updatedAt": "2026-01-17T02:00:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-062",
+      "content": "The library book had a pressed leaf inside. Left it where the next reader could find it. #learning/reading",
+      "createdAt": "2026-01-11T09:13:00.000Z",
+      "updatedAt": "2026-01-11T09:13:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-063",
+      "content": "Late light across the table makes every scratch in the wood visible. #journal",
+      "createdAt": "2026-01-05T01:26:00.000Z",
+      "updatedAt": "2026-01-05T01:26:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-064",
+      "content": "A shape that repeats needs one small variation to stay interesting. #ideas/design",
+      "createdAt": "2025-12-31T08:39:00.000Z",
+      "updatedAt": "2025-12-31T08:39:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-065",
+      "content": "Keep the watering can where I can see it from the sink. #life/garden",
+      "createdAt": "2025-12-25T00:52:00.000Z",
+      "updatedAt": "2025-12-25T00:52:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-066",
+      "content": "A ten-minute walk between two tasks made both feel smaller. #life/running",
+      "createdAt": "2025-12-19T07:05:00.000Z",
+      "updatedAt": "2025-12-19T07:05:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-067",
+      "content": "Write the title after the paragraph has told me what it is about. #learning/writing",
+      "createdAt": "2025-12-13T14:18:00.000Z",
+      "updatedAt": "2025-12-13T14:18:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-068",
+      "content": "The stock is better with the onion skins left on. A deeper colour for almost no effort. #life/cooking",
+      "createdAt": "2025-12-07T06:31:00.000Z",
+      "updatedAt": "2025-12-07T06:31:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-069",
+      "content": "The prototype only needs enough detail to answer today's question. #work/decisions",
+      "createdAt": "2025-12-01T13:44:00.000Z",
+      "updatedAt": "2025-12-01T13:44:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-070",
+      "content": "Leave a blank page after the notes from a long conversation. #ideas/notes",
+      "createdAt": "2025-11-25T05:57:00.000Z",
+      "updatedAt": "2025-11-25T05:57:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-071",
+      "content": "A patch of winter sun reached the back wall for the first time this week. #journal",
+      "createdAt": "2025-11-19T12:10:00.000Z",
+      "updatedAt": "2025-11-19T12:10:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-072",
+      "content": "Something worth noticing happens on the familiar route, too. #quotes",
+      "createdAt": "2025-11-13T04:23:00.000Z",
+      "updatedAt": "2025-11-13T04:23:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-073",
+      "content": "A room begins to feel finished when there is somewhere to put a cup. #work/studio",
+      "createdAt": "2025-11-07T11:36:00.000Z",
+      "updatedAt": "2025-11-07T11:36:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-074",
+      "content": "Put the book back in the bag before bed, ready for the morning train. #learning/reading",
+      "createdAt": "2025-11-02T03:49:00.000Z",
+      "updatedAt": "2025-11-02T03:49:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-075",
+      "content": "Cook the mushrooms in two batches so they have room to brown. #life/cooking",
+      "createdAt": "2025-10-27T10:02:00.000Z",
+      "updatedAt": "2025-10-27T10:02:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-archive-076",
+      "content": "Started this notebook with a date, a few lines, and no plan for the rest. #journal",
+      "createdAt": "2025-10-21T02:15:00.000Z",
+      "updatedAt": "2025-10-21T02:15:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": null,
+      "images": []
+    },
+    {
+      "id": "demo-discarded-list",
+      "content": "Old shelf measurements; use the drawing in the studio note.",
+      "createdAt": "2026-08-28T03:00:00.000Z",
+      "updatedAt": "2026-08-28T03:00:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": "2026-09-01T02:00:00.000Z",
+      "images": []
+    },
+    {
+      "id": "demo-discarded-menu",
+      "content": "Dinner draft: changed the menu after visiting the market.",
+      "createdAt": "2026-08-26T03:00:00.000Z",
+      "updatedAt": "2026-08-26T03:00:00.000Z",
+      "pinnedAt": null,
+      "deletedAt": "2026-08-27T02:00:00.000Z",
+      "images": []
+    }
+  ],
+  "tags": [
+    {
+      "path": "life/cooking",
+      "pinnedAt": "2026-09-01T01:00:00.000Z"
+    },
+    {
+      "path": "work/studio",
+      "pinnedAt": "2026-09-01T02:00:00.000Z"
+    }
+  ]
+}
