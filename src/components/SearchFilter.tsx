@@ -4,6 +4,7 @@ import { useI18n } from "../lib/i18n";
 import type { SavedFilter } from "../lib/savedFilters";
 import type { FacetKey, FeedFilters } from "../lib/search";
 import { Menu } from "./Menu";
+import { RangeCalendar } from "./RangeCalendar";
 import { useTip } from "./Tip";
 
 /** One row per structured facet — shared with App's breadcrumb chips so the
@@ -154,25 +155,12 @@ export function SearchFilter(props: SearchFilterProps) {
               })}
             </div>
           ) : null}
-          <div className="filter-dates">
-            <input
-              type="date"
-              value={filters.dateFrom ?? ""}
-              max={filters.dateTo ?? undefined}
-              aria-label={tr("Start date", "开始日期")}
-              onChange={(event) => props.onDateChange({ dateFrom: event.target.value || null })}
-            />
-            <span className="filter-dates-sep" aria-hidden="true">
-              –
-            </span>
-            <input
-              type="date"
-              value={filters.dateTo ?? ""}
-              min={filters.dateFrom ?? undefined}
-              aria-label={tr("End date", "结束日期")}
-              onChange={(event) => props.onDateChange({ dateTo: event.target.value || null })}
-            />
-          </div>
+          <RangeCalendar
+            from={filters.dateFrom}
+            to={filters.dateTo}
+            onStart={(day) => props.onDateChange({ dateFrom: day, dateTo: null })}
+            onRange={(from, to) => (props.onPresetRange ? props.onPresetRange(from, to) : props.onDateChange({ dateFrom: from, dateTo: to }))}
+          />
           {showSaved ? (
             <>
               <span className="action-menu__sep" />

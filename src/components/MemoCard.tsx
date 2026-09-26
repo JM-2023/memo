@@ -1,4 +1,4 @@
-import { Check, Copy, ImageOff, Link2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Share, Tags, Trash2, X } from "lucide-react";
+import { Check, Copy, ImageOff, Link2, ListChecks, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Share, Tags, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { externalImagesOf } from "../lib/content";
 import { formatTime } from "../lib/dates";
@@ -22,6 +22,8 @@ interface MemoCardProps {
   selecting: boolean;
   selected: boolean;
   onToggleSelect: () => void;
+  /** Enter select mode with this card picked; absent where a view has none. */
+  onSelect?: () => void;
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onSaveEdit: (data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
@@ -51,6 +53,7 @@ interface MemoMenuBodyProps {
   onAddTag: () => void;
   onCopy: () => void;
   onShare: () => void;
+  onSelect?: () => void;
   onDelete: () => void;
   onRestore: () => void;
   onPurge: () => void;
@@ -62,7 +65,7 @@ interface MemoMenuBodyProps {
  * lives here (the panel unmounts on close), so a reopened menu always starts
  * back at the action list.
  */
-function MemoMenuBody({ memo, close, inTrash, pinned, onTogglePin, onStartEdit, onAddTag, onCopy, onShare, onDelete, onRestore, onPurge }: MemoMenuBodyProps) {
+function MemoMenuBody({ memo, close, inTrash, pinned, onTogglePin, onStartEdit, onAddTag, onCopy, onShare, onSelect, onDelete, onRestore, onPurge }: MemoMenuBodyProps) {
   const { count, locale, tr } = useI18n();
   const [confirming, setConfirming] = useState(false);
 
@@ -117,6 +120,19 @@ function MemoMenuBody({ memo, close, inTrash, pinned, onTogglePin, onStartEdit, 
           <Copy size={16} aria-hidden="true" />
           {tr("Copy content", "复制内容")}
         </button>
+        {onSelect ? (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              close();
+              onSelect();
+            }}
+          >
+            <ListChecks size={16} aria-hidden="true" />
+            {tr("Select", "多选")}
+          </button>
+        ) : null}
         <span className="action-menu__sep" />
         <button type="button" role="menuitem" className="danger" onClick={() => setConfirming(true)}>
           <Trash2 size={16} aria-hidden="true" />
@@ -183,6 +199,19 @@ function MemoMenuBody({ memo, close, inTrash, pinned, onTogglePin, onStartEdit, 
           <Share size={16} aria-hidden="true" />
           {tr("Share as image", "分享为图片")}
         </button>
+        {onSelect ? (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              close();
+              onSelect();
+            }}
+          >
+            <ListChecks size={16} aria-hidden="true" />
+            {tr("Select", "多选")}
+          </button>
+        ) : null}
         <span className="action-menu__sep" />
         <button type="button" role="menuitem" className="danger" onClick={() => setConfirming(true)}>
           <Trash2 size={16} aria-hidden="true" />
@@ -377,6 +406,7 @@ export function MemoCard(props: MemoCardProps) {
                     onAddTag={props.onAddTag}
                     onCopy={props.onCopy}
                     onShare={props.onShare}
+                    onSelect={props.onSelect}
                     onDelete={props.onDelete}
                     onRestore={props.onRestore}
                     onPurge={props.onPurge}

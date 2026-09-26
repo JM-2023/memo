@@ -1,4 +1,5 @@
 import {
+  ArrowDownUp,
   Brain,
   Calendar,
   CalendarRange,
@@ -44,6 +45,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ShareDialog } from "./components/ShareDialog";
 import { StatsModal } from "./components/StatsModal";
 import { SwapText } from "./components/SwapText";
+import { useTip } from "./components/Tip";
 import { useModalA11y } from "./hooks/useModalA11y";
 import { useSemanticSearch } from "./hooks/useSemanticSearch";
 import {
@@ -336,6 +338,8 @@ interface FeedHandlers {
   pickTag: (path: string) => void;
   openImage: (items: LightboxItem[], index: number) => void;
   toggleSelect: (memo: Memo) => void;
+  /** Enter select mode from one card's ⋯ menu, that card already picked. */
+  selectFrom: (memo: Memo) => void;
   toggleTask: (memo: Memo, lineKey: number, checked: boolean) => void;
 }
 
@@ -348,6 +352,8 @@ interface FeedItemProps {
   editConflict: boolean;
   selecting: boolean;
   selected: boolean;
+  /** The view has a select mode (memos, Trash) — offers ⋯ › Select. */
+  canSelect: boolean;
   /** This memo's optimistic checkbox states (in-flight toggles), if any. */
   taskFlips: ReadonlyMap<number, boolean> | undefined;
   vtName: string | undefined;
@@ -365,7 +371,7 @@ interface FeedItemProps {
  * deliberately left out of the equality check.
  */
 const FeedItem = reactMemo(
-  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, selecting, selected, taskFlips, vtName, getEntering, delay, handlers }: FeedItemProps) {
+  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, selecting, selected, canSelect, taskFlips, vtName, getEntering, delay, handlers }: FeedItemProps) {
     return (
       <MemoSlot vtName={vtName} entering={getEntering()} delay={delay}>
         <MemoCard
@@ -379,6 +385,7 @@ const FeedItem = reactMemo(
           selected={selected}
           pendingTaskFlips={taskFlips}
           onToggleSelect={() => handlers.toggleSelect(memo)}
+          onSelect={canSelect ? () => handlers.selectFrom(memo) : undefined}
           onStartEdit={() => handlers.startEdit(memo.id)}
           onCancelEdit={handlers.cancelEdit}
           onSaveEdit={(data) => handlers.saveEdit(memo, data)}
@@ -406,6 +413,7 @@ const FeedItem = reactMemo(
     prev.editConflict === next.editConflict &&
     prev.selecting === next.selecting &&
     prev.selected === next.selected &&
+    prev.canSelect === next.canSelect &&
     prev.taskFlips === next.taskFlips &&
     prev.vtName === next.vtName &&
     prev.handlers === next.handlers
@@ -413,6 +421,7 @@ const FeedItem = reactMemo(
 
 export default function App() {
   const { count, errorMessage, language, locale, setLanguage, tr } = useI18n();
+  const tip = useTip();
   const sortOptions: { key: SortKey; label: string }[] = useMemo(
     () => [
       { key: "created-desc", label: tr("Created · Newest first", "创建时间 · 从新到旧") },
@@ -1636,12 +1645,12 @@ export default function App() {
    * the "已选 N 条" counter (they share view-transition-name: topbar-action)
    * while the card checkboxes pop in via their own CSS transitions.
    */
-  const enterSelectMode = useCallback(() => {
+  const enterSelectMode = useCallback((firstId?: string) => {
     if (holdForOpenEdit("select memos", "多选笔记")) return;
     withViewTransition(() =>
       flushSync(() => {
         setSelectMode(true);
-        setSelected(new Set());
+        setSelected(new Set(firstId ? [firstId] : []));
         setConfirmBatchDelete(false);
         setBulkTagOpen(false);
         setTagMemoId(null);
@@ -2391,7 +2400,8 @@ export default function App() {
       showToast(tr("Your draft is still here. Saving now will use the latest version as its base.", "草稿仍在，再次保存将以最新版本为基线"));
     },
     pickTag,
-    toggleSelect
+    toggleSelect,
+    selectFrom: (memo: Memo) => enterSelectMode(memo.id)
   });
   feedActionsRef.current = {
     startEdit: (id: string) => {
@@ -2420,7 +2430,8 @@ export default function App() {
       showToast(tr("Your draft is still here. Saving now will use the latest version as its base.", "草稿仍在，再次保存将以最新版本为基线"));
     },
     pickTag,
-    toggleSelect
+    toggleSelect,
+    selectFrom: (memo: Memo) => enterSelectMode(memo.id)
   };
   const getEntering = useCallback(() => !enterSuppressRef.current, []);
   const feedHandlers = useMemo<FeedHandlers>(
@@ -2443,6 +2454,7 @@ export default function App() {
       pickTag: (path) => feedActionsRef.current.pickTag(path),
       openImage: (items, index) => setLightbox({ items, index }),
       toggleSelect: (memo) => feedActionsRef.current.toggleSelect(memo),
+      selectFrom: (memo) => feedActionsRef.current.selectFrom(memo),
       toggleTask: (memo, lineKey, checked) => feedActionsRef.current.toggleTask(memo, lineKey, checked)
     }),
     []
@@ -2964,8 +2976,19 @@ export default function App() {
                       aria-haspopup="menu"
                       aria-expanded={open}
                       aria-label={tr("View options: sort and select", "视图选项：排序与多选")}
+                      onMouseEnter={(event) =>
+                        tip.show(event.currentTarget, {
+                          strong: tr("Sort & select", "排序与多选"),
+                          text: sortOptions.find((option) => option.key === sortKey)?.label ?? ""
+                        })
+                      }
+                      onMouseLeave={tip.hide}
+                      onPointerDown={tip.hide}
                     >
                       <span className="loc-label">{activeTag ? activeTag.split("/").at(-1) : tr("All memos", "全部笔记")}</span>
+                      {/* A sort other than newest-first is a lens too: it
+                          shows on the pill, not only inside the menu. */}
+                      {sortKey !== "created-desc" ? <ArrowDownUp size={13} className="loc-sort-mark" aria-hidden="true" /> : null}
                       <ChevronDown size={14} className="loc-caret" aria-hidden="true" />
                     </button>
                   )}
@@ -3011,7 +3034,7 @@ export default function App() {
             {view === "trash" && trashedMemos.length > 0 && !selectMode ? (
               // Select is Trash's way into multi-select (the feed's sits in
               // its location menu): pick several, restore or purge at once.
-              <button type="button" className="trash-select-button" aria-label={tr("Select memos", "多选笔记")} onClick={enterSelectMode}>
+              <button type="button" className="trash-select-button" aria-label={tr("Select memos", "多选笔记")} onClick={() => enterSelectMode()}>
                 <ListChecks size={14} aria-hidden="true" />
                 <span>{tr("Select", "多选")}</span>
               </button>
@@ -3124,7 +3147,7 @@ export default function App() {
                 <input
                   ref={searchRef}
                   value={query}
-                  placeholder={tr("Search memos", "搜索笔记")}
+                  placeholder={semanticOn ? tr("Search by meaning", "按意思搜索") : tr("Search memos", "搜索笔记")}
                   title={tr("Space separates keywords; “quotes” match an exact phrase", "空格分隔多个关键词；“引号”匹配完整短语")}
                   onChange={(event) => typeQuery(event.target.value)}
                   onFocus={() => setSearchOpen(true)}
@@ -3152,30 +3175,39 @@ export default function App() {
                 className={`icon-button semantic-toggle${semanticOn ? " is-active" : ""}`}
                 aria-pressed={semanticOn}
                 aria-label={tr("Semantic Search", "语义搜索")}
-                title={
-                  semantic.status === "error"
-                    ? tr("Semantic search stopped — open details", "语义搜索已停止——打开详情")
-                    : modelBusy
-                      ? tr(
-                          modelDownload.phase === "downloading" ? "Downloading the semantic model — open progress" : "Starting the semantic model — open progress",
-                          modelDownload.phase === "downloading" ? "语义模型下载中——打开进度" : "语义模型启动中——打开进度"
-                        )
-                    : semantic.status === "indexing"
-                      ? tr(
-                          `Semantic search — indexing${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}; keyword search remains available`,
-                          `语义搜索——索引中${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}；关键词搜索仍可用`
-                        )
-                      : semantic.queryProgress
-                        ? tr("Semantic Search Is Working — Open Progress", "语义搜索正在工作——打开进度")
-                        : semantic.status === "preparing"
-                          ? tr("Semantic Model Is Loading — Open Progress", "语义模型正在加载——打开进度")
-                          : semanticOn
-                            ? tr(
-                                "Semantic search is on — keyword matches stay first and related memos are added",
-                                "语义搜索已开启——关键词命中优先，并补充意思相关的笔记"
-                              )
-                            : tr("Semantic search — find memos by meaning", "语义搜索——按意思找笔记")
-                }
+                // The in-app bubble rather than a native title: it shows at
+                // once, matches the funnel beside it, and names the state
+                // (on / off / working) before the explanation.
+                onMouseEnter={(event) => {
+                  const text =
+                    semantic.status === "error"
+                      ? tr("Semantic search stopped — open details", "语义搜索已停止——打开详情")
+                      : modelBusy
+                        ? tr(
+                            modelDownload.phase === "downloading" ? "Downloading the semantic model — open progress" : "Starting the semantic model — open progress",
+                            modelDownload.phase === "downloading" ? "语义模型下载中——打开进度" : "语义模型启动中——打开进度"
+                          )
+                      : semantic.status === "indexing"
+                        ? tr(
+                            `Semantic search — indexing${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}; keyword search remains available`,
+                            `语义搜索——索引中${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}；关键词搜索仍可用`
+                          )
+                        : semantic.queryProgress
+                          ? tr("Semantic search is working — open progress", "语义搜索正在工作——打开进度")
+                          : semantic.status === "preparing"
+                            ? tr("Semantic model is loading — open progress", "语义模型正在加载——打开进度")
+                            : semanticOn
+                              ? tr(
+                                  "Keyword matches stay first; related memos are added",
+                                  "关键词命中优先，并补充意思相关的笔记"
+                                )
+                              : tr("Semantic search finds memos by meaning", "语义搜索：按意思找笔记");
+                  tip.show(event.currentTarget, {
+                    strong: semanticBusy || semantic.status === "error" ? undefined : semanticOn ? tr("Semantic search on", "语义搜索已开启") : undefined,
+                    text
+                  });
+                }}
+                onMouseLeave={tip.hide}
                 onClick={() => {
                   if (semantic.status === "error") {
                     setModelSettingsOpen(true);
@@ -3305,6 +3337,7 @@ export default function App() {
                 editConflict={editingId === memo.id && editConflictId === memo.id}
                 selecting={selectingFeed}
                 selected={selectingFeed && selected.has(memo.id)}
+                canSelect={view === "memos" || view === "trash"}
                 taskFlips={pendingTaskFlips.get(memo.id)}
                 vtName={`memo-${memo.id}`}
                 getEntering={getEntering}

@@ -289,6 +289,8 @@ function CardLine({ raw, nextRaw, ink }: { raw: string; nextRaw?: string; ink: C
   }
 }
 
+type SetupCell = "portrait" | "landscape" | "paper" | "gray" | "hand" | "date" | "seal" | "privacy";
+
 /**
  * Share-as-image dialog: the paper artifact on a recessed stage, previewed
  * exactly as it exports (shareCard.css styles both; the dialog's own chrome
@@ -305,6 +307,11 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   const [dated, setDated] = useState<boolean>(() => loadFlag(DATE_KEY, true));
   const [hand, setHand] = useState<boolean>(() => loadFlag(HAND_KEY, false));
   const [privacy, setPrivacy] = useState<boolean>(() => loadFlag(PRIVACY_KEY, false));
+  // The setup track's cells are miniatures with no words; the caption under
+  // it supplies them — the hovered/focused cell's name and state, or else the
+  // current setup read back as a sentence (so a phone, which never hovers,
+  // still gets the words after every tap).
+  const [setupHint, setSetupHint] = useState<SetupCell | null>(null);
   // A lifted seal outlives its own removal by one beat so it can animate
   // away; `sealTouched` marks the moment the control took over from the
   // sheet's arrival choreography, after which a press follows the finger.
@@ -564,6 +571,48 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   // last line was nothing but tags, the page has a new blank edge to drop.
   const printed = redacted ? trimBlankEdges(lines, printsNothingRedacted) : lines;
 
+  // Words for the setup track (see setupHint). Computed at render, so a cell
+  // that keeps focus after a tap reads its new state, not the one it had.
+  const onOff = (on: boolean) => (on ? tr("on", "开") : tr("off", "关"));
+  function cellHint(cell: SetupCell): string {
+    switch (cell) {
+      case "portrait":
+        return tr("Portrait card", "竖版卡片");
+      case "landscape":
+        return tr("Landscape card", "横版卡片");
+      case "paper":
+        return tr("Cream paper", "米白底");
+      case "gray":
+        return tr("Cool gray", "冷灰底");
+      case "hand":
+        return tr(`Handwriting · ${onOff(hand)}`, `手写体 · ${onOff(hand)}`);
+      case "date":
+        return tr(`Dateline · ${onOff(dated)}`, `日期 · ${onOff(dated)}`);
+      case "seal":
+        return tr(`Seal · ${onOff(sealed)}`, `印章 · ${onOff(sealed)}`);
+      case "privacy":
+        return privacy
+          ? tr("Privacy on · no wordmark or tags on the sheet", "隐私已开 · 落款与标签不印上纸面")
+          : tr("Privacy off · wordmark and tags are printed", "隐私已关 · 落款与标签会印上纸面");
+    }
+  }
+  const setupSummary = [
+    layout === "portrait" ? tr("Portrait", "竖版") : tr("Landscape", "横版"),
+    tone === "paper" ? tr("cream paper", "米白底") : tr("cool gray", "冷灰底"),
+    hand ? tr("handwriting", "手写体") : null,
+    dated ? tr("dateline", "日期") : null,
+    sealed ? tr("seal", "印章") : null,
+    privacy ? tr("private", "隐私") : null
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const hintOn = (cell: SetupCell) => ({
+    onPointerEnter: () => setSetupHint(cell),
+    onPointerLeave: () => setSetupHint((current) => (current === cell ? null : current)),
+    onFocus: () => setSetupHint(cell),
+    onBlur: () => setSetupHint((current) => (current === cell ? null : current))
+  });
+
   return (
     <div
       ref={overlayRef}
@@ -651,8 +700,9 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
         {/* Sheet setup — how the artifact is made, kept under the artifact
             and out of the row you leave by. One track, four properties:
             shape and stock to pick, hand and seal to switch on. Each cell is
-            a miniature of what it changes, so none of them needs a word —
-            and beside the track, the one option that does. */}
+            a miniature of what it changes, so none of them carries a word on
+            the track — the caption beneath says it (setupHint) — and beside
+            the track, the one option that does. */}
         <div className="share-setup">
           <span className="share-seg">
             <span className="share-seg-group" role="group" aria-label={tr("Card layout", "卡片版式")} data-layout={layout}>
@@ -662,7 +712,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 className={layout === "portrait" ? "is-active" : ""}
                 aria-pressed={layout === "portrait"}
                 aria-label={tr("Portrait card", "竖版卡片")}
-                title={tr("Portrait card", "竖版卡片")}
+                {...hintOn("portrait")}
                 disabled={busy !== null}
                 onClick={() => pickLayout("portrait")}
               >
@@ -673,7 +723,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 className={layout === "landscape" ? "is-active" : ""}
                 aria-pressed={layout === "landscape"}
                 aria-label={tr("Landscape card", "横版卡片")}
-                title={tr("Landscape card", "横版卡片")}
+                {...hintOn("landscape")}
                 disabled={busy !== null}
                 onClick={() => pickLayout("landscape")}
               >
@@ -690,7 +740,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 className={tone === "paper" ? "is-active" : ""}
                 aria-pressed={tone === "paper"}
                 aria-label={tr("Cream paper", "米白底")}
-                title={tr("Cream paper", "米白底")}
+                {...hintOn("paper")}
                 disabled={busy !== null}
                 onClick={() => pickTone("paper")}
               >
@@ -701,7 +751,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 className={tone === "gray" ? "is-active" : ""}
                 aria-pressed={tone === "gray"}
                 aria-label={tr("Cool gray", "冷灰底")}
-                title={tr("Cool gray", "冷灰底")}
+                {...hintOn("gray")}
                 disabled={busy !== null}
                 onClick={() => pickTone("gray")}
               >
@@ -724,7 +774,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 className={hand ? "is-active" : ""}
                 aria-pressed={hand}
                 aria-label={tr("Handwriting", "手写体")}
-                title={tr("Handwriting", "手写体")}
+                {...hintOn("hand")}
                 disabled={busy !== null}
                 onClick={toggleHand}
               >
@@ -744,7 +794,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 className={dated ? "is-active" : ""}
                 aria-pressed={dated}
                 aria-label={tr("Dateline", "日期")}
-                title={tr("Dateline", "日期")}
+                {...hintOn("date")}
                 disabled={busy !== null}
                 onClick={toggleDate}
               >
@@ -759,7 +809,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 className={sealed ? "is-active" : ""}
                 aria-pressed={sealed}
                 aria-label={tr("Seal", "印章")}
-                title={tr("Seal", "印章")}
+                {...hintOn("seal")}
                 disabled={busy !== null}
                 onClick={toggleSeal}
               >
@@ -782,10 +832,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 type="button"
                 className={privacy ? "is-active" : ""}
                 aria-pressed={privacy}
-                title={tr(
-                  "Privacy mode — leave the wordmark and any tags off the sheet",
-                  "隐私模式 — 落款与标签不印上纸面"
-                )}
+                {...hintOn("privacy")}
                 disabled={busy !== null}
                 onClick={togglePrivacy}
               >
@@ -794,6 +841,9 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
               </button>
             </span>
           </span>
+          <p className="share-caption" aria-hidden="true">
+            {setupHint ? cellHint(setupHint) : setupSummary}
+          </p>
         </div>
 
         <footer className="share-actions">

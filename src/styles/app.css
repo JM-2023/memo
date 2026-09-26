@@ -1083,9 +1083,13 @@ a:hover { text-decoration: underline; }
 /* =========================================================================
    App shell — sidebar + main column
    ========================================================================= */
-/* Centered on big displays: the sidebar and a wide feed share up to ~1720px
-   instead of hugging the left edge of a 4K monitor. */
-.app-shell { display: flex; min-height: 100vh; max-width: 1720px; margin-inline: auto; }
+/* Centered on big displays, and capped at what the two columns actually use:
+   the widest sidebar (392px) + the 880px content cap + the main column's
+   widest gutter (40px) on each side. A looser cap left the feed centred in
+   whatever the sidebar didn't take, so past ~1350px the surplus opened a
+   dead band between the columns that grew with the window; held to this,
+   the surplus becomes symmetric page margin and the pair reads as one unit. */
+.app-shell { display: flex; min-height: 100vh; max-width: calc(392px + 880px + 2 * 40px); margin-inline: auto; }
 .first-reveal .main-column,
 .first-reveal .sidebar-inner { animation: ink-reveal 0.28s var(--ease); }
 
@@ -1606,6 +1610,26 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 @media (hover: hover) { .tag-more:hover { background: var(--wash-strong); color: var(--ink); } }
 @media (hover: none) { .tag-more { opacity: 1; } }
 .tag-more.is-open { background: var(--wash-strong); color: var(--ink); }
+/* One count column for the whole sidebar. Where rows can be hovered, the ⋯
+   no longer reserves a lane of its own beside the count (which pushed tag
+   counts ~30px left of the nav counts above them); it sits over the count
+   and the two trade places on hover / focus / open. The row's 9px + the
+   label's 4px pad = the nav row's 13px, so both counts end on one edge. */
+@media (hover: hover) {
+  .tag-row { padding-right: 9px; }
+  /* The menu's root leaves the flow (it would still take the row's 3px gap
+     as an empty flex item) and centres the ⋯ over a two-digit count. */
+  .tag-row > .menu-root { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); }
+  .tag-more { margin-left: 0; }
+  .tag-count { transition: opacity var(--t) var(--ease); }
+  .tag-row:hover .tag-count,
+  .tag-row:focus-within .tag-count,
+  .tag-row:has(.tag-more.is-open) .tag-count { opacity: 0; }
+}
+/* Touch keeps the ⋯ on screen, so there the nav rows reserve the same lane
+   (10px row pad + 24px ⋯ + 4px gap = 38px, less the label's own 4px pad
+   on the tag side) to hold the column. */
+@media (hover: none) { .nav-item { padding-right: 42px; } }
 /* A subtree's track unfolds from 0 to its height and folds back (TagTree
    animates the height; the rows below ride the layout). A folding track
    stays mounted, inert, until it has shut. */
@@ -1796,6 +1820,8 @@ button.crumb:active { background: var(--wash-strong); }
 .loc-label { min-width: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .loc-caret { flex: none; margin-top: 1px; color: var(--muted); transition: transform 0.18s var(--ease-pop), color var(--t) var(--ease); }
 .loc-trigger.is-open .loc-caret { transform: rotate(180deg); color: var(--ink-soft); }
+/* A non-default sort, said on the pill in the caret's own quiet ink. */
+.loc-sort-mark { flex: none; margin-left: 2px; color: var(--muted); }
 .loc-panel { min-width: 214px; }
 
 /* ---- Multi-select toolbar (replaces the breadcrumb while selecting) ---- */
@@ -2036,12 +2062,12 @@ button.crumb:active { background: var(--wash-strong); }
 
 .filter-panel {
   width: min(296px, calc(100vw - 24px));
-  max-height: min(540px, calc(100dvh - 132px));
+  max-height: min(700px, calc(100dvh - 132px));
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-/* Native date inputs carry a wide intrinsic min-content; without this the
-   grid column would stretch past the panel and clip the date row. */
+/* Keep every row inside the panel's width (long saved-filter names, the
+   calendar's grid) rather than letting min-content stretch the column. */
 .filter-panel > * { min-width: 0; }
 /* Section caption with a trailing inline action (date-range 清除). */
 .filter-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-right: 5px; }
@@ -2061,7 +2087,7 @@ button.crumb:active { background: var(--wash-strong); }
    row, idle, and says why in the caption voice. */
 .filter-row-note { margin-left: auto; padding-left: 10px; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; }
 
-/* Quick ranges above the two date fields: the notebook's usual asks, one
+/* Quick ranges above the calendar: the notebook's usual asks, one
    tap each. Keypad chips (Tier C); the picked one wears the accent tint the
    way a picked review chip does. */
 .filter-presets { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 11px 8px; }
@@ -2080,23 +2106,57 @@ button.crumb:active { background: var(--wash-strong); }
 .filter-preset:active { transform: scale(0.95); }
 .filter-preset.is-active { color: var(--primary-dark); background: var(--primary-tint); border-color: color-mix(in srgb, var(--primary) 38%, transparent); }
 
-.filter-dates { display: flex; align-items: center; gap: 6px; padding: 2px 11px 6px; }
-.filter-dates input {
-  flex: 1;
-  min-width: 0;
-  padding: 5px 7px;
-  color: var(--ink);
-  background: var(--field-bg);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  font-family: inherit;
-  font-size: var(--fs-sm);
-  outline: none;
-  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
+/* The range calendar (RangeCalendar.tsx): a month grid in the heatmap's
+   Monday-first language. The span is a tint band; its two ends are solid
+   accent discs — the one place the panel shows the accent at full strength,
+   because they are the answer. Days past today are idle. */
+.range-cal { padding: 0 11px 8px; }
+.range-cal-summary { display: flex; align-items: baseline; gap: 6px; padding: 2px 0 8px; color: var(--muted); font-size: var(--fs-sm); font-weight: 500; }
+.range-cal-summary .is-set { color: var(--ink); font-weight: 600; }
+.range-cal-summary .is-pending { color: var(--primary-dark); }
+.range-cal-dash { color: var(--muted); }
+.range-cal-head { display: grid; grid-template-columns: 26px 1fr 26px; align-items: center; margin-bottom: 4px; }
+.range-cal-month { color: var(--ink-soft); font-size: var(--fs-xs); font-weight: 600; text-align: center; }
+.range-cal-nav {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--muted);
+  border-radius: var(--r-xs);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
-@media (hover: hover) { .filter-dates input:hover { border-color: var(--line-strong); } }
-.filter-dates input:focus { border-color: var(--line-focus); }
-.filter-dates-sep { flex: none; color: var(--muted); font-size: var(--fs-sm); }
+@media (hover: hover) { .range-cal-nav:hover:not(:disabled) { background: var(--wash); color: var(--ink); } }
+.range-cal-nav:disabled { opacity: 0.35; }
+.range-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; }
+.range-cal-weekday { padding: 2px 0 4px; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; text-align: center; }
+.range-cal-day {
+  position: relative;
+  isolation: isolate;
+  height: 30px;
+  color: var(--ink-soft);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+/* Disc and band are pseudo-elements so the band runs edge to edge between
+   cells while the disc keeps a round, centred footprint. */
+.range-cal-day::before,
+.range-cal-day::after { content: ""; position: absolute; z-index: -1; pointer-events: none; }
+.range-cal-day::after { inset: 2px calc(50% - 13px); border-radius: 999px; transition: background var(--t) var(--ease); }
+.range-cal-day.in-span::before { inset: 2px 0; background: var(--primary-tint); }
+.range-cal-day.is-lo::before { left: 50%; }
+.range-cal-day.is-hi::before { right: 50%; }
+.range-cal-day.is-lo.is-hi::before { display: none; }
+.range-cal-day.is-outside { color: var(--muted); }
+.range-cal-day.in-span { color: var(--primary-dark); }
+.range-cal-day.is-edge { color: var(--primary-ink); font-weight: 600; }
+.range-cal-day.is-edge::after { background: var(--primary); }
+.range-cal-day.is-today:not(.is-edge)::after { box-shadow: inset 0 0 0 1px var(--line-strong); }
+.range-cal-day:disabled { color: var(--muted); opacity: 0.4; }
+@media (hover: hover) { .range-cal-day:hover:not(:disabled):not(.is-edge)::after { background: var(--wash-strong); } }
+.range-cal-day:focus-visible { outline: none; }
+.range-cal-day:focus-visible::after { box-shadow: 0 0 0 2px var(--line-focus); }
 
 /* Saved preset row: apply button + hover-revealed delete in one grid, so a
    long name ellipsizes instead of colliding with the ×. The apply button
@@ -4027,6 +4087,24 @@ button.stats-tag-row:active { scale: 0.992; }
   padding: 0 11px 0 9px;
   font-size: var(--fs-xs);
   font-weight: 500;
+}
+
+/* The track's words (see setupHint in ShareDialog): the hovered cell's name
+   and state, else the setup read back. One fixed line in the caption voice,
+   so swapping text never moves the exits below it. */
+.share-caption {
+  flex-basis: 100%;
+  min-width: 0;
+  height: 18px;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  line-height: 18px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The two exits, and nothing else. Last in the cascade of arrivals: frame,
