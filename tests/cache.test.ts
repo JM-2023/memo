@@ -3,15 +3,17 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MonotonicWriteQueue,
   adoptCacheKey,
+  SHARD_COUNT,
   cacheEpochAllowsWrite,
-  encodeSnapshotCooperatively,
   invalidateSnapshot,
   openSnapshot,
   readSealedSnapshot,
   saveSnapshot,
+  shardOf,
   shouldReplaceSealedSnapshot,
   type Snapshot
 } from "../src/lib/cache";
+import type { Memo } from "../src/lib/types";
 
 function deferred() {
   let resolve!: () => void;
@@ -23,6 +25,47 @@ function deferred() {
 
 function toBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
+}
+
+function memo(id: string, content: string): Memo {
+  return {
+    id,
+    content,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    pinnedAt: null,
+    deletedAt: null,
+    seq: 1,
+    images: []
+  };
+}
+
+function byId(memos: readonly Memo[]): Memo[] {
+  return [...memos].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** The stored shard records' ids, straight from IndexedDB. */
+async function readShardIds(): Promise<(string | null)[]> {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open("memo-cache", 1);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  try {
+    const store = db.transaction("kv").objectStore("kv");
+    return await Promise.all(
+      Array.from(
+        { length: SHARD_COUNT },
+        (_, index) =>
+          new Promise<string | null>((resolve) => {
+            const request = store.get(`snapshot-shard:${index}`);
+            request.onsuccess = () => resolve((request.result as { id?: string } | undefined)?.id ?? null);
+          })
+      )
+    );
+  } finally {
+    db.close();
+  }
 }
 
 async function nextMicrotask(): Promise<void> {
@@ -172,28 +215,92 @@ describe("sealed IndexedDB snapshot", () => {
     expect(cacheEpochAllowsWrite("new-epoch", "new-epoch")).toBe(true);
   });
 
-  it("cooperatively encodes the same logical snapshot", async () => {
+  it("round-trips a sharded notebook with tags and tombstones", async () => {
+    await invalidateSnapshot();
+    adoptCacheKey(toBase64(Uint8Array.from({ length: 32 }, (_, index) => index + 11)));
     const snapshot: Snapshot = {
       cursor: 7,
       syncEpoch: "server-a",
-      memos: [
-        {
-          id: "memo-1",
-          content: "中英文 #tag",
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-          pinnedAt: null,
-          deletedAt: null,
-          seq: 6,
-          images: []
-        }
-      ],
+      memos: Array.from({ length: 200 }, (_, index) => memo(`memo-${index}`, `中英文 ${index} #tag`)),
       tags: [{ path: "tag", pinnedAt: null, seq: 5 }],
       purged: [{ id: "gone", seq: 4 }]
     };
 
-    const encoded = await encodeSnapshotCooperatively(snapshot);
-    expect(JSON.parse(new TextDecoder().decode(encoded))).toEqual(snapshot);
+    await saveSnapshot(snapshot);
+    const opened = await openSnapshot((await readSealedSnapshot())!);
+    expect(opened?.cursor).toBe(7);
+    expect(opened?.tags).toEqual(snapshot.tags);
+    expect(opened?.purged).toEqual(snapshot.purged);
+    expect(byId(opened!.memos)).toEqual(byId(snapshot.memos));
+    await invalidateSnapshot();
+  });
+
+  it("re-seals only the shard an edit touched", async () => {
+    await invalidateSnapshot();
+    adoptCacheKey(toBase64(Uint8Array.from({ length: 32 }, (_, index) => index + 13)));
+    const memos = Array.from({ length: 200 }, (_, index) => memo(`memo-${index}`, `note ${index}`));
+    await saveSnapshot({ cursor: 1, syncEpoch: "server-a", memos, tags: [], purged: [] });
+    const before = await readShardIds();
+
+    // Sync state swaps only the edited memo's object; the rest keep identity.
+    const edited = memos.map((item, index) => (index === 42 ? { ...item, content: "edited", seq: 2 } : item));
+    await saveSnapshot({ cursor: 2, syncEpoch: "server-a", memos: edited, tags: [], purged: [] });
+    const after = await readShardIds();
+
+    const changed = after.map((id, index) => (id !== before[index] ? index : -1)).filter((index) => index >= 0);
+    expect(changed).toEqual([shardOf("memo-42")]);
+    const opened = await openSnapshot((await readSealedSnapshot())!);
+    expect(opened?.memos.find((item) => item.id === "memo-42")?.content).toBe("edited");
+    expect(opened?.memos).toHaveLength(200);
+    await invalidateSnapshot();
+  });
+
+  it("refuses a shard from another write mixed into the manifest", async () => {
+    await invalidateSnapshot();
+    adoptCacheKey(toBase64(Uint8Array.from({ length: 32 }, (_, index) => index + 17)));
+    const memos = [memo("memo-a", "first")];
+    await saveSnapshot({ cursor: 1, syncEpoch: "server-a", memos, tags: [], purged: [] });
+    const older = (await readSealedSnapshot())!;
+    await saveSnapshot({ cursor: 2, syncEpoch: "server-a", memos: [{ ...memos[0], content: "second", seq: 2 }], tags: [], purged: [] });
+    const newer = (await readSealedSnapshot())!;
+
+    const index = shardOf("memo-a");
+    const shardRecords = [...newer.shardRecords];
+    shardRecords[index] = older.shardRecords[index];
+    await expect(openSnapshot({ ...newer, shardRecords })).resolves.toBeNull();
+    // Relabelling the old ciphertext with the new id fails authentication.
+    shardRecords[index] = { ...older.shardRecords[index]!, id: newer.shardRecords[index]!.id };
+    await expect(openSnapshot({ ...newer, shardRecords })).resolves.toBeNull();
+    await expect(openSnapshot(newer)).resolves.not.toBeNull();
+    await invalidateSnapshot();
+  });
+
+  it("falls back to a full write when another tab rewrote shards in between", async () => {
+    await invalidateSnapshot();
+    const key = toBase64(Uint8Array.from({ length: 32 }, (_, index) => index + 19));
+    adoptCacheKey(key);
+    const memos = Array.from({ length: 64 }, (_, index) => memo(`memo-${index}`, `note ${index}`));
+    await saveSnapshot({ cursor: 1, syncEpoch: "server-a", memos, tags: [], purged: [] });
+
+    // A second tab (own module state) rewrites everything at a newer cursor.
+    vi.resetModules();
+    const otherTab = await import("../src/lib/cache");
+    otherTab.adoptCacheKey(key);
+    const otherMemos = memos.map((item) => ({ ...item, content: `${item.content} (other tab)`, seq: 2 }));
+    await otherTab.saveSnapshot({ cursor: 2, syncEpoch: "server-a", memos: otherMemos, tags: [], purged: [] });
+
+    // This tab's baseline is now stale; its incremental write must not reuse
+    // shard ids the other tab replaced.
+    // Every other memo keeps its object, so without the conflict check this
+    // write would reuse ids whose shards the other tab has since replaced.
+    const mine = memos.map((item, index) => (index === 0 ? { ...item, content: "mine", seq: 3 } : item));
+    await saveSnapshot({ cursor: 3, syncEpoch: "server-a", memos: mine, tags: [], purged: [] });
+    const opened = await openSnapshot((await readSealedSnapshot())!);
+    expect(opened?.cursor).toBe(3);
+    expect(opened?.memos).toHaveLength(64);
+    expect(opened?.memos.find((item) => item.id === "memo-0")?.content).toBe("mine");
+    expect(opened?.memos.find((item) => item.id === "memo-5")?.content).toBe("note 5");
+    await invalidateSnapshot();
   });
 
   it("opens the exact record retained before a newer IndexedDB write", async () => {

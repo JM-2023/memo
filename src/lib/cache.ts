@@ -2,6 +2,15 @@
 // cursor and opaque tab epoch are authenticated as AES-GCM additional data;
 // the cursor is duplicated inside the ciphertext, so it can seed a warm sync
 // without becoming a tamperable source of truth.
+//
+// The snapshot is stored as a small manifest plus SHARD_COUNT memo shards
+// (memos bucketed by a hash of their id), so a save re-seals only the shards
+// whose memos changed instead of the whole notebook. Each shard is sealed
+// under a fresh random id that is bound into its AES-GCM additional data and
+// listed inside the manifest's ciphertext: a shard from any other write can
+// never be mixed into this manifest, so the pair still opens only as the
+// exact state one write produced. The manifest also carries the (small) tag
+// rows and purge tombstones, and is re-sealed on every save.
 
 import type { Memo, TagMeta } from "./types";
 import type { PurgedMemo } from "./syncState";
@@ -10,15 +19,37 @@ const DB_NAME = "memo-cache";
 const STORE = "kv";
 const SNAPSHOT_KEY = "snapshot";
 const EPOCH_KEY = "epoch";
-/** Version 3 binds cursor, tombstone watermarks, and a shared cache epoch. */
-const SNAPSHOT_VERSION = 3;
+/** Version 4 splits memos into id-bound shards under a sealed manifest. */
+const SNAPSHOT_VERSION = 4;
+/** Fixed, so a memo's shard never moves; 32 keeps a warm start to one read
+ * transaction of 33 records while an edit re-seals ~1/32 of the memos. */
+export const SHARD_COUNT = 32;
 
+function shardKey(index: number): string {
+  return `snapshot-shard:${index}`;
+}
+
+/** The sealed manifest record (stored under SNAPSHOT_KEY). */
 export interface SealedSnapshot {
   v: number;
   epoch: string;
   cursor: number;
   iv: Uint8Array<ArrayBuffer>;
   data: ArrayBuffer;
+  /** Clear-text copy of the shard ids the manifest seals; only ever used as a
+   * cross-tab concurrency token, never trusted when opening. */
+  shards: string[];
+}
+
+export interface SealedShard {
+  id: string;
+  iv: Uint8Array<ArrayBuffer>;
+  data: ArrayBuffer;
+}
+
+/** A manifest plus the shard records read in the same transaction. */
+export interface SealedSnapshotHandle extends SealedSnapshot {
+  shardRecords: (SealedShard | null)[];
 }
 
 export interface Snapshot {
@@ -30,7 +61,7 @@ export interface Snapshot {
 }
 
 /** A newer app schema wins; within one schema, cursor is the high-water. */
-export function shouldReplaceSealedSnapshot(current: unknown, candidate: SealedSnapshot): boolean {
+export function shouldReplaceSealedSnapshot(current: unknown, candidate: Pick<SealedSnapshot, "v" | "epoch" | "cursor">): boolean {
   if (!current || typeof current !== "object") return true;
   const record = current as Partial<SealedSnapshot>;
   // Reset epochs outrank schema/cursor ordering: an old D1 history must not
@@ -60,6 +91,20 @@ function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
 
 function cursorAad(cursor: number, epoch: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(`memo-cache:${SNAPSHOT_VERSION}:${epoch}:${cursor}`);
+}
+
+function shardAad(index: number, id: string, epoch: string): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(`memo-cache:${SNAPSHOT_VERSION}:${epoch}:shard:${index}:${id}`);
+}
+
+/** FNV-1a over the id: stable across sessions and tabs, cheap per save. */
+export function shardOf(id: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < id.length; index += 1) {
+    hash ^= id.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) % SHARD_COUNT;
 }
 
 /** Remember the snapshot key delivered by an authenticated response. */
@@ -135,28 +180,36 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-async function idbReadState(): Promise<{ record: SealedSnapshot | null; epoch: string }> {
+async function idbReadState(withShards = false): Promise<{ record: SealedSnapshotHandle | null; epoch: string }> {
   const db = await openDb();
   try {
     return await new Promise((resolve, reject) => {
       // Initialize the shared marker in the same transaction as the read so
       // every tab starts from one epoch even when no snapshot exists yet.
+      // Shards ride the same transaction as their manifest: IndexedDB's
+      // transaction isolation is what makes the set one consistent write.
       const transaction = db.transaction(STORE, "readwrite");
       const store = transaction.objectStore(STORE);
       const snapshotRequest = store.get(SNAPSHOT_KEY);
       const epochRequest = store.get(EPOCH_KEY);
-      let record: SealedSnapshot | null = null;
+      const shardRequests = withShards ? Array.from({ length: SHARD_COUNT }, (_, index) => store.get(shardKey(index))) : [];
+      let record: SealedSnapshotHandle | null = null;
       let epoch = "";
       snapshotRequest.onsuccess = () => {
-        record = (snapshotRequest.result as SealedSnapshot | undefined) ?? null;
+        const manifest = (snapshotRequest.result as SealedSnapshot | undefined) ?? null;
+        record = manifest ? { ...manifest, shardRecords: [] } : null;
       };
+      for (const request of shardRequests) request.onerror = () => transaction.abort();
       epochRequest.onsuccess = () => {
         epoch = typeof epochRequest.result === "string" && epochRequest.result ? epochRequest.result : crypto.randomUUID();
         if (epochRequest.result !== epoch) store.put(epoch, EPOCH_KEY);
       };
       snapshotRequest.onerror = () => transaction.abort();
       epochRequest.onerror = () => transaction.abort();
-      transaction.oncomplete = () => resolve({ record, epoch });
+      transaction.oncomplete = () => {
+        if (record) record.shardRecords = shardRequests.map((request) => (request.result as SealedShard | undefined) ?? null);
+        resolve({ record, epoch });
+      };
       transaction.onerror = () => reject(transaction.error);
       transaction.onabort = () => reject(transaction.error ?? new Error("Snapshot transaction aborted"));
     });
@@ -165,25 +218,45 @@ async function idbReadState(): Promise<{ record: SealedSnapshot | null; epoch: s
   }
 }
 
-async function idbWrite(record: SealedSnapshot): Promise<void> {
+type WriteOutcome = "written" | "skipped" | "conflict";
+
+/**
+ * Write a manifest and the shards it re-sealed. `reused` names the shards the
+ * manifest takes over unchanged from what this tab believes is stored; if the
+ * stored manifest no longer lists exactly those ids (another tab wrote in
+ * between), nothing is written and the caller falls back to a full write.
+ */
+async function idbWrite(record: SealedSnapshot, sealed: Map<number, SealedShard>, reused: readonly number[]): Promise<WriteOutcome> {
   const db = await openDb();
   try {
-    await new Promise<void>((resolve, reject) => {
+    return await new Promise<WriteOutcome>((resolve, reject) => {
       const transaction = db.transaction(STORE, "readwrite");
       const store = transaction.objectStore(STORE);
-      // Both guards share this write transaction. Cursor ordering handles
+      // All guards share this write transaction. Cursor ordering handles
       // ordinary tab races; the epoch rejects a late write from an invalidated
       // D1 history even when that stale cursor is numerically larger.
       const snapshotRequest = store.get(SNAPSHOT_KEY);
       const epochRequest = store.get(EPOCH_KEY);
       let snapshotReady = false;
       let epochReady = false;
+      let outcome: WriteOutcome = "skipped";
       const maybeWrite = () => {
         if (!snapshotReady || !epochReady) return;
         const storedEpoch = epochRequest.result;
         if (!cacheEpochAllowsWrite(storedEpoch, record.epoch)) return;
+        const stored = snapshotRequest.result as Partial<SealedSnapshot> | undefined;
+        if (!shouldReplaceSealedSnapshot(stored, record)) return;
+        if (reused.length > 0) {
+          const storedShards = stored?.v === record.v && stored.epoch === record.epoch && Array.isArray(stored.shards) ? stored.shards : null;
+          if (!storedShards || reused.some((index) => storedShards[index] !== record.shards[index])) {
+            outcome = "conflict";
+            return;
+          }
+        }
         if (storedEpoch !== record.epoch) store.put(record.epoch, EPOCH_KEY);
-        if (shouldReplaceSealedSnapshot(snapshotRequest.result, record)) store.put(record, SNAPSHOT_KEY);
+        for (const [index, shard] of sealed) store.put(shard, shardKey(index));
+        store.put(record, SNAPSHOT_KEY);
+        outcome = "written";
       };
       snapshotRequest.onsuccess = () => {
         snapshotReady = true;
@@ -195,7 +268,7 @@ async function idbWrite(record: SealedSnapshot): Promise<void> {
       };
       snapshotRequest.onerror = () => transaction.abort();
       epochRequest.onerror = () => transaction.abort();
-      transaction.oncomplete = () => resolve();
+      transaction.oncomplete = () => resolve(outcome);
       transaction.onerror = () => reject(transaction.error);
       transaction.onabort = () => reject(transaction.error ?? new Error("Snapshot transaction aborted"));
     });
@@ -213,11 +286,13 @@ async function idbResetEpoch(): Promise<void> {
       const store = transaction.objectStore(STORE);
       store.put(nextEpoch, EPOCH_KEY);
       store.delete(SNAPSHOT_KEY);
+      for (let index = 0; index < SHARD_COUNT; index += 1) store.delete(shardKey(index));
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
       transaction.onabort = () => reject(transaction.error ?? new Error("Snapshot transaction aborted"));
     });
     cacheEpoch = nextEpoch;
+    baseline = null;
   } finally {
     db.close();
   }
@@ -335,7 +410,6 @@ interface QueueWaiter {
   reject: (cause?: unknown) => void;
 }
 
-const ENCODE_CHUNK_CHARS = 128 * 1024;
 const YIELD_AFTER_BYTES = 256 * 1024;
 
 async function yieldToMainThread(): Promise<void> {
@@ -347,88 +421,112 @@ async function yieldToMainThread(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
-/** Encode in bounded pieces so a large notebook does not create one long task. */
-export async function encodeSnapshotCooperatively(snapshot: Snapshot): Promise<Uint8Array<ArrayBuffer>> {
-  const encoder = new TextEncoder();
-  const chunks: Uint8Array<ArrayBuffer>[] = [];
-  let buffer = "";
-  let totalBytes = 0;
-  let bytesSinceYield = 0;
-
-  const flush = async () => {
-    if (!buffer) return;
-    const encoded = encoder.encode(buffer);
-    buffer = "";
-    chunks.push(encoded);
-    totalBytes += encoded.byteLength;
-    bytesSinceYield += encoded.byteLength;
-    if (bytesSinceYield >= YIELD_AFTER_BYTES) {
-      bytesSinceYield = 0;
-      await yieldToMainThread();
-    }
-  };
-  const append = (text: string) => {
-    buffer += text;
-    return buffer.length >= ENCODE_CHUNK_CHARS;
-  };
-  const appendArray = async (items: readonly unknown[]) => {
-    for (let index = 0; index < items.length; index += 1) {
-      if (append(`${index === 0 ? "" : ","}${JSON.stringify(items[index])}`)) await flush();
-    }
-  };
-
-  append(`{"cursor":${JSON.stringify(snapshot.cursor)},"syncEpoch":${JSON.stringify(snapshot.syncEpoch)},"memos":[`);
-  await appendArray(snapshot.memos);
-  append(`],"tags":[`);
-  await appendArray(snapshot.tags);
-  append(`],"purged":[`);
-  await appendArray(snapshot.purged);
-  append(`]}`);
-  await flush();
-
-  const payload = new Uint8Array(totalBytes);
-  let offset = 0;
-  let copiedSinceYield = 0;
-  for (const chunk of chunks) {
-    payload.set(chunk, offset);
-    offset += chunk.byteLength;
-    copiedSinceYield += chunk.byteLength;
-    if (copiedSinceYield >= YIELD_AFTER_BYTES) {
-      copiedSinceYield = 0;
-      await yieldToMainThread();
-    }
-  }
-  return payload;
+interface ManifestPayload {
+  cursor: number;
+  syncEpoch: string;
+  tags: TagMeta[];
+  purged: PurgedMemo[];
+  shards: string[];
 }
 
-async function sealAndWrite(snapshot: Snapshot): Promise<void> {
+/**
+ * What this tab last wrote (or opened): per shard, the stored id and the
+ * exact memo objects sealed in it. Sync state replaces a memo object only
+ * when that memo changes, so a shard whose members are the same objects in
+ * the same order needs no re-seal — detection is reference comparison, not
+ * serialization. Tied to the key it was sealed under: a rotated key makes
+ * every stored shard unreadable, so nothing may be reused across it.
+ */
+let baseline: { key: Promise<CryptoKey>; epoch: string; shardIds: string[]; shardMemos: (readonly Memo[])[] } | null = null;
+
+function bucketMemos(memos: readonly Memo[]): Memo[][] {
+  const buckets: Memo[][] = Array.from({ length: SHARD_COUNT }, () => []);
+  for (const memo of memos) buckets[shardOf(memo.id)].push(memo);
+  return buckets;
+}
+
+function sameMembers(a: readonly Memo[], b: readonly Memo[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) if (a[index] !== b[index]) return false;
+  return true;
+}
+
+async function sealAndWrite(snapshot: Snapshot, forceFull = false): Promise<void> {
   const pendingKey = keyPromise;
   if (!pendingKey) return;
   const epoch = await ensureCacheEpoch();
   const key = await pendingKey;
+  const encoder = new TextEncoder();
+  const buckets = bucketMemos(snapshot.memos);
+  const base = !forceFull && baseline && baseline.key === pendingKey && baseline.epoch === epoch ? baseline : null;
+
+  const shardIds: string[] = [];
+  const sealed = new Map<number, SealedShard>();
+  const reused: number[] = [];
+  let bytesSinceYield = 0;
+  for (let index = 0; index < SHARD_COUNT; index += 1) {
+    if (base && sameMembers(base.shardMemos[index], buckets[index])) {
+      shardIds.push(base.shardIds[index]);
+      reused.push(index);
+      continue;
+    }
+    const id = crypto.randomUUID();
+    const payload = encoder.encode(JSON.stringify(buckets[index]));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: shardAad(index, id, epoch) }, key, payload);
+    shardIds.push(id);
+    sealed.set(index, { id, iv, data });
+    // Bounded pieces: a cold first write of a large notebook still never
+    // becomes one long task.
+    bytesSinceYield += payload.byteLength;
+    if (bytesSinceYield >= YIELD_AFTER_BYTES) {
+      bytesSinceYield = 0;
+      await yieldToMainThread();
+    }
+  }
+
+  const manifest: ManifestPayload = {
+    cursor: snapshot.cursor,
+    syncEpoch: snapshot.syncEpoch,
+    tags: snapshot.tags,
+    purged: snapshot.purged,
+    shards: shardIds
+  };
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const payload = await encodeSnapshotCooperatively(snapshot);
   const data = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv, additionalData: cursorAad(snapshot.cursor, epoch) },
     key,
-    payload
+    encoder.encode(JSON.stringify(manifest))
   );
-  await idbWrite({ v: SNAPSHOT_VERSION, epoch, cursor: snapshot.cursor, iv, data });
+  const outcome = await idbWrite({ v: SNAPSHOT_VERSION, epoch, cursor: snapshot.cursor, iv, data, shards: shardIds }, sealed, reused);
+  if (outcome === "written") {
+    baseline = { key: pendingKey, epoch, shardIds, shardMemos: buckets };
+  } else if (outcome === "conflict") {
+    // Another tab rewrote shards this write meant to keep. Re-seal them all;
+    // a full write depends on nothing already stored.
+    baseline = null;
+    await sealAndWrite(snapshot, true);
+  } else {
+    // A newer cursor or epoch owns the store; what it holds is not ours.
+    baseline = null;
+  }
 }
 
-const writeQueue = new MonotonicWriteQueue<Snapshot>(sealAndWrite, idbResetEpoch);
+const writeQueue = new MonotonicWriteQueue<Snapshot>((snapshot) => sealAndWrite(snapshot), idbResetEpoch);
 
-/** Read one exact sealed record; callers retain it across the warm-sync RTT. */
-export async function readSealedSnapshot(): Promise<SealedSnapshot | null> {
+/** Read one exact sealed record set; callers retain it across the warm-sync RTT. */
+export async function readSealedSnapshot(): Promise<SealedSnapshotHandle | null> {
   try {
-    const { record, epoch } = await idbReadState();
+    const { record, epoch } = await idbReadState(true);
     cacheEpoch = epoch;
     if (
       !record ||
       record.v !== SNAPSHOT_VERSION ||
       record.epoch !== epoch ||
       !Number.isFinite(record.cursor) ||
-      record.cursor < 0
+      record.cursor < 0 ||
+      !Array.isArray(record.shards) ||
+      record.shards.length !== SHARD_COUNT
     ) {
       return null;
     }
@@ -438,8 +536,8 @@ export async function readSealedSnapshot(): Promise<SealedSnapshot | null> {
   }
 }
 
-/** Decrypt the exact record previously read by readSealedSnapshot. */
-export async function openSnapshot(record: SealedSnapshot): Promise<Snapshot | null> {
+/** Decrypt the exact record set previously read by readSealedSnapshot. */
+export async function openSnapshot(record: SealedSnapshotHandle): Promise<Snapshot | null> {
   const pendingKey = keyPromise;
   if (!pendingKey || record.v !== SNAPSHOT_VERSION || !record.epoch) return null;
   try {
@@ -449,23 +547,44 @@ export async function openSnapshot(record: SealedSnapshot): Promise<Snapshot | n
     cacheEpoch = state.epoch;
     if (state.epoch !== record.epoch) return null;
     const key = await pendingKey;
+    const decoder = new TextDecoder();
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: record.iv, additionalData: cursorAad(record.cursor, record.epoch) },
       key,
       record.data
     );
-    const parsed = JSON.parse(new TextDecoder().decode(plaintext)) as Partial<Snapshot>;
+    const parsed = JSON.parse(decoder.decode(plaintext)) as Partial<ManifestPayload>;
     if (
       parsed.cursor !== record.cursor ||
       typeof parsed.syncEpoch !== "string" ||
       !parsed.syncEpoch ||
-      !Array.isArray(parsed.memos) ||
       !Array.isArray(parsed.tags) ||
-      !Array.isArray(parsed.purged)
+      !Array.isArray(parsed.purged) ||
+      !Array.isArray(parsed.shards) ||
+      parsed.shards.length !== SHARD_COUNT
     ) {
       return null;
     }
-    return { cursor: record.cursor, syncEpoch: parsed.syncEpoch, memos: parsed.memos, tags: parsed.tags, purged: parsed.purged };
+    // The authenticated id list, not the clear-text copy, decides which
+    // shard ciphertexts belong to this manifest.
+    const shardMemos: Memo[][] = [];
+    for (let index = 0; index < SHARD_COUNT; index += 1) {
+      const id = parsed.shards[index];
+      const shard = record.shardRecords[index];
+      if (typeof id !== "string" || !shard || shard.id !== id) return null;
+      const plain = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: shard.iv, additionalData: shardAad(index, id, record.epoch) },
+        key,
+        shard.data
+      );
+      const memos = JSON.parse(decoder.decode(plain)) as unknown;
+      if (!Array.isArray(memos)) return null;
+      shardMemos.push(memos as Memo[]);
+    }
+    // These exact objects seed sync state, so the next save re-seals only
+    // the shards a delta actually touched.
+    baseline = { key: pendingKey, epoch: record.epoch, shardIds: parsed.shards, shardMemos };
+    return { cursor: record.cursor, syncEpoch: parsed.syncEpoch, memos: shardMemos.flat(), tags: parsed.tags, purged: parsed.purged };
   } catch {
     return null;
   }
