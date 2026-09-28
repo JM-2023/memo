@@ -258,7 +258,7 @@ describe("share dialog", () => {
 
     await waitFor(() => expect(view.container.querySelector(".sc-date")).toBeNull());
     await waitFor(() => expect(view.container.querySelector(".sc-brand")).toBeNull());
-    expect(view.container.querySelector(".sc-glyph")).toBeNull();
+    expect(view.container.querySelector(".sc-ink")).toBeNull();
   });
 
   it("takes the wordmark and the tags off the sheet, and remembers", async () => {
@@ -322,14 +322,15 @@ describe("share dialog", () => {
 
     const brand = view.container.querySelector(".sc-brand");
     expect(brand?.className).toContain("is-drinking");
-    // One node per glyph, each dealt its own beat, so the absorption is
-    // granular rather than a wipe.
-    expect(brand?.querySelectorAll(".sc-glyph")).toHaveLength(4);
+    // The ink rides a canvas over the mark; the text itself stays whole and
+    // in place, so nothing reflows while the paper drinks it.
+    expect(brand?.querySelector("canvas.sc-ink")).not.toBeNull();
+    expect(brand?.textContent).toBe("MEMO");
     expect(view.container.querySelector(".sc-tag")?.className).toContain("is-drinking");
 
     await waitFor(() => expect(view.container.querySelector(".sc-brand")).toBeNull());
-    // Settled: nothing per-character is left for the export to serialize.
-    expect(view.container.querySelector(".sc-glyph")).toBeNull();
+    // Settled: nothing is left over the card for the export to serialize.
+    expect(view.container.querySelector(".sc-ink")).toBeNull();
   });
 
   it("writes the marks back on rather than blinking them in", async () => {
@@ -344,7 +345,9 @@ describe("share dialog", () => {
     await user.click(privacy);
     expect(view.container.querySelector(".sc-brand")?.className).toContain("is-writing");
 
-    await waitFor(() => expect(view.container.querySelector(".sc-glyph")).toBeNull());
+    await waitFor(() => expect(view.container.querySelector(".sc-ink")).toBeNull());
+    expect(view.container.querySelector(".sc-brand")?.className).not.toContain("is-writing");
+    expect(view.container.querySelector(".sc-brand")?.hasAttribute("data-ink")).toBe(false);
     expect(view.container.querySelector(".sc-brand")?.textContent).toBe("MEMO");
     expect(view.container.querySelector(".sc-tag")?.textContent).toBe("#work");
   });

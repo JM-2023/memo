@@ -660,18 +660,6 @@ a:hover { text-decoration: underline; }
 @keyframes seg-pop { from { transform: var(--glyph-tilt) scale(0.76); } }
 /* The seal chip presses on the way the seal does, one size down. */
 @keyframes seal-press { from { opacity: 0; transform: var(--glyph-tilt) scale(1.7) rotate(-12deg); } }
-/* Share card, privacy mode: the two marks it takes off the page are drunk by
-   the paper rather than switched off, and written back rather than switched
-   on — the Riddle diary's own pair of gestures (riddle-lite.css), glyph by
-   glyph. Drinking, the ink spreads as it sinks; writing, the pen lays each
-   stroke down left to right with a wet edge that dries behind it. Which
-   glyph goes when is dealt in inkText.tsx. */
-@keyframes ink-drink { to { opacity: 0; filter: blur(3.5px); transform: translateY(1.5px) scale(1.03); } }
-@keyframes ink-write {
-  from { clip-path: inset(-20% 100% -20% 0); opacity: 0.25; filter: blur(2.5px); }
-  60% { opacity: 1; }
-  to { clip-path: inset(-20% -10% -20% 0); opacity: 1; filter: blur(0); }
-}
 /* Nothing can tween between two typefaces, so the entry is re-inked instead:
    it soaks back into the page and comes up again in the other hand. */
 @keyframes ink-reset {
@@ -3873,18 +3861,17 @@ button.stats-tag-row:active { scale: 0.992; }
    by exactly this long (SEAL_LIFT_MS in ShareDialog); an export inside that
    beat cuts it short rather than photographing a fading stamp. */
 .share-stage .sc-seal.is-lifting { animation: seal-lift 0.2s var(--ease) forwards; }
-/* Privacy mode's two gestures. The card is split into glyphs only while one
-   of them is running (InkText), so this is the only place a .sc-glyph
-   exists — and, like everything else here, the PNG never sees it: an export
-   that lands mid-gesture settles the card first. The soak and stroke lengths
-   are mirrored by inkText.tsx, which times the unmount off them; the
-   per-glyph offsets come the other way, as --ink-delay. */
-.share-stage .sc-glyph {
-  display: inline-block;
-  white-space: pre;
-}
-.share-stage .is-drinking .sc-glyph { animation: ink-drink 380ms ease-in var(--ink-delay, 0ms) both; }
-.share-stage .is-writing .sc-glyph { animation: ink-write 160ms ease-out var(--ink-delay, 0ms) both; }
+/* The card's removable marks are drunk and written back on a canvas laid
+   over them (InkText, src/lib/inkCanvas.ts). While one of those gestures
+   runs, the DOM text keeps its place but gives up its ink — fill only, so it
+   stays selectable and read aloud — and the canvas carries it. The baseline
+   probe is where the canvas sets its type. Like everything here the PNG
+   never sees any of it: an export that lands mid-gesture settles first. */
+.share-stage .is-drinking,
+.share-stage .is-writing { position: relative; }
+.share-stage [data-ink] { -webkit-text-fill-color: transparent; }
+.share-stage .sc-ink-base { display: inline-block; width: 0; height: 0; }
+.share-stage .sc-ink { position: absolute; pointer-events: none; }
 /* The dateline is a whole line rather than a mark inside one, so its room
    closes and opens too — late enough on the way out that the page is drinking
    from a line it has almost finished with, and early enough on the way in

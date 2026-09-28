@@ -1,57 +1,39 @@
 /**
  * Ink the paper can take back.
  *
- * The share card's two removable marks — the wordmark and the tags — don't
- * blink out when privacy mode hides them and don't blink back when it lets
- * them return. They are absorbed and re-written, using the Riddle diary's
- * own two gestures: the page drinks the ink (every glyph sinking on its own
- * beat, dealt from the diary's per-pixel hash so the absorption reads as
- * granular rather than as a wipe), and the pen lays it down again stroke by
- * stroke, left to right.
+ * The share card's removable marks — the dateline, the wordmark and the
+ * tags — don't blink out when they are hidden and don't blink back when they
+ * return. They are absorbed and re-written, using the Riddle diary's own two
+ * gestures, painted on a canvas laid over the mark (src/lib/inkCanvas.ts):
+ * the page drinks the ink pixel by pixel in the diary's hash order, and the
+ * pen lays it down again stroke by stroke, left to right.
  *
- * Split into glyphs only while something is actually moving: a settled card
- * is plain text, so the export never serializes a pile of per-character
- * spans, and the line breaks exactly where it would have anyway.
+ * The DOM text never moves: it only goes transparent while the canvas holds
+ * the ink, so the line breaks exactly where it will when it settles, and a
+ * settled card is plain text for the export to serialize.
  */
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { playInk } from "../lib/inkCanvas";
 
 /** Which way the ink is going, or null once it has settled. */
 export type InkPhase = "drink" | "write" | null;
 
-/** The diary's per-pixel hash (ink.rs px_hash, via riddle-ink.js), reused
-    per glyph to deal each one a dissolve stage. */
-function pxHash(x: number, y: number): number {
-  let h = (Math.imul(x, 0x9e3779b1) ^ Math.imul(y, 0x85ebca6b)) >>> 0;
-  h ^= h >>> 13;
-  h = Math.imul(h, 0xc2b2ae35) >>> 0;
-  return (h ^ (h >>> 16)) >>> 0;
-}
-
-/* The diary absorbs in 14 passes of 70ms; a control that answers a finger
-   can't take a second and a half, so the same pattern is dealt over a
-   shorter clock. The soak and stroke lengths themselves live in app.css
-   (ink-drink / ink-write) — these mirror them to time the unmount. */
-const DRINK_STAGES = 12;
-const DRINK_STAGE_MS = 32;
-const DRINK_SOAK_MS = 380;
+/* The diary absorbs over about a second; a control that answers a finger
+   can't take that long, so the same dissolve runs on a shorter clock. The
+   pen's pace is set per glyph so a long tag takes longer than a short one,
+   the way a hand would. */
+const DRINK_MS = 720;
 const WRITE_STEP_MS = 28;
 const WRITE_STROKE_MS = 160;
 
-/** How long the paper takes to drink a mark, whatever its length: every
-    glyph is dealt one of the stages, so the last one starts at the same
-    moment no matter how many there are. */
-export const INK_DRINK_MS = (DRINK_STAGES - 1) * DRINK_STAGE_MS + DRINK_SOAK_MS;
+/** How long the paper takes to drink a mark, whatever its length. */
+export const INK_DRINK_MS = DRINK_MS;
 
 /** How long the pen takes to write the marks back — set by the longest one,
     since they all start together, plus any wait before the pen is put down. */
 export function inkWriteMs(longestMark: number, lead = 0): number {
   return lead + Math.max(0, longestMark - 1) * WRITE_STEP_MS + WRITE_STROKE_MS;
-}
-
-function delayOf(phase: Exclude<InkPhase, null>, index: number, total: number, lead: number): number {
-  if (phase === "write") return lead + index * WRITE_STEP_MS;
-  return (pxHash(index, total) % DRINK_STAGES) * DRINK_STAGE_MS;
 }
 
 interface InkTextProps {
@@ -65,29 +47,42 @@ interface InkTextProps {
 }
 
 export function InkText({ text, phase, className, lead = 0 }: InkTextProps) {
-  if (!phase) return <span className={className}>{text}</span>;
-  // Code points, not code units: an emoji tag must sink as one mark.
-  const glyphs = [...text];
+  const hostRef = useRef<HTMLSpanElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // A reversal mid-flight restarts cleanly from the other gesture's start.
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    const canvas = canvasRef.current;
+    if (!phase || !host || !canvas) return;
+    return playInk(host, canvas, {
+      gesture: phase,
+      // Code points, matching the dialog's own clock for the longest mark.
+      durationMs: phase === "drink" ? INK_DRINK_MS : inkWriteMs([...text].length, lead),
+      leadMs: phase === "write" ? lead : 0
+    });
+  }, [phase, text, lead]);
+
+  if (!phase) {
+    return (
+      <span ref={hostRef} className={className}>
+        {text}
+      </span>
+    );
+  }
   return (
-    <span className={`${className ? `${className} ` : ""}${phase === "drink" ? "is-drinking" : "is-writing"}`}>
-      {glyphs.map((glyph, index) => (
-        // Keyed by phase so a reversal mid-flight replaces the nodes and
-        // restarts cleanly, instead of retargeting a half-faded glyph.
-        <span
-          key={`${phase}-${index}`}
-          className="sc-glyph"
-          style={{ "--ink-delay": `${delayOf(phase, index, glyphs.length, lead)}ms` } as CSSProperties}
-        >
-          {glyph}
-        </span>
-      ))}
+    <span ref={hostRef} className={`${className ? `${className} ` : ""}${phase === "drink" ? "is-drinking" : "is-writing"}`}>
+      {/* Zero-height, on the baseline: where the canvas sets its type. */}
+      <span className="sc-ink-base" aria-hidden="true" />
+      {text}
+      <canvas ref={canvasRef} className="sc-ink" aria-hidden="true" />
     </span>
   );
 }
 
 /**
  * The clock for one mark's leaving and returning. Holds the gesture's phase
- * for exactly as long as app.css needs to run it, then lets the mark go —
+ * for exactly as long as the canvas needs to run it, then lets the mark go —
  * or, under reduced motion, never starts one at all.
  *
  * One of these per mark that can leave the page, so a dateline and a
