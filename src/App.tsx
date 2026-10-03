@@ -4157,8 +4157,9 @@ export default function App() {
               </div>
             ) : view === "trash" ? (
               // Trash reuses the tag-drilldown breadcrumb language: ⌂ / 回收站,
-              // same cascade-in, ⌂ steps back out to All memos.
-              <nav className="crumbs" aria-label={tr("Location", "当前位置")}>
+              // same cascade-in, ⌂ steps back out to All memos (the trail
+              // folds back on its own snapshot — see .view-trail).
+              <nav className="crumbs view-trail" aria-label={tr("Location", "当前位置")}>
                 <button type="button" className="crumb crumb-home" onClick={showAll} aria-label={tr("All memos", "全部笔记")} style={{ animationDelay: "0s" }}>
                   <Home size={15} aria-hidden="true" />
                 </button>
@@ -4171,7 +4172,7 @@ export default function App() {
             ) : view === "review" ? (
               // Daily review borrows the Trash breadcrumb language: ⌂ / ✦
               // 每日回顾, same cascade-in, ⌂ steps back out to All memos.
-              <nav className="crumbs" aria-label={tr("Location", "当前位置")}>
+              <nav className="crumbs view-trail" aria-label={tr("Location", "当前位置")}>
                 <button type="button" className="crumb crumb-home" onClick={showAll} aria-label={tr("All memos", "全部笔记")} style={{ animationDelay: "0s" }}>
                   <Home size={15} aria-hidden="true" />
                 </button>

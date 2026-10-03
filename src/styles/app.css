@@ -1674,6 +1674,13 @@ button.crumb:active { background: var(--wash-strong); }
 /* The current segment's separator glides between layouts alongside the pill
    instead of snapping when the ancestor list changes width. */
 .loc-sep { view-transition-name: loc-sep; }
+/* The Trash / Daily review trail (⌂ › 回收站, ⌂ › 每日回顾). Left in the
+   topbar snapshot, it could only ride the band's 240ms cross-fade, so going
+   home the topbar-action pill glided right through a still-legible
+   "每日回顾" — three labels stacked for most of the move. On its own
+   snapshot it folds back the way dropped crumbs do (see the view-transition
+   section) and clears the lane before the pill arrives. */
+.view-trail { view-transition-name: view-trail; }
 /* Leaving segments paint from the settled breadcrumb edge without taking up
    flex space. The sort control can move directly to its final position while
    the old path folds away above it. Zero width alone is not enough: as a flex
@@ -2190,6 +2197,8 @@ button.crumb:active { background: var(--wash-strong); }
   border-radius: var(--r-sm);
   animation: crumb-in 0.22s var(--ease-out) backwards;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+  /* Leaves with the trail (see .view-trail) — it sits in the pill's path too. */
+  view-transition-name: trash-select;
 }
 .trash-select-button svg { color: var(--muted); transition: color var(--t) var(--ease); }
 @media (hover: hover) {
@@ -4595,6 +4604,15 @@ button.stats-tag-row:active { scale: 0.992; }
 ::view-transition-old(facet-chip-hasOpenTask):only-child { animation: crumb-out 0.14s var(--ease) both; }
 ::view-transition-old(composer-context-tag):only-child { animation: crumb-out 0.14s var(--ease) both; }
 ::view-transition-new(composer-context-tag):only-child { animation: crumb-in 0.18s var(--ease-out) both; }
+/* Leaving Trash / Daily review, the trail folds back on the pill's own
+   front-loaded curve: the pill crosses it within the first ~60ms of its
+   glide home, so the fold has to be mostly done by then. Arriving, the live
+   crumb-in cascade already IS the entrance — a snapshot fade on top would
+   only dim it twice. Review ↔ Trash shares the name and morphs in place. */
+::view-transition-old(view-trail):only-child,
+::view-transition-old(trash-select):only-child { animation: crumb-out 0.14s var(--ease-out) both; }
+::view-transition-new(view-trail):only-child,
+::view-transition-new(trash-select):only-child { animation: none; }
 /* The date chips morph between labels of different widths (repicking a
    heatmap day, a range growing a second date) — natural-size snapshots keep
    the old label from stretching to the interpolating group width, same as
@@ -4614,16 +4632,25 @@ button.stats-tag-row:active { scale: 0.992; }
    block-size:auto, so the old label stretches to the interpolating group
    width — going home, a narrow tag pill ballooned down-left while gliding
    into the wide root pill. Pinned to the row height instead, every morph is
-   the same pure glide with the labels cross-fading at natural size. */
+   the same pure glide with the labels cross-fading at natural size.
+   The labels hand over in the first 140ms of the 240ms glide: cross-fading
+   for the whole move left the old label (and, being natural-size, its tail
+   past the narrowing group) legible beside the new one until the pill had
+   nearly landed. Both halves keep one duration and curve, so an unchanged
+   label still sums to full opacity under plus-lighter — no flicker. The
+   Trash ↔ review trail swaps its leaf ("回收站" ↔ "每日回顾") the same way. */
 ::view-transition-old(topbar-action),
-::view-transition-new(topbar-action) { inline-size: auto; block-size: 100%; }
+::view-transition-new(topbar-action),
+::view-transition-old(view-trail),
+::view-transition-new(view-trail) { inline-size: auto; block-size: 100%; animation-duration: 0.14s; }
 /* Snapshot stacking during transitions (higher = painted on top):
      cards & feed          auto (0)
      composer              1
      .topbar               2  — above the cards scrolled under the sticky bar,
                                 so the frosted header never blinks out
-     topbar controls       3  — the location / select / day pills and the
-                                crumb separator sit above their own band
+     topbar controls       3  — the location / select / day pills, the
+                                crumb separator and the Trash / review
+                                trail sit above their own band
      .toast                4  — the app's topmost layer (z-index 200 live),
                                 so no pill can glide over it mid-transition
    Natural-size snapshots on the pills/toast keep labels of different widths
@@ -4638,7 +4665,9 @@ button.stats-tag-row:active { scale: 0.992; }
 ::view-transition-group(facet-chip-hasImage),
 ::view-transition-group(facet-chip-hasLink),
 ::view-transition-group(facet-chip-hasOpenTask),
-::view-transition-group(loc-sep) { z-index: 3; }
+::view-transition-group(loc-sep),
+::view-transition-group(view-trail),
+::view-transition-group(trash-select) { z-index: 3; }
 ::view-transition-group(toast) { z-index: 4; }
 ::view-transition-old(toast),
 ::view-transition-new(toast) { inline-size: auto; block-size: 100%; }
