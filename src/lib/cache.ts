@@ -148,6 +148,15 @@ export async function sealDerivedBytes(
   }
 }
 
+/**
+ * Opaque identity of the key sealDerivedBytes would use now (null without
+ * one). Incremental writers compare it to tell whether ciphertext they stored
+ * earlier is still readable, so nothing sealed under a replaced key is reused.
+ */
+export function derivedKeyIdentity(): object | null {
+  return keyPromise;
+}
+
 /** Open a payload sealed by sealDerivedBytes; null without the key or on tampering. */
 export async function openDerivedBytes(
   purpose: string,

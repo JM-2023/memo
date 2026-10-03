@@ -103,6 +103,14 @@ export function useModelDownload(): ModelDownloadState {
   return useSyncExternalStore(subscribeModelDownload, getModelDownloadSnapshot, getModelDownloadSnapshot);
 }
 
+const getModelDownloadPhase = (): ModelDownloadPhase => state.phase;
+
+/** Only the phase: the toolbar re-renders on its few transitions, not on
+    every progress tick of a download. */
+export function useModelDownloadPhase(): ModelDownloadPhase {
+  return useSyncExternalStore(subscribeModelDownload, getModelDownloadPhase, getModelDownloadPhase);
+}
+
 /** True while bytes are moving or the runtime is starting — the moments a closed panel still has something to show. */
 export function isModelWorkInFlight(snapshot: ModelDownloadState): boolean {
   return snapshot.phase === "downloading" || snapshot.phase === "activating";

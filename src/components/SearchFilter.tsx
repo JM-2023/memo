@@ -45,6 +45,8 @@ interface SearchFilterProps {
   disabled: boolean;
   /** The tag lens, if any: "No tags" can only ever be empty inside one. */
   activeTag?: string | null;
+  /** Earliest day with a memo; the calendar pages no further back. */
+  minDay?: string | null;
   /** Bump to open the panel from outside (a chip's edit half). */
   openRequest?: number;
   onToggleFacet: (key: FacetKey) => void;
@@ -90,8 +92,7 @@ export function SearchFilter(props: SearchFilterProps) {
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-label={tr("Filter memos", "筛选笔记")}
-          onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Filter memos", "筛选笔记") })}
-          onMouseLeave={tip.hide}
+          {...tip.bind({ text: tr("Filter memos", "筛选笔记") })}
         >
           <ListFilter size={17} aria-hidden="true" />
         </button>
@@ -158,6 +159,7 @@ export function SearchFilter(props: SearchFilterProps) {
           <RangeCalendar
             from={filters.dateFrom}
             to={filters.dateTo}
+            minDay={props.minDay ?? null}
             onStart={(day) => props.onDateChange({ dateFrom: day, dateTo: null })}
             onRange={(from, to) => (props.onPresetRange ? props.onPresetRange(from, to) : props.onDateChange({ dateFrom: from, dateTo: to }))}
           />

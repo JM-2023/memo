@@ -44,7 +44,8 @@ export const DEFAULT_REVIEW_SETTINGS: ReviewSettings = Object.freeze({
   count: 10
 });
 
-const SETTINGS_KEY = "memo-review-settings";
+/** Exported so open tabs can follow each other's changes (storage events). */
+export const SETTINGS_KEY = "memo-review-settings";
 const DAY_KEY = "memo-review-day";
 const DAY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
@@ -90,6 +91,23 @@ export function persistReviewSettings(settings: ReviewSettings): void {
   } catch {
     // Storage full or blocked — the in-memory settings still drive the session.
   }
+}
+
+/** Keep an include/exclude scope on the same subtree after a tag rename.
+    Returns `settings` itself when no listed tag moved. */
+export function renameReviewSettingsTag(settings: ReviewSettings, from: string, to: string): ReviewSettings {
+  if (!settings.tags.some((tag) => tagMatches(tag, from))) return settings;
+  return normalizeSettings({ ...settings, tags: settings.tags.map((tag) => (tagMatches(tag, from) ? to + tag.slice(from.length) : tag)) });
+}
+
+/** Drop a removed tag subtree from the scope. An include/exclude list left
+    empty — a state the settings dialog will not save — falls back to all
+    memos instead of drawing nothing. */
+export function removeReviewSettingsTag(settings: ReviewSettings, path: string): ReviewSettings {
+  if (!settings.tags.some((tag) => tagMatches(tag, path))) return settings;
+  const tags = settings.tags.filter((tag) => !tagMatches(tag, path));
+  const scoped = settings.scope === "include" || settings.scope === "exclude";
+  return normalizeSettings({ ...settings, tags, scope: scoped && tags.length === 0 ? "all" : settings.scope });
 }
 
 /** Canonical settings identity; any change invalidates the frozen batch. */
@@ -226,4 +244,56 @@ export function clearReviewDay(): void {
   } catch {
     // Ignore: an unreadable record fails parseReviewDay and regenerates anyway.
   }
+}
+
+/** One chip in the settings dialog's tag picker. `label` is what the chip
+    reads: the full `#path`, or — inside a group its root chip leads — the
+    path below that root, `/cooking`. */
+export interface ReviewTagChip {
+  path: string;
+  label: string;
+}
+
+/** The picker's candidates. A pick matches its whole subtree, so every
+    ancestor of a tag in use is a candidate too (`life` for `life/cooking`)
+    even when no memo spells it out. The tags already chosen when the dialog
+    opened come first as `pinned`; the rest are grouped under their
+    top-level tag, in tree order. */
+export interface ReviewTagChoices {
+  pinned: ReviewTagChip[];
+  groups: { root: string; chips: ReviewTagChip[] }[];
+}
+
+export function reviewTagChoices(knownTags: readonly string[], chosen: readonly string[], locale = "en-US"): ReviewTagChoices {
+  const paths = new Set<string>();
+  for (const tag of [...knownTags, ...chosen]) {
+    const parts = tag.split("/");
+    for (let depth = 1; depth <= parts.length; depth += 1) paths.add(parts.slice(0, depth).join("/"));
+  }
+  // Tree order: segment by segment, a parent before its children.
+  const treeOrder = (a: string, b: string) => {
+    const left = a.split("/");
+    const right = b.split("/");
+    for (let index = 0; index < Math.min(left.length, right.length); index += 1) {
+      const order = left[index].localeCompare(right[index], locale);
+      if (order !== 0) return order;
+    }
+    return left.length - right.length;
+  };
+  const pinnedSet = new Set(chosen);
+  const pinned = [...pinnedSet].sort(treeOrder).map((path) => ({ path, label: `#${path}` }));
+  const groups: ReviewTagChoices["groups"] = [];
+  for (const path of [...paths].filter((candidate) => !pinnedSet.has(candidate)).sort(treeOrder)) {
+    const root = path.split("/")[0];
+    let group = groups[groups.length - 1];
+    if (!group || group.root !== root) {
+      group = { root, chips: [] };
+      groups.push(group);
+    }
+    // A relative label only reads right after the root chip it hangs from;
+    // a group whose root is pinned above spells its paths out.
+    const rootLeads = group.chips[0]?.path === root;
+    group.chips.push({ path, label: path === root || !rootLeads ? `#${path}` : `/${path.slice(root.length + 1)}` });
+  }
+  return { pinned, groups };
 }

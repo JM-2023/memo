@@ -1,4 +1,6 @@
 import { inlineCodeSpanEnd, MD_IMAGE_PATTERN, URL_PATTERN } from "./content";
+import { mathAt, parseBlock } from "./markdown";
+import { crossLineBlock } from "./markdownDocument";
 import type { Memo } from "./types";
 
 // Tags can be flat (#标签) or hierarchical (#领域/子类). A tag runs until
@@ -9,9 +11,11 @@ const TAG_PATTERN = /#([\p{L}\p{N}_\-/·]+)/gu;
 type TextRange = [start: number, end: number];
 
 /**
- * Spans whose `#...` text is literal rather than a memo tag. Code ranges are
- * collected one line at a time because the renderer's Markdown grammar is
- * line-stateless; an unmatched backtick therefore never shields another line.
+ * Spans whose `#...` text is literal rather than a memo tag — everything the
+ * card renders as code or TeX. Fenced code and display TeX blocks are found
+ * with the renderer's own grouping (an unclosed fence runs to the end, as on
+ * the card); inline code spans and inline TeX stay line-local, so an
+ * unmatched backtick never shields another line.
  */
 function protectedTagRanges(content: string): TextRange[] {
   const ranges: TextRange[] = [];
@@ -22,25 +26,39 @@ function protectedTagRanges(content: string): TextRange[] {
     ranges.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
   }
 
-  let lineStart = 0;
-  while (lineStart <= content.length) {
-    const newline = content.indexOf("\n", lineStart);
-    const lineEnd = newline === -1 ? content.length : newline;
-    const line = content.slice(lineStart, lineEnd);
-    let cursor = 0;
-    while (cursor < line.length) {
-      const opener = line.indexOf("`", cursor);
-      if (opener === -1) break;
-      const end = inlineCodeSpanEnd(line, opener);
-      if (end === -1) {
-        cursor = opener + 1;
+  const lines = content.split("\n");
+  const starts: number[] = [];
+  for (let key = 0, offset = 0; key < lines.length; offset += lines[key].length + 1, key += 1) starts.push(offset);
+  for (let key = 0; key < lines.length; key += 1) {
+    const lineStart = starts[key];
+    const line = lines[key];
+    const block = crossLineBlock(lines, key);
+    if (block) {
+      const last = Math.min(block.end, lines.length - 1);
+      ranges.push([lineStart, starts[last] + lines[last].length]);
+      key = last;
+      continue;
+    }
+    const trimmed = line.trim();
+    if ((trimmed.startsWith("$$") || trimmed.startsWith("\\[")) && parseBlock(line).kind === "math") {
+      ranges.push([lineStart, lineStart + line.length]);
+      continue;
+    }
+    for (let cursor = 0; cursor < line.length; ) {
+      const char = line[cursor];
+      if (char !== "`" && char !== "$" && char !== "\\") {
+        cursor += 1;
         continue;
       }
-      ranges.push([lineStart + opener, lineStart + end]);
+      const codeEnd = inlineCodeSpanEnd(line, cursor);
+      const end = codeEnd !== -1 ? codeEnd : cursor + (mathAt(line, cursor)?.raw.length ?? 0);
+      if (end === cursor) {
+        cursor += 1;
+        continue;
+      }
+      ranges.push([lineStart + cursor, lineStart + end]);
       cursor = end;
     }
-    if (newline === -1) break;
-    lineStart = newline + 1;
   }
 
   ranges.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
@@ -90,7 +108,22 @@ export function tagsOf(memo: Memo): string[] {
 export function appendTagToContent(content: string, path: string): string {
   if (extractTags(content).includes(path)) return content;
   const separator = content.length === 0 || content.endsWith("\n") ? "" : "\n";
-  return `${content}${separator}#${path}`;
+  // A fence left open runs to the end of the memo, so a tag line appended
+  // inside it would render as code. Close it first; the card looks the same.
+  const closer = openFenceAtEnd(content);
+  return `${content}${separator}${closer ? `${closer}\n` : ""}#${path}`;
+}
+
+/** The marker that would close a code fence still open at the end, or null. */
+function openFenceAtEnd(content: string): string | null {
+  const lines = content.split("\n");
+  for (let key = 0; key < lines.length; key += 1) {
+    const block = crossLineBlock(lines, key);
+    if (!block) continue;
+    if (block.kind === "codeblock" && block.end >= lines.length) return /^ {0,3}(`{3,}|~{3,})/.exec(lines[key])?.[1] ?? null;
+    key = block.end;
+  }
+  return null;
 }
 
 /**
@@ -107,8 +140,9 @@ export function inheritTagContext(content: string, path: string): string {
  * Rewrite every `#from` (and descendant `#from/…`) tag token in `content` to
  * `to`; `to === null` removes the token instead (eating one adjacent space so
  * "a #tag b" tidies to "a b"). URL spans are protected — a fragment like
- * https://x.com/a#section is never touched. Inline code spans are protected
- * with the same rules as the renderer. Shared by the server-side rename/remove
+ * https://x.com/a#section is never touched. Code (fenced blocks and inline
+ * spans) and TeX are protected with the same rules as the renderer, so a
+ * `#include` in pasted code is never rewritten. Shared by the server-side rename/remove
  * endpoints, so client and server agree on tag boundaries.
  */
 export function renameTagInContent(content: string, from: string, to: string | null): string {

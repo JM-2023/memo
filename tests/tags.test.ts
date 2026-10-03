@@ -55,11 +55,37 @@ describe("tag content rewriting", () => {
     expect(renameTagInContent("`#first\n#second`", "first", "changed")).toBe("`#changed\n#second`");
   });
 
-  it("does not introduce cross-line fenced-code semantics", () => {
-    const content = "```\n#work\n```";
-    expect(extractTags(content)).toEqual(["work"]);
-    expect(renameTagInContent(content, "work", "life")).toBe("```\n#life\n```");
-    expect(renameTagInContent(content, "work", null)).toBe("```\n\n```");
+  // The card renders a fenced block as one plain <code> run (markdownRows),
+  // so its #lines are code, not tags — and tag edits must never rewrite them.
+  it("treats fenced code blocks as code, matching the renderer", () => {
+    const content = "#work before\n```c\n#include <stdio.h>\n#work\n```\nafter #work/a";
+    expect(extractTags(content)).toEqual(["work", "work/a"]);
+    expect(renameTagInContent(content, "work", "life")).toBe("#life before\n```c\n#include <stdio.h>\n#work\n```\nafter #life/a");
+    expect(renameTagInContent(content, "work", null)).toBe("before\n```c\n#include <stdio.h>\n#work\n```\nafter");
+    expect(renameTagInContent("```\n#include <x>\n```", "include", null)).toBe("```\n#include <x>\n```");
+  });
+
+  it("matches the renderer's fence rules: tildes, longer closers, CRLF, and an unclosed fence", () => {
+    expect(extractTags("~~~\n#fff\n~~~\n#real")).toEqual(["real"]);
+    // A shorter run does not close a longer fence.
+    expect(extractTags("````\n#a\n```\n#b\n````\n#c")).toEqual(["c"]);
+    expect(extractTags("```\r\n#a\r\n```\r\n#b")).toEqual(["b"]);
+    // An unclosed fence runs to the end of the memo, as on the card.
+    expect(extractTags("#a\n```\n#b\n#c")).toEqual(["a"]);
+  });
+
+  it("treats display and inline TeX as literal", () => {
+    expect(extractTags("$$\n#x\n$$\n\\[\n#y\n\\]\n$$#z$$\n$#w$ #real")).toEqual(["real"]);
+    // An unclosed $$ is prose on the card, so its tags stay tags.
+    expect(extractTags("$$\n#open")).toEqual(["open"]);
+  });
+
+  it("appends after a fence left open instead of inside it", () => {
+    const appended = appendTagToContent("```js\nconst a = 1;", "work");
+    expect(appended).toBe("```js\nconst a = 1;\n```\n#work");
+    expect(extractTags(appended)).toEqual(["work"]);
+    expect(appendTagToContent(appended, "work")).toBe(appended);
+    expect(appendTagToContent("```\ncode\n```", "work")).toBe("```\ncode\n```\n#work");
   });
 
   it("appends a missing tag on a new line and stays idempotent", () => {

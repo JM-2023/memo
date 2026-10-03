@@ -7,9 +7,11 @@ import {
   REVIEW_COUNT_MAX,
   REVIEW_COUNT_MIN,
   eligibleReviewMemos,
+  reviewTagChoices,
   type ReviewRange,
   type ReviewScope,
-  type ReviewSettings
+  type ReviewSettings,
+  type ReviewTagChip
 } from "../lib/review";
 import type { Memo } from "../lib/types";
 import { RollingText } from "./RollingText";
@@ -86,13 +88,17 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
   const needsTags = scope === "include" || scope === "exclude";
   const tagsMissing = needsTags && selectedTags.size === 0;
 
-  // Selected-but-vanished tags (their last memo was deleted) stay listed so
-  // the choice remains visible and revocable.
-  const allTags = useMemo(() => {
-    const set = new Set(knownTags);
-    for (const tag of settings.tags) set.add(tag);
-    return [...set].sort((a, b) => a.localeCompare(b, locale));
-  }, [knownTags, settings.tags, locale]);
+  // Parents are choices too (a pick covers its subtree), grouped under their
+  // top-level tag. The saved picks lead the list — including ones whose last
+  // memo was deleted, so the choice remains visible and revocable — and stay
+  // put while the draft changes, so nothing moves under the finger.
+  const tagChoices = useMemo(() => reviewTagChoices(knownTags, settings.tags, locale), [knownTags, settings.tags, locale]);
+  const hasTagChoices = tagChoices.pinned.length > 0 || tagChoices.groups.length > 0;
+  /** Covered by a chosen parent: shown as included, still pickable. */
+  const coveredByParent = (path: string) => {
+    for (const tag of selectedTags) if (path.startsWith(`${tag}/`)) return true;
+    return false;
+  };
 
   const requestDismiss = useCallback(
     (action: () => void) => {
@@ -184,6 +190,33 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
     stepCount(delta);
   }
 
+  function renderTagChip(chip: ReviewTagChip) {
+    const selected = selectedTags.has(chip.path);
+    const relative = chip.label.startsWith("/");
+    return (
+      <button
+        key={chip.path}
+        type="button"
+        className={`review-chip${selected ? " is-active" : coveredByParent(chip.path) ? " is-covered" : ""}`}
+        aria-pressed={selected}
+        aria-label={relative ? `#${chip.path}` : undefined}
+        disabled={!needsTags}
+        onClick={() => toggleTag(chip.path)}
+      >
+        {relative ? (
+          <>
+            <span className="review-chip-slash" aria-hidden="true">
+              /
+            </span>
+            {chip.label.slice(1)}
+          </>
+        ) : (
+          chip.label
+        )}
+      </button>
+    );
+  }
+
   return (
     <div
       ref={overlayRef}
@@ -229,21 +262,17 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
                 the tab order. */}
             <div className={`review-tagbox${needsTags ? " is-open" : ""}`} aria-hidden={!needsTags}>
               <div>
-                {allTags.length === 0 ? (
+                {!hasTagChoices ? (
                   <p className="review-tags-empty">{tr("No tags yet — write #tags in a memo first.", "还没有标签，先在笔记里写下 #标签 吧")}</p>
                 ) : (
                   <div className="review-tags" role="group" aria-label={tr("Choose tags", "选择标签")}>
-                    {allTags.map((tag) => (
-                      <button
-                        key={tag}
-                        type="button"
-                        className={`review-chip${selectedTags.has(tag) ? " is-active" : ""}`}
-                        aria-pressed={selectedTags.has(tag)}
-                        disabled={!needsTags}
-                        onClick={() => toggleTag(tag)}
-                      >
-                        #{tag}
-                      </button>
+                    {tagChoices.pinned.length > 0 ? (
+                      <div className="review-tag-group is-pinned">{tagChoices.pinned.map(renderTagChip)}</div>
+                    ) : null}
+                    {tagChoices.groups.map((group) => (
+                      <div key={group.root} className="review-tag-group">
+                        {group.chips.map(renderTagChip)}
+                      </div>
                     ))}
                   </div>
                 )}

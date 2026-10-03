@@ -1,16 +1,24 @@
 import { env } from "cloudflare:workers";
 import { applyD1Migrations } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   changePasswordAtomically,
   claimInitialPassword,
   configuredAuthState,
   createSessionCookie,
-  requireAuth
+  hashPassword,
+  renewedSessionCookie,
+  requireAuth,
+  sessionCacheKey,
+  verifiedSession
 } from "../functions/api/_utils/auth";
+import { getOrCreateCacheKey } from "../functions/api/_utils/crypto";
+import { onRequest as middleware } from "../functions/_middleware";
 import type { AppContext, AppEnv } from "../functions/api/_utils/types";
 import { onRequestPost as logout } from "../functions/api/auth/logout";
 import { onRequestPost as setupPasscode } from "../functions/api/auth/setup";
+import { onRequestGet as authStatus } from "../functions/api/auth/status";
+import { onRequestPost as verifyPasscode } from "../functions/api/auth/verify";
 import { onRequestGet as getImage } from "../functions/api/images/[id]";
 
 const appEnv: AppEnv = env;
@@ -113,7 +121,7 @@ describe("atomic authentication state", () => {
     const response = await setupPasscode(context(request));
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toMatchObject({
-      code: "INTERNAL_ERROR"
+      code: "SETUP_DISABLED"
     });
   });
 
@@ -269,5 +277,137 @@ describe("atomic authentication state", () => {
     expect(response.headers.get("Content-Type")).toBe("image/png");
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect([...new Uint8Array(await response.arrayBuffer())]).toEqual([1, 2, 3]);
+  });
+});
+
+function cookiePayload(setCookie: string): { exp: number; gen: number; auth: number } {
+  const token = decodeURIComponent(setCookie.match(/^memo_session=([^;]+)/)?.[1] ?? "");
+  const [payload] = token.split(".");
+  const base64 = payload.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(payload.length / 4) * 4, "=");
+  return JSON.parse(atob(base64)) as { exp: number; gen: number; auth: number };
+}
+
+function maxAgeOf(setCookie: string): number {
+  return Number(setCookie.match(/Max-Age=(\d+)/)?.[1]);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+describe("session lifetime and revocation", () => {
+  it("labels only a stale generation as revoked; a missing or forged cookie is a plain sign-in", async () => {
+    const initial = await claimInitialPassword(appEnv, "hash-old");
+    const oldCookie = (await createSessionCookie(appEnv, initial!.sessionGeneration)).split(";", 1)[0];
+    await changePasswordAtomically(appEnv, initial!, "hash-new");
+
+    const revoked = await requireAuth(context(new Request("https://memo.example/api/sync", { headers: { Cookie: oldCookie } })));
+    await expect(revoked!.json()).resolves.toMatchObject({ code: "AUTH_REQUIRED", params: { reason: "revoked" } });
+
+    const missing = await requireAuth(context(new Request("https://memo.example/api/sync")));
+    const missingBody = (await missing!.json()) as { code: string; params?: unknown };
+    expect(missingBody.code).toBe("AUTH_REQUIRED");
+    expect(missingBody.params).toBeUndefined();
+
+    const forged = await requireAuth(
+      context(new Request("https://memo.example/api/sync", { headers: { Cookie: `${oldCookie.slice(0, -4)}AAAA` } }))
+    );
+    expect(forged?.status).toBe(401);
+    expect(((await forged!.json()) as { params?: unknown }).params).toBeUndefined();
+  });
+
+  it("hands out the client cache key from the session check's own read", async () => {
+    const initial = await claimInitialPassword(appEnv, "hash-old");
+    const cookie = (await createSessionCookie(appEnv, initial!.sessionGeneration)).split(";", 1)[0];
+    const stored = await getOrCreateCacheKey(appEnv);
+
+    const ctx = context(new Request("https://memo.example/api/sync?cacheKey=1", { headers: { Cookie: cookie } }));
+    expect(await requireAuth(ctx)).toBeNull();
+    expect(verifiedSession(ctx)?.cacheKeyRow).not.toBeNull();
+    const withSession = vi.spyOn(appEnv.DB, "withSession");
+    await expect(sessionCacheKey(ctx)).resolves.toBe(stored);
+    expect(withSession).not.toHaveBeenCalled();
+  });
+
+  it("re-signs an ageing session on sync with the same generation and sign-in time", async () => {
+    const initial = await claimInitialPassword(appEnv, "hash-old");
+    const signedInAt = Date.now() - 15 * DAY_MS;
+    vi.spyOn(Date, "now").mockReturnValue(signedInAt);
+    const aged = (await createSessionCookie(appEnv, initial!.sessionGeneration)).split(";", 1)[0];
+    vi.restoreAllMocks();
+
+    const syncContext = context(new Request("https://memo.example/api/sync?since=0", { headers: { Cookie: aged } }));
+    expect(await requireAuth(syncContext)).toBeNull();
+    const renewed = await renewedSessionCookie(syncContext);
+    expect(renewed).not.toBeNull();
+    expect(cookiePayload(renewed!)).toMatchObject({ gen: initial!.sessionGeneration, auth: Math.floor(signedInAt / 1000) });
+    expect(maxAgeOf(renewed!)).toBe(30 * 24 * 60 * 60);
+
+    // The Pages middleware attaches it to the handler's successful response.
+    const middlewareContext = context(new Request("https://memo.example/api/sync?since=0", { headers: { Cookie: aged } }));
+    middlewareContext.next = async () => (await requireAuth(middlewareContext)) ?? new Response("{}", { status: 200 });
+    const viaMiddleware = await middleware(middlewareContext);
+    expect(cookiePayload(viaMiddleware.headers.get("Set-Cookie") ?? "").gen).toBe(initial!.sessionGeneration);
+
+    // Images and mutations never re-sign.
+    const imageContext = context(new Request("https://memo.example/api/images/x", { headers: { Cookie: aged } }));
+    expect(await requireAuth(imageContext)).toBeNull();
+    await expect(renewedSessionCookie(imageContext)).resolves.toBeNull();
+
+    // A cookie with most of its life left is left alone.
+    const fresh = (await createSessionCookie(appEnv, initial!.sessionGeneration)).split(";", 1)[0];
+    const freshContext = context(new Request("https://memo.example/api/sync", { headers: { Cookie: fresh } }));
+    expect(await requireAuth(freshContext)).toBeNull();
+    await expect(renewedSessionCookie(freshContext)).resolves.toBeNull();
+  });
+
+  it("never renews past the absolute cap after the passcode was entered", async () => {
+    const initial = await claimInitialPassword(appEnv, "hash-old");
+    const signedInAt = Math.floor((Date.now() - 170 * DAY_MS) / 1000);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() - 25 * DAY_MS);
+    const aged = (await createSessionCookie(appEnv, initial!.sessionGeneration, signedInAt)).split(";", 1)[0];
+    vi.restoreAllMocks();
+
+    const ctx = context(new Request("https://memo.example/api/sync", { headers: { Cookie: aged } }));
+    expect(await requireAuth(ctx)).toBeNull();
+    const renewed = await renewedSessionCookie(ctx);
+    expect(cookiePayload(renewed!).exp).toBe(signedInAt + 180 * 24 * 60 * 60);
+    expect(maxAgeOf(renewed!)).toBeLessThanOrEqual(10 * 24 * 60 * 60);
+
+    // Once a cookie already ends at the cap, re-signing could not extend it.
+    const capped = context(new Request("https://memo.example/api/sync", { headers: { Cookie: renewed!.split(";", 1)[0] } }));
+    expect(await requireAuth(capped)).toBeNull();
+    await expect(renewedSessionCookie(capped)).resolves.toBeNull();
+  });
+
+  it("verifies the current passcode without rotating anything", async () => {
+    const initial = await claimInitialPassword(appEnv, await hashPassword("2468"));
+    const cookie = (await createSessionCookie(appEnv, initial!.sessionGeneration)).split(";", 1)[0];
+    const verifyRequest = (password: string, withCookie = true) =>
+      new Request("https://memo.example/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: "https://memo.example", ...(withCookie ? { Cookie: cookie } : {}) },
+        body: JSON.stringify({ password })
+      });
+
+    expect((await verifyPasscode(context(verifyRequest("2468")))).status).toBe(200);
+    const wrong = await verifyPasscode(context(verifyRequest("1357")));
+    expect(wrong.status).toBe(401);
+    await expect(wrong.json()).resolves.toMatchObject({ code: "WRONG_CURRENT_PASSCODE" });
+    const signedOut = await verifyPasscode(context(verifyRequest("2468", false)));
+    await expect(signedOut.json()).resolves.toMatchObject({ code: "AUTH_REQUIRED" });
+    await expect(configuredAuthState(appEnv)).resolves.toMatchObject({ sessionGeneration: initial!.sessionGeneration });
+  });
+
+  it("tells the client up front when a public host cannot create the first passcode", async () => {
+    const publicStatus = await authStatus(context(new Request("https://memo.example/api/auth/status")));
+    await expect(publicStatus.json()).resolves.toEqual({ needsSetup: true, setupAllowed: false });
+    const localStatus = await authStatus(context(new Request("http://localhost:8788/api/auth/status")));
+    await expect(localStatus.json()).resolves.toEqual({ needsSetup: true, setupAllowed: true });
+  });
+
+  it("names the missing session secret instead of a generic failure", async () => {
+    const missingSecretEnv: AppEnv = { DB: appEnv.DB, SESSION_SECRET: "" };
+    const response = await requireAuth({ ...context(new Request("https://memo.example/api/sync")), env: missingSecretEnv });
+    expect(response?.status).toBe(500);
+    await expect(response!.json()).resolves.toMatchObject({ code: "SERVER_MISCONFIGURED" });
   });
 });

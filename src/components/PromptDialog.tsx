@@ -1,7 +1,18 @@
 import { useEffect, useRef, useState } from "react";
+import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
+
+/** A hint that changes what confirming does. */
+export interface PromptNotice {
+  text: string;
+  /** An irreversible consequence: set in ink and weight, not grey small print. */
+  strong?: boolean;
+  /** Names the action the confirm button now performs. */
+  confirmLabel?: string;
+  busyLabel?: string;
+}
 
 interface PromptDialogProps {
   title: string;
@@ -14,7 +25,7 @@ interface PromptDialogProps {
   /** Returns an error message for an unacceptable value, or null. */
   validate: (value: string) => string | null;
   /** Optional non-blocking notice (e.g. "同名标签将合并"). */
-  hint?: (value: string) => string | null;
+  hint?: (value: string) => string | PromptNotice | null;
   onCancel: () => void;
   onConfirm: (value: string) => void;
 }
@@ -44,7 +55,8 @@ export function PromptDialog({
 
   const trimmed = value.trim();
   const error = trimmed ? validate(trimmed) : null;
-  const notice = trimmed && !error ? hint?.(trimmed) ?? null : null;
+  const rawNotice = trimmed && !error ? hint?.(trimmed) ?? null : null;
+  const notice: PromptNotice | null = typeof rawNotice === "string" ? { text: rawNotice } : rawNotice;
   const canConfirm = trimmed.length > 0 && !error && !busy;
 
   function requestClose() {
@@ -62,6 +74,7 @@ export function PromptDialog({
     escapeDisabled: Boolean(busy),
     initialFocusRef: inputRef
   });
+  useKeyboardInset(overlayRef);
 
   useEffect(() => {
     inputRef.current?.select();
@@ -104,14 +117,14 @@ export function PromptDialog({
               {error}
             </p>
           ) : notice ? (
-            <p className="prompt-note">{notice}</p>
+            <p className={`prompt-note${notice.strong ? " is-strong" : ""}`}>{notice.text}</p>
           ) : null}
           <div className="confirm-actions">
             <button type="button" className="ghost-button" onClick={requestClose} disabled={busy}>
               {tr("Cancel", "取消")}
             </button>
             <button type="submit" className="accent-button" disabled={!canConfirm}>
-              {busy ? busyLabel ?? tr("Processing…", "处理中…") : confirmLabel}
+              {busy ? notice?.busyLabel ?? busyLabel ?? tr("Processing…", "处理中…") : notice?.confirmLabel ?? confirmLabel}
             </button>
           </div>
         </form>

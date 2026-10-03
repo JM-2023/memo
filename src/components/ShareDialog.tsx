@@ -11,7 +11,7 @@ import {
   RectangleVertical,
   X
 } from "lucide-react";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
@@ -20,8 +20,17 @@ import { dateKey } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { visualLinesOf } from "../lib/lineDiff";
 import { parseBlock, parseInline, type Inline } from "../lib/markdown";
+import { loadedKatex, loadKatex, subscribeKatex } from "../lib/katexLoader";
 import { handFontCss } from "../lib/shareFont";
-import { copyPngToClipboard, downloadBlob, nodeToPngBlob, supportsImageClipboard } from "../lib/shareImage";
+import { fitWideBlocks } from "../lib/shareFit";
+import {
+  ShareImageTooLargeError,
+  copyPngToClipboard,
+  downloadBlob,
+  exportScaleFor,
+  nodeToPngBlob,
+  supportsImageClipboard
+} from "../lib/shareImage";
 import type { Memo } from "../lib/types";
 import "../styles/shareCard.css";
 import shareCardCss from "../styles/shareCard.css?raw";
@@ -57,7 +66,9 @@ const MODAL_WIDTHS: Record<CardLayout, number> = { portrait: 478, landscape: 690
 /** Between dialog edge and card space: 1px modal borders + 24px stage padding
     per side — mirror .share-modal / .share-stage. */
 const MODAL_CHROME = 50;
-/** 400/640 CSS px → 1000/1600 px PNG: crisp in feeds without absurd payloads. */
+/** 400/640 CSS px → 1000/1600 px PNG: crisp in feeds without absurd payloads.
+    A card too long for the canvas at this scale exports smaller (see
+    exportScaleFor); one too long at any usable scale says so up front. */
 const EXPORT_SCALE = 2.5;
 /** How long a lifted seal stays in the tree to animate away — mirrors
     seal-lift in app.css. */
@@ -326,6 +337,13 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   // preview too, so what you see is exactly what exports.
   const [brokenExternals, setBrokenExternals] = useState<ReadonlySet<string>>(() => new Set());
   const [fit, setFit] = useState<{ scale: number; height: number } | null>(null);
+  // The sheet is taller than any canvas will hold — known from the layout
+  // the moment it changes, so the dialog can say so before anyone presses.
+  const [tooLong, setTooLong] = useState(false);
+  // Some code on the sheet is too wide even at the smallest size and wraps.
+  const [codeWraps, setCodeWraps] = useState(false);
+  // Formulas re-render once KaTeX arrives, which changes their width.
+  const katex = useSyncExternalStore(subscribeKatex, loadedKatex, loadedKatex);
   const reducedMotion = useReducedMotion();
   // One clock per mark that can leave the page: the dateline at the head,
   // and the wordmark and tags privacy mode takes together. Separate, so
@@ -341,6 +359,8 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   busyRef.current = busy;
   const cardRef = useRef<HTMLDivElement>(null);
   const saveRef = useRef<HTMLButtonElement>(null);
+  const copyRef = useRef<HTMLButtonElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   /** Unconditional close — the success path after save/copy. */
   function beginClose() {
@@ -388,6 +408,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
         const next = { scale, height: card.offsetHeight * scale };
         return current && current.scale === next.scale && current.height === next.height ? current : next;
       });
+      setTooLong(exportScaleFor(card.offsetWidth, card.offsetHeight, EXPORT_SCALE) === null);
     };
     measure();
     // The window listener re-measures on viewport changes (drag-resize,
@@ -402,6 +423,20 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
       observer?.disconnect();
     };
   }, [layout]);
+
+  // Save is the initial focus, but a sheet measured too long disables it
+  // (and Copy) a beat later — and a disabled button drops focus to <body>,
+  // outside the dialog. Hand it to the close button instead.
+  useLayoutEffect(() => {
+    if (!tooLong) return;
+    const active = document.activeElement;
+    const stranded =
+      active === null ||
+      active === document.body ||
+      active === saveRef.current ||
+      active === copyRef.current;
+    if (stranded) closeButtonRef.current?.focus({ preventScroll: true });
+  }, [tooLong]);
 
   // Print discipline: the artifact drops blank edges the feed tolerates.
   const lines = useMemo(() => trimBlankEdges(visualLinesOf(memo.content), (raw) => raw.trim() === ""), [memo.content]);
@@ -527,6 +562,12 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
         marks.settle();
       });
     }
+    // KaTeX loads on demand; a formula still printed as its source waits for
+    // it (and for the re-render and re-fit) so the image carries the math.
+    if (!loadedKatex() && cardRef.current?.querySelector("[data-math-pending]")) {
+      await loadKatex();
+      flushSync(() => undefined);
+    }
     const card = cardRef.current;
     if (!card) throw new Error("Card is not mounted");
     // The SVG the export rasterizes is its own document with no network, so
@@ -535,8 +576,13 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
     return nodeToPngBlob(card, { css, scale: EXPORT_SCALE });
   }
 
+  // Said up front beside the exits it holds, and again as the error should
+  // an export get there before the sheet was last measured.
+  const tooLongNote = tr("This memo is too long for one image", "这条笔记太长，无法生成一张完整的图片");
+  const tooLongText = tr("This memo is too long for one image.", "这条笔记太长，无法生成一张完整的图片");
+
   async function handleSave() {
-    if (busy) return;
+    if (busy || tooLong) return;
     setBusy("save");
     try {
       const blob = await renderPng();
@@ -544,23 +590,35 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
       setBusy(null);
       onToast(tr("Saved the image", "已保存图片"));
       beginClose();
-    } catch {
+    } catch (error) {
       setBusy(null);
-      onToast(tr("Couldn’t create the image.", "生成图片失败"), "error");
+      const tooLarge = error instanceof ShareImageTooLargeError;
+      if (tooLarge) setTooLong(true);
+      onToast(tooLarge ? tooLongText : tr("Couldn’t create the image.", "生成图片失败"), "error");
     }
   }
 
   async function handleCopy() {
-    if (busy) return;
+    if (busy || tooLong) return;
     setBusy("copy");
+    // The clipboard reports its own failure, not the render's — keep the
+    // render's so a too-long card is named as one.
+    let renderFailure: unknown = null;
+    const render = () =>
+      renderPng().catch((error: unknown) => {
+        renderFailure = error;
+        throw error;
+      });
     try {
-      await copyPngToClipboard(renderPng);
+      await copyPngToClipboard(render);
       setBusy(null);
       onToast(tr("Copied the image", "已复制图片"));
       beginClose();
     } catch {
       setBusy(null);
-      onToast(tr("Couldn’t copy the image.", "复制图片失败"), "error");
+      const tooLarge = renderFailure instanceof ShareImageTooLargeError;
+      if (tooLarge) setTooLong(true);
+      onToast(tooLarge ? tooLongText : tr("Couldn’t copy the image.", "复制图片失败"), "error");
     }
   }
 
@@ -570,6 +628,23 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   // Print discipline again, one pass later: with the tags off a sheet whose
   // last line was nothing but tags, the page has a new blank edge to drop.
   const printed = redacted ? trimBlankEdges(lines, printsNothingRedacted) : lines;
+
+  // Paper doesn't scroll: bring wide code and formulas inside the sheet
+  // before anyone sees it, and again whenever the measure or the face
+  // changes — or a late font changes the glyph widths.
+  useLayoutEffect(() => {
+    const card = cardRef.current;
+    if (!card) return;
+    let live = true;
+    const fitBlocks = () => {
+      if (live) setCodeWraps(fitWideBlocks(card));
+    };
+    fitBlocks();
+    void document.fonts?.ready.then(fitBlocks);
+    return () => {
+      live = false;
+    };
+  }, [layout, hand, handSwaps, redacted, memo.content, katex]);
 
   // Words for the setup track (see setupHint). Computed at render, so a cell
   // that keeps focus after a tap reads its new state, not the one it had.
@@ -627,7 +702,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
       <div className={`share-modal${layout === "landscape" ? " is-wide" : ""}`} onClick={(event) => event.stopPropagation()}>
         <header className="share-head">
           <h2>{tr("Share as image", "分享为图片")}</h2>
-          <button type="button" className="icon-button" onClick={requestClose} aria-label={tr("Close", "关闭")}>
+          <button ref={closeButtonRef} type="button" className="icon-button" onClick={requestClose} aria-label={tr("Close", "关闭")}>
             <X size={18} aria-hidden="true" />
           </button>
         </header>
@@ -693,6 +768,13 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
                 excludedCount === 1 ? "1 linked image can’t be included" : `${excludedCount} linked images can’t be included`,
                 `${excludedCount} 张外链图片无法放入卡片`
               )}
+            </p>
+          ) : null}
+          {codeWraps && !tooLong ? (
+            <p className="share-note" role="status">
+              {layout === "portrait"
+                ? tr("Long code lines wrap to fit · Landscape fits more", "较长的代码行已换行 · 横版能放下更多")
+                : tr("Long code lines wrap to fit the card", "较长的代码行已换行以放进卡片")}
             </p>
           ) : null}
         </div>
@@ -847,13 +929,20 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
         </div>
 
         <footer className="share-actions">
+          {/* Beside the exits it holds, where it is read — the stage may be
+              scrolled far from either end of a sheet this long. */}
+          {tooLong ? (
+            <p className="share-actions-note" role="status">
+              {tooLongNote}
+            </p>
+          ) : null}
           {supportsImageClipboard() ? (
-            <button type="button" className="ghost-button" onClick={handleCopy} disabled={busy !== null}>
+            <button ref={copyRef} type="button" className="ghost-button" onClick={handleCopy} disabled={busy !== null || tooLong}>
               {busy === "copy" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
               {tr("Copy image", "复制图片")}
             </button>
           ) : null}
-          <button ref={saveRef} type="button" className="accent-button" onClick={handleSave} disabled={busy !== null}>
+          <button ref={saveRef} type="button" className="accent-button" onClick={handleSave} disabled={busy !== null || tooLong}>
             {busy === "save" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
             {tr("Save image", "保存图片")}
           </button>

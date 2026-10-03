@@ -364,4 +364,47 @@ describe("share dialog", () => {
     await waitFor(() => expect(screen.getByText("1 linked image can’t be included")).toBeTruthy());
     expect(view.container.querySelector(".sc-img")).toBeNull();
   });
+
+  it("says up front when the memo is too long for one image, and holds the exits", () => {
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("share-card") ? 400 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("share-card") ? 60_000 : 0;
+    });
+    const { onToast } = renderDialog();
+
+    expect(screen.getByText("This memo is too long for one image")).toBeTruthy();
+    const save = screen.getByRole("button", { name: "Save image" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.click(save);
+    expect(onToast).not.toHaveBeenCalled();
+  });
+
+  it("moves focus off the held exits to the close button when the memo is too long", () => {
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("share-card") ? 400 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("share-card") ? 60_000 : 0;
+    });
+    renderDialog();
+
+    // Save is the usual first focus; disabled, it would strand focus on <body>.
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" }));
+  });
+
+  it("prints code blocks unscrolled, and says when long lines had to wrap", () => {
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(function (this: Element) {
+      return this.classList.contains("md-codeblock") ? 336 : 0;
+    });
+    vi.spyOn(Element.prototype, "scrollWidth", "get").mockImplementation(function (this: Element) {
+      return this.classList.contains("md-codeblock") && !this.classList.contains("is-wrapped") ? 2_000 : 0;
+    });
+    const { view } = renderDialog({ memo: { ...memo, content: "```\n" + "x".repeat(160) + "\n```" } });
+
+    const block = view.container.querySelector(".share-card .md-codeblock");
+    expect(block?.classList.contains("is-wrapped")).toBe(true);
+    expect(screen.getByText("Long code lines wrap to fit · Landscape fits more")).toBeTruthy();
+  });
 });

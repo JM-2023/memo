@@ -34,6 +34,38 @@ const REPLAY_HEIGHT_MS = 260;
     telling a legible story. */
 const REPLAY_LINE_BUDGET = 140;
 
+/**
+ * Shared viewport watch: is a card within about a screen of the viewport?
+ * A remote or bulk update (a tag rename touching hundreds of memos) lands on
+ * every mounted card at once; the ones far off-screen skip the replay's ghost,
+ * overlay and per-line measurement and simply take the new content. Unknown
+ * (not yet reported, or no IntersectionObserver) counts as near.
+ */
+const nearCards = new WeakMap<Element, boolean>();
+let nearObserver: IntersectionObserver | null = null;
+
+function watchNear(target: Element): () => void {
+  if (typeof IntersectionObserver !== "function") return () => undefined;
+  nearObserver ??= new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) if (entry.target) nearCards.set(entry.target, entry.isIntersecting);
+    },
+    { rootMargin: "100% 0px" }
+  );
+  const observer = nearObserver;
+  observer.observe(target);
+  return () => {
+    observer.unobserve(target);
+    nearCards.delete(target);
+  };
+}
+
+/** The slot, not the stage: a content-visibility-skipped slot has no laid-out
+    descendants to intersect, but the slot itself keeps a real box. */
+function watchTargetOf(stage: HTMLElement): Element {
+  return stage.closest(".memo-slot") ?? stage;
+}
+
 interface Snap {
   editing: boolean;
   content: string;
@@ -108,8 +140,17 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
   if (sceneChanged || viewContentChanged) {
     const prev = snap;
     setSnap({ editing, content, mediaKey, images });
-    setMorph(buildPlan(prev, { editing, content, mediaKey, images }));
+    // Scene swaps always morph (the reader just asked for them); a view→view
+    // content update far from the viewport lands with no morph at all.
+    const stage = stageRef.current;
+    const offscreen = !sceneChanged && stage !== null && nearCards.get(watchTargetOf(stage)) === false;
+    setMorph(offscreen ? null : buildPlan(prev, { editing, content, mediaKey, images }));
   }
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    return stage ? watchNear(watchTargetOf(stage)) : undefined;
+  }, []);
 
   useLayoutEffect(() => {
     morphRef.current = morph;
@@ -171,7 +212,26 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
       const newMediaTop = boxTop(target, ".memo-images");
       if (plan.prev.editing) headerEl = target.querySelector(".memo-head");
 
-      const clones = overlay ? ([...overlay.children] as HTMLElement[]) : [];
+      // A folded body shows only its top; the line clones must stop (and
+      // fade) at the same edge, or rows below the fold would replay over the
+      // Show more toggle.
+      const foldEdges = [ghost, target]
+        .map((root) => root?.querySelector(".memo-fold[data-overflow]:not(.is-expanded)"))
+        .filter((fold): fold is Element => Boolean(fold))
+        .map((fold) => fold.getBoundingClientRect().bottom - stageTop);
+      const linesBox = overlay?.querySelector<HTMLElement>(".stage-lines") ?? null;
+      if (linesBox && foldEdges.length > 0) {
+        linesBox.classList.add("is-folded");
+        linesBox.style.height = `${Math.min(...foldEdges)}px`;
+      } else if (linesBox) {
+        // The overlay node is reused across back-to-back replays: drop a
+        // clip left by an earlier, folded one.
+        linesBox.classList.remove("is-folded");
+        linesBox.style.height = "";
+      }
+
+      const clones = linesBox ? ([...linesBox.children] as HTMLElement[]) : [];
+      const mediaClones = overlay ? ([...overlay.children] as HTMLElement[]).filter((el) => el !== linesBox) : [];
       let addOrder = 0;
       plan.ops.forEach((op, index) => {
         const el = clones[index];
@@ -215,7 +275,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
         }
       });
 
-      for (const el of clones.slice(plan.ops.length)) {
+      for (const el of mediaClones) {
         if (el.classList.contains("is-media-kept") && oldMediaTop !== null && newMediaTop !== null) {
           cloneTracks.push({
             el,
@@ -336,19 +396,21 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
       ) : null}
       {replay ? (
         <div key="overlay" className="stage-overlay" ref={overlayRef} aria-hidden="true">
-          {replay.ops!.map((op, index) => {
-            // The line below this one in the text this row belongs to (old
-            // text for del rows, new text for keep/add) — MemoLine uses it
-            // to keep table-header bolding identical in the clone.
-            const below = replay
-              .ops!.slice(index + 1)
-              .find((next) => (op.type === "del" ? next.type !== "add" : next.type !== "del"))?.raw;
-            return (
-              <div key={index} className="memo-content stage-line">
-                {renderLine(op.raw, below)}
-              </div>
-            );
-          })}
+          <div className="stage-lines">
+            {replay.ops!.map((op, index) => {
+              // The line below this one in the text this row belongs to (old
+              // text for del rows, new text for keep/add) — MemoLine uses it
+              // to keep table-header bolding identical in the clone.
+              const below = replay
+                .ops!.slice(index + 1)
+                .find((next) => (op.type === "del" ? next.type !== "add" : next.type !== "del"))?.raw;
+              return (
+                <div key={index} className="memo-content stage-line">
+                  {renderLine(op.raw, below)}
+                </div>
+              );
+            })}
+          </div>
           {mediaKept ? (
             <div className="stage-line is-media-kept">{renderGhostMedia(snap.content, snap.images)}</div>
           ) : (

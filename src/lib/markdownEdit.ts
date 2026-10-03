@@ -150,21 +150,79 @@ export function shiftListIndent(value: string, caret: number, delta: 1 | -1): Ed
   return { value: value.slice(0, start) + value.slice(start + removable), start: position, end: position };
 }
 
-/** Toolbar list toggle: plain line → "- " bullet, any list form → plain. */
-export function toggleBulletLine(value: string, caret: number): EditPatch {
-  const { start, end } = lineRangeAt(value, caret);
-  const line = value.slice(start, end);
-  const match = TASK_PREFIX.exec(line) ?? BULLET_PREFIX.exec(line) ?? ORDERED_PREFIX.exec(line);
-  if (match) {
-    // Drop the marker, keep the indent.
-    const keep = start + match[1].length;
-    const removed = match[0].length - match[1].length;
-    const position = caret <= keep ? Math.min(caret, keep) : Math.max(keep, caret - removed);
-    return { value: value.slice(0, keep) + line.slice(match[0].length) + value.slice(end), start: position, end: position };
+/**
+ * Toolbar list toggle over every line the selection touches (blank lines in
+ * a multi-line selection are left alone). One press steps the lines along
+ * plain → "- " bullet → "- [ ] " task → plain, so the one button also reaches
+ * checklists: any plain line gets a bullet; all-bullet lines become tasks;
+ * all-task lines (or any numbered ones) drop their markers. Indentation is
+ * kept, and the selection follows the text it covered.
+ */
+export function toggleBulletLine(value: string, selStart: number, selEnd = selStart): EditPatch {
+  const from = lineRangeAt(value, selStart).start;
+  // A selection that ends right after a newline (a triple-click, or lines
+  // dragged out whole) does not reach into the next line.
+  const last = selEnd > selStart && value[selEnd - 1] === "\n" ? selEnd - 1 : selEnd;
+  const to = lineRangeAt(value, Math.max(from, last)).end;
+
+  const single = lineRangeAt(value, from).end === to;
+
+  type Line = { start: number; indent: number; marker: number; kind: "plain" | "bullet" | "task" | "ordered"; bullet: string };
+  const lines: Line[] = [];
+  for (let start = from; start <= to; ) {
+    const found = value.indexOf("\n", start);
+    const end = found === -1 || found > to ? to : found;
+    const line = value.slice(start, end);
+    const task = TASK_PREFIX.exec(line);
+    const bullet = task ? null : BULLET_PREFIX.exec(line);
+    const ordered = task || bullet ? null : ORDERED_PREFIX.exec(line);
+    const match = task ?? bullet ?? ordered;
+    const indent = match ? match[1].length : /^\s*/.exec(line)![0].length;
+    if (match || single || line.trim() !== "") {
+      lines.push({
+        start,
+        indent,
+        marker: match ? match[0].length - indent : 0,
+        kind: task ? "task" : bullet ? "bullet" : ordered ? "ordered" : "plain",
+        bullet: (task ?? bullet)?.[2] ?? "-"
+      });
+    }
+    start = end + 1;
   }
-  const at = start + /^\s*/.exec(line)![0].length;
-  const position = caret >= at ? caret + 2 : caret;
-  return { value: value.slice(0, at) + "- " + value.slice(at), start: position, end: position };
+
+  const kinds = new Set(lines.map((line) => line.kind));
+  const next = (line: Line): string | null => {
+    if (kinds.has("plain")) return line.kind === "plain" ? "- " : null;
+    if (kinds.size === 1 && kinds.has("task")) return "";
+    if (kinds.has("ordered")) return "";
+    return line.kind === "bullet" ? `${line.bullet} [ ] ` : null;
+  };
+
+  // Each edit swaps the marker span [at, at + removed) for `inserted`.
+  const edits = lines.flatMap((line) => {
+    const inserted = next(line);
+    return inserted === null ? [] : [{ at: line.start + line.indent, removed: line.marker, inserted }];
+  });
+  let out = "";
+  let cursor = 0;
+  for (const edit of edits) {
+    out += value.slice(cursor, edit.at) + edit.inserted;
+    cursor = edit.at + edit.removed;
+  }
+  out += value.slice(cursor);
+
+  // A position inside a replaced marker lands just after its replacement;
+  // the head of a real selection stays in front of a newly added one.
+  const map = (pos: number, head = false) => {
+    let shift = 0;
+    for (const edit of edits) {
+      if (pos < edit.at || (head && edit.removed === 0 && pos === edit.at)) break;
+      if (pos < edit.at + edit.removed || (edit.removed === 0 && pos === edit.at)) return edit.at + shift + edit.inserted.length;
+      shift += edit.inserted.length - edit.removed;
+    }
+    return pos + shift;
+  };
+  return { value: out, start: map(selStart, selEnd > selStart), end: map(selEnd) };
 }
 
 /**

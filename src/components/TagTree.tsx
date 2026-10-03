@@ -1,5 +1,5 @@
 import { ChevronRight, Hash, MoreHorizontal, Pencil, Pin, PinOff, Tag, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useI18n } from "../lib/i18n";
 import type { TagNode } from "../lib/tags";
 import { Menu } from "./Menu";
@@ -30,6 +30,7 @@ interface TagMenuBodyProps {
 function TagMenuBody({ close, node, pinned, onPinTag, onRenameTag, onRemoveTag }: TagMenuBodyProps) {
   const { count, tr } = useI18n();
   const [confirming, setConfirming] = useState(false);
+  const promptId = useId();
 
   if (confirming) {
     // Removal matches the tag and everything under it (tagMatches on the
@@ -37,9 +38,12 @@ function TagMenuBody({ close, node, pinned, onPinTag, onRenameTag, onRemoveTag }
     const below = descendantPaths(node);
     const shown = below.slice(0, 3);
     const more = below.length - shown.length;
+    // The question (and the sub-tags it takes along) describes the confirm
+    // item, so a screen reader hears the blast radius with the button; focus
+    // starts on Cancel — this cannot be undone.
     return (
       <>
-        <span className="action-menu__prompt" role="presentation">
+        <span id={`${promptId}-q`} className="action-menu__prompt">
           {below.length === 0
             ? tr(`Remove #${node.path} from ${count(node.count, "memo")}? The memos stay.`, `从 ${count(node.count, "memo")}中移除 #${node.path}？笔记本身保留`)
             : tr(
@@ -48,7 +52,7 @@ function TagMenuBody({ close, node, pinned, onPinTag, onRenameTag, onRemoveTag }
               )}
         </span>
         {below.length > 0 ? (
-          <span className="action-menu__prompt-detail" role="presentation">
+          <span id={`${promptId}-d`} className="action-menu__prompt-detail">
             {shown.map((path) => `#${path}`).join(" · ")}
             {more > 0 ? tr(` · ${more} more`, ` · 还有 ${more} 个`) : null}
           </span>
@@ -57,6 +61,7 @@ function TagMenuBody({ close, node, pinned, onPinTag, onRenameTag, onRemoveTag }
           type="button"
           role="menuitem"
           className="danger"
+          aria-describedby={below.length > 0 ? `${promptId}-q ${promptId}-d` : `${promptId}-q`}
           onClick={() => {
             close();
             onRemoveTag(node.path);
@@ -65,7 +70,7 @@ function TagMenuBody({ close, node, pinned, onPinTag, onRenameTag, onRemoveTag }
           <Trash2 size={16} aria-hidden="true" />
           {tr("Remove tag", "移除标签")}
         </button>
-        <button type="button" role="menuitem" onClick={() => setConfirming(false)}>
+        <button type="button" role="menuitem" data-menu-autofocus="" onClick={() => setConfirming(false)}>
           <X size={16} aria-hidden="true" />
           {tr("Cancel", "取消")}
         </button>
@@ -197,9 +202,10 @@ function TagRow({ node, depth, activeTag, pinnedTags, openPaths, closingPaths, o
         <Menu
           portal
           align="right"
-          trigger={(open) => (
+          trigger={(open, triggerProps) => (
             <button
               type="button"
+              {...triggerProps}
               className={`tag-more${open ? " is-open" : ""}`}
               aria-label={tr(`Actions for tag ${node.path}`, `标签 ${node.path} 的操作`)}
             >
@@ -258,7 +264,7 @@ function TagRow({ node, depth, activeTag, pinnedTags, openPaths, closingPaths, o
 
 const TRACK_EASING = "cubic-bezier(0.22, 0.9, 0.24, 1)";
 
-export function TagTree({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenameTag, onRemoveTag }: TagTreeProps) {
+function TagTreeView({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenameTag, onRemoveTag }: TagTreeProps) {
   const { tr } = useI18n();
   const listRef = useRef<HTMLUListElement>(null);
   const positionsRef = useRef(new Map<string, number>());
@@ -440,3 +446,7 @@ export function TagTree({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRe
     </div>
   );
 }
+
+/** Memoized: a sidebar re-render that leaves these props alone skips the
+    whole subtree. */
+export const TagTree = memo(TagTreeView);

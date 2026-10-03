@@ -1,4 +1,4 @@
-import { configuredAuthState, createSessionCookie, verifyPassword } from "../_utils/auth";
+import { configuredAuthState, createSessionCookie, serverMisconfigured, verifyPassword } from "../_utils/auth";
 import { scheduleEncryptionBackfill } from "../_utils/crypto";
 import { apiError, json, readJson, requireSameOrigin } from "../_utils/response";
 import type { AppContext } from "../_utils/types";
@@ -15,7 +15,7 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   // missing secret masquerades as 401 "Invalid login" even for the correct
   // passcode. Server misconfiguration must not look like a wrong password.
   if (!context.env.SESSION_SECRET) {
-    return apiError(500, "INTERNAL_ERROR", "The server is not configured correctly.");
+    return serverMisconfigured();
   }
 
   const body = await readJson<LoginBody>(context.request, 20_000).catch(() => null);

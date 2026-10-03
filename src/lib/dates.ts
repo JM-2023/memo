@@ -15,33 +15,50 @@ function localDateOfKey(key: string): Date {
   return new Date(year, month - 1, day);
 }
 
+/** One formatter per locale and shape: every card stamps its time through
+    here and the heatmap labels hundreds of cells per render, and building an
+    Intl.DateTimeFormat costs far more than formatting with one. */
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+
+export function dateFormat(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${locale}|${JSON.stringify(options)}`;
+  let formatter = dateFormatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, options);
+    dateFormatters.set(key, formatter);
+  }
+  return formatter;
+}
+
+const TIME_OPTIONS: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23"
+};
+
 export function formatTime(iso: string, locale = "en-US"): string {
-  return new Intl.DateTimeFormat(locale, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23"
-  }).format(new Date(iso));
+  return dateFormat(locale, TIME_OPTIONS).format(new Date(iso));
 }
 
 export function formatDayLabel(key: string, locale = "en-US"): string {
-  return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(localDateOfKey(key));
+  return dateFormat(locale, { month: "short", day: "numeric" }).format(localDateOfKey(key));
 }
 
 /** A localized weekday for a local date key, parsed part-wise to prevent UTC day drift. */
 export function weekdayLabel(key: string, locale = "en-US"): string {
-  return new Intl.DateTimeFormat(locale, { weekday: "short" }).format(localDateOfKey(key));
+  return dateFormat(locale, { weekday: "short" }).format(localDateOfKey(key));
 }
 
 /** `month` is zero-based, matching `Date#getMonth()`. */
 export function formatMonthYear(year: number, month: number, locale = "en-US"): string {
-  return new Intl.DateTimeFormat(locale, { year: "numeric", month: "long" }).format(new Date(year, month, 1));
+  return dateFormat(locale, { year: "numeric", month: "long" }).format(new Date(year, month, 1));
 }
 
 export function formatYear(year: number, locale = "en-US"): string {
-  return new Intl.DateTimeFormat(locale, { year: "numeric" }).format(new Date(year, 0, 1));
+  return dateFormat(locale, { year: "numeric" }).format(new Date(year, 0, 1));
 }
 
 /** Monday-based start of the week containing `date`. */

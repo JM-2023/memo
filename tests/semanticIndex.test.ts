@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { describe, expect, it, vi } from "vitest";
-import { adoptCacheKey, forgetCacheKey } from "../src/lib/cache";
+import { adoptCacheKey, forgetCacheKey, sealDerivedBytes, SHARD_COUNT, shardOf } from "../src/lib/cache";
 import { EMBEDDING_DIM } from "../src/lib/modelRuntime";
 import {
   SEMANTIC_CHUNK_CHARS,
@@ -32,6 +32,40 @@ function axis(dimension: number, value = 1): Float32Array {
   const vector = new Float32Array(EMBEDDING_DIM);
   vector[dimension] = value;
   return vector;
+}
+
+// Raw access to the index store, to see exactly which records a save wrote.
+function withIndexStore<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open("memo-index", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("kv");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const transaction = db.transaction("kv", mode);
+      const request = run(transaction.objectStore("kv"));
+      transaction.oncomplete = () => {
+        db.close();
+        resolve(request.result);
+      };
+      transaction.onerror = () => reject(transaction.error);
+    };
+  });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function rawIndexRecords(): Promise<Record<string, any>> {
+  const keys = (await withIndexStore("readonly", (store) => store.getAllKeys())) as string[];
+  const values = await withIndexStore("readonly", (store) => store.getAll());
+  return Object.fromEntries(keys.map((key, index) => [key, values[index]]));
+}
+
+function putRawIndexRecord(key: string, value: unknown): Promise<unknown> {
+  return withIndexStore("readwrite", (store) => store.put(value, key));
+}
+
+function clearRawIndexRecords(): Promise<unknown> {
+  return withIndexStore("readwrite", (store) => store.clear());
 }
 
 const countingEmbed = async (texts: readonly string[]): Promise<Float32Array[]> => texts.map(() => axis(0));
@@ -67,6 +101,47 @@ describe("chunking", () => {
     expect(chunks[2].length).toBe(1000 - 2 * (SEMANTIC_CHUNK_CHARS - SEMANTIC_CHUNK_OVERLAP));
 
     expect(chunkMemoContent("y".repeat(40000)).length).toBe(SEMANTIC_MAX_CHUNKS);
+  });
+
+  it("keeps the contiguous windows (and so the content keys) of every memo up to 2,150 chars", () => {
+    // The layout every existing index row was embedded with.
+    const contiguous = (content: string): string[] => {
+      const text = content.trim();
+      const chunks: string[] = [];
+      let start = 0;
+      while (start < text.length && chunks.length < SEMANTIC_MAX_CHUNKS) {
+        const end = Math.min(text.length, start + SEMANTIC_CHUNK_CHARS);
+        const piece = text.slice(start, end).trim();
+        if (piece) chunks.push(piece);
+        if (end >= text.length) break;
+        start = end - SEMANTIC_CHUNK_OVERLAP;
+      }
+      return chunks;
+    };
+    const alphabet = "ab c\n字词。 ";
+    for (let length = 1; length <= 2150; length += 7) {
+      let text = "";
+      for (let index = 0; index < length; index += 1) text += alphabet[(index * 7 + length) % alphabet.length];
+      expect(chunkMemoContent(text)).toEqual(contiguous(text));
+    }
+    expect(chunkMemoContent("z".repeat(2150))).toEqual(contiguous("z".repeat(2150)));
+  });
+
+  it("spreads a long memo's later windows to its end instead of dropping the tail", () => {
+    const text = Array.from({ length: 1000 }, (_, index) => `w${String(index).padStart(4, "0")} `).join("").trim();
+    const chunks = chunkMemoContent(text);
+    expect(chunks.length).toBe(SEMANTIC_MAX_CHUNKS);
+    // The opening stays contiguous...
+    expect(chunks[0]).toBe(text.slice(0, SEMANTIC_CHUNK_CHARS).trim());
+    expect(chunks[1]).toBe(text.slice(350, 350 + SEMANTIC_CHUNK_CHARS).trim());
+    // ...and the last window ends on the memo's last word.
+    expect(text.endsWith(chunks.at(-1)!)).toBe(true);
+    // In between, the last four windows sit at even steps from 700 to the end.
+    const last = text.length - SEMANTIC_CHUNK_CHARS;
+    for (let index = 0; index < 4; index += 1) {
+      const start = Math.round(700 + ((last - 700) * index) / 3);
+      expect(chunks[2 + index]).toBe(text.slice(start, start + SEMANTIC_CHUNK_CHARS).trim());
+    }
   });
 });
 
@@ -134,6 +209,105 @@ describe("plan and reconcile", () => {
 
     const afterDelete = await reconcileSemanticIndex(rebuilt, [edited[0]], countingEmbed);
     expect(afterDelete.rows.map((row) => row.id)).toEqual(["a"]);
+  });
+
+  it("hands unchanged rows through by identity and skips the final copy for one edit", async () => {
+    const memos = Array.from({ length: 6 }, (_, index) => memoOf(`m${index}`, `note ${index}`));
+    const built = await reconcileSemanticIndex(emptySemanticIndex("test-r1"), memos, countingEmbed);
+    const edited = memos.map((memo, index) => (index === 2 ? memoOf(memo.id, "edited", "2026-08-15T09:00:00.000Z") : memo));
+    const partials: SemanticIndex[] = [];
+
+    const next = await reconcileSemanticIndex(built, edited, countingEmbed, { onPartial: (partial) => partials.push(partial) });
+
+    for (const row of next.rows) {
+      if (row.id !== "m2") expect(built.rows).toContain(row);
+    }
+    expect(next.rows.find((row) => row.id === "m2")?.contentKey).toBe(semanticContentKey("edited"));
+    // The first partial already had the final layout: same buffer, no repack.
+    expect(next.vectors.buffer).toBe(partials[0].vectors.buffer);
+  });
+
+  it("spaces first-build checkpoints out as the index grows", async () => {
+    const memos = Array.from({ length: 3000 }, (_, index) => memoOf(`memo-${index}`, `memo ${index}`));
+    const flushed: number[] = [];
+
+    await reconcileSemanticIndex(emptySemanticIndex("test-r1"), memos, countingEmbed, {
+      onFlush: (partial) => {
+        flushed.push(partial.rows.length);
+      }
+    });
+
+    expect(flushed[0]).toBe(256);
+    for (let index = 1; index < flushed.length; index += 1) {
+      expect(flushed[index]).toBeGreaterThanOrEqual(flushed[index - 1] * 1.5);
+    }
+    // Total rows sealed by checkpoints stays linear in the corpus.
+    expect(flushed.reduce((sum, rows) => sum + rows, 0)).toBeLessThan(3 * memos.length);
+  });
+
+  it("still checkpoints a catch-up pass on an existing index every 256 appended rows at first", async () => {
+    const existing = Array.from({ length: 6000 }, (_, index) => memoOf(`old-${index}`, `old ${index}`));
+    const built = await reconcileSemanticIndex(emptySemanticIndex("test-r1"), existing, countingEmbed);
+    const synced = Array.from({ length: 1300 }, (_, index) => memoOf(`new-${index}`, `new ${index}`));
+    const flushed: number[] = [];
+
+    await reconcileSemanticIndex(built, [...existing, ...synced], countingEmbed, {
+      onFlush: (partial) => {
+        flushed.push(partial.rows.length - existing.length);
+      }
+    });
+
+    // Kept rows do not hold the checkpoints back: the first lands after 256
+    // appended rows, not after half the existing index again.
+    expect(flushed.slice(0, 3)).toEqual([256, 512, 768]);
+    expect(flushed.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("re-plans long memos indexed with the old head-only windows, leaving the rest alone", () => {
+    const at = "2026-08-15T00:00:00.000Z";
+    const long = Array.from({ length: 800 }, (_, index) => `w${String(index).padStart(4, "0")} `).join("").trim();
+    expect(long.length).toBeGreaterThan(2150);
+    // Six back-to-back windows over the first 2,150 chars, under the key they
+    // were embedded with, and an unchanged updatedAt: an index written before
+    // long memos spread their windows.
+    const headOnlyKey = semanticContentKey(long.slice(0, 2150))!;
+    expect(headOnlyKey).not.toBe(semanticContentKey(long));
+    const sixWindows = "s".repeat(2000); // exactly six contiguous windows, unchanged layout
+    const rows = [
+      ...Array.from({ length: SEMANTIC_MAX_CHUNKS }, (_, chunkIndex) => ({
+        id: "long",
+        updatedAt: at,
+        contentKey: headOnlyKey,
+        chunkIndex,
+        chunkCount: SEMANTIC_MAX_CHUNKS
+      })),
+      ...Array.from({ length: SEMANTIC_MAX_CHUNKS }, (_, chunkIndex) => ({
+        id: "six",
+        updatedAt: at,
+        contentKey: semanticContentKey(sixWindows)!,
+        chunkIndex,
+        chunkCount: SEMANTIC_MAX_CHUNKS
+      })),
+      { id: "short", updatedAt: at, contentKey: semanticContentKey("short note")!, chunkIndex: 0, chunkCount: 1 }
+    ];
+    const index: SemanticIndex = { modelVersion: "test-r1", rows, vectors: new Float32Array(rows.length * EMBEDDING_DIM) };
+    const memos = [memoOf("long", long, at), memoOf("six", sixWindows, at), memoOf("short", "short note", at)];
+
+    const plan = planSemanticIndex(index, memos);
+    expect(plan.stale.map((memo) => memo.id)).toEqual(["long"]);
+    expect(plan.keptRowIndices).toEqual(Array.from({ length: SEMANTIC_MAX_CHUNKS + 1 }, (_, row) => SEMANTIC_MAX_CHUNKS + row));
+    expect(plan.refreshedUpdatedAt).toEqual([]);
+
+    // Re-embedded with the spread windows, the long memo then settles too.
+    const current: SemanticIndex = {
+      ...index,
+      rows: rows.map((row) => (row.id === "long" ? { ...row, contentKey: semanticContentKey(long)! } : row))
+    };
+    expect(planSemanticIndex(current, memos)).toEqual({
+      stale: [],
+      keptRowIndices: rows.map((_, row) => row),
+      refreshedUpdatedAt: []
+    });
   });
 
   it("stops early when shouldContinue says so, keeping valid rows", async () => {
@@ -244,20 +418,47 @@ describe("search", () => {
     expect(results.get("inside")).toBeCloseTo(0.82, 5);
   });
 
-  it("reports actual row progress while yielding through scoped ranking", async () => {
+  it("ranks an ordinary index in one slice, reporting only start and finish", async () => {
     const index = indexWith(
       Array.from({ length: 600 }, (_, row) => ({ id: `memo-${row}`, vector: axis(0, row === 511 ? 0.9 : 0.2) }))
     );
     const progress: [number, number][] = [];
+    // A frozen clock: the slice budget never runs out.
+    const now = vi.spyOn(performance, "now").mockReturnValue(1000);
 
     const results = await searchSemanticIndexAsync(index, axis(0), new Set(["memo-511"]), {
       onProgress: (done, total) => progress.push([done, total])
     });
+    now.mockRestore();
 
     expect([...results.keys()]).toEqual(["memo-511"]);
-    expect(progress[0]).toEqual([0, 600]);
-    expect(progress.at(-1)).toEqual([600, 600]);
-    expect(progress.length).toBeGreaterThan(2);
+    expect(progress).toEqual([
+      [0, 600],
+      [600, 600]
+    ]);
+  });
+
+  it("yields with actual row progress once a slice spends its time budget", async () => {
+    const index = indexWith(
+      Array.from({ length: 600 }, (_, row) => ({ id: `memo-${row}`, vector: axis(0, row === 511 ? 0.9 : 0.2) }))
+    );
+    const progress: [number, number][] = [];
+    // A slow device: every clock read is 10 ms later than the last.
+    let clock = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => (clock += 10));
+
+    const results = await searchSemanticIndexAsync(index, axis(0), new Set(["memo-511"]), {
+      onProgress: (done, total) => progress.push([done, total])
+    });
+    now.mockRestore();
+
+    expect([...results.keys()]).toEqual(["memo-511"]);
+    expect(progress).toEqual([
+      [0, 600],
+      [256, 600],
+      [512, 600],
+      [600, 600]
+    ]);
   });
 });
 
@@ -316,6 +517,72 @@ describe("sealed persistence", () => {
     await deleteSemanticIndexDb();
 
     expect(await loadSemanticIndex("test-r1")).toBeNull();
+    forgetCacheKey();
+  });
+
+  it("re-seals only the shards whose rows changed", async () => {
+    adoptCacheKey(KEY_B64);
+    await deleteSemanticIndexDb();
+    const memos = Array.from({ length: 40 }, (_, index) => memoOf(`memo-${index}`, `note number ${index}`));
+    const built = await reconcileSemanticIndex(emptySemanticIndex("test-r1"), memos, countingEmbed);
+    await saveSemanticIndex(built);
+    const before = await rawIndexRecords();
+
+    const loaded = await loadSemanticIndex("test-r1");
+    expect(loaded!.rows.map((row) => row.id).sort()).toEqual(built.rows.map((row) => row.id).sort());
+    const edited = memos.map((memo, index) => (index === 7 ? memoOf(memo.id, "a new thought", "2026-08-15T09:00:00.000Z") : memo));
+    await saveSemanticIndex(await reconcileSemanticIndex(loaded!, edited, countingEmbed));
+    const after = await rawIndexRecords();
+
+    const changed = Object.keys(after).filter((key) => key.startsWith("index-shard:") && after[key].id !== before[key].id);
+    expect(changed).toEqual([`index-shard:${shardOf("memo-7")}`]);
+    expect(after.index.shards).not.toEqual(before.index.shards);
+
+    const reopened = await loadSemanticIndex("test-r1");
+    expect(reopened!.rows.length).toBe(40);
+    const row = reopened!.rows.findIndex((entry) => entry.id === "memo-7");
+    expect(reopened!.rows[row].contentKey).toBe(semanticContentKey("a new thought"));
+    expect(reopened!.vectors[row * EMBEDDING_DIM]).toBe(1);
+    forgetCacheKey();
+  });
+
+  it("opens a version-1 single-record index and rewrites it in shards on the next save", async () => {
+    adoptCacheKey(KEY_B64);
+    await deleteSemanticIndexDb();
+    const legacy = indexWith([
+      { id: "a", vector: axis(0, 0.8) },
+      { id: "b", vector: axis(1, 0.6) }
+    ]);
+    const sealed = await sealDerivedBytes("memo-index:1", encodeSemanticIndex(legacy));
+    await putRawIndexRecord("index", { v: 1, iv: sealed!.iv, data: sealed!.data });
+
+    const loaded = await loadSemanticIndex("test-r1");
+    expect(loaded!.rows).toEqual(legacy.rows);
+    expect([...loaded!.vectors]).toEqual([...legacy.vectors]);
+
+    await saveSemanticIndex(loaded!);
+    const records = await rawIndexRecords();
+    expect(records.index.v).toBe(2);
+    expect(Object.keys(records).filter((key) => key.startsWith("index-shard:")).length).toBe(SHARD_COUNT);
+    const reopened = await loadSemanticIndex("test-r1");
+    expect(reopened!.rows.map((row) => row.id).sort()).toEqual(["a", "b"]);
+    forgetCacheKey();
+  });
+
+  it("falls back to a full write when the shards it meant to keep are gone", async () => {
+    adoptCacheKey(KEY_B64);
+    await deleteSemanticIndexDb();
+    const memos = [memoOf("a", "alpha"), memoOf("b", "beta"), memoOf("c", "gamma")];
+    const built = await reconcileSemanticIndex(emptySemanticIndex("test-r1"), memos, countingEmbed);
+    await saveSemanticIndex(built);
+    // Another tab clears the store underneath this one.
+    await clearRawIndexRecords();
+
+    const next = await reconcileSemanticIndex(built, [...memos, memoOf("d", "delta")], countingEmbed);
+    await saveSemanticIndex(next);
+
+    const reopened = await loadSemanticIndex("test-r1");
+    expect(reopened!.rows.map((row) => row.id).sort()).toEqual(["a", "b", "c", "d"]);
     forgetCacheKey();
   });
 

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LanguageProvider } from "../src/lib/i18n";
 import type { ModelLoaderOptions, ModelProgress } from "../src/lib/modelLoader";
 import { MODEL_MANIFEST, modelTotalBytes } from "../src/lib/modelManifest";
+import type { SemanticProgressSnapshot } from "../src/hooks/useSemanticSearch";
 import type { SemanticIndexProgress } from "../src/lib/semanticIndex";
 
 const mocks = vi.hoisted(() => ({
@@ -218,6 +219,52 @@ describe("semantic search settings", () => {
     expect(await screen.findByText("Understanding query")).toBeTruthy();
     expect(screen.getByText("Step 1 of 2")).toBeTruthy();
     expect(screen.getByText("Embedding “fruit” on this device.")).toBeTruthy();
+  });
+
+  it("follows the search hook's live counters when it is handed them", async () => {
+    let snapshot: SemanticProgressSnapshot = {
+      progress: { done: 3, total: 10, doneChunks: 16, totalChunks: 60 },
+      queryProgress: null
+    };
+    const listeners = new Set<() => void>();
+    const live = {
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      getSnapshot: () => snapshot
+    };
+    render(panel({ semanticStatus: "indexing", semanticLive: live }));
+
+    expect(await screen.findByText("3 of 10 memos · keyword search keeps working.")).toBeTruthy();
+    act(() => {
+      snapshot = { ...snapshot, progress: { done: 7, total: 10, doneChunks: 40, totalChunks: 60 } };
+      for (const listener of listeners) listener();
+    });
+    expect(screen.getByText("7 of 10 memos · keyword search keeps working.")).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "Semantic index" }).getAttribute("aria-valuenow")).toBe("70");
+  });
+
+  it("speaks of indexing and understanding in Chinese, never 嵌入 or Worker", async () => {
+    localStorage.setItem("memo:language", "zh-CN");
+    const user = userEvent.setup();
+    const { rerender } = render(panel({ onSemanticReindex: vi.fn(), semanticStatus: "ready", semanticIndexedMemos: 1204 }));
+    expect(await screen.findByText("已就绪")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "重建索引" }));
+    expect(screen.getByText("重建 1204 条笔记的索引？")).toBeTruthy();
+
+    rerender(panel({ semanticStatus: "ready", semanticQuery: "水果", semanticQueryProgress: { stage: "embedding", done: 0, total: 1 } }));
+    expect(await screen.findByText("正在此设备上理解「水果」。")).toBeTruthy();
+
+    rerender(panel({ semanticStatus: "indexing", semanticProgress: { done: 3, total: 10, doneChunks: 16, totalChunks: 60 } }));
+    expect(await screen.findByText("已索引笔记")).toBeTruthy();
+
+    rerender(panel({ semanticStatus: "preparing" }));
+    expect(await screen.findByText("启动后台推理")).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/嵌入|Worker/);
   });
 
   it("wears the lifecycle's orb marks — working, solving, connecting at rest", async () => {

@@ -41,18 +41,12 @@ afterEach(() => {
 });
 
 describe("logout cleanup", () => {
-  it("clears every current app storage family, encrypted snapshot, semantic model, and named cache", async () => {
+  it("clears notebook-derived storage, the encrypted snapshot and named caches, keeping device preferences and the public model", async () => {
     const local = new MemoryStorage();
     const session = new MemoryStorage();
-    for (const key of [
-      "memo:theme",
-      "memo:language",
-      "memo:share-layout",
-      "memo-sort",
-      "memo-saved-filters",
-      "memo-review-settings",
-      "memo-review-day"
-    ]) {
+    const devicePreferences = ["memo:theme", "memo:language", "memo:share-layout", "memo-sort", "memo:semantic-search"];
+    for (const key of devicePreferences) local.setItem(key, "preference");
+    for (const key of ["memo-saved-filters", "memo-review-settings", "memo-review-day", "memo:future-notebook-state"]) {
       local.setItem(key, "sensitive");
     }
     local.setItem("unrelated:preference", "keep");
@@ -79,13 +73,16 @@ describe("logout cleanup", () => {
 
     await clearLocalDeviceData();
 
-    expect([...Array(local.length)].map((_, index) => local.key(index))).toEqual(["unrelated:preference"]);
+    expect([...Array(local.length)].map((_, index) => local.key(index)).sort()).toEqual(
+      [...devicePreferences, "unrelated:preference"].sort()
+    );
     expect([...Array(session.length)].map((_, index) => session.key(index))).toEqual(["unrelated:session"]);
     expect(deleteCache).toHaveBeenCalledTimes(2);
     expect(cached.size).toBe(0);
     expect(await readSealedSnapshot()).toBeNull();
     expect(await openSnapshot(retained!)).toBeNull();
-    expect(await readStoredModelFile("logout-model", "onnx/model.onnx")).toBeNull();
+    // Public, hash-verified weights are not notebook data; logout keeps them.
+    expect(await readStoredModelFile("logout-model", "onnx/model.onnx")).not.toBeNull();
   });
 
   it("continues when optional storage backends deny access", async () => {

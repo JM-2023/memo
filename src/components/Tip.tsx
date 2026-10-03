@@ -1,4 +1,16 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FocusEvent,
+  type PointerEvent,
+  type ReactNode
+} from "react";
 import { createPortal } from "react-dom";
 
 export interface TipContent {
@@ -14,9 +26,44 @@ interface TipState extends TipContent {
   below: boolean;
 }
 
+export interface TipBinding {
+  onPointerEnter: (event: PointerEvent<HTMLElement>) => void;
+  onPointerLeave: () => void;
+  onFocus: (event: FocusEvent<HTMLElement>) => void;
+  onBlur: () => void;
+}
+
 interface TipApi {
   show: (anchor: Element, tip: TipContent) => void;
   hide: () => void;
+  /**
+   * Spread onto an anchor: the tip shows for a hovering mouse or pen and for
+   * keyboard focus, not for a touch (a tap's emulated hover would leave the
+   * bubble standing after the tap) or a click's focus. Pass a function to
+   * read live state at show time. The bubble itself is aria-hidden, so
+   * anything it says beyond the anchor's name must also reach the anchor's
+   * accessible name, description or aria-keyshortcuts.
+   */
+  bind: (content: TipContent | (() => TipContent | null)) => TipBinding;
+}
+
+/** A tip binding whose onFocus also runs the anchor's own focus handler. */
+export function withFocus(binding: TipBinding, onFocus: () => void): TipBinding {
+  return {
+    ...binding,
+    onFocus: (event) => {
+      onFocus();
+      binding.onFocus(event);
+    }
+  };
+}
+
+function focusIsVisible(element: Element): boolean {
+  try {
+    return element.matches(":focus-visible");
+  } catch {
+    return true;
+  }
 }
 
 const TipContext = createContext<TipApi | null>(null);
@@ -91,10 +138,17 @@ export function TipProvider({ children }: { children: ReactNode }) {
     window.addEventListener("scroll", dismiss, { capture: true, passive: true });
     window.addEventListener("resize", dismiss);
     window.addEventListener("pointerdown", dismiss, true);
+    // Escape closes it too, without claiming the key (WCAG 1.4.13): an open
+    // edit or a menu still hears the same press.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") dismiss();
+    };
+    window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("scroll", dismiss, { capture: true });
       window.removeEventListener("resize", dismiss);
       window.removeEventListener("pointerdown", dismiss, true);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [visible]);
 
@@ -117,7 +171,28 @@ export function TipProvider({ children }: { children: ReactNode }) {
     bubble.style.setProperty("--tip-dx", `${dx.toFixed(1)}px`);
   }, [tip]);
 
-  const api = useMemo(() => ({ show, hide }), [show, hide]);
+  const bind = useCallback(
+    (content: TipContent | (() => TipContent | null)): TipBinding => {
+      // A function may return null: nothing to say in the current state.
+      const showFor = (anchor: HTMLElement) => {
+        const value = typeof content === "function" ? content() : content;
+        if (value) show(anchor, value);
+      };
+      return {
+        onPointerEnter: (event) => {
+          if (event.pointerType !== "touch") showFor(event.currentTarget);
+        },
+        onPointerLeave: hide,
+        onFocus: (event) => {
+          if (focusIsVisible(event.currentTarget)) showFor(event.currentTarget);
+        },
+        onBlur: hide
+      };
+    },
+    [show, hide]
+  );
+
+  const api = useMemo(() => ({ show, hide, bind }), [show, hide, bind]);
 
   return (
     <TipContext.Provider value={api}>

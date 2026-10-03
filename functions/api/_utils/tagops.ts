@@ -20,7 +20,20 @@ import { nowIso } from "./response";
 import type { AppContext } from "./types";
 
 export const MAX_TAG_PATH_BYTES = 128;
-const TAG_SCAN_PAGE_SIZE = 20;
+// Scan pages are capped by rows and by stored characters (decrypt + parse
+// CPU scales with bytes, not rows), so short memos travel hundreds at a time
+// while a run of 40k-character memos still stays small. Most pages hold no
+// match at all and cost one round trip; validation never writes, so its pages
+// are larger.
+const VALIDATE_PAGE_ROWS = 400;
+const VALIDATE_PAGE_CHARS = 800_000;
+const WRITE_PAGE_ROWS = 200;
+const WRITE_PAGE_CHARS = 400_000;
+// Each rewritten memo is one statement in the write batch. Together with
+// auth, lease, scan, image metadata and the final tag-meta batch this keeps a
+// page under the Free plan's 50 queries per invocation; a page with more
+// matches stops just before the first one that does not fit.
+const MAX_WRITES_PER_PAGE = 30;
 const MAX_CURSOR_CHARS = 2_048;
 const MAX_ID_CHARS = 128;
 
@@ -40,6 +53,10 @@ interface TagCursor {
   found: boolean;
   updated: number;
   retries: number;
+  /** Rows finished in the current phase, and the frozen row count. Optional
+   *  so a continuation minted before progress existed still resumes. */
+  scanned?: number;
+  total?: number;
 }
 
 interface RewriteResult {
@@ -48,6 +65,8 @@ interface RewriteResult {
   updated: number;
   hasMore: boolean;
   nextAfter: string | null;
+  /** Rows scanned across every pass so far, of `total` (a rename scans twice). */
+  progress: { done: number; total: number };
 }
 
 interface PreparedMemo {
@@ -241,7 +260,9 @@ function decodeCursor(value: string, operationId: string, op: TagOperation, from
       Number(parsed.updated) < 0 ||
       !Number.isSafeInteger(parsed.retries) ||
       Number(parsed.retries) < 0 ||
-      Number(parsed.retries) > 3
+      Number(parsed.retries) > 3 ||
+      (parsed.scanned !== undefined && (!Number.isSafeInteger(parsed.scanned) || Number(parsed.scanned) < 0)) ||
+      (parsed.total !== undefined && (!Number.isSafeInteger(parsed.total) || Number(parsed.total) < 0))
     ) {
       return null;
     }
@@ -267,7 +288,7 @@ async function initialCursor(
   const range = sourceRange(from);
   const [counterResult, boundaryResult, metaResult] = await context.env.DB.batch([
     context.env.DB.prepare("SELECT n FROM sync_counter WHERE id = 1"),
-    context.env.DB.prepare("SELECT COALESCE(MAX(id), '') AS max_id FROM memos"),
+    context.env.DB.prepare("SELECT COALESCE(MAX(id), '') AS max_id, COUNT(*) AS total FROM memos"),
     context.env.DB
       .prepare(
         `SELECT 1 AS found FROM tag_meta
@@ -277,7 +298,9 @@ async function initialCursor(
       .bind(...range)
   ]);
   const snapshotSeq = Number((counterResult.results?.[0] as { n?: unknown } | undefined)?.n ?? 0);
-  const maxId = String((boundaryResult.results?.[0] as { max_id?: unknown } | undefined)?.max_id ?? "");
+  const boundary = boundaryResult.results?.[0] as { max_id?: unknown; total?: unknown } | undefined;
+  const maxId = String(boundary?.max_id ?? "");
+  const total = Number(boundary?.total ?? 0);
   const found = Boolean(metaResult.results?.[0]);
   return {
     v: 3,
@@ -291,8 +314,53 @@ async function initialCursor(
     snapshotSeq,
     found,
     updated: 0,
-    retries: 0
+    retries: 0,
+    scanned: 0,
+    total: Number.isSafeInteger(total) && total > 0 ? total : 0
   };
+}
+
+/** Overall progress: a rename's write pass follows a full validation pass. */
+function progressOf(state: TagCursor): { done: number; total: number } {
+  const total = state.total ?? 0;
+  const passes = state.to === null ? 1 : 2;
+  const done = (state.phase === "write" && state.to !== null ? total : 0) + Math.min(state.scanned ?? 0, total);
+  return { done: Math.min(done, total * passes), total: total * passes };
+}
+
+/**
+ * One keyset page of the frozen snapshot, cut at `rowLimit` rows or once the
+ * stored characters before a row reach `charBudget` (the first row always
+ * fits, so every page advances). `hasMore` reports rows left beyond the cut.
+ */
+async function scanPage(
+  context: AppContext,
+  state: TagCursor,
+  rowLimit: number,
+  charBudget: number
+): Promise<{ rows: MemoRow[]; hasMore: boolean }> {
+  const result = await context.env.DB
+    .prepare(
+      `WITH page AS MATERIALIZED (
+         SELECT ${MEMO_COLUMNS} FROM memos
+         WHERE id > ? AND id <= ? AND seq <= ?
+         ORDER BY id COLLATE BINARY LIMIT ?
+       ),
+       sized AS (
+         SELECT *, COALESCE(SUM(length(content)) OVER (
+           ORDER BY id COLLATE BINARY ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+         ), 0) AS chars_before
+         FROM page
+       )
+       SELECT ${MEMO_COLUMNS}, (SELECT COUNT(*) FROM page) AS page_rows
+       FROM sized WHERE chars_before < ? ORDER BY id COLLATE BINARY`
+    )
+    .bind(state.after, state.maxId, state.snapshotSeq, rowLimit + 1, charBudget)
+    .all<MemoRow & { page_rows: number }>();
+  const fetched = result.results ?? [];
+  const pageRows = Number(fetched[0]?.page_rows ?? 0);
+  const rows = fetched.slice(0, rowLimit).map(({ page_rows: _pageRows, ...row }) => row);
+  return { rows, hasMore: pageRows > rows.length };
 }
 
 /** Read-only first pass: no rename page is committed until every target path is known to fit. */
@@ -309,23 +377,38 @@ async function validateMemoPage(rows: MemoRow[], from: string, to: string, conte
   return found;
 }
 
-async function prepareChanged(rows: MemoRow[], from: string, to: string | null, context: AppContext): Promise<PreparedMemo[]> {
-  const key = await openContentRows(context.env, rows);
+/**
+ * Rewrite a scanned page, up to MAX_WRITES_PER_PAGE changed memos. `rows` is
+ * the prefix actually covered: it ends just before the first change that did
+ * not fit, so the next page resumes there.
+ */
+async function prepareChanged(
+  pageRows: MemoRow[],
+  from: string,
+  to: string | null,
+  context: AppContext
+): Promise<{ prepared: PreparedMemo[]; rows: MemoRow[] }> {
+  const key = await openContentRows(context.env, pageRows);
   const now = nowIso();
   if (to !== null) {
-    for (const row of rows) {
+    for (const row of pageRows) {
       for (const tag of extractTags(row.content)) {
         if (tagMatches(tag, from) && !validTagPath(`${to}${tag.slice(from.length)}`)) throw new InvalidTagTargetError();
       }
     }
   }
-  const changed = rows
+  let changed = pageRows
     .map((row) => ({ row, next: renameTagInContent(row.content, from, to) }))
     .filter(({ row, next }) => next !== row.content);
+  let rows = pageRows;
+  if (changed.length > MAX_WRITES_PER_PAGE) {
+    rows = pageRows.slice(0, pageRows.indexOf(changed[MAX_WRITES_PER_PAGE].row));
+    changed = changed.slice(0, MAX_WRITES_PER_PAGE);
+  }
 
   const prepared: PreparedMemo[] = [];
-  // The scan page itself caps concurrency and CPU; four sealers avoid a burst
-  // of twenty AES-GCM operations on the Free-plan request path.
+  // The write cap bounds the page's CPU; four sealers avoid a burst of
+  // thirty AES-GCM operations on the Free-plan request path.
   let cursor = 0;
   const workers = Array.from({ length: Math.min(4, changed.length) }, async () => {
     while (cursor < changed.length) {
@@ -344,7 +427,7 @@ async function prepareChanged(rows: MemoRow[], from: string, to: string | null, 
   // Parallel sealing can reorder pushes; restore the stable page order.
   const order = new Map(rows.map((row, index) => [row.id, index]));
   prepared.sort((left, right) => (order.get(left.row.id) ?? 0) - (order.get(right.row.id) ?? 0));
-  return prepared;
+  return { prepared, rows };
 }
 
 async function writeMemoPage(
@@ -556,41 +639,27 @@ export async function rewriteTag(
   }
   if (!state) throw new InvalidTagContinuationError();
 
-  const pageResult = await context.env.DB
-    .prepare(`SELECT ${MEMO_COLUMNS} FROM memos WHERE id > ? AND id <= ? AND seq <= ? ORDER BY id COLLATE BINARY LIMIT ?`)
-    .bind(state.after, state.maxId, state.snapshotSeq, TAG_SCAN_PAGE_SIZE + 1)
-    .all<MemoRow>();
-  const rawRows = pageResult.results ?? [];
-  const hasScanMore = rawRows.length > TAG_SCAN_PAGE_SIZE;
-  const pageRows = hasScanMore ? rawRows.slice(0, TAG_SCAN_PAGE_SIZE) : rawRows;
 
   if (state.phase === "validate") {
     if (to === null) throw new InvalidTagContinuationError();
-    const found = state.found || (await validateMemoPage(pageRows, from, to, context));
-    if (hasScanMore) {
-      const nextId = pageRows[pageRows.length - 1]?.id ?? state.after;
-      return {
-        memos: [],
-        tags: [],
-        updated: 0,
-        hasMore: true,
-        nextAfter: encodeCursor({ ...state, after: nextId, found, retries: 0 })
-      };
+    const page = await scanPage(context, state, VALIDATE_PAGE_ROWS, VALIDATE_PAGE_CHARS);
+    const found = state.found || (await validateMemoPage(page.rows, from, to, context));
+    const scanned = (state.scanned ?? 0) + page.rows.length;
+    if (page.hasMore) {
+      const next: TagCursor = { ...state, after: page.rows[page.rows.length - 1]?.id ?? state.after, found, retries: 0, scanned };
+      return { memos: [], tags: [], updated: 0, hasMore: true, nextAfter: encodeCursor(next), progress: progressOf(next) };
     }
     // Validation covered the frozen sequence range. Start a second bounded
     // pass for writes; concurrent edits move above snapshotSeq and are left
     // for their author instead of invalidating an already-written prefix.
     await assertTagMetaTargetsFit(context, { ...state, found });
-    return {
-      memos: [],
-      tags: [],
-      updated: 0,
-      hasMore: true,
-      nextAfter: encodeCursor({ ...state, phase: "write", after: "", found, retries: 0 })
-    };
+    const next: TagCursor = { ...state, phase: "write", after: "", found, retries: 0, scanned: 0 };
+    return { memos: [], tags: [], updated: 0, hasMore: true, nextAfter: encodeCursor(next), progress: progressOf(next) };
   }
 
-  const prepared = await prepareChanged(pageRows, from, to, context);
+  const page = await scanPage(context, state, WRITE_PAGE_ROWS, WRITE_PAGE_CHARS);
+  const { prepared, rows: pageRows } = await prepareChanged(page.rows, from, to, context);
+  const hasScanMore = page.hasMore || pageRows.length < page.rows.length;
   const writeResult = await writeMemoPage(context, prepared, operationId);
   const imagesByMemo = await imageMetaFor(context, writeResult.rows.map((row) => row.id));
   const memos = writeResult.rows.map((row) => shapeMemo(row, imagesByMemo.get(row.id) ?? []));
@@ -603,27 +672,18 @@ export async function rewriteTag(
     const retryAfter = conflictIndex > 0 ? pageRows[conflictIndex - 1].id : state.after;
     const retries = retryAfter === state.after ? state.retries + 1 : 0;
     if (retries > 3) throw new TagOperationConflictError();
-    return {
-      memos,
-      tags: [],
-      updated: writeResult.rows.length,
-      hasMore: true,
-      nextAfter: encodeCursor({ ...state, after: retryAfter, found, updated: updatedTotal, retries })
-    };
+    const next: TagCursor = { ...state, after: retryAfter, found, updated: updatedTotal, retries, scanned: (state.scanned ?? 0) + conflictIndex };
+    return { memos, tags: [], updated: writeResult.rows.length, hasMore: true, nextAfter: encodeCursor(next), progress: progressOf(next) };
   }
 
+  const scanned = (state.scanned ?? 0) + pageRows.length;
   if (hasScanMore) {
-    const nextId = pageRows[pageRows.length - 1]?.id ?? state.after;
-    return {
-      memos,
-      tags: [],
-      updated: writeResult.rows.length,
-      hasMore: true,
-      nextAfter: encodeCursor({ ...state, after: nextId, found, updated: updatedTotal, retries: 0 })
-    };
+    const next: TagCursor = { ...state, after: pageRows[pageRows.length - 1]?.id ?? state.after, found, updated: updatedTotal, retries: 0, scanned };
+    return { memos, tags: [], updated: writeResult.rows.length, hasMore: true, nextAfter: encodeCursor(next), progress: progressOf(next) };
   }
 
   const meta = await finishTagMeta(context, { ...state, found, updated: updatedTotal }, operationId);
   if (!found && !meta.found) return null;
-  return { memos, tags: meta.tags, updated: writeResult.rows.length, hasMore: false, nextAfter: null };
+  const total = progressOf(state).total;
+  return { memos, tags: meta.tags, updated: writeResult.rows.length, hasMore: false, nextAfter: null, progress: { done: total, total } };
 }

@@ -1,6 +1,7 @@
 import type { AppContext } from "./api/_utils/types";
+import { renewedSessionCookie } from "./api/_utils/auth";
 import { DecryptionError } from "./api/_utils/crypto";
-import { apiError } from "./api/_utils/response";
+import { apiError, isStorageFullError } from "./api/_utils/response";
 
 // The app's own scripts, styles, and fonts stay locked to 'self'.
 // 'unsafe-inline' for styles covers React's style attributes; data:/blob:
@@ -50,13 +51,23 @@ export async function onRequest(context: AppContext): Promise<Response> {
     response = await context.next();
   } catch (error) {
     console.error("Unhandled request error", error);
+    // A full database is the one write failure the owner can act on, so it
+    // gets its own code instead of the generic 500.
     response =
       error instanceof DecryptionError
         ? apiError(503, "DECRYPTION_FAILED", "Encrypted memo content is unavailable. Check the server encryption key before retrying.")
-        : apiError(500, "INTERNAL_ERROR", "An unexpected server error occurred.");
+        : isStorageFullError(error)
+          ? apiError(507, "STORAGE_FULL", "The D1 database is full. Free space by emptying Trash or permanently deleting memos with images.")
+          : apiError(500, "INTERNAL_ERROR", "An unexpected server error occurred.");
   }
   const headers = new Headers(response.headers);
   if (requestUrl.pathname.startsWith("/api/") && !headers.has("Cache-Control")) headers.set("Cache-Control", "no-store");
+  // Sliding session: a successful sync/bootstrap re-signs a cookie that is
+  // getting old, so a device in daily use never meets the hard expiry.
+  if (response.ok && !headers.has("Set-Cookie")) {
+    const renewed = await renewedSessionCookie(context).catch(() => null);
+    if (renewed) headers.append("Set-Cookie", renewed);
+  }
   headers.set("Referrer-Policy", "same-origin");
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");

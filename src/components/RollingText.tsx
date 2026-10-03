@@ -144,7 +144,10 @@ export function RollingText({ value, text, align = "right", className }: Rolling
   }
 
   return (
-    <span className={`roll${className ? ` ${className}` : ""}`} role="text" aria-label={st.text}>
+    <span className={`roll${className ? ` ${className}` : ""}`}>
+      {/* Read as plain text: the drum faces below are decoration. (role="text"
+          is WebKit-only; Chromium screen readers skipped its label.) */}
+      <span className="sr-only">{st.text}</span>
       <span className="roll-inner" aria-hidden="true" onAnimationEnd={onAnimationEnd}>
         {st.slots.map((slot) => (
           <span

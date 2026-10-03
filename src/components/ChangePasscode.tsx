@@ -1,7 +1,7 @@
 import { KeyRound } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useModalA11y } from "../hooks/useModalA11y";
-import { AuthRequiredError, changePassword } from "../lib/api";
+import { AuthRequiredError, changePassword, verifyPasscode } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { PasscodePad } from "./PasscodePad";
 
@@ -13,7 +13,11 @@ interface ChangePasscodeProps {
 
 type Step = "current" | "next" | "confirm";
 
-/** Full-screen overlay reusing the login pad: current → new → confirm. */
+/**
+ * Full-screen overlay reusing the login pad: current → new → confirm. The
+ * current passcode is checked as soon as it is entered, so a typo is caught
+ * before the new one has been typed twice.
+ */
 export function ChangePasscode({ onClose, onDone, onAuthLost }: ChangePasscodeProps) {
   const { errorMessage, tr } = useI18n();
   const [step, setStep] = useState<Step>("current");
@@ -23,6 +27,7 @@ export function ChangePasscode({ onClose, onDone, onAuthLost }: ChangePasscodePr
   const [entryKey, setEntryKey] = useState(0);
   const [currentPin, setCurrentPin] = useState("");
   const [nextPin, setNextPin] = useState("");
+  const padRef = useRef<HTMLElement>(null);
 
   function advance(next: Step) {
     setStep(next);
@@ -37,11 +42,28 @@ export function ChangePasscode({ onClose, onDone, onAuthLost }: ChangePasscodePr
 
   async function handleComplete(pin: string) {
     if (step === "current") {
+      setBusy(true);
+      try {
+        await verifyPasscode(pin);
+      } catch (cause) {
+        if (cause instanceof AuthRequiredError) {
+          onAuthLost();
+          return;
+        }
+        fail(errorMessage(cause, "Couldn’t check the passcode. Try again.", "无法验证密码，请重试"), "current");
+        return;
+      } finally {
+        setBusy(false);
+      }
       setCurrentPin(pin);
       advance("next");
       return;
     }
     if (step === "next") {
+      if (pin === currentPin) {
+        fail(tr("That’s the current passcode. Choose a different one.", "这是当前密码，请换一个新密码"), "next");
+        return;
+      }
       setNextPin(pin);
       advance("confirm");
       return;
@@ -78,7 +100,9 @@ export function ChangePasscode({ onClose, onDone, onAuthLost }: ChangePasscodePr
     next: tr("Enter a new passcode of 4 to 18 digits", "输入新的 4-18 位数字密码"),
     confirm: tr("Enter the new passcode one more time", "请再输入一次新密码")
   };
-  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: onClose, escapeDisabled: busy });
+  // Initial focus goes to the pad itself rather than its first focusable
+  // control, the passcode field, which would raise the touch keyboard.
+  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: onClose, escapeDisabled: busy, initialFocusRef: padRef });
 
   return (
     <div
@@ -91,12 +115,14 @@ export function ChangePasscode({ onClose, onDone, onAuthLost }: ChangePasscodePr
       tabIndex={-1}
     >
       <PasscodePad
+        rootRef={padRef}
         icon={<KeyRound size={26} aria-hidden="true" />}
         title={titles[step]}
         subtitle={message ?? subtitles[step]}
         error={error}
         busy={busy}
         entryKey={entryKey}
+        autoComplete={step === "current" ? "current-password" : "new-password"}
         onInput={() => {
           setError(false);
           setMessage(null);

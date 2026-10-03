@@ -20,7 +20,8 @@ describe("compact sidebar counts", () => {
     const ui = render(<LanguageProvider><CompactNumber value={9999} /></LanguageProvider>);
     const numberDrum = ui.container.querySelector(".roll");
     ui.rerender(<LanguageProvider><CompactNumber value={10000} /></LanguageProvider>);
-    expect(ui.container.querySelector(".compact-number")?.getAttribute("aria-label")).toBe("10000");
+    expect(ui.container.querySelector(".compact-number > .sr-only")?.textContent).toBe("10000");
+    expect(ui.container.querySelector("[role=text]")).toBeNull();
     expect(ui.container.querySelector(".roll")).toBe(numberDrum);
     expect(ui.container.querySelectorAll(".roll")).toHaveLength(2);
     expect(ui.container.querySelector(".roll-char-in.is-up")).not.toBeNull();

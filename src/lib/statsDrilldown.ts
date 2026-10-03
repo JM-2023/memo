@@ -1,4 +1,4 @@
-import { dateKey, formatMonthYear, formatYear } from "./dates";
+import { dateFormat, dateKey, formatMonthYear, formatYear } from "./dates";
 import { tagsOf } from "./tags";
 import type { Memo } from "./types";
 
@@ -49,11 +49,11 @@ export function memoMatchesStatsDrilldown(memo: Memo, drilldown: StatsDrilldown)
 
 function formatWeekday(weekday: number, locale: string): string {
   const monday = new Date(2026, 0, 5);
-  return new Intl.DateTimeFormat(locale, { weekday: "long" }).format(new Date(2026, 0, monday.getDate() + weekday));
+  return dateFormat(locale, { weekday: "long" }).format(new Date(2026, 0, monday.getDate() + weekday));
 }
 
 function formatHour(hour: number, locale: string): string {
-  return new Intl.DateTimeFormat(locale, { hour: "numeric" }).format(new Date(2026, 0, 5, hour));
+  return dateFormat(locale, { hour: "numeric" }).format(new Date(2026, 0, 5, hour));
 }
 
 function formatHourRange(hour: number, locale: string): string {

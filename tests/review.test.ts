@@ -8,8 +8,11 @@ import {
   parseReviewDay,
   parseReviewSettings,
   pickReviewIds,
+  removeReviewSettingsTag,
+  renameReviewSettingsTag,
   reviewDayValid,
   reviewFingerprint,
+  reviewTagChoices,
   type ReviewSettings
 } from "../src/lib/review";
 import type { Memo } from "../src/lib/types";
@@ -41,6 +44,28 @@ describe("review settings parsing", () => {
   it("keeps a valid payload intact", () => {
     const stored: ReviewSettings = { scope: "include", tags: ["work", "life/家"], range: "6m", count: 7 };
     expect(parseReviewSettings(JSON.stringify(stored))).toEqual({ ...stored, tags: ["life/家", "work"] });
+  });
+});
+
+describe("review scope follows tag renames and removals", () => {
+  it("renames listed tags and their descendants, leaving siblings alone", () => {
+    const before = settings({ scope: "exclude", tags: ["读书", "读书/小说", "读书会"] });
+    expect(renameReviewSettingsTag(before, "读书", "阅读")).toEqual({ ...before, tags: ["读书会", "阅读", "阅读/小说"] });
+  });
+
+  it("merges into an already listed target without duplicates", () => {
+    expect(renameReviewSettingsTag(settings({ scope: "include", tags: ["a", "b"] }), "a", "b").tags).toEqual(["b"]);
+  });
+
+  it("returns the same object when no listed tag is touched", () => {
+    const before = settings({ scope: "include", tags: ["work"] });
+    expect(renameReviewSettingsTag(before, "life", "home")).toBe(before);
+    expect(removeReviewSettingsTag(before, "life")).toBe(before);
+  });
+
+  it("drops a removed subtree and falls back to all memos when the list empties", () => {
+    expect(removeReviewSettingsTag(settings({ scope: "include", tags: ["a", "b/c"] }), "b")).toMatchObject({ scope: "include", tags: ["a"] });
+    expect(removeReviewSettingsTag(settings({ scope: "exclude", tags: ["diary/private"] }), "diary")).toMatchObject({ scope: "all", tags: [] });
   });
 });
 
@@ -153,5 +178,34 @@ describe("stored day parsing", () => {
     expect(parsed?.ids[0]).toBe("dup");
     expect(parsed?.ids).toHaveLength(REVIEW_COUNT_MAX);
     expect(new Set(parsed?.ids).size).toBe(REVIEW_COUNT_MAX);
+  });
+});
+
+describe("review tag choices", () => {
+  const known = ["learning/reading", "life/cooking", "life/garden/vegetables", "work"];
+
+  it("offers every parent of a tag in use, grouped under its top-level tag", () => {
+    const { pinned, groups } = reviewTagChoices(known, []);
+    expect(pinned).toEqual([]);
+    expect(groups.map((group) => group.root)).toEqual(["learning", "life", "work"]);
+    expect(groups[1].chips).toEqual([
+      { path: "life", label: "#life" },
+      { path: "life/cooking", label: "/cooking" },
+      { path: "life/garden", label: "/garden" },
+      { path: "life/garden/vegetables", label: "/garden/vegetables" }
+    ]);
+    expect(groups[2].chips).toEqual([{ path: "work", label: "#work" }]);
+  });
+
+  it("puts the saved picks first and spells out paths whose root went with them", () => {
+    const { pinned, groups } = reviewTagChoices(known, ["life", "gone/old"]);
+    expect(pinned).toEqual([
+      { path: "gone/old", label: "#gone/old" },
+      { path: "life", label: "#life" }
+    ]);
+    // A vanished pick still brings its parent along as a choice.
+    expect(groups[0].chips).toEqual([{ path: "gone", label: "#gone" }]);
+    const life = groups.find((group) => group.root === "life");
+    expect(life?.chips.map((chip) => chip.label)).toEqual(["#life/cooking", "#life/garden", "#life/garden/vegetables"]);
   });
 });

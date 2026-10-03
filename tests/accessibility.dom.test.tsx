@@ -136,6 +136,48 @@ describe("busy dialogs", () => {
     expect(document.body.contains(dialog)).toBe(true);
   });
 
+  it("reserves the danger fill for destructive confirms", () => {
+    const { unmount } = renderLocalized(
+      <ConfirmDialog title="Import?" body="Adds memos" confirmLabel="Import" tone="accent" onCancel={vi.fn()} onConfirm={vi.fn()} />
+    );
+    expect(screen.getByRole("button", { name: "Import" }).className).toBe("accent-button");
+    unmount();
+    renderLocalized(<ConfirmDialog title="Remove?" body="Removes" confirmLabel="Remove" onCancel={vi.fn()} onConfirm={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Remove" }).className).toBe("danger-button");
+  });
+
+  it("shows a busy import's progress and offers Stop instead of Cancel", async () => {
+    const user = userEvent.setup();
+    const onStop = vi.fn();
+    const { rerender } = renderLocalized(
+      <ConfirmDialog
+        title="Import?"
+        body="Import data"
+        confirmLabel="Import"
+        busy
+        progress={{ value: 40, max: 160, text: "40 of 160 memos" }}
+        onStop={onStop}
+        onCancel={vi.fn()}
+        onConfirm={vi.fn()}
+      />
+    );
+
+    const bar = screen.getByRole("progressbar", { name: "Import?" });
+    expect(bar.getAttribute("aria-valuenow")).toBe("40");
+    expect(bar.getAttribute("aria-valuemax")).toBe("160");
+    expect(bar.getAttribute("aria-valuetext")).toBe("40 of 160 memos");
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(onStop).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <LanguageProvider>
+        <ConfirmDialog title="Import?" body="Import data" confirmLabel="Import" busy stopping onCancel={vi.fn()} onConfirm={vi.fn()} />
+      </LanguageProvider>
+    );
+    expect((screen.getByRole("button", { name: "Stopping…" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("keeps a busy prompt open on Escape and backdrop clicks", async () => {
     const user = userEvent.setup();
     const onCancel = vi.fn();

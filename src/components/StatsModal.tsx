@@ -2,14 +2,14 @@ import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
-import { dateKey, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
+import { dateFormat, dateKey, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { buildHeatMonth, computeStreaks, countsByDay, localMaxima, totalStats, wordCountOf, type HeatMonth } from "../lib/stats";
 import type { StatsDrilldown } from "../lib/statsDrilldown";
 import { tagsOf } from "../lib/tags";
 import type { Memo } from "../lib/types";
 import { RollingText } from "./RollingText";
-import { useTip } from "./Tip";
+import { useTip, withFocus } from "./Tip";
 
 interface StatsModalProps {
   memos: Memo[];
@@ -79,10 +79,7 @@ function BarChart({ label, values, max, labels, tips, onPick }: BarChartProps) {
             disabled={value === 0}
             aria-label={`${tips[index]}: ${count(value, "memo")}`}
             onClick={() => onPick(index)}
-            onMouseEnter={(event) => tip.show(event.currentTarget, { strong: count(value, "memo"), text: tips[index] })}
-            onMouseLeave={tip.hide}
-            onFocus={(event) => tip.show(event.currentTarget, { strong: count(value, "memo"), text: tips[index] })}
-            onBlur={tip.hide}
+            {...tip.bind({ strong: count(value, "memo"), text: tips[index] })}
           >
             <span
               className={`stats-bar${value > 0 ? "" : " is-zero"}`}
@@ -247,13 +244,13 @@ function TagRows({ tags, emptyLabel, onPick }: { tags: [string, number][]; empty
 }
 
 function weekdayNames(locale: string, width: "long" | "narrow"): string[] {
-  const formatter = new Intl.DateTimeFormat(locale, { weekday: width });
+  const formatter = dateFormat(locale, { weekday: width });
   const monday = new Date(2026, 0, 5);
   return Array.from({ length: 7 }, (_, index) => formatter.format(new Date(2026, 0, monday.getDate() + index)));
 }
 
 function formatHour(hour: number, locale: string): string {
-  return new Intl.DateTimeFormat(locale, { hour: "numeric" }).format(new Date(2026, 0, 5, hour));
+  return dateFormat(locale, { hour: "numeric" }).format(new Date(2026, 0, 5, hour));
 }
 
 function formatHourRange(hour: number, locale: string): string {
@@ -596,15 +593,14 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown }: Stat
                                 `查看 ${dayFormatter.format(parseDayKey(cell.key))}的 ${count(cell.count, "memo")}`
                               )}
                               tabIndex={cell.key === rovingHeatDay ? 0 : -1}
-                              onFocus={() => setFocusedHeatDay(cell.key)}
-                              onKeyDown={(event) => moveHeatDayFocus(event, cell.key)}
-                              onMouseEnter={(event) =>
-                                tip.show(event.currentTarget, {
+                              {...withFocus(
+                                tip.bind({
                                   strong: count(cell.count, "memo"),
                                   text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
-                                })
-                              }
-                              onMouseLeave={tip.hide}
+                                }),
+                                () => setFocusedHeatDay(cell.key)
+                              )}
+                              onKeyDown={(event) => moveHeatDayFocus(event, cell.key)}
                               onClick={() => requestDrilldown({ kind: "day", day: cell.key })}
                             />
                           );

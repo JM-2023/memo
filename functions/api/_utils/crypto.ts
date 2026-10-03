@@ -56,37 +56,70 @@ const keyCache = new Map<string, Promise<CryptoKey>>();
 // different request context.
 const verifiedContentModes = new Set<string>();
 
-/** The content key, or null when MEMO_ENC_KEY is absent (plaintext mode). */
-export async function contentKeyOf(env: AppEnv): Promise<CryptoKey | null> {
+const CONTENT_SAMPLE_SQL = "SELECT content FROM memos WHERE content_format = 'enc1' LIMIT 1";
+
+async function importContentKey(env: AppEnv): Promise<CryptoKey | null> {
   const hex = (env.MEMO_ENC_KEY ?? "").trim();
   if (hex && !/^[0-9a-fA-F]{64}$/.test(hex)) {
     throw new DecryptionError("MEMO_ENC_KEY is malformed.");
   }
-  let key: CryptoKey | null = null;
-  if (hex) {
-    let cached = keyCache.get(hex);
-    if (!cached) {
-      const bytes = new Uint8Array(32);
-      for (let index = 0; index < 32; index += 1) bytes[index] = parseInt(hex.slice(index * 2, index * 2 + 2), 16);
-      cached = crypto.subtle.importKey("raw", bytes, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
-      keyCache.set(hex, cached);
-    }
-    key = await cached;
+  if (!hex) return null;
+  let cached = keyCache.get(hex);
+  if (!cached) {
+    const bytes = new Uint8Array(32);
+    for (let index = 0; index < 32; index += 1) bytes[index] = parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+    cached = crypto.subtle.importKey("raw", bytes, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+    keyCache.set(hex, cached);
   }
+  return cached;
+}
+
+function contentModeOf(env: AppEnv): string {
+  return (env.MEMO_ENC_KEY ?? "").trim() || "<plaintext>";
+}
+
+async function verifyContentSample(env: AppEnv, key: CryptoKey | null, sample: { content: string } | null): Promise<void> {
+  if (sample) {
+    if (!key) throw new DecryptionError("MEMO_ENC_KEY is missing for encrypted content.");
+    await openContent(key, sample.content, "enc1");
+  }
+  verifiedContentModes.add(contentModeOf(env));
+}
+
+/** The content key, or null when MEMO_ENC_KEY is absent (plaintext mode). */
+export async function contentKeyOf(env: AppEnv): Promise<CryptoKey | null> {
+  const key = await importContentKey(env);
 
   // Verify a representative existing ciphertext once per isolate before any
   // content write or destructive bulk operation. This prevents a valid-looking
   // but wrong/missing deployment key from creating a mixed-key database.
-  const mode = hex || "<plaintext>";
-  if (!verifiedContentModes.has(mode)) {
-    const sample = await env.DB.prepare("SELECT content FROM memos WHERE content_format = 'enc1' LIMIT 1").first<{ content: string }>();
-    if (sample) {
-      if (!key) throw new DecryptionError("MEMO_ENC_KEY is missing for encrypted content.");
-      await openContent(key, sample.content, "enc1");
-    }
-    verifiedContentModes.add(mode);
+  if (!verifiedContentModes.has(contentModeOf(env))) {
+    const sample = await env.DB.prepare(CONTENT_SAMPLE_SQL).first<{ content: string }>();
+    await verifyContentSample(env, key, sample);
   }
   return key;
+}
+
+/**
+ * The once-per-isolate check contentKeyOf still owes, as a statement the
+ * session check folds into its own D1 batch (null once settled), so a cold
+ * isolate does not spend a separate serial round trip on it.
+ */
+export function pendingContentCheck(env: AppEnv, db: Pick<D1Database, "prepare">): D1PreparedStatement | null {
+  return verifiedContentModes.has(contentModeOf(env)) ? null : db.prepare(CONTENT_SAMPLE_SQL);
+}
+
+/**
+ * Settle that check from the batched sample row. A failure is swallowed on
+ * purpose: the mode stays unverified, so the endpoint's own contentKeyOf call
+ * re-runs the check and reports DECRYPTION_FAILED exactly as before.
+ */
+export async function settleContentCheck(env: AppEnv, sample: { content: string } | null): Promise<void> {
+  try {
+    await verifyContentSample(env, await importContentKey(env), sample);
+  } catch {
+    // Left for contentKeyOf to surface on the request that needs the key.
+  }
 }
 
 export async function sealContent(key: CryptoKey, text: string): Promise<string> {
@@ -142,15 +175,22 @@ export async function openContentRows<T extends { content: string; content_forma
 
 const CACHE_KEY_SETTING = "client_cache_key";
 
+/** The cache-key row read, for a caller that batches it with its own lookups. */
+export function cacheKeyLookup(db: Pick<D1Database, "prepare">): D1PreparedStatement {
+  return db.prepare("SELECT value_json FROM app_settings WHERE key = ?").bind(CACHE_KEY_SETTING);
+}
+
 /**
  * The random key that encrypts the client's IndexedDB snapshot. It is only
  * ever handed out on authenticated responses, so a device that lost its
  * session holds an unreadable local cache. Created once, then stable. Missing
  * rows use insert-and-reread; malformed rows use compare-and-swap-and-reread,
  * so concurrent initializers or repairs always converge on one winner.
+ *
+ * `prefetched` is a row this request already read through cacheKeyLookup; a
+ * valid one is returned without another D1 round trip.
  */
-export async function getOrCreateCacheKey(env: AppEnv): Promise<string> {
-  const db = env.DB.withSession("first-primary");
+export async function getOrCreateCacheKey(env: AppEnv, prefetched?: { value_json: string } | null): Promise<string> {
   const parseKey = (valueJson: string): string | null => {
     try {
       const parsed = JSON.parse(valueJson) as { key?: unknown };
@@ -161,8 +201,11 @@ export async function getOrCreateCacheKey(env: AppEnv): Promise<string> {
       return null;
     }
   };
-  const read = () =>
-    db.prepare("SELECT value_json FROM app_settings WHERE key = ?").bind(CACHE_KEY_SETTING).first<{ value_json: string }>();
+  const prefetchedKey = prefetched ? parseKey(prefetched.value_json) : null;
+  if (prefetchedKey) return prefetchedKey;
+
+  const db = env.DB.withSession("first-primary");
+  const read = () => cacheKeyLookup(db).first<{ value_json: string }>();
 
   const existing = await read();
   const existingKey = existing ? parseKey(existing.value_json) : null;

@@ -5,6 +5,8 @@ import { PasscodePad } from "./PasscodePad";
 
 interface LoginScreenProps {
   needsSetup: boolean;
+  /** False on a public host, where the first passcode comes from the deployment. */
+  setupAllowed?: boolean;
   onLogin: (pin: string) => Promise<void>;
   onSetup: (pin: string) => Promise<void>;
 }
@@ -15,7 +17,7 @@ type SetupStep = "enter" | "confirm";
  * Passcode gate. Login mode asks once; first-run setup asks twice (enter +
  * confirm). Nothing behind the gate is fetched until a session cookie exists.
  */
-export function LoginScreen({ needsSetup, onLogin, onSetup }: LoginScreenProps) {
+export function LoginScreen({ needsSetup, setupAllowed = true, onLogin, onSetup }: LoginScreenProps) {
   const { errorMessage, tr } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -76,9 +78,44 @@ export function LoginScreen({ needsSetup, onLogin, onSetup }: LoginScreenProps) 
         : tr("Enter the passcode one more time.", "请再输入一次刚才的密码")
       : tr("Enter your passcode to unlock your memos.", "输入密码解锁你的笔记"));
 
+  if (needsSetup && !setupAllowed) {
+    // No keypad: setup on a public host can only fail, so say where the
+    // passcode comes from instead.
+    return (
+      <div className="login-screen">
+        <section className="pin-pad setup-blocked" aria-labelledby="setup-blocked-title">
+          <div className="pin-brand">
+            <div className="pin-logo">
+              <NotebookPen size={26} aria-hidden="true" />
+            </div>
+            <h1 id="setup-blocked-title">{tr("Set the passcode at deploy time", "在部署时设置密码")}</h1>
+            <p>
+              {tr(
+                "This MEMO is on a public address, so its first passcode can’t be created here.",
+                "这个 MEMO 部署在公网地址上，不能在这里创建首个密码。"
+              )}
+            </p>
+          </div>
+          <ol className="setup-steps">
+            <li>
+              {tr("Hash a passcode:", "生成密码哈希：")} <code>
+                npm run hash-password -- <span>"&lt;digits&gt;"</span>
+              </code>
+            </li>
+            <li>
+              {tr("Store the output:", "保存输出结果：")} <code>npx wrangler pages secret put APP_PASSWORD_HASH</code>
+            </li>
+            <li>{tr("Redeploy, then reload this page.", "重新部署，然后刷新本页。")}</li>
+          </ol>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="login-screen">
       <PasscodePad
+        autoComplete={needsSetup ? "new-password" : "current-password"}
         icon={<NotebookPen size={26} aria-hidden="true" />}
         title={title}
         subtitle={subtitle}

@@ -69,10 +69,12 @@ quietly grow three spellings of the same idea.
 
 ![The composer, mid-note, with tag autocomplete offering #life/cooking, #life/garden and #life/running](docs/screenshots/write.png)
 
-Images arrive by picking, pasting, or dragging — up to nine per memo. They are
+Images arrive by picking, pasting, or dragging — up to nine per memo. Photos are
 resized to 1600px on the longest edge and compressed to WebP (JPEG as a fallback)
-in the browser before upload, so a photo costs kilobytes rather than megabytes.
-External image URLs are rendered remotely and cost no storage at all.
+in the browser before upload, so a photo costs kilobytes rather than megabytes; long
+screenshots keep their width so the text stays legible. The feed draws a small
+preview and keeps the full image for the lightbox. External image URLs are rendered
+remotely and cost no storage at all.
 
 ### Markdown that stays plain text
 
@@ -212,8 +214,13 @@ and hand each other the delta over `BroadcastChannel`.
 
 **The snapshot is ciphertext.** The IndexedDB snapshot is sealed with a random key
 that lives server-side and is only handed out on authenticated responses. A device
-without a valid session stores nothing it can read; an explicit logout deletes the
-snapshot, the vector index, and the local workspace state.
+without a valid session stores nothing it can read. Sessions slide: a sync or
+bootstrap re-signs a cookie with under 20 days of its 30 left, up to 180 days after
+the passcode was entered. When a session merely expires the device keeps its sealed
+snapshot and index and warm-starts after the next sign-in; an explicit logout, or a
+session revoked by a passcode change elsewhere, deletes the snapshot, the vector
+index, saved filters and review settings (theme, language, sort and the public model
+weights stay).
 
 **Content encryption is optional but one-way.** With `MEMO_ENC_KEY` set, memo text is
 sealed with AES-256-GCM before it reaches D1 (`enc1:` prefix, ~28 bytes plus base64
@@ -225,7 +232,8 @@ treat ciphertext as editable text.
 
 **Workspace state stays local.** Sort order, saved filters, review settings and the
 frozen review batch are per-device furniture in `localStorage`; they are outside the
-sync pipeline by design and are cleared by an ordinary logout.
+sync pipeline by design. Logout clears the ones that name tags or memos (saved
+filters, review settings and batch) and keeps display preferences such as sort order.
 
 ---
 
@@ -359,10 +367,13 @@ encrypted rows.
 
 ## Storage and Free-plan limits
 
-Images are compressed in the browser to WebP (JPEG fallback), limited to 1600px on the
-longest edge and 900 KB per file, and stored base64-encoded in D1 — so no R2 bucket is
-required. A memo holds up to nine stored images and 40,000 characters. External HTTPS
-image links are displayed remotely and consume no storage.
+Images are compressed in the browser to WebP (JPEG fallback; PNG when a transparent
+image fits), limited to 1600px on the longest edge — images longer than 2:1, such as
+scrolling screenshots, to 1280px on the short edge and 6 megapixels instead — and
+900 KB per file, and stored base64-encoded in D1 alongside a feed preview of at most
+140 KB — so no R2 bucket is required. A memo holds up to nine stored images and
+40,000 characters. External HTTPS image links are displayed remotely and consume no
+storage.
 
 Cloudflare's Free plan currently includes 5 million D1 rows read per day, 100,000 rows
 written per day, 5 GB of D1 storage per account, and a 500 MB maximum per database —
@@ -384,7 +395,7 @@ migration to an isolated D1 binding, so migrations are exercised on every run.
 
 ```
 functions/api/   Pages Functions: auth, memos, images, tags, sync, export/import
-migrations/      D1 schema history (0001 … 0005)
+migrations/      D1 schema history (0001 … 0008)
 src/components/  Feed, composer, sidebar, dialogs, share card, semantic panel
 src/lib/         Sync, cache, search, tags, Markdown, stats, model loader/runtime
 tests/           Unit and DOM tests   ·   tests-workers/  runtime + migration tests

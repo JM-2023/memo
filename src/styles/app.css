@@ -4,8 +4,8 @@
    Tiers: A — signature glass (send button, outer pin pad); B — opaque floating
    surfaces (menus, dialogs, toasts); C — flat/neutral controls (keypad,
    segmented chips, icon buttons, rows, inputs) with hover wash. Dark theme is
-   a token swap layered on prefers-color-scheme with a manual [data-theme]
-   override.
+   a token swap on [data-theme="dark"], which carries the resolved theme —
+   the OS preference in "system" mode, or the manual choice.
    ========================================================================= */
 
 /* The one bundled face in the whole app: the script the share card is
@@ -137,7 +137,6 @@
   /* Segmented control — inset solid track, floating solid thumb. */
   --seg-track: var(--surface-3);
   --seg-thumb: var(--surface);
-  --seg-muted: #717a8a;
   /* Signature liquid swell — overshoots then settles. Tier A only. */
   --spring: cubic-bezier(0.175, 0.885, 0.32, 2.2);
   /* Micro overshoot for small pops — the curve provides the bounce, so the
@@ -179,22 +178,6 @@
   --chip-rim: var(--line-strong);
   --chip-shadow: var(--shadow-xs);
   --chip-hover-shadow: var(--shadow-sm);
-
-  /* The statistics period thumb keeps the original Tier B glass recipe. */
-  --period-iris: conic-gradient(from var(--spin, 130deg) at 50% 50%,
-      rgba(124, 122, 255, 0.10), rgba(155, 138, 232, 0.085) 22%,
-      rgba(232, 155, 155, 0.07) 44%, rgba(253, 183, 119, 0.07) 66%,
-      rgba(255, 212, 163, 0.06) 84%, rgba(124, 122, 255, 0.10) 100%);
-  --period-thumb-fill:
-    var(--lg-specular),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.48)),
-    var(--period-iris);
-  --period-thumb-rim: rgba(20, 27, 45, 0.12);
-  --period-thumb-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.92),
-    inset 0 -7px 15px -8px rgba(20, 27, 45, 0.06),
-    0 1px 2px rgba(20, 27, 45, 0.06),
-    0 3px 8px -3px rgba(20, 27, 45, 0.14);
 
   /* Brand marks use the established sage logo treatment. */
   --primary-fill: var(--leaf-logo);
@@ -239,11 +222,12 @@
   --heat-3: var(--primary);
   --heat-4: color-mix(in srgb, var(--primary-dark) 78%, #000000);
 
-  /* Sidebar accent — same sage family as --primary, kept as separate
-     tokens so the sidebar's tints can be tuned independently. */
-  --leaf: #3d7a5b;
-  --leaf-tint: #ecf4ee;
-  --leaf-tint-strong: #d9eadf;
+  /* Sidebar accent — aliases of the one sage family, so the sidebar can
+     never drift from --primary. Declared on :root alongside the theme
+     blocks, they resolve against whichever --primary the theme set. */
+  --leaf: var(--primary);
+  --leaf-tint: var(--primary-tint);
+  --leaf-tint-strong: var(--primary-tint-strong);
   --leaf-logo: linear-gradient(145deg, #66a385, #3d7a5b);
 
   /* Floating tooltip (dark glass in both themes). */
@@ -252,123 +236,18 @@
   --tip-muted: rgba(245, 246, 250, 0.64);
   --tip-rim: rgba(255, 255, 255, 0.09);
 
+  /* The in-app monospace stack: inline code and model identifiers. Code blocks
+     keep the stack mirrored in shareCard.css so exports match the preview. */
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
   background: var(--bg);
   color: var(--ink);
 }
 
-/* ---- Dark theme (auto) ---- */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-
-    --primary: #9ed0b5;
-    --primary-dark: #b7dfc9;
-    --primary-ink: #0e2118;
-    --primary-tint: #1a2a21;
-    --primary-tint-strong: #27412f;
-
-    --bg: #0c0e13;
-    --surface: #16191f;
-    --surface-2: #1b1e26;
-    --surface-3: #222633;
-    --field-bg: #11141a;
-
-    --ink: #e9ebf1;
-    --ink-soft: #b3bacb;
-    --muted: #848da3;
-    --line: #272c38;
-    --line-strong: #39404f;
-
-    --danger: #e2837a;
-    --danger-tint: #2c1a17;
-    --danger-ink: #2c1a17;
-
-    --ring: rgba(158, 208, 181, 0.3);
-
-    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.45);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 6px 14px -6px rgba(0, 0, 0, 0.55);
-    --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.5), 0 14px 30px -10px rgba(0, 0, 0, 0.62);
-
-    --seg-track: var(--field-bg);
-    --seg-thumb: var(--surface-3);
-    --seg-muted: #818aa0;
-
-    --sheen-shape: 220px 240px;
-    --sheen-stops: rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05) 46%, rgba(255, 255, 255, 0) 72%;
-    --glass-sheet: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.035));
-    --glass-rim: rgba(255, 255, 255, 0.1);
-    --glass-rim-strong: rgba(255, 255, 255, 0.16);
-    --glass-highlight:
-      inset 0 1px 0 rgba(255, 255, 255, 0.1),
-      inset 0 -1px 1px rgba(0, 0, 0, 0.3);
-
-    --menu-fill: var(--surface);
-    --menu-highlight: inset 0 -1px 1px rgba(0, 0, 0, 0.3);
-
-    --chip-fill: var(--surface-2);
-    --chip-hover-fill: var(--surface-3);
-    --chip-rim: var(--line-strong);
-    --chip-shadow: var(--shadow-xs);
-    --chip-hover-shadow: var(--shadow-sm);
-
-    --period-thumb-fill:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.05)),
-      var(--period-iris);
-    --period-thumb-rim: rgba(255, 255, 255, 0.14);
-    --period-thumb-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-      inset 0 -1px 1px rgba(0, 0, 0, 0.3),
-      0 1px 2px rgba(0, 0, 0, 0.4),
-      0 3px 7px -3px rgba(0, 0, 0, 0.5);
-
-    --primary-fill: var(--leaf-logo);
-    --primary-hover-fill: var(--leaf-logo);
-    --primary-rim: color-mix(in srgb, var(--primary) 35%, transparent);
-    --primary-shadow: var(--shadow-sm);
-    --primary-hover-shadow: var(--shadow);
-
-    /* Send-button glass, dark: the reference's final render — transparent
-       body, white rim, no frost pass. */
-    --dl-rim: rgba(255, 255, 255, 0.35);
-    --dl-fill: none;
-    --dl-sampling: none;
-    --dl-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 8px 24px rgba(0, 0, 0, 0.18),
-      0 2px 6px rgba(0, 0, 0, 0.12);
-    --dl-hover-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 10px 28px rgba(0, 0, 0, 0.18),
-      0 3px 8px rgba(0, 0, 0, 0.1);
-    --dl-active-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 8px 18px rgba(0, 0, 0, 0.18),
-      0 1px 3px rgba(0, 0, 0, 0.12);
-
-    --wash: rgba(255, 255, 255, 0.06);
-    --wash-strong: rgba(255, 255, 255, 0.1);
-
-    /* Dark grows brighter with activity: the pale accent at full strength
-       is the busiest day, the quiet days sink toward the surface. */
-    --heat-1: color-mix(in srgb, var(--primary) 26%, var(--surface-3));
-    --heat-2: color-mix(in srgb, var(--primary) 48%, var(--surface-3));
-    --heat-3: color-mix(in srgb, var(--primary) 76%, var(--surface-3));
-    --heat-4: var(--primary);
-
-    --leaf: #9ed0b5;
-    --leaf-tint: #1a2a21;
-    --leaf-tint-strong: #27412f;
-    --leaf-logo: linear-gradient(145deg, #6fae8e, #41725a);
-
-    --tip-bg: rgba(42, 46, 58, 0.94);
-    --tip-ink: #eef0f6;
-    --tip-muted: rgba(238, 240, 246, 0.62);
-    --tip-rim: rgba(255, 255, 255, 0.13);
-  }
-}
-
-/* ---- Manual dark override (wins over a light system pref) ---- */
+/* ---- Dark theme ----
+   [data-theme] always holds the resolved theme: public/theme-init.js resolves
+   "system" from prefers-color-scheme before first paint and src/lib/theme.ts
+   follows the OS from then on, so this is the one dark token block. */
 :root[data-theme="dark"] {
   color-scheme: dark;
 
@@ -403,7 +282,6 @@
 
   --seg-track: var(--field-bg);
   --seg-thumb: var(--surface-3);
-  --seg-muted: #818aa0;
 
   --sheen-shape: 220px 240px;
   --sheen-stops: rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05) 46%, rgba(255, 255, 255, 0) 72%;
@@ -422,16 +300,6 @@
   --chip-rim: var(--line-strong);
   --chip-shadow: var(--shadow-xs);
   --chip-hover-shadow: var(--shadow-sm);
-
-  --period-thumb-fill:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.05)),
-    var(--period-iris);
-  --period-thumb-rim: rgba(255, 255, 255, 0.14);
-  --period-thumb-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-    inset 0 -1px 1px rgba(0, 0, 0, 0.3),
-    0 1px 2px rgba(0, 0, 0, 0.4),
-    0 3px 7px -3px rgba(0, 0, 0, 0.5);
 
   --primary-fill: var(--leaf-logo);
   --primary-hover-fill: var(--leaf-logo);
@@ -460,14 +328,13 @@
   --wash: rgba(255, 255, 255, 0.06);
   --wash-strong: rgba(255, 255, 255, 0.1);
 
+  /* Dark grows brighter with activity: the pale accent at full strength
+     is the busiest day, the quiet days sink toward the surface. */
   --heat-1: color-mix(in srgb, var(--primary) 26%, var(--surface-3));
   --heat-2: color-mix(in srgb, var(--primary) 48%, var(--surface-3));
   --heat-3: color-mix(in srgb, var(--primary) 76%, var(--surface-3));
   --heat-4: var(--primary);
 
-  --leaf: #9ed0b5;
-  --leaf-tint: #1a2a21;
-  --leaf-tint-strong: #27412f;
   --leaf-logo: linear-gradient(145deg, #6fae8e, #41725a);
 
   --tip-bg: rgba(42, 46, 58, 0.94);
@@ -477,7 +344,6 @@
 }
 
 /* @property lets --lx/--ly drift smoothly (living sheen, dark mode only). */
-@property --spin { syntax: "<angle>"; inherits: false; initial-value: 130deg; }
 @property --lx { syntax: "<percentage>"; inherits: true; initial-value: 26%; }
 @property --ly { syntax: "<percentage>"; inherits: true; initial-value: -8%; }
 @keyframes glass-sheen-drift {
@@ -498,10 +364,6 @@
 }
 /* Sheen joins (never replaces) the pad's own entrance/shake: a name kept
    across a list swap keeps running, so shake↔calm swaps leave it seamless. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .pin-pad { animation: scale-in 0.24s var(--ease-out) both, glass-sheen-drift 22s ease-in-out infinite; }
-  :root:not([data-theme="light"]) .pin-pad.shake { animation: shake 0.28s var(--ease), glass-sheen-drift 22s ease-in-out infinite; }
-}
 :root[data-theme="dark"] .pin-pad { animation: scale-in 0.24s var(--ease-out) both, glass-sheen-drift 22s ease-in-out infinite; }
 :root[data-theme="dark"] .pin-pad.shake { animation: shake 0.28s var(--ease), glass-sheen-drift 22s ease-in-out infinite; }
 
@@ -538,8 +400,7 @@ a:hover { text-decoration: underline; }
 
 /* Shared low-cost sampling pass for the remaining glass surfaces. */
 .pin-pad,
-.topbar,
-.period-seg {
+.topbar {
   -webkit-backdrop-filter: var(--glass-sampling);
   backdrop-filter: var(--glass-sampling);
 }
@@ -579,6 +440,8 @@ a:hover { text-decoration: underline; }
 }
 @keyframes menu-morph { from { opacity: 0; transform: translateY(-4px) scale(0.92); } to { opacity: 1; transform: none; } }
 @keyframes menu-out { to { opacity: 0; transform: translateY(-4px) scale(0.94); } }
+@keyframes menu-morph-up { from { opacity: 0; transform: translateY(4px) scale(0.92); } to { opacity: 1; transform: none; } }
+@keyframes menu-out-up { to { opacity: 0; transform: translateY(4px) scale(0.94); } }
 @keyframes menu-item { from { opacity: 0; } to { opacity: 1; } }
 @keyframes heat-slide-left { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
 @keyframes heat-slide-right { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: none; } }
@@ -795,6 +658,13 @@ a:hover { text-decoration: underline; }
 .action-menu.memo-action-menu { min-width: 220px; }
 .action-menu.align-right { right: 0; }
 .action-menu.align-left { left: 0; transform-origin: top left; }
+/* In-flow panels that would run past the viewport bottom open upward (Menu
+   measures before paint). The bottom edge pins to the trigger, so a confirm
+   swap that changes the panel's height keeps it glued there; the morph
+   mirrors too, rising from the trigger instead of dropping from it. */
+.action-menu.is-up { top: auto; bottom: calc(100% + 6px); transform-origin: bottom right; animation-name: menu-morph-up; }
+.action-menu.is-up.align-left { transform-origin: bottom left; }
+.action-menu.is-up.is-closing { animation-name: menu-out-up; }
 /* Body-portaled panels (tag menus): fixed coords set inline; must clear the
    mobile drawer (z 150). */
 .action-menu.is-portal { z-index: 170; }
@@ -932,9 +802,9 @@ a:hover { text-decoration: underline; }
   z-index: 1;
   min-width: 46px;
   padding: 3px 10px;
-  color: var(--seg-muted);
+  color: var(--muted);
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   text-align: center;
   background: transparent;
   border: 0;
@@ -946,7 +816,7 @@ a:hover { text-decoration: underline; }
 /* The ring sits inside the cell so it never clips on the track's edge. */
 .lang-seg button:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 78%, transparent); outline-offset: -2px; }
 .lang-seg button:active { transform: scale(0.96); }
-.lang-seg button.is-active { color: var(--ink); }
+.lang-seg button.is-active { color: var(--ink); font-weight: 600; }
 /* Theme takes the same track, three cells wide, one glyph per choice —
    follow the system, light, dark. Label and state are one control, where
    the old row showed the current theme and quietly cycled to the next. */
@@ -1020,6 +890,42 @@ a:hover { text-decoration: underline; }
    the passcode is. Long entries compress the dots instead of wrapping. */
 /* min-width: 0 defeats the grid item's auto minimum, which would otherwise
    widen the whole card column to fit 18 full-size dots. */
+/* Public host without APP_PASSWORD_HASH: the deploy steps take the keypad's
+   place inside the same card. */
+.pin-pad.setup-blocked { width: min(400px, 100%); grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.setup-steps { display: grid; gap: 12px; margin: 0; padding-left: 1.2em; color: var(--ink); font-size: var(--fs-sm); font-weight: 400; }
+.setup-steps code {
+  display: block;
+  margin-top: 4px;
+  padding: 6px 8px;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+  background: var(--surface-3);
+  border-radius: var(--r-sm);
+}
+.setup-steps code span { white-space: nowrap; }
+.pin-entry { position: relative; min-width: 0; }
+.pin-pad:focus-visible { outline: none; }
+/* The field itself is invisible, so its keyboard focus shows on the dots row. */
+.pin-entry:has(.pin-field:focus-visible) .pin-dots { outline: 2px solid color-mix(in srgb, var(--primary) 78%, transparent); outline-offset: 6px; border-radius: 999px; }
+/* The password-manager field: transparent over the dots row, so a tap there
+   opens the keyboard's keychain suggestions while the dots stay the visible
+   entry. 16px keeps iOS from zooming on focus. */
+.pin-field {
+  position: absolute;
+  inset: -12px 0;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  font-size: 16px;
+  color: transparent;
+  caret-color: transparent;
+  background: transparent;
+  border: 0;
+  opacity: 0;
+  cursor: default;
+}
 .pin-dots { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 16px; }
 .pin-dots span {
   width: 14px;
@@ -1078,6 +984,29 @@ a:hover { text-decoration: underline; }
    dead band between the columns that grew with the window; held to this,
    the surplus becomes symmetric page margin and the pair reads as one unit. */
 .app-shell { display: flex; min-height: 100vh; max-width: calc(392px + 880px + 2 * 40px); margin-inline: auto; }
+/* Off screen until a keyboard reaches it: the first Tab stop, so the
+   sidebar's stats, heatmap and tag tree can be stepped over in one go. */
+.skip-link {
+  position: fixed;
+  top: max(12px, env(safe-area-inset-top));
+  left: max(12px, env(safe-area-inset-left));
+  z-index: 300;
+  padding: 8px 14px;
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-decoration: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow);
+  transform: translateY(calc(-100% - 24px));
+}
+.skip-link:focus-visible { transform: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .skip-link { transition: transform var(--t) var(--ease); }
+}
+.main-column:focus { outline: none; }
 .first-reveal .main-column,
 .first-reveal .sidebar-inner { animation: ink-reveal 0.28s var(--ease); }
 
@@ -1092,6 +1021,9 @@ a:hover { text-decoration: underline; }
   display: flex;
   flex-direction: column;
   max-height: 100vh;
+  /* The dynamic viewport where supported: 100vh is the toolbar-collapsed
+     height on iOS Safari, taller than the screen while toolbars show. */
+  max-height: 100dvh;
   /* Side inset as a share of the sidebar's own width, not the viewport's:
      the sidebar stops shrinking at 302px (1208px viewports) but a vw inset
      kept shrinking below that, so the content column *widened* as the window
@@ -1099,6 +1031,8 @@ a:hover { text-decoration: underline; }
      again at 1000px. 6.4% is the old inset at both ends of the sidebar's
      range (19px at 302, 25→24px at 392) and holds still on the floor. */
   padding: 16px clamp(14px, 6.4%, 24px) 24px;
+  /* Landscape iPhones: the notch / island side (viewport-fit=cover). */
+  padding-left: max(clamp(14px, 6.4%, 24px), env(safe-area-inset-left));
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -1165,15 +1099,14 @@ a:hover { text-decoration: underline; }
 }
 
 .period-panel { display: grid; gap: 8px; container-type: inline-size; }
+/* The same neutral track and thumb as the language and theme rows. */
 .period-seg {
   position: relative;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   padding: 2px;
-  --chip-fill: var(--period-thumb-fill);
-  --chip-rim: var(--period-thumb-rim);
-  --chip-shadow: var(--period-thumb-shadow);
-  background: var(--surface-3);
+  background: var(--seg-track);
+  border: 1px solid var(--line);
   border-radius: var(--r-md);
 }
 .period-seg-thumb {
@@ -1182,17 +1115,19 @@ a:hover { text-decoration: underline; }
   bottom: 2px;
   left: 2px;
   width: calc((100% - 4px) / 3);
-  background: var(--chip-fill);
-  border: 1px solid var(--chip-rim);
+  background: var(--seg-thumb);
+  border: 1px solid var(--line-strong);
   /* Concentric with the 2px-padded track. */
   border-radius: calc(var(--r-md) - 2px);
-  box-shadow: var(--chip-shadow);
+  box-shadow: var(--shadow-xs);
   transition: transform 0.2s var(--ease-spring);
 }
 .period-seg button {
   position: relative;
   z-index: 1;
-  padding: 5px 0;
+  /* 4px, not 5: the track's hairline takes the other pixel, so the row
+     keeps its height. */
+  padding: 4px 0;
   color: var(--muted);
   font-size: var(--fs-sm);
   font-weight: 500;
@@ -1637,7 +1572,9 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
    symmetric margin that the topbar follows instead of drifting to the edge. */
 .main-column {
   --content-max: 880px;
-  --content-inset: max(clamp(16px, 3vw, 40px), calc((100% - var(--content-max)) / 2));
+  /* The safe-area terms only bite in landscape on notched phones, where the
+     cover viewport would otherwise put cards under the sensor housing. */
+  --content-inset: max(clamp(16px, 3vw, 40px), calc((100% - var(--content-max)) / 2), env(safe-area-inset-left), env(safe-area-inset-right));
   flex: 1;
   min-width: 0;
   display: flex;
@@ -2023,6 +1960,14 @@ button.crumb:active { background: var(--wash-strong); }
 .searchbox input::placeholder { color: var(--muted); }
 @media (hover: hover) { .searchbox input:hover { border-color: var(--line-strong); } }
 .searchbox input:focus { border-color: var(--line-focus); }
+/* type="search" for the keyboard's Search key and the landmark semantics,
+   without the UA's rounded field or its own × beside ours. */
+.searchbox input { -webkit-appearance: none; appearance: none; }
+.searchbox input::-webkit-search-cancel-button,
+.searchbox input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
+/* The syntax hint (aria-describedby) and the result line's live region:
+   the standard clip recipe, as .heat-legend-sr. */
+.search-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .searchbox-clear {
   position: absolute;
   right: 7px;
@@ -2221,8 +2166,8 @@ button.crumb:active { background: var(--wash-strong); }
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
   view-transition-name: topbar-action;
 }
-@media (hover: hover) { .trash-empty-button:hover { background: var(--danger-tint); } }
-.trash-empty-button:active { transform: scale(0.95); }
+@media (hover: hover) { .trash-empty-button:hover:not(:disabled) { background: var(--danger-tint); } }
+.trash-empty-button:active:not(:disabled) { transform: scale(0.95); }
 /* Armed state (first click): filled red, asking for the second click. */
 .trash-empty-button.is-confirm {
   color: var(--danger-ink);
@@ -2458,6 +2403,13 @@ button.crumb:active { background: var(--wash-strong); }
 }
 .attachment:hover .attachment-remove, .attachment-remove:focus-visible { opacity: 1; transform: scale(1); }
 @media (hover: none) { .attachment-remove { opacity: 1; transform: scale(1); } }
+/* Fingers get a 32px target anchored in the thumbnail's corner (the tile
+   clips anything outside it, so the area grows inward; 32px keeps it to the
+   corner, since removing a pending image has no Undo); the glyph keeps its
+   size. */
+@media (pointer: coarse) {
+  .attachment-remove::before { content: ""; position: absolute; top: -3px; right: -3px; width: 32px; height: 32px; }
+}
 @media (hover: hover) { .attachment-remove:hover { background: var(--danger); } }
 .attachment-remove:active { transform: scale(0.85); }
 
@@ -2623,6 +2575,21 @@ button.crumb:active { background: var(--wash-strong); }
    and let the full shadow bloom back through the transition above once the
    stage settles and .is-morphing drops. */
 .card-stage.is-morphing .send-button:not(:disabled) { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2); }
+/* Saving new images: an accent wash fills the chip from the left as the bytes
+   leave the browser, and the label becomes the percentage. The chip keeps full
+   opacity while it counts — it is reporting work, not refusing a click. */
+.send-button.is-uploading { opacity: 1; }
+.send-progress {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  transform-origin: left center;
+  transition: transform 0.2s linear;
+}
+.send-percent { display: inline-grid; justify-items: center; font-variant-numeric: tabular-nums; }
+.send-percent > span { grid-area: 1 / 1; }
+.send-percent-sizer { visibility: hidden; }
 
 /* =========================================================================
    Memo feed
@@ -2694,6 +2661,26 @@ button.crumb:active { background: var(--wash-strong); }
   view-transition-name: review-banner;
 }
 .review-banner svg { flex: none; color: var(--leaf); }
+/* The search's answer in one line above the results: what was found, where,
+   and how much of it meaning added. The banner's voice, without the icon. */
+.search-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+/* Keyword hits inside the cards (CSS Custom Highlight API: no DOM change).
+   A wash only: a highlight's text-decoration would also recolour the card's
+   own decorations (the open task's transparent strike, link underlines).
+   Semantic-only results stay unmarked. */
+::highlight(search-hit) {
+  background-color: color-mix(in srgb, var(--primary) 24%, transparent);
+}
+@media (forced-colors: active) {
+  ::highlight(search-hit) { background-color: Mark; color: MarkText; }
+}
 /* Each slot's entrance animation leaves a stacking context (fill-mode both
    keeps the animated opacity applied), and content-visibility's paint
    containment clips descendants at the slot's edge — either alone hides an
@@ -2785,8 +2772,20 @@ button.crumb:active { background: var(--wash-strong); }
 .stage-ghost.is-out { visibility: visible; }
 /* While clones replay the diff, the real content holds its layout but not
    its pixels (visibility keeps geometry). */
-.stage-hold > .memo-content, .stage-hold > .memo-images { visibility: hidden; }
+/* (Descendant, not child: the body sits inside .memo-view-surface and,
+   when long, inside .memo-fold.) */
+.stage-hold .memo-content, .stage-hold .memo-images { visibility: hidden; }
 .stage-overlay { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+/* The text clones' layer. Over a folded body MemoStage sets its height to
+   the fold's bottom edge: the clones clip and fade exactly where the real
+   text does, never replaying over the Show more toggle. */
+.stage-lines { position: absolute; inset: 0; }
+.stage-lines.is-folded {
+  bottom: auto;
+  overflow: clip;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent);
+}
 /* Each clone is one .memo-content-classed line pinned to the stage top and
    placed purely via translateY, keeping the whole replay off the layout. */
 .stage-line {
@@ -2879,6 +2878,61 @@ button.crumb:active { background: var(--wash-strong); }
 .memo-menu-trigger.is-open { opacity: 1; background: var(--wash); color: var(--ink); }
 .memo-card:hover .memo-menu-trigger, .memo-menu-trigger:focus-visible { opacity: 1; }
 @media (hover: none) { .memo-menu-trigger { opacity: 1; } }
+/* A trashed card's one job, on the card itself: a quiet text action in the
+   ghost-button material, cut to the 26px tool cell so the header's height
+   never changes. It retires with the ⋯ while selecting. */
+.memo-restore {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  color: var(--ink-soft);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  white-space: nowrap;
+  border-radius: var(--r-sm);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), opacity 0.15s var(--ease);
+}
+.memo-restore svg { flex: none; color: var(--muted); stroke-width: 1.9; }
+@media (hover: hover) {
+  .memo-restore:hover:not(:disabled) { background: var(--wash); color: var(--ink); }
+  .memo-restore:hover:not(:disabled) svg { color: var(--ink); }
+}
+.memo-restore:active:not(:disabled) { transform: scale(0.96); }
+.memo-restore:disabled { opacity: 0.55; }
+.memo-card.is-selecting .memo-restore { opacity: 0; visibility: hidden; transition: opacity 0.15s var(--ease), visibility 0s 0.15s; }
+/* Tags stay buttons while selecting (the surface is inert); they dim like
+   the static pills they used to be re-rendered as. */
+.memo-card.is-selecting .memo-tag { opacity: 0.8; }
+
+/* ---- Long-memo fold ----
+   A body taller than the fold (MemoFold measures it and sets data-overflow)
+   shows its first 320px, fading out toward the toggle — a gradient with a
+   direction and a job. The toggle only exists while the attribute does. */
+.memo-fold[data-overflow]:not(.is-expanded) {
+  max-height: 320px;
+  overflow: clip;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent);
+}
+.memo-fold-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 4px;
+  margin-top: -2px;
+  padding: 2px 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  border-radius: var(--r-xs);
+  transition: color var(--t) var(--ease);
+}
+.memo-fold-toggle svg { transition: transform var(--t) var(--ease); }
+.memo-fold.is-expanded + .memo-fold-toggle svg { transform: rotate(180deg); }
+.memo-fold:not([data-overflow]) + .memo-fold-toggle { display: none; }
+@media (hover: hover) { .memo-fold-toggle:hover { color: var(--ink); } }
 
 /* Prose, not chrome: figures go back to proportional so a number inside a
    sentence sits on its own width. Where a column has to line up anyway —
@@ -2949,16 +3003,25 @@ button.crumb:active { background: var(--wash-strong); }
 button.md-task-box { cursor: pointer; }
 button.md-task-box:hover { border-color: var(--primary); }
 button.md-task-box:active { transform: scale(0.88); }
-/* line-through is always on, transparent until done — so the strike fades
-   with the same transition as the box instead of snapping. */
+/* The strike fades with the same transition as the box instead of snapping.
+   The line itself is only on while done: a search-hit highlight repaints the
+   text's decorations in its own colour, and an always-on transparent strike
+   surfaced under every hit in an open task, reading as done. The line is a
+   discrete property, so rather than flip it mid-fade it switches on at once
+   when ticked and off only after the fade when unticked (the delay below).
+   allow-discrete sits in its own longhand: an engine that doesn't know it
+   drops just that line, not the colour fade with it. */
 .md-task > .md-body {
-  text-decoration: line-through;
+  text-decoration-line: none;
   text-decoration-color: transparent;
-  transition: color 0.16s var(--ease), text-decoration-color 0.16s var(--ease);
+  transition: color 0.16s var(--ease), text-decoration-color 0.16s var(--ease), text-decoration-line 0s linear 0.16s;
+  transition-behavior: allow-discrete;
 }
 .md-task.is-done > .md-body {
   color: var(--muted);
+  text-decoration-line: line-through;
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  transition-delay: 0s;
 }
 
 .md-quote { border-inline-start: 2px solid color-mix(in srgb, var(--primary) 42%, var(--line)); padding-inline-start: 12px; color: var(--ink-soft); }
@@ -2993,7 +3056,7 @@ button.md-task-box:active { transform: scale(0.88); }
   box-decoration-break: clone;
 }
 .memo-content code {
-  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 0.855em;
   background: var(--surface-3);
   border-radius: var(--r-xs);
@@ -3036,9 +3099,22 @@ button.memo-tag:active {
 }
 .memo-tag.is-static { opacity: 0.8; }
 
-.memo-images { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 2px; }
-.memo-images.count-1 { grid-template-columns: minmax(0, 240px); }
-.memo-images.count-2 { grid-template-columns: repeat(2, minmax(0, 170px)); }
+/* One cell cap for every count, so more images never mean bigger cells: two
+   or four images sit two-wide (a pair, a 2×2), every other count three-wide,
+   and cells shrink together on narrow cards. A lone image keeps its own
+   shape (--media-ratio, clamped to 2:3…16:9 from the stored size) inside a
+   --single-box square, reserving its height before any byte arrives. */
+.memo-images {
+  --cell-max: 180px;
+  --single-box: 320px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, var(--cell-max)));
+  gap: 6px;
+  margin-top: 2px;
+}
+.memo-images.cols-2 { grid-template-columns: repeat(2, minmax(0, var(--cell-max))); }
+.memo-images.count-1 { grid-template-columns: minmax(0, calc(var(--single-box) * min(1, var(--media-ratio, 1)))); }
+.memo-images.count-1 > .memo-image { aspect-ratio: var(--media-ratio, 1); }
 .memo-image {
   position: relative;
   aspect-ratio: 1;
@@ -3046,6 +3122,26 @@ button.memo-tag:active {
   overflow: hidden;
   border: 1px solid var(--line);
 }
+/* A neutral ground while a stored image loads; it retires once the picture
+   paints so transparent images keep the card behind them. */
+.memo-image.is-loading { background: var(--surface-2); }
+.memo-image.is-failed { border-style: dashed; border-color: var(--line-strong); }
+.memo-image-failed {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  text-align: center;
+  transition: color var(--t) var(--ease);
+}
+@media (hover: hover) { .memo-image.is-failed:hover .memo-image-failed { color: var(--ink-soft); } }
 /* One hover cue: the photo itself brightens a touch (the hairline border
    already separates it from the card). Press dims it back down. */
 .memo-image img { width: 100%; height: 100%; object-fit: cover; display: block; transition: filter 0.18s var(--ease); }
@@ -3092,7 +3188,14 @@ button.memo-tag:active {
 
 .memo-card.is-trash { border-style: dashed; }
 .memo-card.is-trash .memo-content { color: var(--ink-soft); }
-.memo-card.is-trash .memo-time { color: var(--danger); opacity: 0.75; }
+/* The stamp shares the row with Restore and the ⋯; on a 320px phone it
+   truncates instead of wrapping, so the header keeps its one-line height. */
+.memo-card.is-trash .memo-time { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.memo-card.is-trash .memo-head-right { flex-shrink: 0; }
+/* The dashed edge is the trash card's one accent; its stamp says the state
+   in words, the word at 600, in the ordinary meta colour (red stays with
+   the actions that destroy). */
+.memo-time-state { font-weight: 600; }
 
 .feed-empty { display: grid; justify-items: center; gap: 6px; padding: 56px 20px; color: var(--muted); text-align: center; animation: rise-in 0.26s var(--ease-out) both; view-transition-name: feed-empty; }
 /* Empty review day: the settings shortcut sits under the explanation. */
@@ -3104,13 +3207,22 @@ button.memo-tag:active {
 /* =========================================================================
    Overlays: confirm dialog + lightbox
    ========================================================================= */
+/* The page runs under the notch and the home indicator (viewport-fit=cover),
+   so every edge keeps clear of its safe area; the bottom also clears an
+   on-screen keyboard (--kb-inset, set by useKeyboardInset on dialogs with a
+   text field). Phones re-present the card as a bottom sheet — see "Dialogs
+   as bottom sheets" below. */
 .overlay {
   position: fixed;
   inset: 0;
   z-index: 180;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding:
+    max(24px, env(safe-area-inset-top))
+    max(24px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom), var(--kb-inset, 0px) + 12px)
+    max(24px, env(safe-area-inset-left));
   background: rgba(10, 12, 18, 0.44);
   -webkit-backdrop-filter: blur(7px);
   backdrop-filter: blur(7px);
@@ -3133,6 +3245,11 @@ button.memo-tag:active {
 .confirm-card h2 { margin: 0; font-size: var(--fs-lg); font-weight: 700; overflow-wrap: anywhere; }
 .confirm-card p { margin: 0 0 10px; color: var(--muted); font-size: var(--fs-md); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* A long-running confirm (backup import) counts up above its actions on the
+   model panel's track. */
+.confirm-progress { display: grid; gap: 8px; margin: 0 0 12px; }
+.confirm-progress-text { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; font-variant-numeric: tabular-nums; }
+.confirm-progress .model-progress-track { margin-top: 0; }
 
 /* Prompt dialog (tag rename): ConfirmDialog + one text field. */
 .prompt-form { display: grid; gap: 10px; margin-top: 2px; }
@@ -3150,6 +3267,9 @@ button.memo-tag:active {
 .prompt-input:focus { border-color: var(--line-focus); }
 .prompt-note { margin: -2px 0 0; font-size: var(--fs-xs); font-weight: 500; color: var(--muted); animation: fade-up 0.18s var(--ease) both; }
 .prompt-note.is-error { color: var(--danger); }
+/* A consequence that cannot be undone (a tag merge) is said in ink and
+   weight, above the grey body copy — never as the quietest line. */
+.prompt-note.is-strong { color: var(--ink); font-size: var(--fs-md); font-weight: 600; }
 .accent-button {
   padding: 8px 16px;
   color: var(--primary-ink);
@@ -3213,6 +3333,21 @@ button.memo-tag:active {
   outline: none;
 }
 .bulk-tag-field input::placeholder { color: var(--muted); }
+
+/* iOS Safari zooms the page into any focused field set under 16px and never
+   zooms back. On touch screens the text fields take 16px; the desktop scale
+   keeps its 15/14px. The over-limit mirror tracks the textarea's metrics or
+   its tint drifts off the text. (Not maximum-scale: that kills pinch-zoom.)
+   A zoomed page also reads to useKeyboardInset as a pinch, not a keyboard,
+   so the sheet dialogs' fields must never trigger it either. */
+@media (pointer: coarse) {
+  .searchbox input,
+  .editor textarea,
+  .editor-overflow,
+  .link-pop-inner input { font-size: 1rem; }
+  .prompt-input,
+  .bulk-tag-field input { font-size: max(16px, var(--fs-md)); }
+}
 .bulk-tag-note {
   min-height: 1.35em;
   color: var(--muted);
@@ -3278,26 +3413,102 @@ button.memo-tag:active {
   min-width: 108px;
 }
 
-.lightbox { padding: 40px; }
+/* The lightbox carries its own scrim: a near-opaque night ground in both
+   themes (the dialog wash read as mid-grey under white controls), drawn on
+   ::before so a downward swipe can thin it without touching the controls'
+   layer. The blur stays on the overlay itself: under its fade animation the
+   overlay is a backdrop root, so a blur on ::before would see nothing.
+   Every edge control clears the safe areas the cover viewport hands us;
+   the image's height budget subtracts the same insets. */
+.lightbox {
+  --lb-top: max(18px, env(safe-area-inset-top));
+  --lb-bottom: max(20px, env(safe-area-inset-bottom));
+  --lb-left: max(18px, env(safe-area-inset-left));
+  --lb-right: max(18px, env(safe-area-inset-right));
+  padding: max(40px, env(safe-area-inset-top)) max(40px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(40px, env(safe-area-inset-left));
+  background: none;
+  /* Single-finger swipes are ours; two-finger pinch stays the browser's. */
+  touch-action: pinch-zoom;
+}
+.lightbox.is-zoomed { touch-action: auto; }
+.lightbox::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: rgba(12, 14, 19, 0.9);
+  opacity: calc(1 - 0.6 * var(--lb-fade, 0));
+  transition: opacity 0.26s var(--ease-out);
+}
+@media (min-width: 561px) {
+  /* Keep a wide image clear of the paging arrows. */
+  .lightbox.has-nav { padding-inline: calc(var(--lb-left) + 58px) calc(var(--lb-right) + 58px); }
+}
+.lightbox-image,
+.lightbox-status { grid-area: 1 / 1; }
 .lightbox-image {
-  max-width: min(1080px, 100%);
-  max-height: calc(100vh - 120px);
+  max-width: min(1600px, 100%);
+  max-height: calc(100vh - var(--lb-top) - var(--lb-bottom) - 82px);
+  max-height: calc(100dvh - var(--lb-top) - var(--lb-bottom) - 82px);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-lg);
+  /* Follows the finger while dragged (independent translate/scale, so the
+     entrance keyframes on transform never fight it), settles back after. */
+  translate: var(--lb-dx, 0px) var(--lb-dy, 0px);
+  scale: calc(1 - 0.15 * var(--lb-fade, 0));
+  transition: translate 0.26s var(--ease-out), scale 0.26s var(--ease-out);
   animation: lightbox-zoom 0.22s var(--ease-out) both;
 }
-.lightbox-close { position: absolute; top: 18px; right: 18px; width: 38px; height: 38px; color: #fff; background: rgba(255, 255, 255, 0.12); border-radius: 50%; }
-.lightbox-nav { position: absolute; top: 50%; width: 40px; height: 40px; color: #fff; background: rgba(255, 255, 255, 0.12); border-radius: 50%; transform: translateY(-50%); }
-.lightbox-nav.prev { left: 18px; }
-.lightbox-nav.next { right: 18px; }
-@media (hover: hover) {
-  .lightbox-close:hover, .lightbox-nav:hover { background: rgba(255, 255, 255, 0.24); color: #fff; }
+/* The zoom is the opening; later pages slide in from the side they came. */
+.lightbox-image.dir-fwd { animation: swap-in-fwd 0.22s var(--ease-out) both; }
+.lightbox-image.dir-back { animation: swap-in-back 0.22s var(--ease-out) both; }
+/* Until it has pixels the image holds still and invisible; the entrance
+   plays once it can be seen. */
+.lightbox-image.is-pending { opacity: 0; animation: none; }
+.lightbox.is-dragging .lightbox-image,
+.lightbox.is-dragging::before { transition: none; }
+.lightbox-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  pointer-events: none;
 }
-.lightbox-nav:active { transform: translateY(-50%) scale(0.9); }
-.lightbox-close:active { transform: scale(0.9); }
+/* A fast load never flashes the spinner. */
+.lightbox-status.is-loading { animation: fade-in 0.2s var(--ease) 0.15s both; }
+.lightbox-close,
+.lightbox-nav {
+  position: absolute;
+  z-index: 1;
+  display: inline-grid;
+  place-items: center;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+  transition: background var(--t) var(--ease), scale var(--t-fast) var(--ease), opacity 0.26s var(--ease-out);
+}
+.lightbox-close { top: var(--lb-top); right: var(--lb-right); width: 38px; height: 38px; }
+/* Centred by the translate property, so a press scale never drops it. */
+.lightbox-nav { top: 50%; width: 40px; height: 40px; translate: 0 -50%; }
+.lightbox-nav.prev { left: var(--lb-left); }
+.lightbox-nav.next { right: var(--lb-right); }
+@media (hover: hover) {
+  .lightbox-close:hover, .lightbox-nav:hover { background: rgba(255, 255, 255, 0.24); }
+}
+.lightbox-close:active, .lightbox-nav:active { scale: 0.9; }
+/* Chrome steps back as a downward swipe takes the image away. */
+.lightbox-close,
+.lightbox-nav,
+.lightbox-count,
+.lightbox-source { opacity: calc(1 - 1.6 * var(--lb-fade, 0)); }
+.lightbox.is-dragging :is(.lightbox-close, .lightbox-nav, .lightbox-count, .lightbox-source) { transition: none; }
 .lightbox-count {
   position: absolute;
-  bottom: 20px;
+  z-index: 1;
+  bottom: var(--lb-bottom);
   left: 50%;
   transform: translateX(-50%);
   padding: 4px 12px;
@@ -3306,11 +3517,13 @@ button.memo-tag:active {
   border-radius: var(--r-sm);
   font-size: var(--fs-sm);
   font-weight: 600;
+  transition: opacity 0.26s var(--ease-out);
 }
 .lightbox-source {
   position: absolute;
-  right: 20px;
-  bottom: 20px;
+  z-index: 1;
+  right: max(20px, env(safe-area-inset-right));
+  bottom: var(--lb-bottom);
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -3320,7 +3533,7 @@ button.memo-tag:active {
   border-radius: var(--r-sm);
   font-size: var(--fs-sm);
   font-weight: 600;
-  transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
+  transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease), opacity 0.26s var(--ease-out);
 }
 @media (hover: hover) { .lightbox-source:hover { background: rgba(12, 14, 19, 0.78); text-decoration: none; } }
 .lightbox-source:active { transform: scale(0.96); }
@@ -3486,9 +3699,14 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
 .heat-legend { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; user-select: none; }
 .heat-legend-cells { display: inline-flex; gap: 3px; }
 .heat-legend .mini-cell { width: 10px; height: 10px; }
-/* The screen-reader sentence describing the scale: the standard clip recipe
-   (the sheet has no shared visually-hidden utility). */
-.heat-legend-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+/* Visually hidden, still read: the standard clip recipe. .sr-only is the
+   shared utility (rolling numbers' spoken value, the app's live regions);
+   .heat-legend-sr is the scale's screen-reader sentence and .send-progress-sr
+   the composer's upload progressbar (beside the send button, whose children
+   are presentational). */
+.sr-only,
+.heat-legend-sr,
+.send-progress-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 
 .bar-chart { display: grid; gap: 6px; }
 .stats-bars { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; align-items: end; height: 120px; }
@@ -3697,14 +3915,19 @@ button.stats-tag-row:active { scale: 0.992; }
 .review-tagbox.is-open { grid-template-rows: 1fr; opacity: 1; }
 .review-tagbox > div { overflow: hidden; min-height: 0; }
 .review-tags {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  align-content: start;
   gap: 6px;
   max-height: 138px;
   padding: 4px 2px 2px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
+/* One row group per top-level tag: the parent chip leads, its subtags
+   follow as /paths. The saved picks sit above, ruled off. */
+.review-tag-group { display: flex; flex-wrap: wrap; gap: 6px; }
+.review-tag-group.is-pinned { padding-bottom: 7px; border-bottom: 1px solid var(--glass-rim); }
+.review-chip-slash { margin-right: 1px; color: var(--muted); }
 .review-tags-empty { margin: 2px 2px 0; color: var(--muted); font-size: var(--fs-sm); }
 
 /* Choice chips (tags + time range): Tier C keypad chips; picked = sage. */
@@ -3730,6 +3953,8 @@ button.stats-tag-row:active { scale: 0.992; }
   border-color: color-mix(in srgb, var(--leaf) 38%, transparent);
 }
 @media (hover: hover) { .review-chip.is-active:hover:not(:disabled) { color: var(--leaf); background: var(--leaf-tint-strong); } }
+/* Already included through a picked parent: the pick's ink, none of its fill. */
+.review-chip.is-covered { color: var(--leaf); border-color: color-mix(in srgb, var(--leaf) 24%, transparent); }
 
 /* Batch-size stepper: inset track, floating step keys, split-flap value. */
 .review-count-row { display: flex; align-items: center; gap: 10px; }
@@ -3785,7 +4010,13 @@ button.stats-tag-row:active { scale: 0.992; }
    everything display-only (stage recess, preview shadow, entrance, the seal
    stamp) therefore lives HERE, where the PNG can never pick it up.
    ========================================================================= */
-.share-overlay { padding: 16px; }
+.share-overlay {
+  padding:
+    max(16px, env(safe-area-inset-top))
+    max(16px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom))
+    max(16px, env(safe-area-inset-left));
+}
 .share-modal {
   display: flex;
   flex-direction: column;
@@ -3889,6 +4120,7 @@ button.stats-tag-row:active { scale: 0.992; }
   font-weight: 500;
   text-align: center;
 }
+.share-note + .share-note { margin-top: 4px; }
 /* -------------------------------------------------------------------------
    Sheet setup — the three things about the artifact you can change: its
    shape, its stock, whether it carries the mark. They belong under the sheet
@@ -3976,7 +4208,7 @@ button.stats-tag-row:active { scale: 0.992; }
      buttons below. Stated rather than stretched: the strip is only as wide
      as its cells, so there is nothing to stretch against. */
   min-height: 27px;
-  color: var(--seg-muted);
+  color: var(--muted);
   background: transparent;
   border: 0;
   border-radius: calc(var(--r-md) - 2px);
@@ -4054,7 +4286,7 @@ button.stats-tag-row:active { scale: 0.992; }
 }
 .share-seg-group:not(.is-on) .share-seal-chip,
 .share-seg-group:not(.is-on) .share-hand-chip {
-  color: var(--seg-muted);
+  color: var(--muted);
   background: transparent;
   border-color: var(--line-strong);
 }
@@ -4105,6 +4337,16 @@ button.stats-tag-row:active { scale: 0.992; }
   animation: fade-up 0.24s var(--ease-out) 0.14s both;
 }
 .share-actions > button { display: inline-flex; align-items: center; gap: 7px; }
+/* Why the exits are off, when they are: said in weight, not red. */
+.share-actions-note {
+  flex-basis: 100%;
+  min-width: 0;
+  margin: 0 2px;
+  text-align: right;
+  color: var(--ink-soft);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
 
 /* =========================================================================
    Back-to-top — a frosted disc floating top-center over the feed, just
@@ -4195,9 +4437,6 @@ button.stats-tag-row:active { scale: 0.992; }
   outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
   outline-offset: 2px;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .scroll-top-btn { border-color: rgba(255, 255, 255, 0.15); }
-}
 :root[data-theme="dark"] .scroll-top-btn { border-color: rgba(255, 255, 255, 0.15); }
 
 /* =========================================================================
@@ -4269,6 +4508,8 @@ button.stats-tag-row:active { scale: 0.992; }
 .toast.is-leaving { animation: toast-out 0.16s var(--ease) both; pointer-events: none; }
 .toast-text { min-width: 0; }
 .toast-text:only-child { text-align: center; }
+/* A counting toast's figures (export progress) must not shift as they change. */
+.toast-detail { font-variant-numeric: tabular-nums; }
 /* An error keeps the sentence in ink — the weight already reads first —
    and says its tone with the mark and a warmed hairline, not by turning the
    whole line red. */
@@ -4416,6 +4657,17 @@ button.stats-tag-row:active { scale: 0.992; }
     visibility: hidden;
   }
   .sidebar.is-open { transform: none; visibility: visible; animation: drawer-in 0.22s var(--ease-out) both; }
+  /* The drawer is fixed to the visible viewport, so its scroller takes that
+     height rather than a viewport unit: on iOS Safari 100vh overhangs the
+     toolbars, and with the page locked behind the drawer the last tags could
+     never be scrolled into view. The bottom inset clears the home indicator;
+     contain keeps a flick at either end from reaching the locked page. */
+  .sidebar-inner {
+    height: 100%;
+    max-height: none;
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+    overscroll-behavior: contain;
+  }
   .sidebar.is-open.is-closing { transform: translateX(-102%); transition: transform 0.16s var(--ease); animation: none; }
   .drawer-backdrop {
     position: fixed;
@@ -4457,9 +4709,15 @@ button.stats-tag-row:active { scale: 0.992; }
   /* Phones tighten the shared column gutter; topbar, composer and feed all
      follow the one token. */
   .main-column { --content-inset: 12px; }
-  .memo-images { grid-template-columns: repeat(2, 1fr); }
-  .memo-images.count-1 { grid-template-columns: minmax(0, 1fr); }
-  .lightbox { padding: 16px; }
+  /* While a search is up, an untouched composer folds away so results start
+     right under the search box — with the keyboard open, a full composer
+     left room for barely one card. A draft (text or images) or a focused
+     composer stays put; clearing the search brings it back. */
+  .composer[data-searching]:not(:focus-within):not(:has(.editor-attachments)):has(textarea:placeholder-shown) { display: none; }
+  /* A lone image may span the card; grids keep their column counts and
+     their cells shrink to fit. */
+  .memo-images { --single-box: 100%; }
+  .lightbox { padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
   /* The action pill goes icon-only; the armed question still shows its text. */
   .trash-empty-button span { display: none; }
   .trash-empty-button.is-confirm span { display: inline; }
@@ -4547,6 +4805,14 @@ button.stats-tag-row:active { scale: 0.992; }
    filter's clear control and keeps the drawer trigger on the first row. */
 @media (max-width: 440px) {
   .topbar { flex-wrap: wrap; gap: 8px; }
+  /* Reading down the feed, the search row tucks under the first row (the
+     band clips from the bottom, see useTopbarTuck) and the feed gets ~48px
+     back; scrolling up reveals it again. */
+  .topbar[data-tuck="in"] {
+    clip-path: inset(0 0 var(--topbar-tuck) 0);
+  }
+  .topbar[data-tuck="in"] .search-tools { visibility: hidden; opacity: 0; }
+  .main-column:has(.topbar[data-tuck="in"]) .scroll-top-slot { --scroll-top-anchor: 88px; }
   .breadcrumb { flex: 0 0 calc(100% - 40px); }
   .breadcrumb:has(.filter-chip) .crumbs { flex: 1; }
   .filter-chip { flex: none; max-width: min(132px, 48%); }
@@ -4561,11 +4827,22 @@ button.stats-tag-row:active { scale: 0.992; }
   }
 }
 
+@media (max-width: 440px) and (prefers-reduced-motion: no-preference) {
+  .topbar[data-tuck="in"] { animation: topbar-tuck 0.2s var(--ease) both; }
+  .topbar[data-tuck="in"] .search-tools { transition: opacity 0.14s var(--ease), visibility 0s linear 0.2s; }
+  .topbar[data-tuck="out"] { animation: topbar-untuck 0.22s var(--ease-out) both; }
+  .topbar[data-tuck="out"] .search-tools { transition: opacity 0.18s var(--ease) 0.04s; }
+}
+@keyframes topbar-tuck {
+  from { clip-path: inset(0 0 0 0); }
+  to { clip-path: inset(0 0 var(--topbar-tuck) 0); }
+}
+@keyframes topbar-untuck {
+  from { clip-path: inset(0 0 var(--topbar-tuck) 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
 @media (max-width: 400px) {
-  .stats-overlay { padding: 8px; }
-  .stats-modal { max-height: calc(100dvh - 16px); }
-  .review-overlay { padding: 10px; }
-  .review-modal { max-height: calc(100dvh - 20px); }
   .stats-head {
     grid-template-columns: 1fr auto;
     grid-template-areas:
@@ -4577,7 +4854,6 @@ button.stats-tag-row:active { scale: 0.992; }
   .stats-head h2 { grid-area: title; }
   .stats-year-nav { grid-area: year; }
   .stats-close { grid-area: close; margin-right: 0; }
-  .bulk-tag-overlay { padding: 10px; }
   .bulk-tag-head { padding: 14px 12px 12px; }
   .bulk-tag-form { padding: 12px; }
 
@@ -4628,6 +4904,44 @@ button.stats-tag-row:active { scale: 0.992; }
 }
 
 /* =========================================================================
+   Coarse pointers — touch hit areas
+   A finger needs ~44px; the drawn controls stay their size. Each small
+   control grows an invisible ::before (the .md-task-box recipe) as far as
+   its neighbours allow. Positioning goes through :where() so it never
+   outranks a control's own `position` (several icon buttons are absolute).
+   ========================================================================= */
+@media (pointer: coarse) {
+  :where(.icon-button, .memo-restore, .memo-fold-toggle, .tag-expand, .tag-more, .attachment-remove) { position: relative; }
+  .icon-button::before,
+  .memo-restore::before,
+  .memo-fold-toggle::before,
+  .tag-expand::before,
+  .tag-more::before,
+  .searchbox-clear::before,
+  .attachment-remove::before,
+  .lang-seg button::before { content: ""; position: absolute; }
+  /* 32 → 44; the 26px card ⋯ sits in 13–15px of card padding: 26 → 44. */
+  .icon-button::before { inset: -6px; }
+  .memo-menu-trigger::before { inset: -9px; }
+  /* Editor tools stand 2px apart: grow up and down, and only across the gap
+     horizontally, so no tool steals its neighbour's taps. */
+  .editor-tools .icon-button::before { inset: -6px -1px; }
+  .memo-restore::before { inset: -9px 0; }
+  .memo-fold-toggle::before { inset: -11px -8px; }
+  /* The search field's text ends 30px from its edge: grow over that pad, not
+     over the text. */
+  .searchbox-clear::before { inset: -12px -7px -12px -5px; }
+  .attachment-remove::before { inset: -7px; }
+  .lang-seg button::before { inset: -6px 0; }
+  /* Tag rows are 34px apart on fine pointers; a touch row gets the full 44
+     so its chevron, name and ⋯ can each take the row's height. */
+  .tag-row { min-height: 44px; }
+  .tag-label { align-self: stretch; }
+  .tag-expand::before { inset: -11px -3px -11px -10px; }
+  .tag-more::before { inset: -10px -10px -10px -4px; }
+}
+
+/* =========================================================================
    Reduced motion — everything still works, nothing moves but status
    ========================================================================= */
 @media (prefers-reduced-motion: reduce) {
@@ -4668,8 +4982,8 @@ button.stats-tag-row:active { scale: 0.992; }
      wash the Brain button pulses onto the progress block. */
   --hairline: rgba(20, 27, 45, 0.1);
   --track: rgba(22, 25, 34, 0.11);
-  --attend: rgba(61, 122, 91, 0.1);
-  --attend-rim: rgba(61, 122, 91, 0.34);
+  --attend: color-mix(in srgb, var(--primary) 10%, transparent);
+  --attend-rim: color-mix(in srgb, var(--primary) 34%, transparent);
   --panel-pop:
     inset 0 1px 0 rgba(255, 255, 255, 0.85),
     0 1px 2px rgba(20, 27, 45, 0.06),
@@ -4688,24 +5002,10 @@ button.stats-tag-row:active { scale: 0.992; }
   overflow: hidden;
   animation: modal-in 0.24s var(--ease-out) both;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .model-panel {
-    --hairline: rgba(255, 255, 255, 0.1);
-    --track: rgba(233, 235, 241, 0.14);
-    --attend: rgba(158, 208, 181, 0.12);
-    --attend-rim: rgba(158, 208, 181, 0.34);
-    --panel-pop:
-      inset 0 -1px 1px rgba(0, 0, 0, 0.3),
-      0 2px 6px rgba(0, 0, 0, 0.5),
-      0 14px 30px -10px rgba(0, 0, 0, 0.62);
-    --chip-pop: 0 1px 2px rgba(0, 0, 0, 0.4);
-  }
-}
 :root[data-theme="dark"] .model-panel {
   --hairline: rgba(255, 255, 255, 0.1);
   --track: rgba(233, 235, 241, 0.14);
-  --attend: rgba(158, 208, 181, 0.12);
-  --attend-rim: rgba(158, 208, 181, 0.34);
+  --attend: color-mix(in srgb, var(--primary) 12%, transparent);
   --panel-pop:
     inset 0 -1px 1px rgba(0, 0, 0, 0.3),
     0 2px 6px rgba(0, 0, 0, 0.5),
@@ -4732,7 +5032,7 @@ button.stats-tag-row:active { scale: 0.992; }
   flex: 1;
   min-width: 0;
   margin: 0;
-  font-size: var(--fs-md);
+  font-size: var(--fs-lg);
   font-weight: 700;
   letter-spacing: -0.01em;
 }
@@ -4760,7 +5060,7 @@ button.stats-tag-row:active { scale: 0.992; }
 .model-headline-swap { position: relative; display: block; width: 100%; margin-bottom: 8px; }
 .model-headline {
   display: block;
-  font-size: 1.625rem;
+  font-size: var(--fs-xl);
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.2;
@@ -4774,7 +5074,7 @@ button.stats-tag-row:active { scale: 0.992; }
   position: absolute;
   inset: 0 0 auto;
   display: block;
-  font-size: 1.625rem;
+  font-size: var(--fs-xl);
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.2;
@@ -4985,7 +5285,7 @@ button.stats-tag-row:active { scale: 0.992; }
    character against a manifest, never compared for size. */
 .model-device-field code,
 .model-file-name {
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-2xs);
   overflow-wrap: anywhere;
 }
@@ -5057,7 +5357,7 @@ button.stats-tag-row:active { scale: 0.992; }
   padding: 0;
   list-style: none;
   color: var(--ink-soft);
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-2xs);
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -5135,7 +5435,7 @@ button.stats-tag-row:active { scale: 0.992; }
 /* The dotted thought-orb (src/lib/thinkingOrb.ts). Depth is painted from a
    two-stop ramp rather than the library's grayscale, so the mark swaps with
    the theme like every other surface; the canvas re-reads the tokens when
-   [data-theme] or the OS preference changes. Rest states (checking, idle,
+   [data-theme] changes (it also follows the OS in "system" mode). Rest states (checking, idle,
    failed, clearing) wear the mute pair — present, but not urgent. */
 .thinking-orb {
   display: block;
@@ -5146,14 +5446,6 @@ button.stats-tag-row:active { scale: 0.992; }
   --orb-far: #aec8b8;
   --orb-near-mute: #767f8d;
   --orb-far-mute: #c9ced7;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .thinking-orb {
-    --orb-near: #d3edde;
-    --orb-far: #42604f;
-    --orb-near-mute: #7b8496;
-    --orb-far-mute: #3b4250;
-  }
 }
 :root[data-theme="dark"] .thinking-orb {
   --orb-near: #d3edde;
@@ -5169,6 +5461,39 @@ button.stats-tag-row:active { scale: 0.992; }
   .model-device-col { padding: 20px 20px 24px; border-top: 1px solid var(--hairline); border-left: 0; }
   .model-adv-actions { flex-wrap: wrap; }
   .model-clear-confirm-actions { grid-column: 1 / -1; }
+}
+
+/* =========================================================================
+   Dialogs as bottom sheets. On a phone a centered card leaves its actions
+   mid-screen and its ✕ in the hardest corner to reach; the same card rises
+   from the bottom edge instead, full width, square at the bottom, its last
+   row lifted clear of the home indicator (or of the keyboard, which then
+   covers the indicator anyway). Material, header and contents are the
+   dialog's own. Placed after every dialog's rules, because it re-presents
+   them — including their closing animations.
+   ========================================================================= */
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes sheet-down { to { transform: translateY(100%); } }
+@media (max-width: 560px) {
+  /* The lightbox is an .overlay too, but a full-bleed image viewer, not a card. */
+  .overlay:not(.lightbox) {
+    --sheet-safe-bottom: max(0px, env(safe-area-inset-bottom) - var(--kb-inset, 0px));
+    place-items: end stretch;
+    padding: max(16px, env(safe-area-inset-top)) 0 var(--kb-inset, 0px);
+  }
+  .overlay > :is(.confirm-card, .stats-modal, .review-modal, .model-panel, .share-modal) {
+    width: 100%;
+    max-height: 100%;
+    padding-bottom: var(--sheet-safe-bottom);
+    border-bottom: 0;
+    border-radius: var(--r-xl) var(--r-xl) 0 0;
+    animation: sheet-up 0.28s var(--ease-out) both;
+  }
+  .overlay > .confirm-card { padding-bottom: calc(16px + var(--sheet-safe-bottom)); }
+  .overlay > .confirm-card.bulk-tag-card { padding-bottom: var(--sheet-safe-bottom); }
+  .overlay.is-closing > :is(.confirm-card, .stats-modal, .review-modal, .model-panel, .share-modal) {
+    animation: sheet-down 0.16s var(--ease) both;
+  }
 }
 
 /* The semantic toggle sits between the searchbox and the filter funnel and
@@ -5189,8 +5514,9 @@ button.stats-tag-row:active { scale: 0.992; }
   .semantic-toggle.is-active:hover:not(:disabled) { background: var(--primary-tint-strong); color: var(--primary-dark); }
 }
 
-/* Shared with exported cards: code preserves diagram spacing; long formulas scroll. */
-.md-codeblock { white-space: pre; overflow-x: auto; padding: 12px; border-radius: 8px; background: rgba(128,128,128,.08); tab-size: 4; }
+/* Feed blocks: code preserves diagram spacing; long lines and formulas
+   scroll. The share card sets its own in shareCard.css, where nothing may. */
+.md-codeblock { white-space: pre; overflow-x: auto; padding: 12px; border-radius: var(--r-md); background: var(--surface-3); tab-size: 4; }
 .md-codeblock code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; background: none; padding: 0; }
 .md-math-block { overflow-x: auto; overflow-y: hidden; padding: .5em 0; }
 .md-math math { font-family: math; }

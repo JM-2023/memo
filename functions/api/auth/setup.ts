@@ -1,4 +1,4 @@
-import { claimInitialPassword, configuredAuthState, createSessionCookie, hashPassword } from "../_utils/auth";
+import { claimInitialPassword, configuredAuthState, createSessionCookie, hashPassword, serverMisconfigured } from "../_utils/auth";
 import { apiError, json, readJson, requireSameOrigin } from "../_utils/response";
 import type { AppContext } from "../_utils/types";
 
@@ -29,7 +29,7 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   // Checked up front: createSessionCookie throws without it, and an unhandled
   // throw surfaces in the UI as an unreadable generic failure.
   if (!context.env.SESSION_SECRET) {
-    return apiError(500, "INTERNAL_ERROR", "The server is not configured correctly.");
+    return serverMisconfigured();
   }
 
   try {
@@ -43,7 +43,7 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   if (!allowsInAppSetup(context.request)) {
     return apiError(
       503,
-      "INTERNAL_ERROR",
+      "SETUP_DISABLED",
       "Public passcode setup is disabled. Configure APP_PASSWORD_HASH during deployment."
     );
   }

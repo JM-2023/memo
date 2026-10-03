@@ -1,18 +1,38 @@
 import { invalidateSnapshot } from "./cache";
-import { clearModelFiles } from "./modelLoader";
+import { deleteImageCacheDb } from "./imageCache";
 import { resetModelRuntime } from "./modelRuntime";
 import { deleteSemanticIndexDb } from "./semanticIndex";
 
 const APP_STORAGE_PREFIXES = ["memo:", "memo-"] as const;
 
+/**
+ * Device preferences that say nothing about the notebook: how the app looks
+ * and behaves on this device. They survive logout so the gate and the next
+ * session keep the owner's language and theme. Everything else under the app
+ * prefixes (saved filters and Daily Review settings name tags and searches;
+ * the review day lists memo ids) is notebook-derived and is cleared.
+ */
+const DEVICE_PREFERENCE_KEYS: ReadonlySet<string> = new Set([
+  "memo:theme",
+  "memo:language",
+  "memo-sort",
+  "memo:semantic-search",
+  "memo:share-layout",
+  "memo:share-tone",
+  "memo:share-seal",
+  "memo:share-hand",
+  "memo:share-date",
+  "memo:share-privacy"
+]);
+
 function isAppStorageKey(key: string): boolean {
-  return APP_STORAGE_PREFIXES.some((prefix) => key.startsWith(prefix));
+  return APP_STORAGE_PREFIXES.some((prefix) => key.startsWith(prefix)) && !DEVICE_PREFERENCE_KEYS.has(key);
 }
 
 /**
- * Remove every MEMO-owned Web Storage entry while leaving unrelated
- * same-origin data alone. Current preferences use `memo:`; the older sort,
- * saved-filter, and review keys use `memo-`.
+ * Remove every MEMO-owned Web Storage entry except the device preferences,
+ * leaving unrelated same-origin data alone. Current preferences use `memo:`;
+ * the older sort, saved-filter, and review keys use `memo-`.
  */
 function clearAppStorage(storage: Storage): void {
   const keys: string[] = [];
@@ -45,7 +65,9 @@ async function clearCacheStorage(): Promise<void> {
 }
 
 /**
- * Clear persistent data owned by this device after an ordinary logout.
+ * Clear the notebook's data from this device after an explicit logout (here
+ * or in a sibling tab) or a revoked session. Plain session expiry does not
+ * come here: it only forgets the snapshot key, like a cold start.
  *
  * Snapshot invalidation forgets the in-memory AES key synchronously, then
  * serializes deletion behind any in-flight snapshot write. Web Storage is
@@ -54,10 +76,13 @@ async function clearCacheStorage(): Promise<void> {
  * Clear-Site-Data; this also clears Cache Storage for present or future app
  * shell caches.
  *
- * Both semantic stores are deleted: `memo-model` holds the public model
- * weights, while `memo-index` holds sealed vectors derived from memo content.
- * The runtime pipeline is disposed too, so logout clears disk and memory with
- * the same semantics.
+ * `memo-index` holds sealed vectors derived from memo content and is deleted.
+ * `memo-model` holds only the public, SHA-verified model weights, so it stays:
+ * deleting them protected nothing and cost a 123 MB download on next use
+ * (Semantic Search settings still offer an explicit removal). The runtime
+ * pipeline is disposed so no notebook-derived state lingers in memory.
+ * Sealed feed previews (`memo-image-cache`) and the in-memory image blobs
+ * are deleted too.
  */
 export async function clearLocalDeviceData(): Promise<void> {
   const snapshotInvalidation = invalidateSnapshot();
@@ -79,8 +104,8 @@ export async function clearLocalDeviceData(): Promise<void> {
   await Promise.allSettled([
     snapshotInvalidation,
     clearCacheStorage(),
+    deleteImageCacheDb(),
     deleteSemanticIndexDb(),
-    clearModelFiles(),
     resetModelRuntime()
   ]);
 }

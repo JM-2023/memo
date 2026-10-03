@@ -23,40 +23,42 @@ import {
   WifiOff,
   X
 } from "lucide-react";
-import { memo as reactMemo, startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, lazy, memo as reactMemo, startTransition, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { ChangePasscode } from "./components/ChangePasscode";
 import { BulkTagDialog } from "./components/BulkTagDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Crumbs } from "./components/Crumbs";
-import { Editor } from "./components/Editor";
+import { Editor, type EditDraft, type EditorSubmission } from "./components/Editor";
 import { FilterChip } from "./components/FilterChip";
 import { Lightbox } from "./components/Lightbox";
 import { LoginScreen } from "./components/LoginScreen";
 import { MemoCard } from "./components/MemoCard";
 import { Menu } from "./components/Menu";
 import { PromptDialog } from "./components/PromptDialog";
-import { ModelSettingsModal } from "./components/ModelSettingsModal";
-import { ReviewSettingsModal } from "./components/ReviewSettingsModal";
 import { RollingText } from "./components/RollingText";
 import { ScrollTopButton } from "./components/ScrollTopButton";
 import { FACET_ROWS, SearchFilter } from "./components/SearchFilter";
 import { Sidebar } from "./components/Sidebar";
-import { ShareDialog } from "./components/ShareDialog";
-import { StatsModal } from "./components/StatsModal";
 import { SwapText } from "./components/SwapText";
 import { useTip } from "./components/Tip";
 import { useModalA11y } from "./hooks/useModalA11y";
+import { useSearchHighlight } from "./hooks/useSearchHighlight";
+import { useTopbarTuck } from "./hooks/useTopbarTuck";
 import { useSemanticSearch } from "./hooks/useSemanticSearch";
 import {
   AuthRequiredError,
   ApiError,
+  batchMemos,
   bootstrap,
   createMemo,
   emptyTrash,
   exportData,
   getAuthStatus,
   importDataInChunks,
+  isSessionRevoked,
+  isTransientImportFailure,
+  lastAuthLossWasRevocation,
   login,
   logout,
   pinTag,
@@ -65,19 +67,25 @@ import {
   renameTag,
   restoreMemo,
   setupPassword,
-  syncSince,
   trashMemo,
   updateMemo,
-  type BackupPayload
+  type BootstrapResponse,
+  type MemoBatchFailure
 } from "./lib/api";
-import { adoptCacheKey, invalidateSnapshot, openSnapshot, readSealedSnapshot, saveSnapshot } from "./lib/cache";
+import { BackupFormatError, inspectBackup, readBackupItems } from "./lib/backupFile";
+import { startBoot, type BootStart } from "./lib/boot";
+import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, saveSnapshot } from "./lib/cache";
 import { dateKey, formatDayLabel } from "./lib/dates";
 import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow } from "./lib/feedSafety";
 import { useI18n } from "./lib/i18n";
+import { pruneImageCache } from "./lib/imageCache";
+import { announce, mountLiveRegions } from "./lib/liveAnnouncer";
 import { clearLocalDeviceData } from "./lib/logoutCleanup";
 import { splitTaskLine } from "./lib/markdown";
-import { isModelWorkInFlight, useModelDownload } from "./lib/modelDownload";
+import { useModelDownloadPhase } from "./lib/modelDownload";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
+import { captureFeedPlace, createNavStore, isRootLens, lensesEqual, navIdOf, restoreFeedPlace, ROOT_LENS, type NavLens, type NavPlace, type NavStore } from "./lib/navHistory";
+import { applyOptimisticLayer, withOptimistic, withoutPatch, withPatch, type OptimisticLayer, type OptimisticPatch } from "./lib/optimisticMemos";
 import {
   buildReviewDay,
   clearReviewDay,
@@ -86,12 +94,17 @@ import {
   loadReviewSettings,
   persistReviewDay,
   persistReviewSettings,
+  removeReviewSettingsTag,
+  renameReviewSettingsTag,
   reviewDayValid,
+  reviewFingerprint,
+  SETTINGS_KEY as REVIEW_SETTINGS_KEY,
   type ReviewDay,
   type ReviewSettings
 } from "./lib/review";
 import {
   SAVED_FILTERS_LIMIT,
+  STORAGE_KEY as SAVED_FILTERS_KEY,
   loadSavedFilters,
   persistSavedFilters,
   removeSavedFiltersForTag,
@@ -112,18 +125,42 @@ import {
   type FacetKey,
   type FeedFilters
 } from "./lib/search";
+import { searchNeedles } from "./lib/searchHighlight";
 import { selectionWithinVisibleIds } from "./lib/selection";
 import { countsByDay, dayKeyOf } from "./lib/stats";
 import { feedQueryForStatsDrilldown, memoMatchesStatsDrilldown, statsDrilldownLabel, type StatsDrilldown } from "./lib/statsDrilldown";
-import { applySyncDelta, createSyncState, memosOf, purgedOf, tagsOfState, type PurgedMemo } from "./lib/syncState";
-import { appendTagToContent, buildTagTree, inheritTagContext, isValidTagPath, tagMatches, tagRenamePathsOverlap, tagsOf } from "./lib/tags";
+import { useSnapshotWriterLease } from "./lib/snapshotWriter";
+import { applySyncDelta, createSyncState, memosOf, purgedOf, tagsOfState, type PurgedMemo, type SyncState } from "./lib/syncState";
+import { buildTagTree, inheritTagContext, isValidTagPath, tagMatches, tagRenamePathsOverlap, tagsOf } from "./lib/tags";
 import { applyTaskFlips, freshestTaskMemo, type TaskFlipQueue } from "./lib/taskFlips";
 import { applyTheme, loadTheme, type ThemeChoice } from "./lib/theme";
-import type { LightboxItem, Memo, NewImagePayload, SortKey, TagMeta } from "./lib/types";
+import type { LightboxItem, Memo, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
 import { withViewTransition } from "./lib/viewTransition";
 
 type Phase = "checking" | "error" | "login" | "ready";
+
+/** Cold-start pages still arriving after the first one rendered. */
+interface BootstrapLoad {
+  /** Memos at the frozen cursor, from the first page; null if unknown. */
+  total: number | null;
+  /** Pages keep failing; the next attempt resumes from the same cursor. */
+  failed: boolean;
+}
+
+interface BootstrapJob {
+  after: string;
+  snapshot: number;
+  syncEpoch: string;
+  failures: number;
+  timer: number;
+  running: boolean;
+}
+
+/** Retries of a failed background page; the notice says so from the second miss. */
+const BOOTSTRAP_RETRY_MAX_MS = 30_000;
+const BOOTSTRAP_FAILED_AFTER = 2;
+
 type View = "memos" | "trash" | "review";
 
 interface ToastAction {
@@ -134,6 +171,12 @@ interface ToastAction {
 interface ToastState {
   id: number;
   text: string;
+  /**
+   * A count that keeps changing (a running export's progress). It is shown
+   * after the text in tabular figures and kept out of the live region, so
+   * the status is announced once instead of on every update.
+   */
+  detail?: string;
   tone: "info" | "error";
   /** One verb the toast offers — Undo, mostly. Runs once, then dismisses. */
   action?: ToastAction;
@@ -143,12 +186,15 @@ interface ToastState {
 
 interface ToastOptions {
   action?: ToastAction;
+  detail?: string;
   /** Overrides the length-derived stay, in ms. */
   duration?: number;
 }
 
 /** Toasts up at once; past this the oldest steps off. */
 const TOAST_LIMIT = 3;
+/** A progress toast stays until its work ends (the longest setTimeout delay). */
+const STICKY_TOAST_MS = 2_147_483_647;
 const TOAST_LEAVE_MS = 170;
 
 /**
@@ -166,6 +212,8 @@ function toastDuration(text: string, tone: "info" | "error", hasAction: boolean)
 interface ToastStackProps {
   toasts: ToastState[];
   dismissLabel: string;
+  /** Names the stack's landmark ("Notifications"). */
+  regionLabel: string;
   onDismiss: (id: number) => void;
   onPause: () => void;
   onResume: () => void;
@@ -173,37 +221,108 @@ interface ToastStackProps {
 
 /**
  * The toasts, newest at the bottom so a toast already up never moves when
- * another lands. An error is an alert (assertive) and carries a mark; every
- * other toast is a status. Text and weight say what happened — the tone is
- * carried by the mark and the hairline, not by recolouring the sentence.
+ * another lands. An error carries a mark; text and weight say what happened
+ * — the tone is carried by the mark and the hairline, not by recolouring the
+ * sentence. Screen readers hear each toast through the app's standing live
+ * regions (showToast announces it), so the visible stack is a labelled
+ * landmark rather than a live region inserted along with its text.
+ *
+ * The stack sits at the end of the page, a whole feed of Tab stops away from
+ * where an Undo is wanted. F6 jumps to the newest action while one is up;
+ * F6 or Escape inside the stack hands focus back to where it came from, as
+ * does using one of its buttons.
  */
-function ToastStack({ toasts, dismissLabel, onDismiss, onPause, onResume }: ToastStackProps) {
+function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onResume }: ToastStackProps) {
+  const stackRef = useRef<HTMLDivElement>(null);
+  // Where focus stood before it entered the stack.
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const hasAction = toasts.some((toast) => toast.action && !toast.leaving);
+
+  function handBackFocus() {
+    const target = returnFocusRef.current;
+    returnFocusRef.current = null;
+    if (target?.isConnected && !target.inert) target.focus({ preventScroll: true });
+    else if (stackRef.current?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+  }
+
+  useEffect(() => {
+    if (!hasAction) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "F6" || event.altKey || event.ctrlKey || event.metaKey || event.defaultPrevented) return;
+      const stack = stackRef.current;
+      // Under an open dialog the stack is inert; F6 stays the browser's.
+      if (!stack || stack.inert || stack.closest("[inert]")) return;
+      event.preventDefault();
+      if (stack.contains(document.activeElement)) {
+        handBackFocus();
+        return;
+      }
+      const target = [...stack.querySelectorAll<HTMLElement>(".toast:not(.is-leaving) .toast-action")].at(-1);
+      if (!target) return;
+      const active = document.activeElement;
+      returnFocusRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
+      target.focus({ preventScroll: true });
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [hasAction]);
+
   if (toasts.length === 0) return null;
+  // A used button leaves with its toast; focus goes back before it does.
+  const settle = (id: number) => {
+    onDismiss(id);
+    if (stackRef.current?.contains(document.activeElement)) handBackFocus();
+  };
   return (
-    <div className="toast-stack" onPointerEnter={onPause} onPointerLeave={onResume} onFocus={onPause} onBlur={onResume}>
+    <div
+      ref={stackRef}
+      className="toast-stack"
+      role="region"
+      aria-label={regionLabel}
+      onPointerEnter={onPause}
+      onPointerLeave={onResume}
+      onFocus={(event) => {
+        const from = event.relatedTarget;
+        if (from instanceof HTMLElement && !event.currentTarget.contains(from)) returnFocusRef.current = from;
+        onPause();
+      }}
+      onBlur={onResume}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        handBackFocus();
+      }}
+    >
       {toasts.map((toast) => (
         <div key={toast.id} className={`toast-slot${toast.leaving ? " is-leaving" : ""}`}>
           <div className="toast-clip">
-            <div
-              className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`}
-              role={toast.tone === "error" ? "alert" : "status"}
-            >
+            <div className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`}>
               {toast.tone === "error" ? <CircleAlert size={15} className="toast-mark" aria-hidden="true" /> : null}
-              <span className="toast-text">{toast.text}</span>
+              <span className="toast-text">
+                {toast.text}
+                {toast.detail ? (
+                  <span className="toast-detail" aria-hidden="true">
+                    {" "}
+                    {toast.detail}
+                  </span>
+                ) : null}
+              </span>
               {toast.action ? (
                 <button
                   type="button"
                   className="toast-action"
+                  aria-keyshortcuts="F6"
                   onClick={() => {
                     toast.action?.run();
-                    onDismiss(toast.id);
+                    settle(toast.id);
                   }}
                 >
                   {toast.action.label}
                 </button>
               ) : null}
               {toast.action || toast.tone === "error" ? (
-                <button type="button" className="toast-dismiss" aria-label={dismissLabel} onClick={() => onDismiss(toast.id)}>
+                <button type="button" className="toast-dismiss" aria-label={dismissLabel} onClick={() => settle(toast.id)}>
                   <X size={13} aria-hidden="true" />
                 </button>
               ) : null}
@@ -220,7 +339,6 @@ interface PendingBatchTag {
   scope: "selection" | "memo";
   tag: string;
   changed: Memo[];
-  refreshed: Memo[];
   retryIds: string[];
   failedCount: number;
   firstFailure: string | null;
@@ -230,25 +348,6 @@ interface PendingBatchTag {
 
 const SORT_KEYS: SortKey[] = ["created-desc", "created-asc", "updated-desc", "updated-asc"];
 const EMPTY_TAGS: string[] = [];
-
-async function mapSettledWithLimit<T, R>(items: readonly T[], limit: number, worker: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
-  const results = new Array<PromiseSettledResult<R>>(items.length);
-  let cursor = 0;
-  async function consume() {
-    for (;;) {
-      const index = cursor;
-      cursor += 1;
-      if (index >= items.length) return;
-      try {
-        results[index] = { status: "fulfilled", value: await worker(items[index]) };
-      } catch (reason) {
-        results[index] = { status: "rejected", reason };
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, consume));
-  return results;
-}
 
 const SORT_COMPARATORS: Record<SortKey, (a: Memo, b: Memo) => number> = {
   "created-desc": (a, b) => b.createdAt.localeCompare(a.createdAt),
@@ -309,8 +408,46 @@ function MemoSlot({ vtName, entering, delay, children }: MemoSlotProps) {
   );
 }
 
+/**
+ * A removal unmounts the focused card — its ⋯ got focus back from the menu —
+ * and would drop focus to <body>, sending a keyboard reader back to the top
+ * of the page. Call before the change: the returned function, run once the
+ * DOM holds the new state, moves focus to the next surviving card's ⋯ (else
+ * the previous one's; else, for a keyboard reader, the composer; else the
+ * location pill). A no-op when focus was not inside a card or survived the
+ * change.
+ */
+function holdFeedFocus(): () => void {
+  const active = document.activeElement;
+  const slot = active instanceof HTMLElement ? active.closest<HTMLElement>(".memo-slot") : null;
+  if (!active || !slot) return () => undefined;
+  // A tap must not land in the composer and raise the on-screen keyboard.
+  let keyboard = false;
+  try {
+    keyboard = active.matches(":focus-visible");
+  } catch {
+    keyboard = false;
+  }
+  const neighbours: Element[] = [];
+  for (let next = slot.nextElementSibling; next; next = next.nextElementSibling) neighbours.push(next);
+  for (let previous = slot.previousElementSibling; previous; previous = previous.previousElementSibling) neighbours.push(previous);
+  return () => {
+    if (active.isConnected && document.activeElement === active) return;
+    const survivor = neighbours.find((element) => element.isConnected && element.classList.contains("memo-slot"));
+    const target =
+      survivor?.querySelector<HTMLElement>(".memo-menu-trigger:not([tabindex='-1'])") ??
+      (keyboard ? document.querySelector<HTMLElement>(".composer:not([hidden]) textarea") : null) ??
+      document.querySelector<HTMLElement>(".loc-trigger");
+    target?.focus({ preventScroll: true });
+  };
+}
+
 /** How many feed rows render before the scroll sentinel asks for more. */
 const FEED_PAGE = 80;
+
+/** Above this many memos a batch move to Trash asks once (naming the count)
+ * before it runs; at or below it the toast's Undo is the safety net. */
+const BATCH_TRASH_CONFIRM_AT = 20;
 
 /** At or under this many rows the feed renders every card for real instead
  * of letting content-visibility hold unvisited slots at their estimated
@@ -323,10 +460,61 @@ const FEED_PAGE = 80;
 const SMALL_FEED = 24;
 
 /** Stable per-App action surface — what keeps FeedItem memoization honest. */
+/* Dialogs opened on demand ship as their own chunks, fetched in idle time
+   after start-up so opening one stays instant. */
+const lazyLoaders = {
+  share: () => import("./components/ShareDialog"),
+  stats: () => import("./components/StatsModal"),
+  review: () => import("./components/ReviewSettingsModal"),
+  model: () => import("./components/ModelSettingsModal")
+};
+const ShareDialog = lazy(() => lazyLoaders.share().then((module) => ({ default: module.ShareDialog })));
+const StatsModal = lazy(() => lazyLoaders.stats().then((module) => ({ default: module.StatsModal })));
+const ReviewSettingsModal = lazy(() => lazyLoaders.review().then((module) => ({ default: module.ReviewSettingsModal })));
+const ModelSettingsModal = lazy(() => lazyLoaders.model().then((module) => ({ default: module.ModelSettingsModal })));
+
+function prefetchLazyDialogs(): () => void {
+  const run = () => {
+    for (const load of Object.values(lazyLoaders)) void load().catch(() => undefined);
+  };
+  if (typeof window.requestIdleCallback === "function") {
+    const id = window.requestIdleCallback(run, { timeout: 5_000 });
+    return () => window.cancelIdleCallback(id);
+  }
+  const timer = window.setTimeout(run, 2_000);
+  return () => window.clearTimeout(timer);
+}
+
+/** Suspense for one lazy dialog, plus a catch for a chunk that failed to
+    load (offline, or a deploy replaced it): the dialog stays closed and
+    onFail says so, instead of the error unmounting the app. */
+class LazyDialog extends Component<{ onFail: () => void; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch() {
+    this.props.onFail();
+  }
+  render() {
+    return this.state.failed ? null : <Suspense fallback={null}>{this.props.children}</Suspense>;
+  }
+}
+
+/** Stable wrappers around a ref of handlers: same identities for the life of
+    the component, each call forwarding to the latest closure. */
+function stableHandlers<T extends Record<string, (...args: never[]) => unknown>>(ref: { current: T }): T {
+  const out: Record<string, (...args: unknown[]) => unknown> = {};
+  for (const key of Object.keys(ref.current)) {
+    out[key] = (...args) => (ref.current[key] as unknown as (...args: unknown[]) => unknown)(...args);
+  }
+  return out as unknown as T;
+}
+
 interface FeedHandlers {
   startEdit: (id: string) => void;
-  cancelEdit: () => void;
-  saveEdit: (memo: Memo, data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
+  cancelEdit: (draft: EditDraft | null) => void;
+  saveEdit: (memo: Memo, data: EditorSubmission) => Promise<boolean>;
   acceptEditConflict: (id: string) => void;
   togglePin: (memo: Memo) => void;
   addTag: (memo: Memo) => void;
@@ -341,6 +529,8 @@ interface FeedHandlers {
   /** Enter select mode from one card's ⋯ menu, that card already picked. */
   selectFrom: (memo: Memo) => void;
   toggleTask: (memo: Memo, lineKey: number, checked: boolean) => void;
+  /** The open edit's text after each change, held in memory for a re-login. */
+  editDraftChange: (memoId: string, content: string) => void;
 }
 
 interface FeedItemProps {
@@ -350,12 +540,18 @@ interface FeedItemProps {
   editing: boolean;
   savingEdit: boolean;
   editConflict: boolean;
+  /** A discarded edit being reopened by its toast's Undo. */
+  editDraft: EditDraft | null;
   selecting: boolean;
   selected: boolean;
   /** The view has a select mode (memos, Trash) — offers ⋯ › Select. */
   canSelect: boolean;
   /** This memo's optimistic checkbox states (in-flight toggles), if any. */
   taskFlips: ReadonlyMap<number, boolean> | undefined;
+  /** Text a held edit resumes with after a re-login. */
+  resumeContent: string | undefined;
+  /** A pin / trash / restore of this memo is in flight. */
+  busy: boolean;
   vtName: string | undefined;
   /** Read once at mount; a stable getter keeps the memo comparison clean. */
   getEntering: () => boolean;
@@ -371,7 +567,7 @@ interface FeedItemProps {
  * deliberately left out of the equality check.
  */
 const FeedItem = reactMemo(
-  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, selecting, selected, canSelect, taskFlips, vtName, getEntering, delay, handlers }: FeedItemProps) {
+  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, editDraft, selecting, selected, canSelect, taskFlips, resumeContent, busy, vtName, getEntering, delay, handlers }: FeedItemProps) {
     return (
       <MemoSlot vtName={vtName} entering={getEntering()} delay={delay}>
         <MemoCard
@@ -381,9 +577,13 @@ const FeedItem = reactMemo(
           editing={editing}
           savingEdit={savingEdit}
           editConflict={editConflict}
+          editDraft={editDraft}
           selecting={selecting}
           selected={selected}
           pendingTaskFlips={taskFlips}
+          resumeContent={resumeContent}
+          onEditDraftChange={editing ? (content) => handlers.editDraftChange(memo.id, content) : undefined}
+          busy={busy}
           onToggleSelect={() => handlers.toggleSelect(memo)}
           onSelect={canSelect ? () => handlers.selectFrom(memo) : undefined}
           onStartEdit={() => handlers.startEdit(memo.id)}
@@ -411,17 +611,22 @@ const FeedItem = reactMemo(
     prev.editing === next.editing &&
     prev.savingEdit === next.savingEdit &&
     prev.editConflict === next.editConflict &&
+    prev.editDraft === next.editDraft &&
     prev.selecting === next.selecting &&
     prev.selected === next.selected &&
     prev.canSelect === next.canSelect &&
     prev.taskFlips === next.taskFlips &&
+    prev.resumeContent === next.resumeContent &&
+    prev.busy === next.busy &&
     prev.vtName === next.vtName &&
     prev.handlers === next.handlers
 );
 
 export default function App() {
-  const { count, errorMessage, language, locale, setLanguage, tr } = useI18n();
+  const { count, errorMessage, formatNumber, language, locale, tr } = useI18n();
   const tip = useTip();
+  // Live regions stand in the document before anything is said into them.
+  useEffect(() => mountLiveRegions(), []);
   const sortOptions: { key: SortKey; label: string }[] = useMemo(
     () => [
       { key: "created-desc", label: tr("Created · Newest first", "创建时间 · 从新到旧") },
@@ -433,6 +638,7 @@ export default function App() {
   );
   const [phase, setPhase] = useState<Phase>("checking");
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [setupAllowed, setSetupAllowed] = useState(true);
   const [bootError, setBootError] = useState<string | null>(null);
   const [syncState, setSyncState] = useState(() => createSyncState());
   // Cursor paired with the rendered state for cache persistence. The network
@@ -446,7 +652,21 @@ export default function App() {
   // This matters when a delayed mutation resolves after logout + re-login:
   // its response must never be merged into the newly bootstrapped notebook.
   const sessionEpochRef = useRef(0);
-  const skipNextSnapshotSaveRef = useRef(false);
+  // The exact state a warm start opened from the sealed record: saving it
+  // again would only re-encrypt what is already stored.
+  const skipSnapshotSaveForRef = useRef<SyncState | null>(null);
+  // A cold start renders its first page, then loads the rest in the
+  // background; the snapshot is saved only once that working set is whole.
+  const [bootstrapLoad, setBootstrapLoad] = useState<BootstrapLoad | null>(null);
+  const bootstrapJobRef = useRef<BootstrapJob | null>(null);
+  const stopBootstrapLoad = useCallback(() => {
+    if (bootstrapJobRef.current) window.clearTimeout(bootstrapJobRef.current.timer);
+    bootstrapJobRef.current = null;
+    setBootstrapLoad(null);
+  }, []);
+  // Every memo in state came from a page or a newer sync; cap at the frozen
+  // total so memos written meanwhile never count past it.
+  const loadedMemoCount = bootstrapLoad?.total == null ? syncState.memos.size : Math.min(syncState.memos.size, bootstrapLoad.total);
   const memos = useMemo(() => memosOf(syncState), [syncState.memos]);
   const pinnedTags = useMemo(
     () => new Map([...syncState.tags.values()].filter((tag) => tag.pinnedAt).map((tag) => [tag.path, tag.pinnedAt as string])),
@@ -459,8 +679,16 @@ export default function App() {
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [activeDay, setActiveDay] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  // The preference key sits under the memo: prefix, so an ordinary logout
-  // resets it along with the other workspace furniture.
+  // What the search box shows while an IME is composing. The query itself
+  // waits for the composed text: pinyin mid-composition ("chuang'bian") is
+  // not what the reader is searching for, and filtering by it flashed an
+  // empty feed (and embedded the pinyin) on every Chinese search.
+  const [searchComposition, setSearchComposition] = useState<string | null>(null);
+  const searchComposingRef = useRef(false);
+  // Trash's own keyword search: never carried into the memos feed or back.
+  const [trashQuery, setTrashQuery] = useState("");
+  // A device preference like theme and language: it survives logout and
+  // session expiry (the hook itself only runs in the ready phase).
   const [semanticOn, setSemanticOn] = useState(() => {
     try {
       return localStorage.getItem("memo:semantic-search") === "1";
@@ -475,12 +703,40 @@ export default function App() {
   // Names the current filter combination via PromptDialog.
   const [savingFilter, setSavingFilter] = useState(false);
 
+  // Session history (lib/navHistory): the entry on screen, whether the next
+  // lens change adds an entry (a discrete pick) or edits this one in place
+  // (typing), and reading places waiting to be restored.
+  const navStoreRef = useRef<NavStore | null>(null);
+  navStoreRef.current ??= createNavStore();
+  const navBootedRef = useRef(false);
+  const currentNavIdRef = useRef<string | null>(null);
+  const navIntentRef = useRef<"push" | "replace">("replace");
+  const pendingPlaceRef = useRef<NavPlace | null>(null);
+  const [placeTick, setPlaceTick] = useState(0);
+  // Where the reader left All memos, for the ⌂ pill to return to.
+  const rootPlaceRef = useRef<NavPlace | null>(null);
+
   // Daily review: settings and the day's frozen batch are workspace
   // furniture (localStorage, like the sort key) — see lib/review.ts. The
   // batch is drawn lazily, on the first visit to the review view of a local
   // day, never ahead of time and never on the server.
   const [reviewSettings, setReviewSettings] = useState<ReviewSettings>(loadReviewSettings);
   const [reviewDay, setReviewDay] = useState<ReviewDay | null>(loadReviewDay);
+  // A batch drawn while a cold start is still loading older pages comes from
+  // a partial pool. It serves this visit but is never saved, and the first
+  // visit after loading finishes draws the real one (and saves that), so the
+  // same day + settings + notebook still deal the same batch on any device.
+  const provisionalReviewRef = useRef<ReviewDay | null>(null);
+  const drawReviewDay = useCallback((pool: readonly Memo[], settings: ReviewSettings): ReviewDay => {
+    const next = buildReviewDay(pool, settings);
+    if (bootstrapJobRef.current) {
+      provisionalReviewRef.current = next;
+    } else {
+      provisionalReviewRef.current = null;
+      persistReviewDay(next);
+    }
+    return next;
+  }, []);
   const [reviewSettingsOpen, setReviewSettingsOpen] = useState(false);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   // Non-zero when the Brain button opened the panel to show unfinished work:
@@ -499,6 +755,24 @@ export default function App() {
   const editingBaseSeqRef = useRef<number | null>(null);
   const [editConflictId, setEditConflictId] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  // Unsent text survives a lost session within this page: the live editors
+  // report into these refs, a drop to the gate holds a copy, and the next
+  // sign-in seeds the remounted editors with it. Memory only, by design —
+  // never written to Web Storage, IndexedDB or the server.
+  const composerDraftRef = useRef("");
+  const editDraftRef = useRef<{ memoId: string; content: string } | null>(null);
+  const heldEditRef = useRef<{ memoId: string; content: string; baseSeq: number | null } | null>(null);
+  // The held base waits here until the edit-conflict effect sees the resumed
+  // editingId: that effect clears editingBaseSeqRef whenever no edit is open,
+  // including in the very commit that hands the edit back.
+  const resumedBaseRef = useRef<{ memoId: string; baseSeq: number | null } | null>(null);
+  const [composerSeed, setComposerSeed] = useState("");
+  const [editSeed, setEditSeed] = useState<{ memoId: string; content: string } | null>(null);
+  // The last edit Esc / Cancel discarded, held in memory only (drafts are
+  // never persisted) for the Undo on its toast; and the draft that Undo is
+  // reopening, handed to the editor as it mounts.
+  const discardedEditRef = useRef<{ memoId: string; draft: EditDraft; baseSeq: number | null } | null>(null);
+  const [reopenedDraft, setReopenedDraft] = useState<{ memoId: string; draft: EditDraft } | null>(null);
   // Feed checkbox toggles: an ephemeral optimistic layer (memoId → lineKey →
   // desired checked state) that only skins the rendered box. syncState stays
   // the server truth throughout, so snapshots and sync never persist a guess;
@@ -508,6 +782,14 @@ export default function App() {
   // batched into the next one, computed against the then-latest seq/content —
   // rapid ticking never races itself into a version conflict.
   const taskFlipQueueRef = useRef(new Map<string, TaskFlipQueue>());
+  // Pin / trash / restore: the same idea as the checkbox layer, one level up.
+  // The guessed pinnedAt/deletedAt shows at the click (see optimisticMemos);
+  // the per-memo token both marks the request in flight — a second tap on
+  // the same memo waits instead of racing into a false "changed elsewhere"
+  // conflict — and lets a late view-transition callback know its guess has
+  // already been settled.
+  const [optimisticMemos, setOptimisticMemos] = useState<OptimisticLayer>(() => new Map());
+  const memoActionTokensRef = useRef(new Map<string, object>());
 
   const stampTaskFlip = useCallback((memoId: string, lineKey: number, checked: boolean) => {
     setPendingTaskFlips((current) => {
@@ -555,12 +837,17 @@ export default function App() {
   const confirmBatchDeleteRef = useRef(false);
   confirmBatchDeleteRef.current = confirmBatchDelete;
   const [batchBusy, setBatchBusy] = useState(false);
+  // Settled/total while a select-mode action spans several requests.
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const [bulkTagOpen, setBulkTagOpen] = useState(false);
   // The same sheet aimed at one card, opened from its ⋯ menu. Held by id so a
   // sync that edits or deletes the memo mid-flight is reflected, not stale.
   const [tagMemoId, setTagMemoId] = useState<string | null>(null);
   const pendingBatchTagRef = useRef<PendingBatchTag | null>(null);
   const [renameTagTarget, setRenameTagTarget] = useState<string | null>(null);
+  // Share of the server's scan finished while a rename runs (0–1).
+  const [renameProgress, setRenameProgress] = useState<number | null>(null);
+  const tagRenameUndoRef = useRef<(from: string, to: string) => Promise<void>>(async () => undefined);
   const [dialogBusy, setDialogBusy] = useState(false);
   // Two-step Empty Trash: first click arms the button, second click fires.
   const [confirmEmptyTrash, setConfirmEmptyTrash] = useState(false);
@@ -568,15 +855,22 @@ export default function App() {
   // (blur/timeout disarms would snap it back to "Empty Trash" mid-flight),
   // so the disarm paths and re-fires check this ref.
   const emptyTrashBusyRef = useRef(false);
-  // Parsed backup file waiting for the user's go-ahead.
-  const [importTarget, setImportTarget] = useState<{ payload: BackupPayload; memoCount: number; imageCount: number } | null>(null);
+  // Backup file waiting for the user's go-ahead: only the File handle and its
+  // counts are kept; the records are re-read from it as they are sent.
+  const [importTarget, setImportTarget] = useState<{ file: File; memoCount: number; imageCount: number } | null>(null);
+  const [importProgress, setImportProgress] = useState<{ done: number; stopping: boolean } | null>(null);
+  const importAbortRef = useRef<AbortController | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
+  // A running export: its Stop handle and the toast that shows its progress.
+  const exportRef = useRef<{ controller: AbortController; toastId: number; text: string; detail?: string } | null>(null);
 
   const [lightbox, setLightbox] = useState<{ items: LightboxItem[]; index: number } | null>(null);
   // Memo being shared as an image card; holds a snapshot until dismissed.
   const [shareMemo, setShareMemo] = useState<Memo | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
   const [changingPasscode, setChangingPasscode] = useState(false);
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerClosing, setDrawerClosing] = useState(false);
   const [toasts, setToasts] = useState<ToastState[]>([]);
@@ -600,6 +894,8 @@ export default function App() {
   const drawerAfterCloseRef = useRef<Array<() => void>>([]);
   const logoutBusyRef = useRef(false);
   const searchRef = useRef<HTMLInputElement>(null);
+  const topbarRef = useRef<HTMLDivElement>(null);
+  useTopbarTuck(topbarRef, phase === "ready");
   const errorMessageRef = useRef(errorMessage);
   errorMessageRef.current = errorMessage;
 
@@ -627,13 +923,28 @@ export default function App() {
       // Past the cap the oldest steps off first.
       const live = toastsRef.current.filter((toast) => !toast.leaving);
       for (const stale of live.slice(0, Math.max(0, live.length + 1 - TOAST_LIMIT))) dismissToast(stale.id);
-      setToasts((current) => [...current, { id, text, tone, action: options.action }]);
+      setToasts((current) => [...current, { id, text, tone, action: options.action, detail: options.detail }]);
       if (toastsPausedRef.current) toastTimersRef.current.set(id, { timer: 0, expiresAt: 0, remaining: duration });
       else armToast(id, duration);
+      // Spoken through the standing live regions; an action is announced
+      // with the key that reaches it (see ToastStack).
+      const label = options.action?.label;
+      const sentence = text.replace(/[.。]$/, "");
+      // "Exporting your backup…" already ends its sentence.
+      const stop = sentence.endsWith("…") ? ["", ""] : [".", "。"];
+      announce(
+        label ? tr(`${sentence}${stop[0]} Press F6 to ${label.toLowerCase()}.`, `${sentence}${stop[1]}按 F6 ${label}。`) : text,
+        tone === "error" ? "assertive" : "polite"
+      );
       return id;
     },
-    [armToast, dismissToast]
+    [armToast, dismissToast, tr]
   );
+
+  /** Rewrite a toast's detail in place (a running export's count); one already gone stays gone. */
+  const updateToastDetail = useCallback((id: number, detail: string) => {
+    setToasts((current) => (current.some((toast) => toast.id === id && !toast.leaving) ? current.map((toast) => (toast.id === id ? { ...toast, detail } : toast)) : current));
+  }, []);
 
   const pauseToasts = useCallback(() => {
     if (toastsPausedRef.current) return;
@@ -663,13 +974,32 @@ export default function App() {
 
   const resetSessionUi = useCallback(() => {
     clearToasts();
+    // Lens history is notebook-derived (tag paths, search words): it goes
+    // with the session, and the entry on screen forgets its id. Older
+    // same-document entries can't be removed; they stay inert (the login
+    // screen doesn't listen) and resolve to All memos after the next login.
+    navStoreRef.current?.clear();
+    navBootedRef.current = false;
+    currentNavIdRef.current = null;
+    pendingPlaceRef.current = null;
+    rootPlaceRef.current = null;
+    try {
+      window.history.replaceState(null, "");
+    } catch {
+      // History may be unavailable; the store is already empty.
+    }
     window.clearTimeout(drawerCloseTimerRef.current);
     window.cancelAnimationFrame(drawerCallbackFrameRef.current);
     drawerAfterCloseRef.current = [];
     emptyTrashBusyRef.current = false;
+    importAbortRef.current?.abort();
+    exportRef.current?.controller.abort();
     confirmBatchDeleteRef.current = false;
     editingBaseSeqRef.current = null;
-    skipNextSnapshotSaveRef.current = false;
+    resumedBaseRef.current = null;
+    releaseDiscardedEdit();
+    skipSnapshotSaveForRef.current = null;
+    stopBootstrapLoad();
 
     setSyncState(createSyncState());
     setSnapshotCursor(0);
@@ -677,7 +1007,9 @@ export default function App() {
     setActiveTag(null);
     setActiveDay(null);
     setQuery("");
-    setSemanticOn(false);
+    setSearchComposition(null);
+    searchComposingRef.current = false;
+    setTrashQuery("");
     setSearchOpen(false);
     setFilters(EMPTY_FILTERS);
     setStatsDrilldown(null);
@@ -686,9 +1018,12 @@ export default function App() {
     setCreating(false);
     setEditingId(null);
     setEditConflictId(null);
+    setReopenedDraft(null);
     setSavingEdit(false);
     setPendingTaskFlips(new Map());
     taskFlipQueueRef.current.clear();
+    setOptimisticMemos(new Map());
+    memoActionTokensRef.current.clear();
     setSelectMode(false);
     setSelected(new Set());
     setConfirmBatchDelete(false);
@@ -700,6 +1035,7 @@ export default function App() {
     setDialogBusy(false);
     setConfirmEmptyTrash(false);
     setImportTarget(null);
+    setImportProgress(null);
     setLightbox(null);
     setShareMemo(null);
     setStatsOpen(false);
@@ -708,20 +1044,26 @@ export default function App() {
     setModelSettingsAttend(0);
     setEnableSemanticWhenReady(false);
     setChangingPasscode(false);
+    setConfirmLogout(false);
     setDrawerOpen(false);
     setDrawerClosing(false);
     setFilterOpenRequest(0);
     setReveal(false);
-  }, [clearToasts]);
+  }, [clearToasts, stopBootstrapLoad]);
 
+  /** Mirror clearLocalDeviceData in memory: theme, language and sort stay. */
   const resetLocalWorkspaceState = useCallback(() => {
-    setTheme("system");
-    setLanguage("en");
-    setSortKey("created-desc");
     setSavedFilters([]);
     setReviewSettings(DEFAULT_REVIEW_SETTINGS);
     setReviewDay(null);
-  }, [setLanguage]);
+  }, []);
+
+  /** Forget held or seeded drafts: the owner chose to leave, not lost the session. */
+  const discardHeldDrafts = useCallback(() => {
+    heldEditRef.current = null;
+    setComposerSeed("");
+    setEditSeed(null);
+  }, []);
 
   const drawerRef = useModalA11y<HTMLElement>({
     enabled: drawerOpen,
@@ -744,28 +1086,89 @@ export default function App() {
     persistSavedFilters(savedFilters);
   }, [phase, savedFilters]);
 
+  // Presets and review settings stay per-device, but every open tab of this
+  // device follows the latest write; otherwise a stale tab's next save would
+  // overwrite the whole list with its old copy. (A same-value write fires no
+  // storage event, so the persist effect above cannot echo back and forth.)
+  useEffect(() => {
+    function onStorage(event: StorageEvent) {
+      if (event.key === null || event.key === SAVED_FILTERS_KEY) setSavedFilters(loadSavedFilters());
+      if (event.key === null || event.key === REVIEW_SETTINGS_KEY) setReviewSettings(loadReviewSettings());
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
   const applySyncChanges = useCallback((changed: readonly Memo[], purged: readonly PurgedMemo[], tags: readonly TagMeta[], cursor?: number) => {
     setSyncState((current) => applySyncDelta(current, { memos: changed, purged, tags }));
     if (cursor !== undefined) setSnapshotCursor((current) => Math.max(current, cursor));
   }, []);
 
-  const dropToLogin = useCallback(() => {
-    sessionEpochRef.current += 1;
-    void clearLocalDeviceData();
-    resetSessionUi();
-    resetLocalWorkspaceState();
-    setPhase("login");
-    showToast(tr("Your session has expired. Enter your passcode again.", "登录已过期，请重新输入密码"), "error");
-  }, [resetLocalWorkspaceState, resetSessionUi, showToast, tr]);
+  /**
+   * The session ended under the owner. Plain expiry behaves like a cold start
+   * behind a gate: only the snapshot key is forgotten, so the sealed snapshot,
+   * semantic index, model and preferences wait for the next sign-in. Only a
+   * revocation (passcode changed elsewhere) clears the device like a logout.
+   * Either way the unsent composer text and an open edit are held in memory
+   * and come back after sign-in.
+   */
+  const dropToLogin = useCallback(
+    (revoked?: boolean) => {
+      const wipe = revoked ?? lastAuthLossWasRevocation();
+      sessionEpochRef.current += 1;
+      const editing = editingIdRef.current;
+      const editDraft = editDraftRef.current;
+      heldEditRef.current =
+        editing && editDraft?.memoId === editing ? { memoId: editing, content: editDraft.content, baseSeq: editingBaseSeqRef.current } : null;
+      setComposerSeed(composerDraftRef.current);
+      setEditSeed(null);
+      if (wipe) {
+        void clearLocalDeviceData();
+        resetLocalWorkspaceState();
+      } else {
+        forgetCacheKey();
+      }
+      resetSessionUi();
+      setPhase("login");
+      showToast(
+        wipe
+          ? tr("Your passcode changed. Enter the new one to continue.", "密码已更改，请输入新密码继续")
+          : tr("Your session has expired. Enter your passcode again.", "登录已过期，请重新输入密码"),
+        "error"
+      );
+    },
+    [resetLocalWorkspaceState, resetSessionUi, showToast, tr]
+  );
 
   const handlePeerLogout = useCallback(() => {
     sessionEpochRef.current += 1;
     void clearLocalDeviceData();
+    discardHeldDrafts();
     resetSessionUi();
     resetLocalWorkspaceState();
     setPhase("login");
     showToast(tr("Another tab logged out. Enter your passcode again.", "另一个标签页已退出，请重新输入密码"), "error");
-  }, [resetLocalWorkspaceState, resetSessionUi, showToast, tr]);
+  }, [discardHeldDrafts, resetLocalWorkspaceState, resetSessionUi, showToast, tr]);
+
+  // Hand held drafts back once the notebook is on screen again: the composer
+  // already mounted with its seed; an open edit resumes on its memo with its
+  // original base, so a change made elsewhere meanwhile still shows the
+  // conflict notice instead of being overwritten silently.
+  useEffect(() => {
+    if (phase !== "ready") return;
+    setComposerSeed("");
+    const held = heldEditRef.current;
+    heldEditRef.current = null;
+    if (!held) return;
+    resumedBaseRef.current = { memoId: held.memoId, baseSeq: held.baseSeq };
+    setEditSeed({ memoId: held.memoId, content: held.content });
+    setEditingId(held.memoId);
+  }, [phase]);
+
+  // The seed belongs to that one resumed edit; a later edit starts from the memo.
+  useEffect(() => {
+    if (editSeed && editingId !== editSeed.memoId) setEditSeed(null);
+  }, [editingId, editSeed]);
 
   const handleServerReset = useCallback(() => {
     sessionEpochRef.current += 1;
@@ -776,12 +1179,32 @@ export default function App() {
     // Changing the passcode rotates session_generation and the cookie. Abort
     // old-cookie heartbeats during that window so a legitimate success cannot
     // be followed by a stale 401 that drops every tab back to the gate.
-    enabled: phase === "ready" && !changingPasscode,
+    // Logout aborts them too: a sync answered after the logout response could
+    // otherwise carry a renewed session cookie back into this browser.
+    enabled: phase === "ready" && !changingPasscode && !loggingOut,
     applyChanges: applySyncChanges,
     onAuthLost: dropToLogin,
     onPeerLogout: handlePeerLogout,
     onServerReset: handleServerReset
   });
+
+  // The link to the server, said in words when it matters (rendered above
+  // the composer) and spoken once each time it changes.
+  const syncNotice =
+    phase !== "ready" || (syncStatus.online && !syncStatus.degraded)
+      ? null
+      : syncStatus.online
+        ? tr("Can’t reach the server · showing your last synced memos", "无法连接服务器 · 显示上次同步的笔记")
+        : tr("Offline · showing your last synced memos", "离线 · 显示上次同步的笔记");
+  useEffect(() => {
+    if (syncNotice) announce(syncNotice);
+  }, [syncNotice]);
+  // The cold-start loading line ticks per page, so it is not a live region;
+  // only a stalled load is spoken.
+  const bootstrapFailed = bootstrapLoad?.failed === true;
+  useEffect(() => {
+    if (bootstrapFailed) announce(tr("Couldn’t load the rest of your memos", "其余笔记载入失败"));
+  }, [bootstrapFailed, tr]);
 
   /** Apply a mutation response locally, then reconcile cursor + sibling tabs. */
   const commitMutation = useCallback(
@@ -793,84 +1216,155 @@ export default function App() {
     [applySyncChanges, runSync, notifyPeers]
   );
 
+  // Stable callbacks below read these, so a language change (which renews
+  // dropToLogin) never renews enterApp and re-runs the boot effect.
+  const dropToLoginRef = useRef(dropToLogin);
+  dropToLoginRef.current = dropToLogin;
+  const pumpBootstrapRef = useRef<() => Promise<void>>(async () => undefined);
+  // Background pages pause while the passcode changes, for the same reason
+  // useSync does: a page sent with the old cookie can 401 after the rotation.
+  const changingPasscodeRef = useRef(changingPasscode);
+  changingPasscodeRef.current = changingPasscode;
+  const passcodeChangesRef = useRef(0);
+
+  /**
+   * Load the remaining cold-start pages behind the rendered first page. Pages
+   * share the frozen cursor, so they hold only rows at or below it, while sync
+   * (already running from that cursor) supplies everything newer; merging is
+   * seq-aware and tombstones block resurrection, so the order in which the
+   * two streams land does not matter. A failed page is retried from the same
+   * keyset cursor: nothing already loaded is fetched again.
+   */
+  const pumpBootstrap = useCallback(async () => {
+    const job = bootstrapJobRef.current;
+    if (!job || job.running || changingPasscodeRef.current) return;
+    job.running = true;
+    window.clearTimeout(job.timer);
+    job.timer = 0;
+    const epoch = sessionEpochRef.current;
+    const passcodeChanges = passcodeChangesRef.current;
+    const current = () => bootstrapJobRef.current === job && epoch === sessionEpochRef.current;
+    try {
+      while (current() && !changingPasscodeRef.current) {
+        const page: BootstrapResponse = await bootstrap(job.after, job.snapshot);
+        if (!current()) return;
+        if (page.syncEpoch !== job.syncEpoch) {
+          // The database was replaced mid-load; start over against the new one.
+          bootstrapJobRef.current = null;
+          handleServerReset();
+          return;
+        }
+        const next = page.hasMore ? page.nextAfter : null;
+        if (page.hasMore && (!next || next === job.after)) throw new Error("Bootstrap page did not advance its continuation cursor");
+        job.failures = 0;
+        setSyncState((state) => applySyncDelta(state, { memos: page.memos, tags: page.tags }));
+        if (!next) {
+          bootstrapJobRef.current = null;
+          setBootstrapLoad(null);
+          return;
+        }
+        job.after = next;
+        setBootstrapLoad((load) => (load?.failed ? { ...load, failed: false } : load));
+      }
+    } catch (cause) {
+      if (!current()) return;
+      if (cause instanceof AuthRequiredError) {
+        dropToLoginRef.current();
+        return;
+      }
+      job.failures += 1;
+      if (job.failures >= BOOTSTRAP_FAILED_AFTER) setBootstrapLoad((load) => (load && !load.failed ? { ...load, failed: true } : load));
+      const delay = Math.min(BOOTSTRAP_RETRY_MAX_MS, 1_000 * 2 ** Math.min(job.failures - 1, 5));
+      job.timer = window.setTimeout(() => void pumpBootstrapRef.current(), delay);
+    } finally {
+      job.running = false;
+      // A passcode change renews the session epoch, which parks a page still
+      // in flight; once the change is over, carry on from the same cursor.
+      // (While it lasts, the effect below resumes the pump when it ends.)
+      if (passcodeChangesRef.current !== passcodeChanges && bootstrapJobRef.current === job && !changingPasscodeRef.current) {
+        void pumpBootstrapRef.current();
+      }
+    }
+  }, [handleServerReset]);
+  pumpBootstrapRef.current = pumpBootstrap;
+
+  /** The reader's own "try again" for a stalled cold load. */
+  const retryBootstrap = useCallback(() => {
+    void pumpBootstrapRef.current();
+  }, []);
+
+  useEffect(() => {
+    if (phase === "ready" && !changingPasscode) void pumpBootstrapRef.current();
+  }, [phase, changingPasscode]);
+
+  useEffect(() => {
+    if (!bootstrapLoad?.failed) return;
+    window.addEventListener("online", retryBootstrap);
+    return () => window.removeEventListener("online", retryBootstrap);
+  }, [bootstrapLoad?.failed, retryBootstrap]);
+
   const enterApp = useCallback(
-    async (withReveal: boolean) => {
+    async (withReveal: boolean, start?: Promise<BootStart>) => {
       // Warm start: with a sealed local snapshot, one incremental sync
       // replaces the full-notebook bootstrap — startup traffic stays
       // constant-size no matter how large the notebook grows. Auth errors
       // propagate to the caller exactly like the bootstrap path's.
       let entered = false;
-      skipNextSnapshotSaveRef.current = false;
-      const sealed = await readSealedSnapshot();
-      if (sealed) {
-        let delta = await syncSince(sealed.cursor, { includeCacheKey: true });
+      skipSnapshotSaveForRef.current = null;
+      stopBootstrapLoad();
+      const begun = await (start ?? startBoot());
+      let firstPage = begun.kind === "cold" ? begun.firstPage : null;
+      if (begun.kind === "warm") {
+        const { sealed } = begun;
+        const delta = await begun.firstSync;
         adoptCacheKey(delta.cacheKey);
         const snapshot = await openSnapshot(sealed);
         // The server epoch catches a replaced database even when its new
         // numeric counter has already grown past this sleeping client.
         if (snapshot && delta.syncEpoch === snapshot.syncEpoch && delta.cursor >= sealed.cursor) {
-          const warmSyncEpoch = snapshot.syncEpoch;
-          let warmValid = true;
-          let nextState = createSyncState(snapshot.memos, snapshot.tags, snapshot.purged);
-          let warmChanged = delta.memos.length > 0 || delta.purged.length > 0 || delta.tags.length > 0;
-          nextState = applySyncDelta(nextState, delta);
-          let cursor = delta.cursor;
-          while (delta.hasMore) {
-            const previous = cursor;
-            delta = await syncSince(cursor);
-            adoptCacheKey(delta.cacheKey);
-            if (delta.syncEpoch !== warmSyncEpoch) {
-              warmValid = false;
-              break;
-            }
-            warmChanged ||= delta.memos.length > 0 || delta.purged.length > 0 || delta.tags.length > 0;
-            nextState = applySyncDelta(nextState, delta);
-            cursor = delta.cursor;
-            if (cursor <= previous) throw new Error("Sync page did not advance its cursor");
-          }
-          if (warmValid) {
-            setSyncState(nextState);
-            setSnapshotCursor(cursor);
-            setSnapshotSyncEpoch(warmSyncEpoch);
-            setCursor(cursor);
-            setSyncEpoch(warmSyncEpoch);
-            // The sealed record is already the exact working set when the warm
-            // delta is empty. Avoid immediately re-encrypting the same notebook.
-            skipNextSnapshotSaveRef.current = !warmChanged;
-            entered = true;
-          }
-        }
-        if (!entered) {
+          const warmChanged = delta.memos.length > 0 || delta.purged.length > 0 || delta.tags.length > 0;
+          const nextState = applySyncDelta(createSyncState(snapshot.memos, snapshot.tags, snapshot.purged), delta);
+          // Render now. A long absence pages on through useSync from this
+          // cursor, which also checks every page against this epoch.
+          setSyncState(nextState);
+          setSnapshotCursor(delta.cursor);
+          setSnapshotSyncEpoch(snapshot.syncEpoch);
+          setCursor(delta.cursor);
+          setSyncEpoch(snapshot.syncEpoch);
+          // The sealed record is already the exact working set when the warm
+          // delta is empty. Avoid immediately re-encrypting the same notebook.
+          skipSnapshotSaveForRef.current = warmChanged ? null : nextState;
+          entered = true;
+        } else {
           // Corrupt ciphertext, a rotated cache key, or a lower server cursor
           // / different server epoch means this record belongs to unusable
           // history. Clear it before cold bootstrap.
           await invalidateSnapshot();
+          firstPage = bootstrap();
         }
       }
-      if (!entered) {
-        let page = await bootstrap();
+      if (!entered && firstPage) {
+        // Cold start: the first page is the newest memos (plus every pinned
+        // one), enough to render the top of the feed; the rest loads behind it.
+        const page = await firstPage;
         adoptCacheKey(page.cacheKey);
-        const snapshotCursor = page.cursor;
-        const bootstrapSyncEpoch = page.syncEpoch;
-        let nextState = createSyncState(page.memos, page.tags);
-        let after = page.nextAfter;
-        while (page.hasMore) {
-          if (after === undefined || after === null) throw new Error("Bootstrap page is missing its continuation cursor");
-          const previous = after;
-          page = await bootstrap(after, snapshotCursor);
-          if (page.syncEpoch !== bootstrapSyncEpoch) throw new Error("Database history changed during bootstrap");
-          adoptCacheKey(page.cacheKey);
-          nextState = applySyncDelta(nextState, { memos: page.memos, tags: page.tags });
-          after = page.nextAfter;
-          if (page.hasMore && (after === undefined || after === null || after === previous)) {
-            throw new Error("Bootstrap page did not advance its continuation cursor");
-          }
+        if (page.hasMore && !page.nextAfter) throw new Error("Bootstrap page is missing its continuation cursor");
+        setSyncState(createSyncState(page.memos, page.tags));
+        setSnapshotCursor(page.cursor);
+        setSnapshotSyncEpoch(page.syncEpoch);
+        setCursor(page.cursor);
+        setSyncEpoch(page.syncEpoch);
+        if (page.hasMore && page.nextAfter) {
+          bootstrapJobRef.current = {
+            after: page.nextAfter,
+            snapshot: page.cursor,
+            syncEpoch: page.syncEpoch,
+            failures: 0,
+            timer: 0,
+            running: false
+          };
+          setBootstrapLoad({ total: typeof page.total === "number" ? page.total : null, failed: false });
         }
-        setSyncState(nextState);
-        setSnapshotCursor(snapshotCursor);
-        setSnapshotSyncEpoch(bootstrapSyncEpoch);
-        setCursor(snapshotCursor);
-        setSyncEpoch(bootstrapSyncEpoch);
       }
       setBootError(null);
       setPhase("ready");
@@ -878,17 +1372,20 @@ export default function App() {
         setReveal(true);
         window.setTimeout(() => setReveal(false), 350);
       }
+      void pumpBootstrapRef.current();
     },
-    [setCursor, setSyncEpoch]
+    [setCursor, setSyncEpoch, stopBootstrapLoad]
   );
+
+  // One tab persists the snapshot (see useSnapshotWriterLease); a cold start
+  // joins only once its working set is whole.
+  const snapshotWriter = useSnapshotWriterLease(phase === "ready" && !bootstrapLoad);
 
   // Persist the working set (sealed) once changes settle.
   useEffect(() => {
-    if (phase !== "ready" || !snapshotSyncEpoch) return;
-    if (skipNextSnapshotSaveRef.current) {
-      skipNextSnapshotSaveRef.current = false;
-      return;
-    }
+    if (phase !== "ready" || !snapshotSyncEpoch || bootstrapLoad || !snapshotWriter) return;
+    if (skipSnapshotSaveForRef.current === syncState) return;
+    skipSnapshotSaveForRef.current = null;
     let idleId = 0;
     let fallbackId = 0;
     const save = () => {
@@ -899,6 +1396,8 @@ export default function App() {
         tags: tagsOfState(syncState),
         purged: purgedOf(syncState)
       });
+      // Sealed feed previews follow the snapshot: drop those whose memo is gone.
+      void pruneImageCache(memos);
     };
     const timer = window.setTimeout(() => {
       if (typeof window.requestIdleCallback === "function") {
@@ -912,42 +1411,48 @@ export default function App() {
       window.clearTimeout(fallbackId);
       if (idleId) window.cancelIdleCallback(idleId);
     };
-  }, [phase, snapshotCursor, snapshotSyncEpoch, syncState, memos]);
+  }, [phase, snapshotCursor, snapshotSyncEpoch, syncState, memos, bootstrapLoad, snapshotWriter]);
 
   const runInitialBoot = useCallback(async () => {
     const attempt = ++bootAttemptRef.current;
     setBootError(null);
     setPhase("checking");
 
-    let status: Awaited<ReturnType<typeof getAuthStatus>>;
+    // Status, the local snapshot read and the first sync or bootstrap page all
+    // start together. A signed-in boot never waits on status: a successful
+    // authenticated pull already proves setup is done. Status only decides
+    // between setup and login once that pull comes back 401.
+    const status = getAuthStatus();
+    status.catch(() => undefined);
     try {
-      status = await getAuthStatus();
+      await enterApp(false, startBoot());
     } catch (cause) {
       if (attempt !== bootAttemptRef.current) return;
-      setBootError(errorMessageRef.current(cause, "Couldn’t connect to the server", "无法连接服务器"));
-      setPhase("error");
-      return;
-    }
-
-    if (attempt !== bootAttemptRef.current) return;
-    setNeedsSetup(status.needsSetup);
-    if (status.needsSetup) {
-      setPhase("login");
-      return;
-    }
-
-    try {
-      await enterApp(false);
-    } catch (cause) {
-      if (attempt !== bootAttemptRef.current) return;
-      if (cause instanceof AuthRequiredError) {
-        setPhase("login");
-      } else {
+      if (!(cause instanceof AuthRequiredError)) {
         setBootError(errorMessageRef.current(cause, "Couldn’t load your memos", "加载失败"));
         setPhase("error");
+        return;
       }
+      // A revoked cookie at boot is the lost-device case: wipe like mid-session.
+      if (isSessionRevoked(cause)) {
+        void clearLocalDeviceData();
+        resetLocalWorkspaceState();
+      }
+      let statusNow: Awaited<typeof status>;
+      try {
+        statusNow = await status;
+      } catch (statusCause) {
+        if (attempt !== bootAttemptRef.current) return;
+        setBootError(errorMessageRef.current(statusCause, "Couldn’t connect to the server", "无法连接服务器"));
+        setPhase("error");
+        return;
+      }
+      if (attempt !== bootAttemptRef.current) return;
+      setNeedsSetup(statusNow.needsSetup);
+      setSetupAllowed(statusNow.setupAllowed !== false);
+      setPhase("login");
     }
-  }, [enterApp]);
+  }, [enterApp, resetLocalWorkspaceState]);
 
   useEffect(() => {
     void runInitialBoot();
@@ -975,10 +1480,17 @@ export default function App() {
     [dropToLogin]
   );
 
-  const activeMemos = useMemo(() => memos.filter((memo) => !memo.deletedAt), [memos]);
+  // What the reader sees: server truth with in-flight pin/trash/restore
+  // guesses laid over it. (`memos` itself stays the truth that snapshots save.)
+  const shownMemos = useMemo(() => applyOptimisticLayer(memos, optimisticMemos), [memos, optimisticMemos]);
+  const activeMemos = useMemo(() => shownMemos.filter((memo) => !memo.deletedAt), [shownMemos]);
+  // Server truth without the guesses. Anything that changes state or does
+  // costly work off the active list (clearing a vanished tag filter, the
+  // semantic index) reads this one, so a failed trash rolls back cleanly.
+  const confirmedActiveMemos = useMemo(() => memos.filter((memo) => !memo.deletedAt), [memos]);
   const trashedMemos = useMemo(
-    () => memos.filter((memo) => memo.deletedAt).sort((a, b) => (b.deletedAt ?? "").localeCompare(a.deletedAt ?? "")),
-    [memos]
+    () => shownMemos.filter((memo) => memo.deletedAt).sort((a, b) => (b.deletedAt ?? "").localeCompare(a.deletedAt ?? "")),
+    [shownMemos]
   );
 
   const { tree: tagTree, uniqueTagCount } = useMemo(
@@ -991,18 +1503,31 @@ export default function App() {
     return [...set].sort((a, b) => a.localeCompare(b, locale));
   }, [activeMemos, locale]);
   const byDay = useMemo(() => countsByDay(activeMemos), [activeMemos]);
+  // The earliest local day with a memo: the range calendar's floor.
+  const minDay = useMemo(() => {
+    let min: string | null = null;
+    for (const key of byDay.keys()) if (min === null || key < min) min = key;
+    return min;
+  }, [byDay]);
 
   useEffect(() => {
-    if (!activeTag) return;
-    const stillExists = activeMemos.some((memo) => tagsOf(memo).some((tag) => tagMatches(tag, activeTag)));
+    // A tag's memos may simply not have loaded yet during a cold start.
+    if (!activeTag || bootstrapLoad) return;
+    const stillExists = confirmedActiveMemos.some((memo) => tagsOf(memo).some((tag) => tagMatches(tag, activeTag)));
     if (!stillExists) setActiveTag(null);
-  }, [activeTag, activeMemos]);
+  }, [activeTag, confirmedActiveMemos, bootstrapLoad]);
 
   useEffect(() => {
     if (!editingId) {
       editingBaseSeqRef.current = null;
       setEditConflictId(null);
+      setReopenedDraft(null);
       return;
+    }
+    const resumed = resumedBaseRef.current;
+    if (resumed) {
+      resumedBaseRef.current = null;
+      if (resumed.memoId === editingId) editingBaseSeqRef.current = resumed.baseSeq;
     }
     const current = syncState.memos.get(editingId);
     if (!current || current.deletedAt) {
@@ -1080,14 +1605,18 @@ export default function App() {
 
   // Semantic ranking rides the same search box. Keyword/phrase matching stays
   // active as the high-confidence tier; semantic results add related memos.
-  // Trash and review keep plain search, so the hook sees their query as empty.
+  // Ranking only runs in the memos view: Trash has its own keyword-only
+  // search and review none, so the hook sees their query as empty.
   // Activation also waits for phase "ready": the sealed index only opens with
   // the cache key adopted from the first authenticated response, and starting
   // earlier misreads "not decryptable yet" as "no index", throwing away the
   // persisted vectors and re-embedding the whole notebook on every refresh.
+  // It also waits out a cold start's background pages: reconciling against
+  // the partial set would prune (and save) the vectors of every memo not yet
+  // loaded, then embed them all again as their pages arrive.
   const semantic = useSemanticSearch(
-    semanticOn && phase === "ready",
-    activeMemos,
+    semanticOn && phase === "ready" && !bootstrapLoad,
+    confirmedActiveMemos,
     view === "memos" ? feedQuery : "",
     semanticScopeIds,
     publishSemanticResults
@@ -1100,9 +1629,29 @@ export default function App() {
   // The model download lives at app level (it outlives the settings panel),
   // so the Brain shows it as unfinished work too: closing the panel never
   // hides a running download.
-  const modelDownload = useModelDownload();
-  const modelBusy = isModelWorkInFlight(modelDownload);
-  const semanticBusy = modelBusy || semantic.status === "preparing" || semantic.status === "indexing" || semantic.queryProgress !== null;
+  // Only the phase and the hook's busy bit reach App: the counters behind them
+  // tick per batch and per slice, and only the settings panel shows them.
+  const modelPhase = useModelDownloadPhase();
+  const modelBusy = modelPhase === "downloading" || modelPhase === "activating";
+  const semanticBusy = modelBusy || semantic.status === "preparing" || semantic.status === "indexing" || semantic.queryBusy;
+  // Busy or stopped, the Brain opens the details panel rather than toggling.
+  const semanticMonitor = semanticBusy || semantic.status === "error";
+  // Its state in words for the button's accessible name — the counts stay
+  // in the bubble and the panel.
+  const semanticState =
+    semantic.status === "error"
+      ? tr("stopped", "已停止")
+      : modelBusy
+        ? modelPhase === "downloading"
+          ? tr("downloading the model", "模型下载中")
+          : tr("starting the model", "模型启动中")
+        : semantic.status === "indexing"
+          ? tr("indexing", "索引中")
+          : semantic.queryBusy
+            ? tr("working", "正在工作")
+            : semantic.status === "preparing"
+              ? tr("loading the model", "模型加载中")
+              : null;
   // This query's ranking is still on its way. The keyword tier answers within
   // the keystroke, meaning answers a beat later, so a feed with nothing in it
   // yet is "still looking" — saying "no matching memos" there makes the app
@@ -1137,6 +1686,9 @@ export default function App() {
   // batches read this at commit time instead of a render-stale capture).
   const feedContextRef = useRef({ view, filters, statsDrilldown, sortKey, parsedQuery });
   feedContextRef.current = { view, filters, statsDrilldown, sortKey, parsedQuery };
+  // The lenses as of the latest render, for a toast action that runs later.
+  const lensRef = useRef({ view, activeTag, activeDay, statsDrilldown, filters, parsedQuery });
+  lensRef.current = { view, activeTag, activeDay, statsDrilldown, filters, parsedQuery };
 
   const visibleMemos = useMemo(() => {
     let list = searchScopeMemos;
@@ -1177,13 +1729,22 @@ export default function App() {
     if (!reviewDay) return [];
     const list: Memo[] = [];
     for (const id of reviewDay.ids) {
-      const memo = syncState.memos.get(id);
+      const stored = syncState.memos.get(id);
+      const memo = stored ? withOptimistic(stored, optimisticMemos) : null;
       if (memo && !memo.deletedAt) list.push(memo);
     }
     return list;
-  }, [reviewDay, syncState.memos]);
+  }, [reviewDay, syncState.memos, optimisticMemos]);
 
-  const feedMemos = view === "trash" ? trashedMemos : view === "review" ? reviewMemos : visibleMemos;
+  // Trash search is keywords only — no semantic tier, no facets — over the
+  // trashed memos alone, in their deletion order.
+  const trashSearch = useDeferredValue(trashQuery.trim().toLowerCase());
+  const trashFeedMemos = useMemo(() => {
+    const parsed = parseSearchQuery(trashSearch);
+    return queryIsEmpty(parsed) ? trashedMemos : trashedMemos.filter((memo) => memoMatchesQuery(memo, parsed));
+  }, [trashedMemos, trashSearch]);
+
+  const feedMemos = view === "trash" ? trashFeedMemos : view === "review" ? reviewMemos : visibleMemos;
   const visibleFeedIds = useMemo(() => feedMemos.map((memo) => memo.id), [feedMemos]);
   const visibleSelected = useMemo(() => selectionWithinVisibleIds(selected, visibleFeedIds), [selected, visibleFeedIds]);
   // Resolved every render, so a sync that deletes the memo closes its sheet.
@@ -1202,7 +1763,7 @@ export default function App() {
   // back an identically ordered but freshly built map. A reader 200 rows into
   // their results watched the feed truncate to one page under them and the
   // browser clamp their scroll into whatever was left.
-  const feedQueryKey = feedQuery;
+  const feedQueryKey = view === "trash" ? `trash:${trashSearch}` : feedQuery;
   const feedWindowKey = useMemo(() => ({}), [view, activeTag, activeDay, statsDrilldown, feedQueryKey, filters, sortKey, semanticOn]);
   const [renderWindow, setRenderWindow] = useState<FeedWindow<object>>({ key: {}, cap: FEED_PAGE });
   // Resolve a stale generation synchronously during render. An effect would
@@ -1215,6 +1776,71 @@ export default function App() {
     return editingMemo ? [...rendered, editingMemo] : rendered;
   }, [feedMemos, renderCap, editingId]);
   const hasMoreFeed = feedMemos.length > renderCap;
+
+  // Search feedback. The literal keyword hits are what get highlighted and
+  // counted as found; with semantic search on, the rest of the list is what
+  // meaning added. Memo text is lowercased once per snapshot (search.ts), so
+  // a second pass over the result list costs little.
+  const searching = view === "memos" && !queryIsEmpty(parsedQuery);
+  const keywordHitIds = useMemo(() => {
+    if (!searching) return null;
+    const ids = new Set<string>();
+    for (const memo of visibleMemos) if (memoMatchesQuery(memo, parsedQuery)) ids.add(memo.id);
+    return ids;
+  }, [searching, visibleMemos, parsedQuery]);
+  const relatedCount = useMemo(
+    () => (keywordHitIds && semanticResults ? visibleMemos.filter((memo) => !keywordHitIds.has(memo.id) && semanticResults.has(memo.id)).length : 0),
+    [keywordHitIds, semanticResults, visibleMemos]
+  );
+  const searchNeedleList = useMemo(() => (searching ? searchNeedles(parsedQuery) : []), [searching, parsedQuery]);
+  const feedRef = useRef<HTMLElement | null>(null);
+  useSearchHighlight(feedRef, searchNeedleList, keywordHitIds);
+  // A tag, day, stats bar or filter quietly narrows what the query searches;
+  // the result line and the empty state say so instead of implying the whole
+  // notebook was searched.
+  const otherScopeOn = activeDay !== null || statsDrilldown !== null || structuredFiltersOn;
+  const searchScopeText = !semanticScopeActive
+    ? null
+    : activeTag
+      ? otherScopeOn
+        ? tr(`in #${activeTag} with filters`, `在 #${activeTag} 的筛选范围内`)
+        : tr(`in #${activeTag}`, `在 #${activeTag} 中`)
+      : tr("within the current filters", "在当前筛选范围内");
+  // Matches the scope hides, offered when the scoped search comes up empty.
+  const outsideHitCount = useMemo(() => {
+    if (!searching || !semanticScopeActive || feedMemos.length > 0) return 0;
+    let total = 0;
+    for (const memo of activeMemos) if (memoMatchesQuery(memo, parsedQuery)) total += 1;
+    return total;
+  }, [searching, semanticScopeActive, feedMemos.length, activeMemos, parsedQuery]);
+  const foundCount = (keywordHitIds?.size ?? 0) + relatedCount;
+  const searchSummary = !searching
+    ? ""
+    : `${
+        searchScopeText
+          ? tr(`Found ${count(foundCount, "memo")} ${searchScopeText}`, `${searchScopeText}找到 ${count(foundCount, "memo")}`)
+          : tr(`Found ${count(foundCount, "memo")}`, `找到 ${count(foundCount, "memo")}`)
+      }${relatedCount > 0 ? tr(` · ${relatedCount} related by meaning`, ` · 其中 ${relatedCount} 条意思相近`) : ""}`;
+  const searchEmptyTitle = searchScopeText
+    ? tr(`No matching memos ${searchScopeText}`, `${searchScopeText}没有找到相关笔记`)
+    : tr("No matching memos", "没有找到相关笔记");
+  // What the polite live region reads: the settled answer, not every
+  // keystroke's (or the "still looking" state's) intermediate one.
+  const searchSettled = searching && !semanticPending ? (feedMemos.length === 0 ? searchEmptyTitle : searchSummary) : "";
+  const [searchAnnouncement, setSearchAnnouncement] = useState("");
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearchAnnouncement(searchSettled), searchSettled ? 400 : 0);
+    return () => window.clearTimeout(timer);
+  }, [searchSettled]);
+  const searchText = searchComposition ?? query;
+  const searchPlaceholder = activeTag
+    ? semanticOn
+      ? tr(`Search #${activeTag} by meaning`, `在 #${activeTag} 中按意思搜索`)
+      : tr(`Search in #${activeTag}`, `在 #${activeTag} 中搜索`)
+    : semanticOn
+      ? tr("Search by meaning", "按意思搜索")
+      : tr("Search memos", "搜索笔记");
+  const searchSyntaxHint = tr("Space separates keywords (all must match); “quotes” match an exact phrase.", "空格分隔多个关键词（须全部命中）；“引号”匹配完整短语。");
 
   // Typing opens a new result list, and a new list starts at the top — the
   // same rule every other lens follows through changeFeed. Search reached the
@@ -1302,7 +1928,7 @@ export default function App() {
    * entirely.
    */
   const swapFeed = useCallback(
-    (apply: () => void, { rewind }: { rewind: boolean }) => {
+    (apply: () => void, { rewind, morph = true }: { rewind: boolean; morph?: boolean }) => {
       const update = (animated = false) => {
         enterSuppressRef.current = true;
         try {
@@ -1312,6 +1938,8 @@ export default function App() {
           });
         } finally {
           enterSuppressRef.current = false;
+          // The swap's lens change has been recorded (or there was none).
+          navIntentRef.current = "replace";
         }
         // Capture the composer at its final opacity/position. Its named
         // snapshot plays the entrance; hidden -> visible also restarts the
@@ -1323,7 +1951,9 @@ export default function App() {
         }
         if (rewind) window.scrollTo(0, 0);
       };
-      if (drawerOpen) update();
+      // `morph: false` is a swap the browser already animated (a Back swipe
+      // with its own slide): playing the feed morph on top would show it twice.
+      if (drawerOpen || !morph) update();
       else {
         withViewTransition(update);
       }
@@ -1331,7 +1961,66 @@ export default function App() {
     [drawerOpen]
   );
 
-  const changeFeed = useCallback((apply: () => void) => swapFeed(apply, { rewind: true }), [swapFeed]);
+  const navLens = useMemo<NavLens>(
+    () => ({ view, tag: activeTag, day: activeDay, drilldown: statsDrilldown, filters, query }),
+    [view, activeTag, activeDay, statsDrilldown, filters, query]
+  );
+  const navLensRef = useRef(navLens);
+  navLensRef.current = navLens;
+
+  /** Measure the reading place before the feed changes under the reader. */
+  const noteLeavingPlace = useCallback(() => {
+    const place = captureFeedPlace(FEED_PAGE);
+    const id = currentNavIdRef.current;
+    if (id) navStoreRef.current?.setPlace(id, place);
+    if (isRootLens(navLensRef.current)) rootPlaceRef.current = place;
+  }, []);
+
+  /** A discrete lens change: a new result list, and a new Back step. */
+  const changeFeed = useCallback(
+    (apply: () => void) => {
+      noteLeavingPlace();
+      swapFeed(() => {
+        navIntentRef.current = "push";
+        apply();
+      }, { rewind: true });
+    },
+    [swapFeed, noteLeavingPlace]
+  );
+
+  /**
+   * A lens the reader has been in before (Back/Forward, the ⌂ pill): the
+   * same morph, but landing on the card they left rather than the top. The
+   * restore itself runs in the layout effect below, once the list exists.
+   */
+  const returnToFeed = useCallback(
+    (apply: () => void, place: NavPlace | null, intent: "push" | "replace", morph = true) => {
+      swapFeed(
+        () => {
+          navIntentRef.current = intent;
+          pendingPlaceRef.current = place;
+          apply();
+          setPlaceTick((tick) => tick + 1);
+        },
+        { rewind: place === null, morph }
+      );
+    },
+    [swapFeed]
+  );
+
+  // Declared after the query-scroll effect above so a restored place wins
+  // over its scroll-to-top. A place deep in the feed first widens the render
+  // window (a synchronous re-render, still before paint) so its card exists.
+  useLayoutEffect(() => {
+    const place = pendingPlaceRef.current;
+    if (!place) return;
+    if (renderCap < place.cap && hasMoreFeed) {
+      setRenderWindow({ key: feedWindowKey, cap: place.cap });
+      return;
+    }
+    pendingPlaceRef.current = null;
+    restoreFeedPlace(place);
+  }, [placeTick, feedWindowKey, renderCap, hasMoreFeed]);
 
   // The wiring promised above the useSemanticSearch call.
   publishSemanticRef.current = (commit) => swapFeed(commit, { rewind: false });
@@ -1339,13 +2028,26 @@ export default function App() {
   /** Search text set by a control: lands with the swap that animates it. */
   const swapQuery = useCallback((next: string) => {
     queryLeapRef.current = next.trim().toLowerCase();
+    setSearchComposition(null);
     setQuery(next);
   }, []);
   /** Search text set by the keyboard: stays on the deferred path. */
-  const typeQuery = useCallback((next: string) => {
-    queryLeapRef.current = null;
-    setQuery(next);
-  }, []);
+  const typeQuery = useCallback(
+    (next: string) => {
+      queryLeapRef.current = null;
+      setSearchComposition(null);
+      // The keystroke that starts a search leaves the lens it was typed in:
+      // one Back step per search (Back clears it again), and the place left
+      // behind (All memos' too, for ⌂) is measured now. Later keystrokes
+      // edit that entry in place.
+      if (next.trim() !== "" && navLensRef.current.query.trim() === "") {
+        noteLeavingPlace();
+        navIntentRef.current = "push";
+      }
+      setQuery(next);
+    },
+    [noteLeavingPlace]
+  );
 
   /**
    * The lenses — tag, day, search, facets, sort, presets — change freely
@@ -1394,6 +2096,9 @@ export default function App() {
       }
       changeFeed(() => {
         setActiveDay(key);
+        // One date lens at a time: a heatmap day replaces a date range
+        // (their intersection was a second chip and, mostly, an empty feed).
+        if (key) setFilters((current) => (current.dateFrom !== null || current.dateTo !== null ? { ...current, dateFrom: null, dateTo: null } : current));
         setStatsDrilldown(null);
         setView("memos");
       });
@@ -1405,21 +2110,101 @@ export default function App() {
     if (view === "memos" && activeTag === null && activeDay === null && statsDrilldown === null && query.length === 0 && !hasActiveFilters(filters)) {
       return;
     }
+    // Home is a lens the reader has been in: back to the card they left
+    // All memos at, not to the top of a reset window.
+    noteLeavingPlace();
+    returnToFeed(
+      () => {
+        setActiveTag(null);
+        setActiveDay(null);
+        setStatsDrilldown(null);
+        swapQuery("");
+        setFilters(EMPTY_FILTERS);
+        // A selection belongs to the view it was made in.
+        if (view !== "memos") {
+          setSelectMode(false);
+          setSelected(new Set());
+          setConfirmBatchDelete(false);
+        }
+        setView("memos");
+      },
+      rootPlaceRef.current,
+      "push"
+    );
+  }, [view, activeTag, activeDay, statsDrilldown, query, filters, noteLeavingPlace, returnToFeed, swapQuery]);
+
+  /**
+   * Lifts just the lenses that hide one memo (a just-created one, from its
+   * toast), then brings its card into view once the feed has re-rendered.
+   */
+  const revealIdRef = useRef<string | null>(null);
+  const revealMemo = useCallback(
+    (id: string) => {
+      const memo = syncStateRef.current.memos.get(id);
+      if (!memo || memo.deletedAt) return;
+      const lens = lensRef.current;
+      revealIdRef.current = id;
+      // Past the rendered window (an oldest-first feed) there is no card to
+      // bring in; don't leave a jump armed for whenever paging reaches it.
+      window.setTimeout(() => {
+        if (revealIdRef.current === id) revealIdRef.current = null;
+      }, 1000);
+      changeFeed(() => {
+        if (!memoMatchesQuery(memo, lens.parsedQuery)) swapQuery("");
+        const tag = lens.activeTag;
+        if (tag && !tagsOf(memo).some((path) => tagMatches(path, tag))) setActiveTag(null);
+        if (lens.activeDay && dayKeyOf(memo) !== lens.activeDay) setActiveDay(null);
+        if (lens.statsDrilldown && !memoMatchesStatsDrilldown(memo, lens.statsDrilldown)) setStatsDrilldown(null);
+        if (!memoMatchesFilters(memo, lens.filters)) setFilters(EMPTY_FILTERS);
+        if (lens.view !== "memos") {
+          setSelectMode(false);
+          setSelected(new Set());
+          setConfirmBatchDelete(false);
+          setView("memos");
+        }
+      });
+    },
+    [changeFeed, swapQuery]
+  );
+  useEffect(() => {
+    const id = revealIdRef.current;
+    if (!id || !renderedFeedMemos.some((memo) => memo.id === id)) return;
+    revealIdRef.current = null;
+    // A frame later: the swap's own rewind to the top lands first.
+    const frame = window.requestAnimationFrame(() => {
+      const slot = Array.from(document.querySelectorAll<HTMLElement>(".memo-slot[data-vt]")).find((node) => node.dataset.vt === `memo-${id}`);
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      slot?.scrollIntoView?.({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [renderedFeedMemos]);
+
+  // A just-created memo the lenses keep can still land past the render
+  // window (oldest first, a long feed): no card appears as the editor clears,
+  // which reads as a failed send just like a lens hiding it. Checked once the
+  // feed has taken the memo in; rendering up to it would mean rendering the
+  // whole list, so the toast only says where it went.
+  const createdPlacementRef = useRef<string | null>(null);
+  useEffect(() => {
+    const id = createdPlacementRef.current;
+    if (!id) return;
+    const index = feedMemos.findIndex((memo) => memo.id === id);
+    if (index < 0) return;
+    createdPlacementRef.current = null;
+    if (!renderedFeedMemos.some((memo) => memo.id === id)) {
+      showToast(tr("Saved the memo — it's further down this list", "已保存这条笔记，它在列表靠后的位置"));
+    }
+  }, [feedMemos, renderedFeedMemos, showToast, tr]);
+
+  /** Widens a scoped search to the whole notebook, keeping the query. */
+  const searchAllMemos = useCallback(() => {
     changeFeed(() => {
       setActiveTag(null);
       setActiveDay(null);
       setStatsDrilldown(null);
-      swapQuery("");
       setFilters(EMPTY_FILTERS);
-      // A selection belongs to the view it was made in.
-      if (view !== "memos") {
-        setSelectMode(false);
-        setSelected(new Set());
-        setConfirmBatchDelete(false);
-      }
-      setView("memos");
     });
-  }, [view, activeTag, activeDay, statsDrilldown, query, filters, changeFeed, swapQuery]);
+  }, [changeFeed]);
 
   /** Facet on/off is a discrete choice — it rides the same feed morph as a
       tag or sort change, whether it comes from the panel or a chip's ×. */
@@ -1430,16 +2215,34 @@ export default function App() {
     [changeFeed]
   );
 
-  // Date edits arrive segment-by-segment from the native inputs — update in
-  // place like search keystrokes instead of morphing per keypress.
-  const patchDateRange = useCallback((patch: Partial<Pick<FeedFilters, "dateFrom" | "dateTo">>) => {
-    setFilters((current) => ({ ...current, ...patch }));
-  }, []);
+  // The calendar's first tap (an open "since") updates in place rather than
+  // morphing. Starting a range is a Back step; closing it (below) is not.
+  const patchDateRange = useCallback(
+    (patch: Partial<Pick<FeedFilters, "dateFrom" | "dateTo">>) => {
+      const { filters: current } = navLensRef.current;
+      if (current.dateFrom === null && current.dateTo === null) {
+        noteLeavingPlace();
+        navIntentRef.current = "push";
+      }
+      setFilters((value) => ({ ...value, ...patch }));
+      // One date lens at a time: a range replaces a heatmap day.
+      if (patch.dateFrom || patch.dateTo) setActiveDay(null);
+    },
+    [noteLeavingPlace]
+  );
 
   /** A quick range lands whole, so it morphs like a facet does. */
   const applyPresetRange = useCallback(
     (from: string, to: string) => {
-      changeFeed(() => setFilters((current) => ({ ...current, dateFrom: from, dateTo: to })));
+      // The calendar's second tap closes the open range its first tap made:
+      // one pick, one Back step.
+      const { filters: current } = navLensRef.current;
+      const closing = current.dateFrom !== null && current.dateTo === null;
+      changeFeed(() => {
+        if (closing) navIntentRef.current = "replace";
+        setFilters((value) => ({ ...value, dateFrom: from, dateTo: to }));
+        setActiveDay(null);
+      });
     },
     [changeFeed]
   );
@@ -1473,6 +2276,14 @@ export default function App() {
   /** A preset restores the whole feed context in one morph. */
   const applySavedFilter = useCallback(
     (item: SavedFilter) => {
+      // A preset aimed at a tag that is gone (renamed or removed on another
+      // device) would be cleared by the missing-tag effect the moment it
+      // applied — silently widening the lens to every memo. Say so instead.
+      const tag = item.tag;
+      if (tag && !knownTags.some((known) => tagMatches(known, tag))) {
+        showToast(tr(`Couldn’t apply “${item.name}”: #${tag} no longer exists`, `无法应用「${item.name}」：#${tag} 已不存在`), "error");
+        return;
+      }
       changeFeed(() => {
         setView("memos");
         setActiveTag(item.tag);
@@ -1482,7 +2293,7 @@ export default function App() {
         setFilters(item.filters);
       });
     },
-    [changeFeed, swapQuery]
+    [changeFeed, swapQuery, knownTags, showToast, tr]
   );
 
   const deleteSavedFilter = useCallback(
@@ -1565,6 +2376,7 @@ export default function App() {
     if (holdForOpenEdit("open Trash", "打开回收站")) return;
     changeFeed(() => {
       setView("trash");
+      setTrashQuery("");
       setStatsDrilldown(null);
       // Same flush: the "已选 N 条" pill hands topbar-action to the Empty
       // Trash pill inside one morph instead of two competing transitions.
@@ -1584,9 +2396,9 @@ export default function App() {
   const openReview = useCallback(() => {
     if (view !== "review" && holdForOpenEdit("open Daily review", "打开每日回顾")) return;
     let next = reviewDay;
-    if (!reviewDayValid(next, reviewSettings)) {
-      next = buildReviewDay(activeMemos, reviewSettings);
-      persistReviewDay(next);
+    const provisionalStale = next !== null && next === provisionalReviewRef.current && !bootstrapJobRef.current;
+    if (!reviewDayValid(next, reviewSettings) || provisionalStale) {
+      next = drawReviewDay(activeMemos, reviewSettings);
     }
     // Re-clicking the nav item on a still-valid day is a no-op; on a rolled-
     // over day it deals the new batch in place.
@@ -1599,7 +2411,7 @@ export default function App() {
       setSelected(new Set());
       setConfirmBatchDelete(false);
     });
-  }, [view, reviewDay, reviewSettings, activeMemos, changeFeed, holdForOpenEdit]);
+  }, [view, reviewDay, reviewSettings, activeMemos, changeFeed, holdForOpenEdit, drawReviewDay]);
 
   // Crossing midnight while the review view sits open: returning focus (or
   // visibility) re-checks the frozen batch and deals the new day in a morph.
@@ -1608,8 +2420,7 @@ export default function App() {
     function refresh() {
       if (document.visibilityState === "hidden") return;
       if (reviewDayValid(reviewDay, reviewSettings)) return;
-      const next = buildReviewDay(memosOf(syncStateRef.current), reviewSettings);
-      persistReviewDay(next);
+      const next = drawReviewDay(memosOf(syncStateRef.current), reviewSettings);
       withViewTransition(() => flushSync(() => setReviewDay(next)));
     }
     window.addEventListener("focus", refresh);
@@ -1618,19 +2429,153 @@ export default function App() {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, [phase, view, reviewDay, reviewSettings]);
+  }, [phase, view, reviewDay, reviewSettings, drawReviewDay]);
+
+  /** Put a remembered lens on screen (Back/Forward, or a reload). */
+  function applyNavLens(lens: NavLens) {
+    // Review replays the day's frozen batch, drawing it first if the day
+    // rolled over — what openReview does.
+    if (lens.view === "review" && !reviewDayValid(reviewDay, reviewSettings)) {
+      const next = buildReviewDay(activeMemos, reviewSettings);
+      persistReviewDay(next);
+      setReviewDay(next);
+    }
+    // A selection and a Trash search belong to the view they were made in.
+    if (lens.view !== view) {
+      setSelectMode(false);
+      setSelected(new Set());
+      setConfirmBatchDelete(false);
+      setTrashQuery("");
+    }
+    setView(lens.view);
+    setActiveTag(lens.tag);
+    setActiveDay(lens.day);
+    setStatsDrilldown(lens.drilldown);
+    setFilters(lens.filters);
+    swapQuery(lens.query);
+  }
+
+  // Records lens changes into session history. The first ready commit
+  // either restores the lens this tab's entry remembers (a reload) or stamps
+  // the entry with the current one. After that a discrete pick adds an
+  // entry and anything else (typing) edits the current one.
+  useLayoutEffect(() => {
+    const store = navStoreRef.current;
+    if (phase !== "ready" || !store) {
+      navBootedRef.current = false;
+      return;
+    }
+    if (!navBootedRef.current) {
+      navBootedRef.current = true;
+      try {
+        window.history.scrollRestoration = "manual";
+      } catch {
+        // Older engines: the browser's own restore only lands at the top.
+      }
+      const id = navIdOf(window.history.state);
+      const entry = id ? store.get(id) : null;
+      if (id && entry) {
+        currentNavIdRef.current = id;
+        if (!lensesEqual(entry.lens, navLens)) applyNavLens(entry.lens);
+        if (entry.place) {
+          pendingPlaceRef.current = entry.place;
+          setPlaceTick((tick) => tick + 1);
+        }
+      } else {
+        currentNavIdRef.current = store.replace(null, navLens);
+      }
+      return;
+    }
+    const intent = navIntentRef.current;
+    navIntentRef.current = "replace";
+    const id = currentNavIdRef.current;
+    const entry = id ? store.get(id) : null;
+    if (entry && lensesEqual(entry.lens, navLens)) return;
+    currentNavIdRef.current = intent === "push" && entry ? store.push(navLens) : store.replace(id, navLens);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs per lens change; applyNavLens reads this render
+  }, [phase, navLens]);
+
+  const popNavRef = useRef<(state: unknown, browserAnimated: boolean) => void>(() => undefined);
+  popNavRef.current = (state, browserAnimated) => {
+    const store = navStoreRef.current;
+    if (!store) return;
+    const id = navIdOf(state);
+    const entry = id ? store.get(id) : null;
+    const lens = entry?.lens ?? ROOT_LENS;
+    const current = navLensRef.current;
+    // Trash and Daily review wait for an open edit, as their nav items do.
+    // The browser has already stepped, so the lens on screen goes back on top.
+    if (lens.view !== current.view && lens.view !== "memos") {
+      const held = lens.view === "trash" ? holdForOpenEdit("open Trash", "打开回收站") : holdForOpenEdit("open Daily review", "打开每日回顾");
+      if (held) {
+        currentNavIdRef.current = store.push(current);
+        return;
+      }
+    }
+    noteLeavingPlace();
+    // An id the store no longer knows (an entry from before a logout, or one
+    // trimmed past the cap) is stamped again with the lens it now shows, so
+    // the next pick still adds a Back step on top of it.
+    currentNavIdRef.current = id && entry ? id : store.replace(id, lens);
+    if (drawerOpen) closeDrawer();
+    setStatsOpen(false);
+    if (lensesEqual(lens, current)) {
+      if (entry?.place) restoreFeedPlace(entry.place);
+      return;
+    }
+    returnToFeed(() => applyNavLens(lens), entry?.place ?? null, "replace", !browserAnimated);
+  };
+
+  useEffect(() => {
+    if (phase !== "ready") return;
+    // A Back swipe that the browser already slid in (iOS Safari, Chrome on
+    // Android) lands without the feed morph on top.
+    const onPopState = (event: PopStateEvent) => popNavRef.current(event.state, (event as PopStateEvent & { hasUAVisualTransition?: boolean }).hasUAVisualTransition === true);
+    // A reload in this tab comes back to the same card, not just the lens.
+    const onPageHide = () => {
+      const id = currentNavIdRef.current;
+      if (id) navStoreRef.current?.setPlace(id, captureFeedPlace(FEED_PAGE));
+      navStoreRef.current?.flush();
+    };
+    window.addEventListener("popstate", onPopState);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, [phase]);
 
   function handleSaveReviewSettings(next: ReviewSettings) {
-    setReviewSettings(next);
-    persistReviewSettings(next);
     setReviewSettingsOpen(false);
     showToast(tr("Saved review settings", "已保存回顾设置"));
-    if (reviewDayValid(reviewDay, next)) return;
+    adoptReviewSettings(next);
+  }
+
+  /**
+   * Keep the review scope on the tags it named after a sidebar rename or
+   * removal. A rename leaves the same memos eligible, so today's batch is
+   * carried over under the new fingerprint instead of being redrawn mid-day.
+   */
+  function followTagChangeInReview(next: ReviewSettings, sameMemos: boolean) {
+    if (next === reviewSettings) return;
+    if (sameMemos && reviewDayValid(reviewDay, reviewSettings)) {
+      const carried = { ...reviewDay, fingerprint: reviewFingerprint(next) };
+      persistReviewDay(carried);
+      setReviewDay(carried);
+      adoptReviewSettings(next, carried);
+    } else {
+      adoptReviewSettings(next);
+    }
+  }
+
+  function adoptReviewSettings(next: ReviewSettings, currentDay: ReviewDay | null = reviewDay) {
+    setReviewSettings(next);
+    persistReviewSettings(next);
+    if (reviewDayValid(currentDay, next)) return;
     if (view === "review") {
       // Redraw immediately — after the dialog's exit has painted, so the
       // feed's morph to the new batch reads as its own beat.
-      const nextDay = buildReviewDay(activeMemos, next);
-      persistReviewDay(nextDay);
+      const nextDay = drawReviewDay(activeMemos, next);
       window.requestAnimationFrame(() => withViewTransition(() => flushSync(() => setReviewDay(nextDay))));
     } else {
       // Invalidate; the next visit draws under the new settings.
@@ -1733,11 +2678,14 @@ export default function App() {
   async function handleLogout() {
     if (logoutBusyRef.current) return;
     logoutBusyRef.current = true;
+    setLoggingOut(true);
     try {
       const result = await logout();
       if (!result.ok) throw new ApiError("LOGOUT_FAILED", 500, "The server did not confirm logout");
     } catch (cause) {
       if (!(cause instanceof AuthRequiredError)) {
+        setLoggingOut(false);
+        setConfirmLogout(false);
         showToast(tr("Logout wasn’t confirmed. Your session remains open.", "退出未得到服务器确认，当前登录仍然有效"), "error");
         return;
       }
@@ -1748,17 +2696,19 @@ export default function App() {
     sessionEpochRef.current += 1;
     notifyLogout();
     const localCleanup = clearLocalDeviceData();
+    discardHeldDrafts();
     resetSessionUi();
     resetLocalWorkspaceState();
+    setLoggingOut(false);
     setPhase("login");
     await localCleanup;
   }
 
-  async function handleCreate(data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }): Promise<boolean> {
+  async function handleCreate(data: EditorSubmission): Promise<boolean> {
     const content = activeTag ? inheritTagContext(data.content, activeTag) : data.content;
     setCreating(true);
     try {
-      const result = await guard(() => createMemo(data.clientId, content, data.newImages));
+      const result = await guard(() => createMemo(data.clientId, content, data.newImages, { onUploadProgress: data.onUploadProgress }));
       if (!result) return false;
       let saved = result.memo;
       if (result.idempotent) {
@@ -1780,6 +2730,22 @@ export default function App() {
       }
       commitMutation({ memos: [saved] });
       for (const image of data.newImages) URL.revokeObjectURL(image.previewUrl);
+      // The composer stays up under a search, a day or a filter, and a memo
+      // those lenses exclude would just vanish as the editor clears — read
+      // as a failed send. Say where it went and offer the way to it.
+      const lens = lensRef.current;
+      const savedId = saved.id;
+      if (lens.view === "memos" && !(memoMatchesSearchScope(saved, lens) && memoMatchesQuery(saved, lens.parsedQuery))) {
+        showToast(tr("Saved the memo — this view hides it", "已保存这条笔记，当前视图下看不到它"), "info", {
+          action: { label: tr("Show", "显示"), run: () => revealMemo(savedId) }
+        });
+      } else if (lens.view === "memos") {
+        // In the view, but maybe past the render window (see the effect).
+        createdPlacementRef.current = savedId;
+        window.setTimeout(() => {
+          if (createdPlacementRef.current === savedId) createdPlacementRef.current = null;
+        }, 1000);
+      }
       return true;
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === "VERSION_CONFLICT") {
@@ -1817,16 +2783,73 @@ export default function App() {
     return true;
   }
 
-  async function handleSaveEdit(memo: Memo, data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }): Promise<boolean> {
+  /** Pending attachments in a stashed draft hold object URLs; free them. */
+  function releaseDiscardedEdit() {
+    const stash = discardedEditRef.current;
+    discardedEditRef.current = null;
+    for (const image of stash?.draft.newImages ?? []) URL.revokeObjectURL(image.previewUrl);
+  }
+
+  /**
+   * Esc / Cancel close the editor at once. A dirty edit leaves a "Discarded"
+   * toast whose Undo reopens it exactly as it was — text, attachments,
+   * selection and the version it was based on (so a remote change made
+   * meanwhile still raises the conflict notice).
+   */
+  function handleCancelEdit(draft: EditDraft | null) {
+    const memoId = editingIdRef.current;
+    const baseSeq = editingBaseSeqRef.current;
+    editingBaseSeqRef.current = null;
+    setEditConflictId(null);
+    setEditingId(null);
+    if (!draft || !memoId) return;
+    releaseDiscardedEdit();
+    const entry = { memoId, draft, baseSeq };
+    discardedEditRef.current = entry;
+    showToast(tr("Discarded your edits", "已放弃这次修改"), "info", {
+      action: { label: tr("Undo", "撤销"), run: () => feedActionsRef.current.reopenEdit(entry) }
+    });
+  }
+
+  function reopenDiscardedEdit(entry: { memoId: string; draft: EditDraft; baseSeq: number | null }) {
+    // A later discard replaced (and released) this one.
+    if (discardedEditRef.current !== entry) return;
+    if (editingIdRef.current) {
+      showToast(tr("Save or cancel the open edit before editing another memo.", "请先保存或取消当前编辑，再编辑其他笔记"));
+      return;
+    }
+    const current = syncStateRef.current.memos.get(entry.memoId);
+    if (!current || current.deletedAt) {
+      releaseDiscardedEdit();
+      showToast(tr("Couldn’t reopen the edit: the memo was deleted.", "无法恢复编辑：这条笔记已被删除"), "error");
+      return;
+    }
+    if (view !== "memos" || selectMode) {
+      showToast(tr("Go back to your memos to reopen the edit.", "回到笔记列表后再恢复编辑"));
+      return;
+    }
+    // The editor owns the draft (and its preview URLs) from here on.
+    discardedEditRef.current = null;
+    editingBaseSeqRef.current = entry.baseSeq;
+    setEditConflictId(null);
+    setReopenedDraft({ memoId: entry.memoId, draft: entry.draft });
+    setEditingId(entry.memoId);
+  }
+
+  async function handleSaveEdit(memo: Memo, data: EditorSubmission): Promise<boolean> {
     setSavingEdit(true);
     try {
       const result = await guard(() =>
-        updateMemo(memo.id, {
-          expectedSeq: editingBaseSeqRef.current ?? memo.seq,
-          content: data.content,
-          addImages: data.newImages,
-          removeImageIds: data.removeImageIds
-        })
+        updateMemo(
+          memo.id,
+          {
+            expectedSeq: editingBaseSeqRef.current ?? memo.seq,
+            content: data.content,
+            addImages: data.newImages,
+            removeImageIds: data.removeImageIds
+          },
+          { onUploadProgress: data.onUploadProgress }
+        )
       );
       if (!result?.memo) return false;
       const saved = result.memo;
@@ -1856,17 +2879,63 @@ export default function App() {
     }
   }
 
-  async function handleTogglePin(memo: Memo) {
+  /**
+   * One optimistic pin / trash / restore. The guess lands at the click, in
+   * the view transition that moves the card (to the top, out of the feed,
+   * into Trash); the server's answer then replaces it in place — same
+   * outcome, nothing moves. A failure peels the guess off in a transition
+   * of its own, so the card glides back, and rethrows for the caller's
+   * toast. Resolves to null when the memo already has an action in flight
+   * (or the session went away) — nothing to report then.
+   */
+  async function runOptimisticMemoAction(memo: Memo, patch: OptimisticPatch, request: () => Promise<Memo | null>): Promise<Memo | null> {
+    const tokens = memoActionTokensRef.current;
+    if (tokens.has(memo.id)) return null;
+    const token = {};
+    tokens.set(memo.id, token);
+    // A card the guess removes (trash, restore) must not drop keyboard focus
+    // to <body>: hand it on to a neighbour, as applyRemoval does.
+    const refocus = holdFeedFocus();
+    withViewTransition(() => {
+      flushSync(() => {
+        // The transition's update can run after a very fast response has
+        // already settled this action; a stale guess must not land then.
+        if (tokens.get(memo.id) === token) setOptimisticMemos((current) => withPatch(current, memo.id, patch));
+      });
+      refocus();
+    });
+    let settled: Memo | null = null;
     try {
-      const result = await guard(() => updateMemo(memo.id, { expectedSeq: memo.seq, pinned: !memo.pinnedAt }));
-      if (!result) return;
-      const nextMemo = result.memo ?? (result.memoPatch ? { ...memo, ...result.memoPatch } : null);
-      if (!nextMemo) return;
-      // Pinning reorders the feed — let the card glide to its new slot.
-      withViewTransition(() => flushSync(() => applySyncChanges([nextMemo], [], [])));
+      settled = await request();
+    } finally {
+      tokens.delete(memo.id);
+      const land = () => {
+        if (settled) applySyncChanges([settled], [], []);
+        setOptimisticMemos((current) => withoutPatch(current, memo.id));
+      };
+      if (settled) land();
+      else withViewTransition(() => flushSync(land));
+    }
+    if (settled) {
       void runSync();
       notifyPeers();
-      showToast(nextMemo.pinnedAt ? tr("Pinned", "已置顶") : tr("Unpinned", "已取消置顶"));
+    }
+    return settled;
+  }
+
+  async function handleTogglePin(memo: Memo) {
+    const pinning = !memo.pinnedAt;
+    try {
+      const nextMemo = await runOptimisticMemoAction(memo, { pinnedAt: pinning ? new Date().toISOString() : null }, async () => {
+        const result = await guard(() => updateMemo(memo.id, { expectedSeq: memo.seq, pinned: pinning }));
+        return result?.memo ?? (result?.memoPatch ? { ...memo, ...result.memoPatch } : null);
+      });
+      if (!nextMemo) return;
+      // Pinning lifts a card from deep in the feed out of view, so the
+      // reverse rides on the toast.
+      showToast(nextMemo.pinnedAt ? tr("Pinned", "已置顶") : tr("Unpinned", "已取消置顶"), "info", {
+        action: { label: tr("Undo", "撤销"), run: () => void handleTogglePin(nextMemo) }
+      });
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
       showToast(errorMessage(cause, "Couldn’t update the memo.", "更新笔记失败"), "error");
@@ -1986,7 +3055,11 @@ export default function App() {
    */
   const applyRemoval = useCallback(
     (changed: Memo[], purged: PurgedMemo[]) => {
-      withViewTransition(() => flushSync(() => applySyncChanges(changed, purged, [])));
+      const refocus = holdFeedFocus();
+      withViewTransition(() => {
+        flushSync(() => applySyncChanges(changed, purged, []));
+        refocus();
+      });
       void runSync();
       notifyPeers();
     },
@@ -1995,12 +3068,15 @@ export default function App() {
 
   async function handleTrash(memo: Memo) {
     try {
-      const result = await guard(() => trashMemo(memo.id, memo.seq));
-      if (!result) return;
-      applyRemoval([result.memo], []);
+      const trashed = await runOptimisticMemoAction(
+        memo,
+        { deletedAt: new Date().toISOString() },
+        async () => (await guard(() => trashMemo(memo.id, memo.seq)))?.memo ?? null
+      );
+      if (!trashed) return;
       // Reversible, so the toast carries the reverse — the trashed memo's
       // own seq, since the trip to Trash bumped it.
-      showToast(tr("Moved to Trash", "已移入回收站"), "info", { action: { label: tr("Undo", "撤销"), run: () => void handleRestore(result.memo) } });
+      showToast(tr("Moved to Trash", "已移入回收站"), "info", { action: { label: tr("Undo", "撤销"), run: () => void handleRestore(trashed) } });
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
       showToast(errorMessage(cause, "Couldn’t delete the memo.", "删除笔记失败"), "error");
@@ -2009,9 +3085,12 @@ export default function App() {
 
   async function handleRestore(memo: Memo) {
     try {
-      const result = await guard(() => restoreMemo(memo.id, memo.seq));
-      if (!result) return;
-      applyRemoval([result.memo], []);
+      const restored = await runOptimisticMemoAction(
+        memo,
+        { deletedAt: null },
+        async () => (await guard(() => restoreMemo(memo.id, memo.seq)))?.memo ?? null
+      );
+      if (!restored) return;
       showToast(tr("Restored", "已恢复"));
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
@@ -2032,7 +3111,9 @@ export default function App() {
   }
 
   async function handleEmptyTrash() {
-    if (emptyTrashBusyRef.current) return;
+    // The server purges every trashed memo, so the count it confirms must be
+    // the whole set: never while a cold start is still loading older pages.
+    if (emptyTrashBusyRef.current || bootstrapJobRef.current) return;
     emptyTrashBusyRef.current = true;
     try {
       const result = await guard(() => emptyTrash());
@@ -2075,30 +3156,22 @@ export default function App() {
    */
   async function settleBatch(
     targets: Memo[],
-    mutate: (memo: Memo) => Promise<{ memo: Memo }>,
+    op: "trash" | "restore",
     { fromSelection, done, failed }: { fromSelection: boolean; done: (changed: Memo[]) => void; failed: (failedCount: number) => string }
   ) {
     if (targets.length === 0 || batchBusy) return;
-    const sessionEpoch = sessionEpochRef.current;
     setBatchBusy(true);
     try {
-      const results = await mapSettledWithLimit(targets, 4, mutate);
-      if (sessionEpoch !== sessionEpochRef.current) return;
-      const changed: Memo[] = [];
-      const failedIds: string[] = [];
-      let authLost = false;
-      results.forEach((result, index) => {
-        if (result.status === "fulfilled") changed.push(result.value.memo);
-        else {
-          failedIds.push(targets[index].id);
-          if (result.reason instanceof AuthRequiredError) authLost = true;
-          else reconcileVersionConflict(result.reason);
-        }
+      const result = await guard(() => runMemoBatch(op, targets));
+      if (!result) return;
+      // The server confirmed each change at the version we sent, so the
+      // patch over our copy is exactly the server row.
+      const byId = new Map(targets.map((memo) => [memo.id, memo]));
+      const changed = result.patches.flatMap((patch) => {
+        const memo = byId.get(patch.id);
+        return memo ? [{ ...memo, ...patch }] : [];
       });
-      if (authLost) {
-        dropToLogin();
-        return;
-      }
+      const failedIds = result.failed.map((failure) => failure.id);
       if (changed.length > 0) {
         withViewTransition(() =>
           flushSync(() => {
@@ -2115,14 +3188,37 @@ export default function App() {
             }
           })
         );
-        void runSync();
         notifyPeers();
       }
-      if (failedIds.length > 0) showToast(failed(failedIds.length), "error");
+      // Refusals (a version changed elsewhere) pull the server truth too.
+      if (changed.length > 0 || failedIds.length > 0) void runSync();
+      if (failedIds.length > 0) showToast(failed(failedIds.length) + batchFailureDetail(result.failed), "error");
       else done(changed);
+    } catch (cause) {
+      showToast(failed(targets.length) + tr(" ", "，") + errorMessage(cause), "error");
     } finally {
       setBatchBusy(false);
+      setBatchProgress(null);
     }
+  }
+
+  /**
+   * One select-mode action through the batch endpoint, a chunk per request.
+   * Large selections report settled/total for the busy pill; a single-chunk
+   * job finishes before a count would mean anything.
+   */
+  function runMemoBatch(op: "trash" | "restore" | "purge" | "tag", targets: Memo[], tag?: string) {
+    return batchMemos(
+      op,
+      targets.map((memo) => ({ id: memo.id, expectedSeq: memo.seq })),
+      { tag, onProgress: (settled) => setBatchProgress(settled < targets.length ? { done: settled, total: targets.length } : null) }
+    );
+  }
+
+  /** The first refusal's reason, appended to a batch failure toast. */
+  function batchFailureDetail(failures: MemoBatchFailure[]): string {
+    if (failures.length === 0) return "";
+    return tr(" ", "，") + errorMessage(failures[0]);
   }
 
   /**
@@ -2132,7 +3228,7 @@ export default function App() {
    * Reversible, so its toast carries the reverse.
    */
   function trashMany(targets: Memo[], fromSelection: boolean) {
-    return settleBatch(targets, (memo) => trashMemo(memo.id, memo.seq), {
+    return settleBatch(targets, "trash", {
       fromSelection,
       failed: (n) => tr(`Couldn’t move ${count(n, "memo")} to Trash.`, `有 ${count(n, "memo")}未能移入回收站`),
       done: (changed) =>
@@ -2143,7 +3239,7 @@ export default function App() {
   }
 
   function restoreMany(targets: Memo[], fromSelection: boolean) {
-    return settleBatch(targets, (memo) => restoreMemo(memo.id, memo.seq), {
+    return settleBatch(targets, "restore", {
       fromSelection,
       failed: (n) => tr(`Couldn’t restore ${count(n, "memo")}.`, `有 ${count(n, "memo")}恢复失败`),
       done: (changed) =>
@@ -2156,26 +3252,12 @@ export default function App() {
   /** Permanent, so no Undo — the armed pill asked twice. */
   async function purgeMany(targets: Memo[]) {
     if (targets.length === 0 || batchBusy) return;
-    const sessionEpoch = sessionEpochRef.current;
     setBatchBusy(true);
     try {
-      const results = await mapSettledWithLimit(targets, 4, (memo) => purgeMemo(memo.id, memo.seq));
-      if (sessionEpoch !== sessionEpochRef.current) return;
-      const purged: PurgedMemo[] = [];
-      const failedIds: string[] = [];
-      let authLost = false;
-      results.forEach((result, index) => {
-        if (result.status === "fulfilled") purged.push(...result.value.purged);
-        else {
-          failedIds.push(targets[index].id);
-          if (result.reason instanceof AuthRequiredError) authLost = true;
-          else reconcileVersionConflict(result.reason);
-        }
-      });
-      if (authLost) {
-        dropToLogin();
-        return;
-      }
+      const result = await guard(() => runMemoBatch("purge", targets));
+      if (!result) return;
+      const purged = result.purged;
+      const failedIds = result.failed.map((failure) => failure.id);
       if (purged.length > 0) {
         withViewTransition(() =>
           flushSync(() => {
@@ -2188,13 +3270,24 @@ export default function App() {
             }
           })
         );
-        void runSync();
         notifyPeers();
       }
-      if (failedIds.length > 0) showToast(tr(`Couldn’t delete ${count(failedIds.length, "memo")}.`, `有 ${count(failedIds.length, "memo")}删除失败`), "error");
-      else showToast(tr(`Permanently deleted ${count(purged.length, "memo")}`, `已彻底删除 ${count(purged.length, "memo")}`));
+      // Refusals (a version changed elsewhere) pull the server truth too.
+      if (purged.length > 0 || failedIds.length > 0) void runSync();
+      if (failedIds.length > 0) {
+        showToast(
+          tr(`Couldn’t delete ${count(failedIds.length, "memo")}.`, `有 ${count(failedIds.length, "memo")}删除失败`) + batchFailureDetail(result.failed),
+          "error"
+        );
+      } else showToast(tr(`Permanently deleted ${count(purged.length, "memo")}`, `已彻底删除 ${count(purged.length, "memo")}`));
+    } catch (cause) {
+      showToast(
+        tr(`Couldn’t delete ${count(targets.length, "memo")}.`, `有 ${count(targets.length, "memo")}删除失败`) + tr(" ", "，") + errorMessage(cause),
+        "error"
+      );
     } finally {
       setBatchBusy(false);
+      setBatchProgress(null);
     }
   }
 
@@ -2229,76 +3322,33 @@ export default function App() {
     if (targets.length === 0 || pendingBatchTagRef.current) return false;
 
     const pendingTargets = targets.filter((memo) => !tagsOf(memo).includes(tag));
-    const sessionEpoch = sessionEpochRef.current;
     try {
-      const results = await mapSettledWithLimit(pendingTargets, 4, (memo) =>
-        updateMemo(memo.id, { expectedSeq: memo.seq, content: appendTagToContent(memo.content, tag) })
-      );
-      if (sessionEpoch !== sessionEpochRef.current) return false;
+      // The server appends to its own current text, so no memo body is
+      // uploaded, and a memo another tab already tagged comes back as is.
+      const result = await guard(() => runMemoBatch("tag", pendingTargets, tag));
+      if (!result) return false;
 
-      const changed: Memo[] = [];
-      const refreshed: Memo[] = [];
-      const retryIds: string[] = [];
-      let failedCount = 0;
-      let firstFailure: string | null = null;
-      let authLost = false;
-      results.forEach((result, index) => {
-        if (result.status === "fulfilled" && result.value.memo) {
-          changed.push(result.value.memo);
-          return;
-        }
-        const target = pendingTargets[index];
-        if (result.status === "fulfilled") {
-          failedCount += 1;
-          retryIds.push(target.id);
-          firstFailure ??= tr("The server did not return the updated memo.", "服务器未返回更新后的笔记");
-          return;
-        }
-        if (result.reason instanceof AuthRequiredError) {
-          authLost = true;
-          return;
-        }
-        if (result.reason instanceof ApiError && result.reason.code === "VERSION_CONFLICT" && result.reason.current) {
-          const current = result.reason.current;
-          // A concurrent tab may have completed this exact operation first.
-          // Treat that server truth as idempotent success instead of asking
-          // the user to retry an already-applied tag.
-          if (!current.deletedAt && tagsOf(current).includes(tag)) {
-            changed.push(current);
-            return;
-          }
-          refreshed.push(current);
-          failedCount += 1;
-          if (!current.deletedAt) retryIds.push(current.id);
-          firstFailure ??= errorMessage(result.reason);
-          return;
-        }
-        failedCount += 1;
-        retryIds.push(target.id);
-        firstFailure ??= errorMessage(result.reason, "Couldn’t update a selected memo.", "无法更新其中一条所选笔记");
-      });
-      if (authLost) {
-        dropToLogin();
-        return false;
-      }
-
+      // Gone or in Trash elsewhere (sync brings that news) or too long to
+      // take the tag: a retry would fail the same way, so those leave the selection.
+      const final = new Set(["MEMO_NOT_FOUND", "MEMO_TRASHED", "MEMO_CONTENT_TOO_LONG"]);
       // Even an all-failed batch has a settled result: close the sheet and
       // retain precisely those failures so retrying is one action away.
       pendingBatchTagRef.current = {
         scope,
         tag,
-        changed,
-        refreshed,
-        retryIds,
-        failedCount,
-        firstFailure,
-        alreadyTagged: targets.length - pendingTargets.length,
+        changed: result.memos,
+        retryIds: result.failed.filter((failure) => !final.has(failure.code)).map((failure) => failure.id),
+        failedCount: result.failed.length,
+        firstFailure: result.failed.length > 0 ? errorMessage(result.failed[0]) : null,
+        alreadyTagged: targets.length - pendingTargets.length + result.unchanged.length,
         targetCount: targets.length
       };
       return true;
     } catch (cause) {
       showToast(errorMessage(cause, "Couldn’t add the tag.", "添加标签失败"), "error");
       return false;
+    } finally {
+      setBatchProgress(null);
     }
   }
 
@@ -2320,9 +3370,7 @@ export default function App() {
     withViewTransition(() =>
       flushSync(() => {
         closeTagDialogs();
-        if (result.changed.length > 0 || result.refreshed.length > 0) {
-          applySyncChanges([...result.refreshed, ...result.changed], [], []);
-        }
+        if (result.changed.length > 0) applySyncChanges(result.changed, [], []);
         if (!fromSelection) return;
         if (result.retryIds.length === 0) {
           setSelectMode(false);
@@ -2334,7 +3382,7 @@ export default function App() {
       })
     );
 
-    if (result.changed.length > 0 || result.refreshed.length > 0 || result.failedCount > 0) {
+    if (result.changed.length > 0 || result.failedCount > 0) {
       void runSync();
     }
     if (result.changed.length > 0) {
@@ -2384,6 +3432,8 @@ export default function App() {
       setEditConflictId(null);
       setEditingId(id);
     },
+    cancelEdit: handleCancelEdit,
+    reopenEdit: reopenDiscardedEdit,
     saveEdit: handleSaveEdit,
     togglePin: handleTogglePin,
     addTag: openMemoTagDialog,
@@ -2414,6 +3464,8 @@ export default function App() {
       setEditConflictId(null);
       setEditingId(id);
     },
+    cancelEdit: handleCancelEdit,
+    reopenEdit: reopenDiscardedEdit,
     saveEdit: handleSaveEdit,
     togglePin: handleTogglePin,
     addTag: openMemoTagDialog,
@@ -2437,11 +3489,7 @@ export default function App() {
   const feedHandlers = useMemo<FeedHandlers>(
     () => ({
       startEdit: (id) => feedActionsRef.current.startEdit(id),
-      cancelEdit: () => {
-        editingBaseSeqRef.current = null;
-        setEditConflictId(null);
-        setEditingId(null);
-      },
+      cancelEdit: (draft) => feedActionsRef.current.cancelEdit(draft),
       saveEdit: (memo, data) => feedActionsRef.current.saveEdit(memo, data),
       acceptEditConflict: (id) => feedActionsRef.current.acceptEditConflict(id),
       togglePin: (memo) => void feedActionsRef.current.togglePin(memo),
@@ -2455,10 +3503,71 @@ export default function App() {
       openImage: (items, index) => setLightbox({ items, index }),
       toggleSelect: (memo) => feedActionsRef.current.toggleSelect(memo),
       selectFrom: (memo) => feedActionsRef.current.selectFrom(memo),
-      toggleTask: (memo, lineKey, checked) => feedActionsRef.current.toggleTask(memo, lineKey, checked)
+      toggleTask: (memo, lineKey, checked) => feedActionsRef.current.toggleTask(memo, lineKey, checked),
+      editDraftChange: (memoId, content) => {
+        editDraftRef.current = { memoId, content };
+      }
     }),
     []
   );
+
+  // The sidebar is memoized; its handlers read the latest closures through a
+  // ref so App re-renders (every keystroke in search) never reach it.
+  const sidebarActions = {
+    onCloseDrawer: () => closeDrawer(),
+    onPinTag: (path: string, pinned: boolean) => void handlePinTag(path, pinned),
+    onRenameTag: (path: string) => closeDrawer(() => setRenameTagTarget(path)),
+    onRemoveTag: (path: string) => void handleRemoveTag(path),
+    onPickTag: (path: string | null) => {
+      pickTag(path);
+      closeDrawer();
+    },
+    onPickDay: (key: string | null) => {
+      pickDay(key);
+      closeDrawer();
+    },
+    onShowAll: () => {
+      showAll();
+      closeDrawer();
+    },
+    onOpenTrash: () => {
+      openTrash();
+      closeDrawer();
+    },
+    onOpenReview: () => {
+      openReview();
+      closeDrawer();
+    },
+    onOpenReviewSettings: () => closeDrawer(() => setReviewSettingsOpen(true)),
+    onOpenModelSettings: () =>
+      closeDrawer(() => {
+        setEnableSemanticWhenReady(false);
+        setModelSettingsOpen(true);
+      }),
+    onOpenStats: () => closeDrawer(() => setStatsOpen(true)),
+    onChangePasscode: () =>
+      closeDrawer(() => {
+        sessionEpochRef.current += 1;
+        passcodeChangesRef.current += 1;
+        changingPasscodeRef.current = true;
+        setChangingPasscode(true);
+      }),
+    onExportData: () => closeDrawer(() => void handleExport()),
+    onImportData: () => closeDrawer(() => importFileRef.current?.click()),
+    onLogout: () => closeDrawer(() => setConfirmLogout(true))
+  };
+  const sidebarActionsRef = useRef(sidebarActions);
+  sidebarActionsRef.current = sidebarActions;
+  const sidebarHandlers = useMemo(() => stableHandlers(sidebarActionsRef), []);
+
+  const lazyDialogFailed = useCallback(() => {
+    setShareMemo(null);
+    setStatsOpen(false);
+    setReviewSettingsOpen(false);
+    setModelSettingsOpen(false);
+    showToast(tr("Couldn’t open this panel. Reload the page and try again.", "无法打开此面板，请刷新页面后重试"), "error");
+  }, [showToast, tr]);
+  useEffect(() => prefetchLazyDialogs(), []);
 
   /**
    * Arming/disarming Empty Trash swaps the pill's label (and width) — run it
@@ -2496,7 +3605,8 @@ export default function App() {
   useEffect(() => {
     if (!selectMode) return;
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") exitSelectMode();
+      // An Escape that cancels an IME candidate belongs to the IME.
+      if (event.key === "Escape" && !event.isComposing) exitSelectMode();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -2504,9 +3614,11 @@ export default function App() {
 
   // A filter change can hide a selected memo. Prune against the rendered feed
   // so a later batch action can never affect a card the user can no longer
-  // see — and say so, since the picks left the count without a click.
+  // see — and say so, since the picks left the count without a click. A
+  // batch in flight is exempt: a sync can deliver its first committed chunk
+  // before the last one returns, and the batch settles the selection itself.
   useEffect(() => {
-    if (!selectMode) return;
+    if (!selectMode || batchBusy) return;
     const next = selectionWithinVisibleIds(selected, visibleFeedIds);
     const unchanged = next.size === selected.size && [...next].every((id) => selected.has(id));
     if (unchanged) return;
@@ -2527,7 +3639,7 @@ export default function App() {
         tr(`${count(dropped, "memo")} left the selection — no longer in view`, `${count(dropped, "memo")}已不在当前视图，已从选择中移除`)
       );
     }
-  }, [selectMode, selected, visibleFeedIds, showToast, dismissToast, count, tr]);
+  }, [selectMode, batchBusy, selected, visibleFeedIds, showToast, dismissToast, count, tr]);
 
   useLayoutEffect(() => {
     if (selectMode || !restoreLocationFocusRef.current) return;
@@ -2555,30 +3667,72 @@ export default function App() {
       showToast(tr("A tag cannot be renamed to its own parent or child path.", "标签不能重命名到自身的上级或下级路径"), "error");
       return;
     }
+    // Onto a path already in use the two tags merge, and their memos can no
+    // longer be told apart — no Undo for that. A plain rename reverses exactly.
+    const merges = tagPathInUse(to);
     setDialogBusy(true);
     try {
-      const result = await guard(() => renameTag(from, to));
+      const result = await performTagRename(from, to, setRenameProgress);
       if (!result) return;
       setRenameTagTarget(null);
-      applySyncChanges(result.memos, [], result.tags);
-      if (activeTag && tagMatches(activeTag, from)) {
-        setActiveTag(to + activeTag.slice(from.length));
+      if (merges) {
+        showToast(tr(`Merged #${from} into #${to} in ${count(result.updated, "memo")}`, `已将 #${from} 合并到 #${to}，更新了 ${count(result.updated, "memo")}`));
+      } else {
+        showToast(tr(`Renamed #${from} to #${to} in ${count(result.updated, "memo")}`, `已将 #${from} 重命名为 #${to}，更新了 ${count(result.updated, "memo")}`), "info", {
+          action: { label: tr("Undo", "撤销"), run: () => void tagRenameUndoRef.current(from, to) }
+        });
       }
-      setSavedFilters((current) => renameSavedFilterTags(current, from, to));
-      setStatsDrilldown((current) =>
-        current?.kind === "tag" && tagMatches(current.tag, from) ? { ...current, tag: to + current.tag.slice(from.length) } : current
-      );
-      void runSync();
-      notifyPeers();
-      showToast(tr(`Renamed #${from} to #${to} in ${count(result.updated, "memo")}`, `已将 #${from} 重命名为 #${to}，更新了 ${count(result.updated, "memo")}`));
     } catch (cause) {
       void runSync();
       notifyPeers();
       showToast(errorMessage(cause, "Couldn’t rename the tag.", "重命名标签失败"), "error");
     } finally {
       setDialogBusy(false);
+      setRenameProgress(null);
     }
   }
+
+  /** True when `path` or a tag under it is on any memo, Trash included — renaming onto it merges. */
+  function tagPathInUse(path: string): boolean {
+    return memos.some((memo) => tagsOf(memo).some((tag) => tagMatches(tag, path)));
+  }
+
+  /**
+   * Rename on the server, then carry every per-device reference along: the
+   * open tag lens, saved presets, a stats drill-down and the review scope.
+   */
+  async function performTagRename(from: string, to: string, onProgress?: (fraction: number) => void) {
+    const result = await guard(() => renameTag(from, to, onProgress));
+    if (!result) return undefined;
+    applySyncChanges(result.memos, [], result.tags);
+    setActiveTag((current) => (current && tagMatches(current, from) ? to + current.slice(from.length) : current));
+    setSavedFilters((current) => renameSavedFilterTags(current, from, to));
+    setStatsDrilldown((current) =>
+      current?.kind === "tag" && tagMatches(current.tag, from) ? { ...current, tag: to + current.tag.slice(from.length) } : current
+    );
+    followTagChangeInReview(renameReviewSettingsTag(reviewSettings, from, to), true);
+    void runSync();
+    notifyPeers();
+    return result;
+  }
+
+  /** The rename toast's Undo: the same rename in reverse, unless that would now merge. */
+  async function undoTagRename(from: string, to: string) {
+    if (tagPathInUse(from)) {
+      showToast(tr(`Couldn’t undo: #${from} is in use again`, `无法撤销：#${from} 已重新使用`), "error");
+      return;
+    }
+    try {
+      const result = await performTagRename(to, from);
+      if (result) showToast(tr(`Renamed #${to} back to #${from}`, `已将 #${to} 改回 #${from}`));
+    } catch (cause) {
+      void runSync();
+      notifyPeers();
+      showToast(errorMessage(cause, "Couldn’t undo the rename.", "撤销重命名失败"), "error");
+    }
+  }
+  // A toast's Undo outlives the render that created it; read the latest state.
+  tagRenameUndoRef.current = undoTagRename;
 
   async function handleRemoveTag(path: string) {
     try {
@@ -2597,6 +3751,7 @@ export default function App() {
           setStatsDrilldown((current) => (current?.kind === "tag" && tagMatches(current.tag, path) ? null : current));
         })
       );
+      followTagChangeInReview(removeReviewSettingsTag(reviewSettings, path), false);
       void runSync();
       notifyPeers();
       showToast(tr(`Removed #${path} from ${count(result.updated, "memo")}`, `已从 ${count(result.updated, "memo")}中移除 #${path}`));
@@ -2607,44 +3762,105 @@ export default function App() {
     }
   }
 
+  function showExportToast(text: string, detail: string | undefined, controller: AbortController): number {
+    return showToast(text, "info", {
+      detail,
+      duration: STICKY_TOAST_MS,
+      action: { label: tr("Stop", "停止"), run: () => controller.abort() }
+    });
+  }
+
   async function handleExport() {
-    try {
-      const blob = await guard(() => exportData());
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `memo-backup-${dateKey(new Date())}.json`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 4000);
-      showToast(tr("Exported your backup", "已导出备份"));
-    } catch (cause) {
-      showToast(errorMessage(cause, "Couldn’t export the backup.", "导出备份失败"), "error");
+    // One export at a time. Asking again only brings a dismissed progress
+    // toast back into view.
+    const running = exportRef.current;
+    if (running) {
+      if (!toastsRef.current.some((toast) => toast.id === running.toastId && !toast.leaving)) {
+        running.toastId = showExportToast(running.text, running.detail, running.controller);
+      }
+      return;
     }
+    const controller = new AbortController();
+    const text = tr("Exporting your backup…", "正在导出备份…");
+    const job: { controller: AbortController; toastId: number; text: string; detail?: string } = {
+      controller,
+      toastId: showExportToast(text, undefined, controller),
+      text
+    };
+    exportRef.current = job;
+    const finish = () => {
+      if (exportRef.current === job) exportRef.current = null;
+      dismissToast(job.toastId);
+    };
+    let blob: Blob | undefined;
+    try {
+      blob = await guard(() =>
+        exportData({
+          signal: controller.signal,
+          onProgress: ({ done, total }) => {
+            job.detail = tr(`${formatNumber(done)} of ${count(total, "memo")}`, `${formatNumber(done)} / ${count(total, "memo")}`);
+            updateToastDetail(job.toastId, job.detail);
+          }
+        })
+      );
+    } catch (cause) {
+      finish();
+      if (controller.signal.aborted) showToast(tr("Stopped exporting your backup", "已停止导出备份"));
+      else showToast(errorMessage(cause, "Couldn’t export the backup.", "导出备份失败"), "error");
+      return;
+    }
+    finish();
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `memo-backup-${dateKey(new Date())}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+    showToast(tr("Exported your backup", "已导出备份"));
   }
 
   async function handleImportFile(file: File) {
     try {
-      const payload = JSON.parse(await file.text()) as BackupPayload;
-      if (!payload || payload.format !== "memo-backup" || payload.version !== 1 || !Array.isArray(payload.memos)) {
-        showToast(tr("This isn’t a memo backup file.", "这不是有效的备份文件"), "error");
-        return;
-      }
-      const imageCount = payload.memos.reduce((sum, memo) => sum + (Array.isArray(memo.images) ? memo.images.length : 0), 0);
-      setImportTarget({ payload, memoCount: payload.memos.length, imageCount });
-    } catch {
-      showToast(tr("Couldn’t read the backup file.", "无法读取备份文件"), "error");
+      // Validates and counts in one streaming pass; nothing of the file is
+      // kept but its handle.
+      const { memoCount, imageCount } = await inspectBackup(file);
+      setImportTarget({ file, memoCount, imageCount });
+    } catch (cause) {
+      showToast(
+        cause instanceof BackupFormatError
+          ? tr("This isn’t a memo backup file.", "这不是有效的备份文件")
+          : tr("Couldn’t read the backup file.", "无法读取备份文件"),
+        "error"
+      );
     }
   }
 
+  function stopImport() {
+    importAbortRef.current?.abort();
+    setImportProgress((current) => (current ? { ...current, stopping: true } : current));
+  }
+
   async function handleImportConfirmed() {
-    if (!importTarget) return;
-    const { payload } = importTarget;
+    if (!importTarget || importAbortRef.current) return;
+    const { file } = importTarget;
+    const controller = new AbortController();
+    importAbortRef.current = controller;
+    let done = 0;
     setDialogBusy(true);
+    setImportProgress({ done: 0, stopping: false });
     try {
-      const result = await guard(() => importDataInChunks(payload));
+      const result = await guard(() =>
+        importDataInChunks(readBackupItems(file), {
+          signal: controller.signal,
+          onProgress: (progress) => {
+            done = progress.done;
+            setImportProgress((current) => ({ done: progress.done, stopping: current?.stopping ?? false }));
+          }
+        })
+      );
       if (!result) return;
       setImportTarget(null);
       // The imported rows carry fresh seqs, so one incremental sync pulls
@@ -2671,13 +3887,35 @@ export default function App() {
         showToast(tr("Import complete — no new memos", "导入完成，没有新的笔记"));
       }
     } catch (cause) {
-      // Earlier chunks may already be committed; reconcile them and let a
-      // retry safely skip their stable ids.
+      // Earlier chunks are already committed; reconcile them and let a rerun
+      // skip their stable ids.
       void runSync();
       notifyPeers();
-      showToast(errorMessage(cause, "Couldn’t import the backup.", "导入备份失败"), "error");
+      if (controller.signal.aborted) {
+        setImportTarget(null);
+        showToast(
+          tr(
+            `Stopped the import after ${count(done, "memo")}. Import the file again to pick up where it left off.`,
+            `已停止导入，已处理 ${count(done, "memo")}。再次导入同一文件即可从中断处继续`
+          )
+        );
+        return;
+      }
+      const reason = errorMessage(cause, "Couldn’t import the backup.", "导入备份失败");
+      // A rerun resumes past the committed chunks, but only a transient
+      // failure can get further: a rejected memo fails the same way again.
+      // The reason's own closing stop is dropped so the hint always joins it
+      // as a second sentence.
+      if (done > 0 && isTransientImportFailure(cause)) {
+        const base = reason.replace(/[.。]\s*$/u, "");
+        showToast(tr(`${base}. Import the file again to pick up where it left off.`, `${base}，再次导入同一文件即可从中断处继续`), "error");
+      } else {
+        showToast(reason, "error");
+      }
     } finally {
+      if (importAbortRef.current === controller) importAbortRef.current = null;
       setDialogBusy(false);
+      setImportProgress(null);
     }
   }
 
@@ -2709,8 +3947,8 @@ export default function App() {
   if (phase === "login") {
     return (
       <>
-        <LoginScreen needsSetup={needsSetup} onLogin={handleLogin} onSetup={handleSetup} />
-        <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} onDismiss={dismissToast} onPause={pauseToasts} onResume={resumeToasts} />
+        <LoginScreen needsSetup={needsSetup} setupAllowed={setupAllowed} onLogin={handleLogin} onSetup={handleSetup} />
+        <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} regionLabel={tr("Notifications", "通知")} onDismiss={dismissToast} onPause={pauseToasts} onResume={resumeToasts} />
       </>
     );
   }
@@ -2728,11 +3966,14 @@ export default function App() {
     });
   }
 
-  // Two-step: the first click arms the pill (it names the count), the second
-  // fires — Trash in the feed, permanent deletion inside Trash.
+  // Permanent deletion inside Trash is two-step: the first click arms the
+  // pill (it names the count), the second fires. Moving to Trash is undoable
+  // from its toast, so an ordinary selection goes in one click; only a sweep
+  // past BATCH_TRASH_CONFIRM_AT (a Select all over a big lens) still shows
+  // the count first.
   function handleBatchDeleteClick() {
     if (batchBusy) return;
-    if (!confirmBatchDelete) {
+    if (!confirmBatchDelete && (selectingTrash || visibleSelectedCount > BATCH_TRASH_CONFIRM_AT)) {
       if (visibleSelectedCount > 0) setBatchDeleteArm(true);
       return;
     }
@@ -2755,9 +3996,29 @@ export default function App() {
   const armedDeleteLabel = selectingTrash
     ? tr(`Delete ${count(visibleSelectedCount, "memo")} forever?`, `彻底删除 ${count(visibleSelectedCount, "memo")}？`)
     : tr(`Move ${count(visibleSelectedCount, "memo")} to Trash?`, `将 ${count(visibleSelectedCount, "memo")}移入回收站？`);
+  const batchBusyLabel = batchProgress
+    ? tr(`Working… ${formatNumber(batchProgress.done)}/${formatNumber(batchProgress.total)}`, `处理中… ${formatNumber(batchProgress.done)}/${formatNumber(batchProgress.total)}`)
+    : tr("Working…", "处理中…");
 
   return (
     <div className={`app-shell${reveal ? " first-reveal" : ""}`}>
+      {/* Keyboard users skip the sidebar (stats, heatmap, the whole tag
+          tree) and land at the top of the feed column: location, search,
+          composer. Focus is lent to <main> only for the jump. */}
+      <a
+        className="skip-link"
+        href="#main-content"
+        onClick={(event) => {
+          event.preventDefault();
+          const main = document.getElementById("main-content");
+          if (!main) return;
+          main.setAttribute("tabindex", "-1");
+          main.addEventListener("blur", () => main.removeAttribute("tabindex"), { once: true });
+          main.focus();
+        }}
+      >
+        {tr("Skip to main content", "跳到主要内容")}
+      </a>
       <aside
         ref={drawerRef}
         id="app-sidebar"
@@ -2774,57 +4035,17 @@ export default function App() {
           filtersActive={filtersActive}
           view={view}
           drawerOpen={drawerOpen}
-          onCloseDrawer={() => closeDrawer()}
           trashCount={trashedMemos.length}
           theme={theme}
           pinnedTags={pinnedTags}
-          onPinTag={(path, pinned) => void handlePinTag(path, pinned)}
-          onRenameTag={(path) => closeDrawer(() => setRenameTagTarget(path))}
-          onRemoveTag={(path) => void handleRemoveTag(path)}
-          onPickTag={(path) => {
-            pickTag(path);
-            closeDrawer();
-          }}
-          onPickDay={(key) => {
-            pickDay(key);
-            closeDrawer();
-          }}
-          onShowAll={() => {
-            showAll();
-            closeDrawer();
-          }}
-          onOpenTrash={() => {
-            openTrash();
-            closeDrawer();
-          }}
-          onOpenReview={() => {
-            openReview();
-            closeDrawer();
-          }}
-          onOpenReviewSettings={() => closeDrawer(() => setReviewSettingsOpen(true))}
-          onOpenModelSettings={() =>
-            closeDrawer(() => {
-              setEnableSemanticWhenReady(false);
-              setModelSettingsOpen(true);
-            })
-          }
-          onOpenStats={() => closeDrawer(() => setStatsOpen(true))}
           onSetTheme={setTheme}
-          onChangePasscode={() => {
-            closeDrawer(() => {
-              sessionEpochRef.current += 1;
-              setChangingPasscode(true);
-            });
-          }}
-          onExportData={() => closeDrawer(() => void handleExport())}
-          onImportData={() => closeDrawer(() => importFileRef.current?.click())}
-          onLogout={() => void handleLogout()}
+          {...sidebarHandlers}
         />
       </aside>
       {drawerOpen ? <div className={`drawer-backdrop${drawerClosing ? " is-closing" : ""}`} onClick={() => closeDrawer()} /> : null}
 
-      <main className="main-column">
-        <div className="topbar">
+      <main id="main-content" className="main-column">
+        <div ref={topbarRef} className="topbar">
           <button
             type="button"
             className="icon-button drawer-toggle"
@@ -2843,7 +4064,7 @@ export default function App() {
               // cascade in with the breadcrumb language. Inside Trash the
               // verbs are Restore and Delete forever.
               <div className="select-bar">
-                <span className="select-count" aria-live="polite">
+                <span className="select-count" aria-live="polite" aria-atomic="true">
                   {language === "zh-CN" ? (
                     <>
                       已选 <RollingText value={visibleSelectedCount} className="select-count-num" /> 条
@@ -2907,11 +4128,13 @@ export default function App() {
                   className={`select-delete${confirmBatchDelete ? " is-confirm" : ""}`}
                   disabled={visibleSelectedCount === 0 || batchBusy}
                   aria-label={
-                    confirmBatchDelete
-                      ? armedDeleteLabel
-                      : selectingTrash
-                        ? tr("Delete selected memos forever", "彻底删除所选笔记")
-                        : tr("Move selected memos to Trash", "将所选笔记移入回收站")
+                    batchBusy
+                      ? batchBusyLabel
+                      : confirmBatchDelete
+                        ? armedDeleteLabel
+                        : selectingTrash
+                          ? tr("Delete selected memos forever", "彻底删除所选笔记")
+                          : tr("Move selected memos to Trash", "将所选笔记移入回收站")
                   }
                   onClick={handleBatchDeleteClick}
                   onBlur={() => setConfirmBatchDelete(false)}
@@ -2919,7 +4142,7 @@ export default function App() {
                   {batchBusy ? <Loader2 size={14} className="spin" aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
                   <span>
                     {batchBusy
-                      ? tr("Working…", "处理中…")
+                      ? batchBusyLabel
                       : confirmBatchDelete
                         ? armedDeleteLabel
                         : selectingTrash
@@ -2969,20 +4192,20 @@ export default function App() {
                   portal
                   className="loc-menu"
                   panelClassName="loc-panel"
-                  trigger={(open) => (
+                  trigger={(open, triggerProps) => (
+                    // Named by its visible text (where you are: All memos or
+                    // the tag), so voice control can say what it sees; what
+                    // the button does, and the sort in force, is the
+                    // description.
                     <button
                       type="button"
+                      {...triggerProps}
                       className={`loc-trigger${open ? " is-open" : ""}${activeTag ? "" : " is-root"}`}
-                      aria-haspopup="menu"
-                      aria-expanded={open}
-                      aria-label={tr("View options: sort and select", "视图选项：排序与多选")}
-                      onMouseEnter={(event) =>
-                        tip.show(event.currentTarget, {
-                          strong: tr("Sort & select", "排序与多选"),
-                          text: sortOptions.find((option) => option.key === sortKey)?.label ?? ""
-                        })
-                      }
-                      onMouseLeave={tip.hide}
+                      aria-describedby={`${triggerProps.id}-desc`}
+                      {...tip.bind(() => ({
+                        strong: tr("Sort & select", "排序与多选"),
+                        text: sortOptions.find((option) => option.key === sortKey)?.label ?? ""
+                      }))}
                       onPointerDown={tip.hide}
                     >
                       <span className="loc-label">{activeTag ? activeTag.split("/").at(-1) : tr("All memos", "全部笔记")}</span>
@@ -2990,6 +4213,9 @@ export default function App() {
                           shows on the pill, not only inside the menu. */}
                       {sortKey !== "created-desc" ? <ArrowDownUp size={13} className="loc-sort-mark" aria-hidden="true" /> : null}
                       <ChevronDown size={14} className="loc-caret" aria-hidden="true" />
+                      <span id={`${triggerProps.id}-desc`} hidden>
+                        {tr("Sort and select", "排序与多选")}: {sortOptions.find((option) => option.key === sortKey)?.label ?? ""}
+                      </span>
                     </button>
                   )}
                 >
@@ -3046,6 +4272,9 @@ export default function App() {
               <button
                 type="button"
                 className={`trash-empty-button${confirmEmptyTrash ? " is-confirm" : ""}`}
+                // Older pages may still hold trashed memos this count misses,
+                // and emptying purges them all; wait for the whole notebook.
+                disabled={bootstrapLoad !== null}
                 aria-label={
                   confirmEmptyTrash
                     ? tr(`Delete ${count(trashedMemos.length, "memo")} forever?`, `彻底删除 ${count(trashedMemos.length, "memo")}？`)
@@ -3141,19 +4370,70 @@ export default function App() {
             ) : null}
           </div>
           {view === "memos" ? (
-            <div className="search-tools">
-              <div className={`searchbox${searchOpen || query ? " is-open" : ""}`}>
+            <div className="search-tools" role="search">
+              <div className={`searchbox${searchOpen || searchText ? " is-open" : ""}`}>
                 <Search size={15} className="searchbox-icon" aria-hidden="true" />
                 <input
                   ref={searchRef}
-                  value={query}
-                  placeholder={semanticOn ? tr("Search by meaning", "按意思搜索") : tr("Search memos", "搜索笔记")}
-                  title={tr("Space separates keywords; “quotes” match an exact phrase", "空格分隔多个关键词；“引号”匹配完整短语")}
-                  onChange={(event) => typeQuery(event.target.value)}
-                  onFocus={() => setSearchOpen(true)}
+                  type="search"
+                  value={searchText}
+                  placeholder={searchPlaceholder}
+                  aria-label={searchPlaceholder}
+                  aria-describedby="search-syntax-hint"
+                  enterKeyHint="search"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  onChange={(event) => {
+                    // Mid-composition the box shows the IME's text but the
+                    // feed waits; compositionend (or WebKit's trailing
+                    // non-composing input event) hands over the result.
+                    if (searchComposingRef.current || (event.nativeEvent as InputEvent).isComposing) {
+                      setSearchComposition(event.target.value);
+                      return;
+                    }
+                    typeQuery(event.target.value);
+                  }}
+                  onCompositionStart={(event) => {
+                    searchComposingRef.current = true;
+                    setSearchComposition(event.currentTarget.value);
+                  }}
+                  onCompositionEnd={(event) => {
+                    searchComposingRef.current = false;
+                    typeQuery(event.currentTarget.value);
+                  }}
+                  onKeyDown={(event) => {
+                    // Keys that confirm or cancel an IME candidate belong to it.
+                    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                    if (event.key === "Escape") {
+                      if (query) {
+                        // Consumed: select mode's window listener must not
+                        // also back out on the same press.
+                        event.preventDefault();
+                        event.stopPropagation();
+                        changeFeed(() => swapQuery(""));
+                      } else event.currentTarget.blur();
+                    } else if (event.key === "Enter" && window.matchMedia("(pointer: coarse)").matches) {
+                      // The feed already follows each keystroke; on a phone
+                      // the Search key just puts the keyboard away.
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  onMouseEnter={(event) => {
+                    if (document.activeElement !== event.currentTarget) tip.show(event.currentTarget, { text: searchSyntaxHint });
+                  }}
+                  onMouseLeave={tip.hide}
+                  onFocus={() => {
+                    tip.hide();
+                    setSearchOpen(true);
+                  }}
                   onBlur={() => setSearchOpen(false)}
                 />
-                {query ? (
+                <span id="search-syntax-hint" className="search-sr">
+                  {searchSyntaxHint}
+                </span>
+                {searchText ? (
                   <button
                     type="button"
                     className="searchbox-clear"
@@ -3173,26 +4453,31 @@ export default function App() {
               <button
                 type="button"
                 className={`icon-button semantic-toggle${semanticOn ? " is-active" : ""}`}
-                aria-pressed={semanticOn}
-                aria-label={tr("Semantic Search", "语义搜索")}
+                // A switch only while idle: busy or stopped, a press opens the
+                // details panel instead, and the name carries the state the
+                // bubble shows (the bubble itself is aria-hidden).
+                aria-pressed={semanticMonitor ? undefined : semanticOn}
+                aria-haspopup={semanticMonitor ? "dialog" : undefined}
+                aria-label={semanticState ? tr(`Semantic Search: ${semanticState}`, `语义搜索：${semanticState}`) : tr("Semantic Search", "语义搜索")}
                 // The in-app bubble rather than a native title: it shows at
                 // once, matches the funnel beside it, and names the state
                 // (on / off / working) before the explanation.
-                onMouseEnter={(event) => {
+                {...tip.bind(() => {
+                  const indexProgress = semantic.live.getSnapshot().progress;
                   const text =
                     semantic.status === "error"
                       ? tr("Semantic search stopped — open details", "语义搜索已停止——打开详情")
                       : modelBusy
                         ? tr(
-                            modelDownload.phase === "downloading" ? "Downloading the semantic model — open progress" : "Starting the semantic model — open progress",
-                            modelDownload.phase === "downloading" ? "语义模型下载中——打开进度" : "语义模型启动中——打开进度"
+                            modelPhase === "downloading" ? "Downloading the semantic model — open progress" : "Starting the semantic model — open progress",
+                            modelPhase === "downloading" ? "语义模型下载中——打开进度" : "语义模型启动中——打开进度"
                           )
                       : semantic.status === "indexing"
                         ? tr(
-                            `Semantic search — indexing${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}; keyword search remains available`,
-                            `语义搜索——索引中${semantic.progress ? ` ${semantic.progress.done}/${semantic.progress.total}` : "…"}；关键词搜索仍可用`
+                            `Semantic search — indexing${indexProgress ? ` ${indexProgress.done}/${indexProgress.total}` : "…"}; keyword search remains available`,
+                            `语义搜索——索引中${indexProgress ? ` ${indexProgress.done}/${indexProgress.total}` : "…"}；关键词搜索仍可用`
                           )
-                        : semantic.queryProgress
+                        : semantic.queryBusy
                           ? tr("Semantic search is working — open progress", "语义搜索正在工作——打开进度")
                           : semantic.status === "preparing"
                             ? tr("Semantic model is loading — open progress", "语义模型正在加载——打开进度")
@@ -3202,12 +4487,11 @@ export default function App() {
                                   "关键词命中优先，并补充意思相关的笔记"
                                 )
                               : tr("Semantic search finds memos by meaning", "语义搜索：按意思找笔记");
-                  tip.show(event.currentTarget, {
+                  return {
                     strong: semanticBusy || semantic.status === "error" ? undefined : semanticOn ? tr("Semantic search on", "语义搜索已开启") : undefined,
                     text
-                  });
-                }}
-                onMouseLeave={tip.hide}
+                  };
+                })}
                 onClick={() => {
                   if (semantic.status === "error") {
                     setModelSettingsOpen(true);
@@ -3240,6 +4524,7 @@ export default function App() {
                 canSave={filtersActive && statsDrilldown === null}
                 disabled={false}
                 activeTag={activeTag}
+                minDay={minDay}
                 openRequest={filterOpenRequest}
                 onToggleFacet={toggleFacet}
                 onDateChange={patchDateRange}
@@ -3249,21 +4534,81 @@ export default function App() {
                 onDeleteSaved={deleteSavedFilter}
                 onSaveCurrent={() => setSavingFilter(true)}
               />
+              {/* The result line, read out once typing settles. */}
+              <p className="search-sr" role="status">
+                {searchAnnouncement}
+              </p>
+            </div>
+          ) : view === "trash" && trashedMemos.length > 0 ? (
+            // Trash's search: the same box, keywords only — no Brain, no
+            // funnel. Its text never follows the reader out of Trash.
+            <div className="search-tools">
+              <div className={`searchbox${searchOpen || trashQuery ? " is-open" : ""}`}>
+                <Search size={15} className="searchbox-icon" aria-hidden="true" />
+                <input
+                  value={trashQuery}
+                  placeholder={tr("Search Trash", "搜索回收站")}
+                  aria-label={tr("Search Trash", "搜索回收站")}
+                  onChange={(event) => setTrashQuery(event.target.value)}
+                  onFocus={() => setSearchOpen(true)}
+                  onBlur={() => setSearchOpen(false)}
+                />
+                {trashQuery ? (
+                  <button
+                    type="button"
+                    className="searchbox-clear"
+                    aria-label={tr("Clear search", "清空搜索")}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={(event) => {
+                      const input = event.currentTarget.parentElement?.querySelector("input");
+                      changeFeed(() => setTrashQuery(""));
+                      input?.focus();
+                    }}
+                  >
+                    <X size={13} aria-hidden="true" />
+                  </button>
+                ) : null}
+              </div>
             </div>
           ) : null}
         </div>
 
-        {!syncStatus.online || syncStatus.degraded ? (
-          // The link to the server, said in words when it matters: offline,
-          // or pulls failing while online. Until it clears, the feed is the
-          // last good sync — which is still the whole notebook.
-          <div className="sync-notice" role="status">
-            {syncStatus.online ? <CloudOff size={14} aria-hidden="true" /> : <WifiOff size={14} aria-hidden="true" />}
+        {bootstrapLoad ? (
+          // A cold start shows its first page at once; this line counts the
+          // rest in, and says so plainly if a page keeps failing (the next
+          // attempt resumes where loading stopped). Not a live region: the
+          // count ticks per page, so only a failure is spoken (see above).
+          <div className="sync-notice">
+            {bootstrapLoad.failed ? <CloudOff size={14} aria-hidden="true" /> : <Loader2 size={14} className="spin" aria-hidden="true" />}
             <span className="sync-notice-text">
-              {syncStatus.online
-                ? tr("Can’t reach the server · showing your last synced memos", "无法连接服务器 · 显示上次同步的笔记")
-                : tr("Offline · showing your last synced memos", "离线 · 显示上次同步的笔记")}
+              {bootstrapLoad.total === null
+                ? bootstrapLoad.failed
+                  ? tr(`Couldn’t load the rest of your memos · ${formatNumber(loadedMemoCount)} loaded`, `其余笔记载入失败 · 已载入 ${formatNumber(loadedMemoCount)} 条`)
+                  : tr(`Loading memos · ${formatNumber(loadedMemoCount)} loaded`, `正在载入笔记 · 已载入 ${formatNumber(loadedMemoCount)} 条`)
+                : bootstrapLoad.failed
+                  ? tr(
+                      `Couldn’t load the rest of your memos · ${formatNumber(loadedMemoCount)} of ${formatNumber(bootstrapLoad.total)} loaded`,
+                      `其余笔记载入失败 · 已载入 ${formatNumber(loadedMemoCount)} / ${formatNumber(bootstrapLoad.total)}`
+                    )
+                  : tr(
+                      `Loading memos · ${formatNumber(loadedMemoCount)} of ${formatNumber(bootstrapLoad.total)}`,
+                      `正在载入笔记 · ${formatNumber(loadedMemoCount)} / ${formatNumber(bootstrapLoad.total)}`
+                    )}
             </span>
+            {bootstrapLoad.failed ? (
+              <button type="button" className="sync-notice-retry" onClick={retryBootstrap}>
+                {tr("Retry", "重试")}
+              </button>
+            ) : null}
+          </div>
+        ) : syncNotice ? (
+          // Offline, or pulls failing while online. Until it clears, the feed
+          // is the last good sync — which is still the whole notebook. Not a
+          // live region itself: it mounts with its text, so the standing
+          // regions speak it (see syncNotice).
+          <div className="sync-notice">
+            {syncStatus.online ? <CloudOff size={14} aria-hidden="true" /> : <WifiOff size={14} aria-hidden="true" />}
+            <span className="sync-notice-text">{syncNotice}</span>
             {syncStatus.online ? (
               <button type="button" className="sync-notice-retry" onClick={retrySync}>
                 {tr("Retry", "重试")}
@@ -3272,11 +4617,24 @@ export default function App() {
           </div>
         ) : null}
 
-        <div className="composer" hidden={view !== "memos"}>
-          <Editor mode="create" knownTags={knownTags} contextTag={activeTag} busy={creating} onSubmit={handleCreate} />
+        {/* data-searching: on phones an empty composer folds away while a
+            search is up, so results start under the search box (app.css). */}
+        <div className="composer" hidden={view !== "memos"} data-searching={view === "memos" && trimmedQuery ? "" : undefined}>
+          <Editor
+            mode="create"
+            initialContent={composerSeed}
+            onDraftChange={(content) => {
+              composerDraftRef.current = content;
+            }}
+            knownTags={knownTags}
+            contextTag={activeTag}
+            busy={creating}
+            onSubmit={handleCreate}
+          />
         </div>
 
         <section
+          ref={feedRef}
           className={`memo-feed${selectingFeed ? " is-select" : ""}${renderedFeedMemos.length <= SMALL_FEED ? " is-small" : ""}`}
           aria-label={view === "trash" ? tr("Trash", "回收站") : view === "review" ? tr("Daily review", "每日回顾") : tr("Memo list", "笔记列表")}
         >
@@ -3292,9 +4650,21 @@ export default function App() {
               </span>
             </div>
           ) : null}
+          {searching && feedMemos.length > 0 ? (
+            // Announced through the live region in the search tools, once
+            // typing settles; this line is the one sighted readers scan.
+            <p className="search-summary">
+              {searchSummary}
+            </p>
+          ) : null}
           {feedMemos.length === 0 ? (
             <div className="feed-empty">
-              {view === "trash" ? (
+              {view === "trash" && trashedMemos.length > 0 ? (
+                <>
+                  <p className="feed-empty-title">{tr("No matching memos in Trash", "回收站里没有相关笔记")}</p>
+                  <p>{tr("Try a different search.", "换个关键词试试")}</p>
+                </>
+              ) : view === "trash" ? (
                 <>
                   <p className="feed-empty-title">{tr("Trash is empty", "回收站是空的")}</p>
                   <p>{tr("Deleted memos appear here before you restore or permanently delete them.", "删除的笔记会先到这里，可以恢复或彻底删除")}</p>
@@ -3318,9 +4688,25 @@ export default function App() {
                   <p className="feed-empty-title">{tr("👋 Capture your first thought", "👋 记下第一条想法吧")}</p>
                   <p>{tr("Write something above and organize it with #tags.", "在上面的输入框写点什么，用 #标签 整理它们")}</p>
                 </>
+              ) : searching && searchScopeText && (outsideHitCount > 0 || semanticOn) ? (
+                <>
+                  <p className="feed-empty-title">{searchEmptyTitle}</p>
+                  <p>
+                    {outsideHitCount > 0
+                      ? tr(
+                          `${count(outsideHitCount, "memo")} outside this view ${outsideHitCount === 1 ? "matches" : "match"}.`,
+                          `范围外有 ${count(outsideHitCount, "memo")}匹配`
+                        )
+                      : tr("Memos outside this view may still match by meaning.", "范围外的笔记可能有意思相近的")}
+                  </p>
+                  <button type="button" className="ghost-button feed-empty-action" onClick={searchAllMemos}>
+                    <Search size={15} aria-hidden="true" />
+                    {tr("Search all memos", "在全部笔记中搜索")}
+                  </button>
+                </>
               ) : (
                 <>
-                  <p className="feed-empty-title">{tr("No matching memos", "没有找到相关笔记")}</p>
+                  <p className="feed-empty-title">{searching ? searchEmptyTitle : tr("No matching memos", "没有找到相关笔记")}</p>
                   <p>{tr("Try a different search or filter.", "换个筛选条件试试")}</p>
                 </>
               )}
@@ -3335,10 +4721,13 @@ export default function App() {
                 editing={editingId === memo.id}
                 savingEdit={editingId === memo.id && savingEdit}
                 editConflict={editingId === memo.id && editConflictId === memo.id}
+                editDraft={editingId === memo.id && reopenedDraft?.memoId === memo.id ? reopenedDraft.draft : null}
                 selecting={selectingFeed}
                 selected={selectingFeed && selected.has(memo.id)}
                 canSelect={view === "memos" || view === "trash"}
                 taskFlips={pendingTaskFlips.get(memo.id)}
+                resumeContent={editSeed?.memoId === memo.id ? editSeed.content : undefined}
+                busy={optimisticMemos.has(memo.id)}
                 vtName={`memo-${memo.id}`}
                 getEntering={getEntering}
                 delay={Math.min(index, 6) * 0.008}
@@ -3353,14 +4742,21 @@ export default function App() {
       </main>
 
       {lightbox ? <Lightbox items={lightbox.items} index={lightbox.index} onClose={() => setLightbox(null)} /> : null}
-      {shareMemo ? <ShareDialog memo={shareMemo} onToast={showToast} onClose={() => setShareMemo(null)} /> : null}
+      {shareMemo ? (
+        <LazyDialog onFail={lazyDialogFailed}>
+          <ShareDialog memo={shareMemo} onToast={showToast} onClose={() => setShareMemo(null)} />
+        </LazyDialog>
+      ) : null}
       {statsOpen ? (
-        <StatsModal memos={activeMemos} uniqueTagCount={uniqueTagCount} onClose={() => setStatsOpen(false)} onDrilldown={openStatsDrilldown} />
+        <LazyDialog onFail={lazyDialogFailed}>
+          <StatsModal memos={activeMemos} uniqueTagCount={uniqueTagCount} onClose={() => setStatsOpen(false)} onDrilldown={openStatsDrilldown} />
+        </LazyDialog>
       ) : null}
       {bulkTagOpen ? (
         <BulkTagDialog
           selectedCount={visibleSelectedCount}
           knownTags={knownTags}
+          progress={batchProgress}
           onApply={prepareBatchTag}
           onDismiss={() => {
             pendingBatchTagRef.current = null;
@@ -3384,41 +4780,44 @@ export default function App() {
         />
       ) : null}
       {reviewSettingsOpen ? (
-        <ReviewSettingsModal
-          settings={reviewSettings}
-          memos={activeMemos}
-          knownTags={knownTags}
-          onSave={handleSaveReviewSettings}
-          onClose={() => setReviewSettingsOpen(false)}
-        />
+        <LazyDialog onFail={lazyDialogFailed}>
+          <ReviewSettingsModal
+            settings={reviewSettings}
+            memos={activeMemos}
+            knownTags={knownTags}
+            onSave={handleSaveReviewSettings}
+            onClose={() => setReviewSettingsOpen(false)}
+          />
+        </LazyDialog>
       ) : null}
       {modelSettingsOpen ? (
-        <ModelSettingsModal
-          onClose={() => {
-            setModelSettingsOpen(false);
-            setModelSettingsAttend(0);
-            setEnableSemanticWhenReady(false);
-          }}
-          onModelReady={() => {
-            if (!enableSemanticWhenReady) return;
-            setEnableSemanticWhenReady(false);
-            setSemanticOn(true);
-          }}
-          onModelCleared={() => {
-            setEnableSemanticWhenReady(false);
-            setSemanticOn(false);
-          }}
-          onSemanticRetry={semantic.retry}
-          onSemanticReindex={semantic.rebuild}
-          semanticStatus={semantic.status}
-          semanticProgress={semantic.progress}
-          semanticQueryProgress={semantic.queryProgress}
-          semanticError={semantic.error}
-          semanticIndexedMemos={semantic.indexedMemos}
-          semanticRebuilding={semantic.rebuilding}
-          semanticQuery={view === "memos" ? feedQuery : ""}
-          attend={modelSettingsAttend}
-        />
+        <LazyDialog onFail={lazyDialogFailed}>
+          <ModelSettingsModal
+            onClose={() => {
+              setModelSettingsOpen(false);
+              setModelSettingsAttend(0);
+              setEnableSemanticWhenReady(false);
+            }}
+            onModelReady={() => {
+              if (!enableSemanticWhenReady) return;
+              setEnableSemanticWhenReady(false);
+              setSemanticOn(true);
+            }}
+            onModelCleared={() => {
+              setEnableSemanticWhenReady(false);
+              setSemanticOn(false);
+            }}
+            onSemanticRetry={semantic.retry}
+            onSemanticReindex={semantic.rebuild}
+            semanticStatus={semantic.status}
+            semanticLive={semantic.live}
+            semanticError={semantic.error}
+            semanticIndexedMemos={semantic.indexedMemos}
+            semanticRebuilding={semantic.rebuilding}
+            semanticQuery={view === "memos" ? feedQuery : ""}
+            attend={modelSettingsAttend}
+          />
+        </LazyDialog>
       ) : null}
       <input
         ref={importFileRef}
@@ -3441,6 +4840,21 @@ export default function App() {
           confirmLabel={tr("Import", "导入")}
           busyLabel={tr("Importing…", "导入中…")}
           busy={dialogBusy}
+          tone="accent"
+          progress={
+            importProgress
+              ? {
+                  value: importProgress.done,
+                  max: importTarget.memoCount,
+                  text: tr(
+                    `${formatNumber(importProgress.done)} of ${count(importTarget.memoCount, "memo")}`,
+                    `${formatNumber(importProgress.done)} / ${count(importTarget.memoCount, "memo")}`
+                  )
+                }
+              : undefined
+          }
+          onStop={importProgress && !importProgress.stopping ? stopImport : undefined}
+          stopping={importProgress?.stopping}
           onCancel={() => {
             if (!dialogBusy) setImportTarget(null);
           }}
@@ -3457,7 +4871,11 @@ export default function App() {
           initialValue={renameTagTarget}
           placeholder={tr("New name; use / for levels", "新名称，可用 / 分层")}
           confirmLabel={tr("Rename", "重命名")}
-          busyLabel={tr("Renaming…", "重命名中…")}
+          busyLabel={
+            renameProgress === null
+              ? tr("Renaming…", "重命名中…")
+              : tr(`Renaming… ${formatNumber(Math.floor(renameProgress * 100))}%`, `重命名中… ${formatNumber(Math.floor(renameProgress * 100))}%`)
+          }
           busy={dialogBusy}
           validate={(value) => {
             if (value === renameTagTarget) return tr("The new name is unchanged", "新旧名称相同");
@@ -3468,8 +4886,16 @@ export default function App() {
             return null;
           }}
           hint={(value) =>
-            knownTags.includes(value)
-              ? tr(`#${value} already exists. Renaming will merge the tags.`, `#${value} 已存在，重命名后两个标签会合并`)
+            tagPathInUse(value)
+              ? {
+                  text: tr(`#${value} already exists. Merging the two tags can’t be undone.`, `#${value} 已存在，两个标签将合并，且无法撤销。`),
+                  strong: true,
+                  confirmLabel: tr("Merge", "合并"),
+                  busyLabel:
+                    renameProgress === null
+                      ? tr("Merging…", "合并中…")
+                      : tr(`Merging… ${formatNumber(Math.floor(renameProgress * 100))}%`, `合并中… ${formatNumber(Math.floor(renameProgress * 100))}%`)
+                }
               : null
           }
           onCancel={() => {
@@ -3510,11 +4936,27 @@ export default function App() {
           onAuthLost={dropToLogin}
           onDone={() => {
             setChangingPasscode(false);
-            showToast(tr("Updated your passcode", "已更新密码"));
+            showToast(tr("Updated your passcode. Other devices will ask for the new one.", "已更新密码，其他设备需要输入新密码"));
           }}
         />
       ) : null}
-      <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} onDismiss={dismissToast} onPause={pauseToasts} onResume={resumeToasts} />
+      {confirmLogout ? (
+        <ConfirmDialog
+          title={tr("Log out of this device?", "退出这台设备的登录？")}
+          body={tr(
+            "Your memos stay on the server. This device forgets its offline copy, search index, saved filters and Daily Review settings. Theme, language and the downloaded semantic search model stay.",
+            "笔记仍保存在服务器上。这台设备会清除离线副本、搜索索引、已保存的筛选和每日回顾设置；主题、语言和已下载的语义搜索模型会保留。"
+          )}
+          confirmLabel={tr("Log Out", "退出登录")}
+          busyLabel={tr("Logging out…", "正在退出…")}
+          busy={loggingOut}
+          onCancel={() => {
+            if (!loggingOut) setConfirmLogout(false);
+          }}
+          onConfirm={() => void handleLogout()}
+        />
+      ) : null}
+      <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} regionLabel={tr("Notifications", "通知")} onDismiss={dismissToast} onPause={pauseToasts} onResume={resumeToasts} />
     </div>
   );
 }

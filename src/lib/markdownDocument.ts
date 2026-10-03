@@ -28,6 +28,30 @@ function resolveReferences(text: string, refs: Map<string, string>): string {
   return result;
 }
 
+/** The cross-line block `lines[key]` opens: a code fence or display TeX.
+ * `end` is the closing line's index — `lines.length` for a fence left open,
+ * which runs to the end of the memo; display TeX groups only once closed.
+ * Tag parsing shares this, so a block the card renders as code or TeX is
+ * never mined for #tags. Lines may keep a trailing "\r". */
+export function crossLineBlock(lines: readonly string[], key: number): { kind: "codeblock" | "math"; end: number } | null {
+  const raw = lines[key];
+  const fence = /^ {0,3}(`{3,}|~{3,})[^`]*$/.exec(raw);
+  if (fence) {
+    const closer = new RegExp(`^ {0,3}${fence[1][0]}{${fence[1].length},}\\s*$`);
+    let end = key + 1;
+    while (end < lines.length && !closer.test(lines[end])) end++;
+    return { kind: "codeblock", end };
+  }
+  const opener = raw.trim().startsWith("$$") ? "$$" : raw.trim().startsWith("\\[") ? "\\[" : null;
+  if (opener && parseBlock(raw).kind !== "math") {
+    const closer = opener === "$$" ? "$$" : "\\]";
+    let end = key + 1;
+    while (end < lines.length && !lines[end].trimEnd().endsWith(closer)) end++;
+    if (end < lines.length) return { kind: "math", end };
+  }
+  return null;
+}
+
 /** Group cross-line syntax once. Each resulting row is self-contained for
  * the animation's independent clones, and retains its original line key. */
 export function markdownRows(content: string): MarkdownRow[] {
@@ -36,25 +60,17 @@ export function markdownRows(content: string): MarkdownRow[] {
   const refs = new Map<string, string>();
   for (let key = 0; key < source.length; key++) {
     const raw = source[key];
-    const fence = /^ {0,3}(`{3,}|~{3,})[^`]*$/.exec(raw);
-    if (fence) {
-      const closer = new RegExp(`^ {0,3}${fence[1][0]}{${fence[1].length},}\\s*$`);
-      let end = key + 1;
-      while (end < source.length && !closer.test(source[end])) end++;
+    const block = crossLineBlock(source, key);
+    if (block?.kind === "codeblock") {
+      const end = block.end;
       rows.push({ raw: source.slice(key, Math.min(end + 1, source.length)).join("\n") + (end === key + 1 && end === source.length ? "\n" : ""), key });
       key = Math.min(end, source.length - 1);
       continue;
     }
-    const opener = raw.trim().startsWith("$$") ? "$$" : raw.trim().startsWith("\\[") ? "\\[" : null;
-    if (opener && parseBlock(raw).kind !== "math") {
-      const closer = opener === "$$" ? "$$" : "\\]";
-      let end = key + 1;
-      while (end < source.length && !source[end].trimEnd().endsWith(closer)) end++;
-      if (end < source.length) {
-        rows.push({ raw: source.slice(key, end + 1).join("\n"), key });
-        key = end;
-        continue;
-      }
+    if (block) {
+      rows.push({ raw: source.slice(key, block.end + 1).join("\n"), key });
+      key = block.end;
+      continue;
     }
     const ref = reference.exec(raw);
     if (ref) {

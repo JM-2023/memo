@@ -18,7 +18,8 @@ export interface SavedFilter {
 
 export const SAVED_FILTERS_LIMIT = 20;
 
-const STORAGE_KEY = "memo-saved-filters";
+/** Exported so open tabs can follow each other's changes (storage events). */
+export const STORAGE_KEY = "memo-saved-filters";
 const DAY_KEY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 function dayOrNull(value: unknown): string | null {

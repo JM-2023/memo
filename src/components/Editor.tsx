@@ -1,6 +1,8 @@
 import { Bold, Hash, Image as ImageIcon, ImagePlus, Link2, List, Loader2, Send, Table, X } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { ApiError } from "../lib/api";
+import { isImageUrl } from "../lib/content";
+import { htmlToMarkdown } from "../lib/htmlToMarkdown";
 import { ImageSlotLedger } from "../lib/imageSlots";
 import { compressImage } from "../lib/images";
 import { useI18n } from "../lib/i18n";
@@ -14,7 +16,9 @@ import {
   toggleWrap,
   type EditPatch
 } from "../lib/markdownEdit";
+import { caretPoint } from "../lib/textareaCaret";
 import type { MemoImage, NewImagePayload } from "../lib/types";
+import { StoredImg } from "./StoredImage";
 import { useTip } from "./Tip";
 
 const MAX_IMAGES = 9;
@@ -25,6 +29,30 @@ const MAX_CONTENT_CHARS = 40_000;
 const HARD_INPUT_CAP = 100_000;
 /** The counter appears once this close to the cap. */
 const COUNTER_FROM = MAX_CONTENT_CHARS - 2_000;
+/** The field grows with its text up to this share of the visible viewport
+ * (the visual viewport, so an open on-screen keyboard shrinks it and Save
+ * stays reachable), then scrolls inside. */
+const GROW_SHARE = 0.7;
+const GROW_FLOOR = 200;
+
+/**
+ * An edit discarded by Esc / Cancel, held in memory only (drafts are never
+ * persisted) so the Undo on the "Discarded" toast can reopen it as it was.
+ * Pending attachments travel with it: their preview URLs stay alive until
+ * the draft is reopened or released.
+ */
+export interface EditDraft {
+  content: string;
+  newImages: NewImagePayload[];
+  removedIds: string[];
+  selectionStart: number;
+  selectionEnd: number;
+}
+
+/** Shortcuts accept ⌘ or Ctrl everywhere; tips name the platform's own key. */
+const APPLE_KEYS = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+const MOD = APPLE_KEYS ? "⌘" : "Ctrl+";
+const ENTER = APPLE_KEYS ? "↩" : "Enter";
 
 interface EditorProps {
   mode: "create" | "edit";
@@ -35,11 +63,28 @@ interface EditorProps {
   /** Create mode: the active feed tag that will be inherited on submit. */
   contextTag?: string | null;
   busy: boolean;
-  onSubmit: (data: { clientId: string; content: string; newImages: NewImagePayload[]; removeImageIds: string[] }) => Promise<boolean>;
-  onCancel?: () => void;
+  onSubmit: (data: EditorSubmission) => Promise<boolean>;
+  /** Edit mode: `draft` is null when nothing changed (a plain close). */
+  onCancel?: (draft: EditDraft | null) => void;
+  /** Edit mode: reopen a discarded draft instead of the memo's own text. */
+  initialDraft?: EditDraft | null;
+  /** Where autoFocus puts the caret (default: the end). `viewportY` is the
+   * screen row the reader double-clicked, so that line stays under them. */
+  initialCaret?: { offset: number; viewportY?: number } | null;
   autoFocus?: boolean;
   conflictMessage?: string | null;
   onAcceptRemoteBase?: () => void;
+  /** Reports the text after every change, so the owner can hold an unsent draft in memory. */
+  onDraftChange?: (content: string) => void;
+}
+
+export interface EditorSubmission {
+  clientId: string;
+  content: string;
+  newImages: NewImagePayload[];
+  removeImageIds: string[];
+  /** Set when the save carries new images: reports the sent fraction (0..1). */
+  onUploadProgress?: (fraction: number) => void;
 }
 
 interface Suggestion {
@@ -72,21 +117,38 @@ export function Editor({
   busy,
   onSubmit,
   onCancel,
+  initialDraft = null,
+  initialCaret = null,
   autoFocus,
   conflictMessage,
-  onAcceptRemoteBase
+  onAcceptRemoteBase,
+  onDraftChange
 }: EditorProps) {
   const { errorMessage, formatNumber, tr } = useI18n();
   const tip = useTip();
-  const [content, setContent] = useState(initialContent);
-  const [newImages, setNewImages] = useState<NewImagePayload[]>([]);
-  const [removedIds, setRemovedIds] = useState<string[]>([]);
+  const [content, setContent] = useState(initialDraft?.content ?? initialContent);
+  const onDraftChangeRef = useRef(onDraftChange);
+  onDraftChangeRef.current = onDraftChange;
+  useEffect(() => {
+    onDraftChangeRef.current?.(content);
+  }, [content]);
+  // What "unchanged" means for Cancel: the text this editor opened on (a
+  // remote update arriving mid-edit does not make an untouched edit dirty).
+  const [openedOn] = useState(initialContent);
+  const [newImages, setNewImages] = useState<NewImagePayload[]>(() => initialDraft?.newImages ?? []);
+  const [removedIds, setRemovedIds] = useState<string[]>(() => initialDraft?.removedIds ?? []);
   const [compressing, setCompressing] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  // Whole percent of the image upload sent so far; null while none is running.
+  // Held at 99 until the server answers: the last bytes leaving the browser
+  // is not the memo being saved.
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Counter, not boolean: dragenter/leave fire per child element.
   const [dragDepth, setDragDepth] = useState(0);
+  // What the drag carries: files say "add images", a bare link says "insert".
+  const [dragKind, setDragKind] = useState<"files" | "link">("files");
   // Attachments play their exit animation before the state actually drops
   // them — keys are image ids (existing) or preview URLs (pending).
   const [removingKeys, setRemovingKeys] = useState<ReadonlySet<string>>(new Set());
@@ -96,6 +158,9 @@ export function Editor({
   const overflowRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const linkRef = useRef<HTMLInputElement>(null);
+  const suggestRef = useRef<HTMLDivElement>(null);
+  // ⌘⇧V / Ctrl+Shift+V asks for plain text even when HTML is on offer.
+  const plainPasteRef = useRef(false);
   const suggestionListId = useId();
   const contextTagDescriptionId = useId();
   // Stable across ambiguous network failures; rotate only after a confirmed
@@ -156,21 +221,73 @@ export function Editor({
   // Layout effect: the textarea must reach its grown height before the card
   // stage measures the editor scene for its height morph. preventScroll keeps
   // entering edit mode from yanking the page — the stage animates instead.
+  // The caret goes where the reader asked for it: a reopened draft's own
+  // selection, the double-clicked spot, or else the end (menu › Edit, the
+  // usual "add a line" case).
   useLayoutEffect(() => {
     autoGrow();
     if (autoFocus) {
       const area = areaRef.current;
       if (area) {
         area.focus({ preventScroll: true });
-        area.setSelectionRange(area.value.length, area.value.length);
+        const end = area.value.length;
+        if (initialDraft) {
+          area.setSelectionRange(Math.min(initialDraft.selectionStart, end), Math.min(initialDraft.selectionEnd, end));
+          revealCaret(area, area.selectionEnd);
+        } else if (initialCaret && initialCaret.offset < end) {
+          area.setSelectionRange(initialCaret.offset, initialCaret.offset);
+          revealCaret(area, initialCaret.offset, initialCaret.viewportY);
+        } else {
+          area.setSelectionRange(end, end);
+        }
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The grow cap follows the visual viewport (an on-screen keyboard opening
+  // or closing resizes it).
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const onResize = () => autoGrow();
+    viewport.addEventListener("resize", onResize);
+    return () => viewport.removeEventListener("resize", onResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (linkOpen) linkRef.current?.focus();
   }, [linkOpen]);
+
+  /**
+   * The tag list opens at the "#" being typed, not pinned under the field:
+   * just below that line (above it when the viewport has no room below),
+   * with its first "#" over the typed one. Anchored to the token start, so
+   * it holds still while the query grows. Placed before paint.
+   */
+  function placeSuggest() {
+    const pop = suggestRef.current;
+    const area = areaRef.current;
+    const host = pop?.offsetParent as HTMLElement | null | undefined;
+    if (!pop || !area || !host || !suggestion) return;
+    const caret = caretPoint(area, suggestion.tokenStart);
+    const areaRect = area.getBoundingClientRect();
+    const hostRect = host.getBoundingClientRect();
+    // A token scrolled out of the field pins the list to the field's edge.
+    const lineTop = Math.min(Math.max(areaRect.top + caret.top - area.scrollTop, areaRect.top), areaRect.bottom - caret.height);
+    const below = lineTop + caret.height + 4;
+    const above = lineTop - 4 - pop.offsetHeight;
+    const viewport = window.visualViewport?.height ?? window.innerHeight;
+    const flip = below + pop.offsetHeight > viewport && above >= 0;
+    // 16 = list padding + option padding: option text starts over the "#".
+    const left = areaRect.left + caret.left - area.scrollLeft - 16 - hostRect.left - host.clientLeft;
+    pop.style.top = `${(flip ? above : below) - hostRect.top - host.clientTop}px`;
+    pop.style.left = `${Math.max(0, Math.min(left, host.clientWidth - pop.offsetWidth))}px`;
+    pop.style.transformOrigin = flip ? "bottom left" : "top left";
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(placeSuggest, [suggestion, content]);
 
   useEffect(() => {
     if (!locked) return;
@@ -208,8 +325,37 @@ export function Editor({
   function autoGrow() {
     const area = areaRef.current;
     if (!area) return;
+    const viewport = window.visualViewport?.height ?? window.innerHeight;
+    const cap = Math.max(GROW_FLOOR, Math.round(viewport * GROW_SHARE));
+    // Measuring at "auto" resets the inner scroll; put it back so a long
+    // draft does not jump while it is typed into.
+    const scrollTop = area.scrollTop;
     area.style.height = "auto";
-    area.style.height = `${Math.min(360, Math.max(mode === "create" ? 68 : 96, area.scrollHeight))}px`;
+    area.style.height = `${Math.min(cap, Math.max(mode === "create" ? 68 : 96, area.scrollHeight))}px`;
+    area.scrollTop = scrollTop;
+  }
+
+  /**
+   * Bring the caret line of a long draft into view, aiming it at
+   * `viewportY` (the line the reader double-clicked stays under the
+   * pointer) or else 40% down the screen. The field's own scroll absorbs
+   * what it can; the page moves only as far as needed to keep the caret
+   * inside the field's visible rows. A card taller than its editor shrinks
+   * as the stage morphs, and the browser may then clamp the page scroll —
+   * that shifts the field, but the caret stays within it.
+   */
+  function revealCaret(area: HTMLTextAreaElement, offset: number, viewportY?: number) {
+    const caret = caretPoint(area, offset);
+    const rect = area.getBoundingClientRect();
+    const viewport = window.visualViewport?.height ?? window.innerHeight;
+    const target = (viewportY ?? viewport * 0.4) - caret.height / 2;
+    const room = Math.max(0, area.scrollHeight - area.clientHeight);
+    // Field tops (on screen) that can show the caret line at `target`.
+    const lowest = target - Math.min(Math.max(0, area.clientHeight - caret.height), caret.top);
+    const highest = target - Math.max(0, caret.top - room);
+    const fieldTop = Math.min(Math.max(rect.top, lowest), Math.max(lowest, highest));
+    area.scrollTop = Math.min(room, Math.max(0, caret.top - (target - fieldTop)));
+    if (Math.abs(rect.top - fieldTop) >= 1) window.scrollBy(0, rect.top - fieldTop);
   }
 
   function refreshSuggestion(value: string, caret: number) {
@@ -239,20 +385,60 @@ export function Editor({
     setSuggestion(items.length > 0 ? { tokenStart: hashStart, query, items, index: 0, exact } : null);
   }
 
+  /**
+   * Land a programmatic edit through the browser's own editing pipeline so
+   * it joins the native undo stack: ⌘Z steps back over one list
+   * continuation, one ⌘B, one tag completion — instead of losing the history
+   * to a controlled-value write. Only the changed span is replaced, and
+   * insertText fires a real input event, so onChange keeps state in step.
+   * Where execCommand is missing or refuses (deprecated, yet still the only
+   * undo-preserving path for a textarea), the value is written directly:
+   * that costs the undo history, never the text. Focus is taken right here,
+   * inside the click or key handler, so iOS keeps its keyboard up.
+   */
+  function landValue(next: string, selStart: number, selEnd = selStart, suggest = true) {
+    const area = areaRef.current;
+    if (!area) return;
+    const prev = area.value;
+    area.focus({ preventScroll: true });
+    let landed = prev === next;
+    if (!landed) {
+      const max = Math.min(prev.length, next.length);
+      let head = 0;
+      while (head < max && prev.charCodeAt(head) === next.charCodeAt(head)) head += 1;
+      let tail = 0;
+      while (tail < max - head && prev.charCodeAt(prev.length - 1 - tail) === next.charCodeAt(next.length - 1 - tail)) tail += 1;
+      // Never cut a surrogate pair in half at either seam.
+      if (head > 0 && /[\ud800-\udbff]/.test(prev[head - 1])) head -= 1;
+      if (tail > 0 && /[\udc00-\udfff]/.test(prev[prev.length - tail])) tail -= 1;
+      const mid = next.slice(head, next.length - tail);
+      area.setSelectionRange(head, prev.length - tail);
+      try {
+        landed = typeof document.execCommand === "function" && document.execCommand(mid ? "insertText" : "delete", false, mid);
+      } catch {
+        landed = false;
+      }
+      landed = landed && area.value === next;
+    }
+    setContent(next);
+    if (!suggest) setSuggestion(null);
+    const settle = () => {
+      area.setSelectionRange(selStart, selEnd);
+      if (suggest) refreshSuggestion(next, selStart);
+      autoGrow();
+    };
+    if (landed) settle();
+    else requestAnimationFrame(settle);
+  }
+
   function applySuggestion(tag: string) {
     if (busy || submittingRef.current) return;
     const area = areaRef.current;
     if (!area || !suggestion) return;
     const caret = area.selectionStart;
     const next = `${content.slice(0, suggestion.tokenStart)}#${tag} ${content.slice(caret)}`;
-    setContent(next);
-    setSuggestion(null);
-    requestAnimationFrame(() => {
-      const position = suggestion.tokenStart + tag.length + 2;
-      area.focus();
-      area.setSelectionRange(position, position);
-      autoGrow();
-    });
+    const position = suggestion.tokenStart + tag.length + 2;
+    landValue(next, position, position, false);
   }
 
   /** Insert text at the caret (textareas keep their selection while blurred). */
@@ -266,14 +452,8 @@ export function Editor({
     const after = padded && (end >= content.length || !/\s/.test(content[end])) ? " " : "";
     const inserted = `${before}${text}${after}`;
     const next = `${content.slice(0, start)}${inserted}${content.slice(end)}`;
-    setContent(next);
-    requestAnimationFrame(() => {
-      const position = start + inserted.length;
-      area.focus();
-      area.setSelectionRange(position, position);
-      refreshSuggestion(next, position);
-      autoGrow();
-    });
+    const position = start + inserted.length;
+    landValue(next, position);
   }
 
   function insertHash() {
@@ -284,18 +464,17 @@ export function Editor({
     insertAtCaret(`${needsSpace ? " " : ""}#`);
   }
 
+  /** Toolbar buttons never take focus from the field: on iOS a blurred
+   * textarea drops the keyboard, and a refocus outside the tap cannot raise
+   * it again. Keyboard users still Tab to them as before. */
+  function keepFieldFocus(event: ReactMouseEvent) {
+    event.preventDefault();
+  }
+
   /** Land a markdown edit: new value plus an exact selection to restore. */
   function applyPatch(patch: EditPatch) {
     if (busy || submittingRef.current) return;
-    setContent(patch.value);
-    requestAnimationFrame(() => {
-      const area = areaRef.current;
-      if (!area) return;
-      area.focus();
-      area.setSelectionRange(patch.start, patch.end);
-      refreshSuggestion(patch.value, patch.start);
-      autoGrow();
-    });
+    landValue(patch.value, patch.start, patch.end);
   }
 
   function confirmLink() {
@@ -364,7 +543,38 @@ export function Editor({
     if (files.length > 0) {
       event.preventDefault();
       void addFiles(files);
+      return;
     }
+    const plainOnly = plainPasteRef.current;
+    plainPasteRef.current = false;
+    const area = event.currentTarget;
+    const start = area.selectionStart;
+    const end = area.selectionEnd;
+    const text = event.clipboardData.getData("text/plain");
+    // A lone URL pasted over selected words links them: [words](url).
+    const url = text.trim();
+    const selected = content.slice(start, end);
+    const label = selected.trim();
+    if (
+      label &&
+      /^https?:\/\/\S+$/i.test(url) &&
+      !/^https?:\/\//i.test(label) &&
+      !/[\n[\]]/.test(label)
+    ) {
+      event.preventDefault();
+      const lead = /^\s*/.exec(selected)![0];
+      const trail = /\s*$/.exec(selected)![0];
+      const link = `${lead}[${label}](${url.replace(/\(/g, "%28").replace(/\)/g, "%29")})${trail}`;
+      landValue(`${content.slice(0, start)}${link}${content.slice(end)}`, start + link.length);
+      return;
+    }
+    // Rich text (web pages, docs) arrives as Markdown the card can render;
+    // plain text, code-editor copies and ⌘⇧V paste exactly as before.
+    if (plainOnly) return;
+    const markdown = htmlToMarkdown(event.clipboardData.getData("text/html"));
+    if (markdown === null) return;
+    event.preventDefault();
+    landValue(`${content.slice(0, start)}${markdown}${content.slice(end)}`, start + markdown.length);
   }
 
   function hasFiles(event: DragEvent) {
@@ -375,6 +585,7 @@ export function Editor({
     if (!hasFiles(event)) return;
     event.preventDefault();
     if (busy || submittingRef.current) return;
+    setDragKind([...(event.dataTransfer?.types ?? [])].includes("Files") ? "files" : "link");
     setDragDepth((value) => value + 1);
   }
 
@@ -398,12 +609,27 @@ export function Editor({
       void addFiles(files);
       return;
     }
-    // Dragged link (e.g. an image from another page): keep it as an external
-    // image reference instead of uploading.
-    const uri = (event.dataTransfer?.getData("text/uri-list") || event.dataTransfer?.getData("text/plain") || "").split("\n")[0]?.trim();
-    if (uri && /^https?:\/\/\S+$/i.test(uri)) {
-      insertAtCaret(`![](${uri})`, true);
+    // A dragged image from another page stays an external image reference
+    // (never uploaded); any other link lands as a plain link. The image is
+    // known by the <img> in the drag's HTML (unless the drag is the link
+    // wrapped around it), or by an image file extension.
+    const data = event.dataTransfer;
+    const uri = (data?.getData("text/uri-list") || data?.getData("text/plain") || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("#"));
+    let image: string | null = null;
+    const html = data?.getData("text/html") ?? "";
+    if (html && typeof DOMParser !== "undefined") {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const src = doc.querySelector("img")?.getAttribute("src")?.trim();
+      const draggedLink = uri !== undefined && uri !== src && [...doc.querySelectorAll("a[href]")].some((a) => a.getAttribute("href") === uri);
+      if (src && !draggedLink && /^https?:\/\/\S+$/i.test(src)) image = src;
     }
+    if (!image && uri && isImageUrl(uri)) image = uri;
+    const encode = (url: string) => url.replace(/\(/g, "%28").replace(/\)/g, "%29");
+    if (image) insertAtCaret(`![](${encode(image)})`, true);
+    else if (uri && /^https?:\/\/\S+$/i.test(uri)) insertAtCaret(uri, true);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -478,9 +704,39 @@ export function Editor({
       event.preventDefault();
       void submit();
     }
+    // Paste-and-match-style: the paste handler below skips the HTML path.
+    plainPasteRef.current = (event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "v";
     if (event.key === "Escape" && mode === "edit" && onCancel) {
-      onCancel();
+      cancel();
     }
+  }
+
+  /**
+   * Esc / Cancel close the editor at once. An edit with real changes is
+   * handed up as a draft first, so the "Discarded" toast can offer Undo
+   * (in memory only — drafts are never persisted); an untouched one just
+   * closes. Attachments mid-exit-animation count as removed, and pending
+   * ones leave with the draft, so their preview URLs must outlive unmount.
+   */
+  function cancel() {
+    if (!onCancel || locked) return;
+    const area = areaRef.current;
+    const keptNew = newImages.filter((image) => !removingKeys.has(image.previewUrl));
+    const removed = [...removedIds, ...existingImages.filter((image) => removingKeys.has(image.id)).map((image) => image.id)];
+    const dirty = content.trim() !== openedOn.trim() || keptNew.length > 0 || removed.length > 0;
+    if (!dirty) {
+      onCancel(null);
+      return;
+    }
+    const handedOff = new Set(keptNew.map((image) => image.previewUrl));
+    previewUrls.current = previewUrls.current.filter((url) => !handedOff.has(url));
+    onCancel({
+      content,
+      newImages: keptNew,
+      removedIds: removed,
+      selectionStart: area?.selectionStart ?? content.length,
+      selectionEnd: area?.selectionEnd ?? content.length
+    });
   }
 
   async function submit() {
@@ -490,11 +746,19 @@ export function Editor({
     setError(null);
     try {
       // Attachments mid-exit-animation count as removed already.
+      const uploading = newImages.filter((image) => !removingKeys.has(image.previewUrl));
+      if (uploading.length > 0) setUploadPercent(0);
       const ok = await onSubmit({
         clientId: draftIdRef.current,
         content: content.trim(),
-        newImages: newImages.filter((image) => !removingKeys.has(image.previewUrl)),
-        removeImageIds: [...removedIds, ...existingImages.filter((image) => removingKeys.has(image.id)).map((image) => image.id)]
+        newImages: uploading,
+        removeImageIds: [...removedIds, ...existingImages.filter((image) => removingKeys.has(image.id)).map((image) => image.id)],
+        onUploadProgress:
+          uploading.length > 0
+            ? (fraction) => {
+                if (mountedRef.current) setUploadPercent(Math.min(99, Math.round(fraction * 100)));
+              }
+            : undefined
       });
       if (ok && mode === "create") {
         draftIdRef.current = crypto.randomUUID();
@@ -526,7 +790,10 @@ export function Editor({
       setError(errorMessage(cause, "Couldn’t save the memo", "保存失败"));
     } finally {
       submittingRef.current = false;
-      if (mountedRef.current) setSubmitting(false);
+      if (mountedRef.current) {
+        setSubmitting(false);
+        setUploadPercent(null);
+      }
     }
   }
 
@@ -572,7 +839,10 @@ export function Editor({
             refreshSuggestion(event.target.value, event.target.selectionStart);
             autoGrow();
           }}
-          onScroll={syncOverflowScroll}
+          onScroll={() => {
+            syncOverflowScroll();
+            placeSuggest();
+          }}
           onClick={(event) => refreshSuggestion(content, event.currentTarget.selectionStart)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
@@ -587,7 +857,7 @@ export function Editor({
       </div>
 
       {suggestion ? (
-        <div id={suggestionListId} className="tag-suggest" role="listbox" aria-label={tr("Tag suggestions", "标签建议")}>
+        <div ref={suggestRef} id={suggestionListId} className="tag-suggest" role="listbox" aria-label={tr("Tag suggestions", "标签建议")}>
           {suggestion.items.map((tag, index) => (
             <button
               key={tag}
@@ -623,7 +893,7 @@ export function Editor({
                 });
               }}
             >
-              <img src={`/api/images/${image.id}`} alt="" decoding="async" />
+              <StoredImg image={image} />
               <button
                 type="button"
                 className="attachment-remove"
@@ -673,6 +943,12 @@ export function Editor({
           <Link2 size={14} aria-hidden="true" />
           <input
             ref={linkRef}
+            type="url"
+            inputMode="url"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            enterKeyHint="done"
             value={linkValue}
             placeholder={tr(
               "Paste an image URL https://… (external preview; uses no storage)",
@@ -722,17 +998,18 @@ export function Editor({
         <div className="editor-tools">
           <button
             type="button"
+            onMouseDown={keepFieldFocus}
             className="icon-button"
             onClick={insertHash}
             disabled={locked}
             aria-label={tr("Insert tag", "插入标签")}
-            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Insert tag", "插入标签") })}
-            onMouseLeave={tip.hide}
+            {...tip.bind({ text: tr("Insert tag", "插入标签") })}
           >
             <Hash size={17} aria-hidden="true" />
           </button>
           <button
             type="button"
+            onMouseDown={keepFieldFocus}
             className="icon-button"
             onClick={() => {
               const area = areaRef.current;
@@ -740,27 +1017,28 @@ export function Editor({
             }}
             aria-label={tr("Bold", "加粗")}
             disabled={locked}
-            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Bold (⌘B)", "加粗（⌘B）") })}
-            onMouseLeave={tip.hide}
+            aria-keyshortcuts="Meta+B Control+B"
+            {...tip.bind({ text: tr(`Bold (${MOD}B)`, `加粗（${MOD}B）`) })}
           >
             <Bold size={16} aria-hidden="true" />
           </button>
           <button
             type="button"
+            onMouseDown={keepFieldFocus}
             className="icon-button"
             onClick={() => {
               const area = areaRef.current;
-              if (area) applyPatch(toggleBulletLine(content, area.selectionStart));
+              if (area) applyPatch(toggleBulletLine(content, area.selectionStart, area.selectionEnd));
             }}
             aria-label={tr("Bullet list", "列表")}
             disabled={locked}
-            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Bullet list", "无序列表") })}
-            onMouseLeave={tip.hide}
+            {...tip.bind({ text: tr("Bullet list (again for a checklist)", "无序列表（再按一次变为待办）") })}
           >
             <List size={17} aria-hidden="true" />
           </button>
           <button
             type="button"
+            onMouseDown={keepFieldFocus}
             className="icon-button"
             onClick={() => {
               const area = areaRef.current;
@@ -768,33 +1046,35 @@ export function Editor({
             }}
             aria-label={tr("Insert table", "插入表格")}
             disabled={locked}
-            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Insert table", "插入表格") })}
-            onMouseLeave={tip.hide}
+            {...tip.bind({ text: tr("Insert table", "插入表格") })}
           >
             <Table size={16} aria-hidden="true" />
           </button>
           <button
             type="button"
+            onMouseDown={keepFieldFocus}
             className="icon-button"
             onClick={() => fileRef.current?.click()}
             disabled={locked || totalImages + compressing >= MAX_IMAGES}
             aria-label={tr("Add image", "添加图片")}
-            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Add image (or drag and paste)", "添加图片（可拖拽/粘贴）") })}
-            onMouseLeave={tip.hide}
+            {...tip.bind({ text: tr("Add image (or drag and paste)", "添加图片（可拖拽/粘贴）") })}
           >
             <ImageIcon size={17} aria-hidden="true" />
           </button>
           <button
             type="button"
+            onMouseDown={keepFieldFocus}
             className={`icon-button${linkOpen ? " is-active-tool" : ""}`}
             onClick={() => {
+              // Focus inside the tap itself, or iOS will not raise the keyboard.
+              if (!linkOpen) linkRef.current?.focus({ preventScroll: true });
+              else areaRef.current?.focus({ preventScroll: true });
               setLinkOpen((value) => !value);
               setError(null);
             }}
             aria-label={tr("Insert image link", "插入图片链接")}
             disabled={locked}
-            onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr("Insert image link", "插入图片链接") })}
-            onMouseLeave={tip.hide}
+            {...tip.bind({ text: tr("Insert image link", "插入图片链接") })}
           >
             <Link2 size={16} aria-hidden="true" />
           </button>
@@ -821,26 +1101,56 @@ export function Editor({
           </span>
         ) : null}
           {mode === "edit" && onCancel ? (
-            <button type="button" className="ghost-button" onClick={onCancel} disabled={locked}>
+            <button type="button" className="ghost-button" onClick={cancel} disabled={locked}>
               {tr("Cancel", "取消")}
             </button>
           ) : null}
           <button
             type="button"
-            className="send-button"
+            className={`send-button${uploadPercent !== null ? " is-uploading" : ""}`}
             onClick={() => void submit()}
             disabled={!canSubmit}
             aria-label={mode === "create" ? tr("Send", "发送") : tr("Save", "保存")}
+            aria-keyshortcuts="Meta+Enter Control+Enter"
+            {...tip.bind({
+              text: mode === "create" ? tr(`Send (${MOD}${ENTER})`, `发送（${MOD}${ENTER}）`) : tr(`Save (${MOD}${ENTER})`, `保存（${MOD}${ENTER}）`)
+            })}
           >
+            {uploadPercent !== null ? (
+              // Images can take a while on a slow uplink: the fill and the
+              // figure track the bytes actually sent. Decoration only: a
+              // button's children are presentational, so the progressbar
+              // screen readers can reach sits beside the button.
+              <span className="send-progress" aria-hidden="true" style={{ transform: `scaleX(${uploadPercent / 100})` }} />
+            ) : null}
             {locked ? <Loader2 size={17} className="spin" aria-hidden="true" /> : <Send size={17} aria-hidden="true" />}
-            <span>{mode === "create" ? tr("Send", "发送") : tr("Save", "保存")}</span>
+            {/* Label and percentage share one grid cell with hidden sizers for
+                both, so the chip is the same width idle, at 0% and at 99%
+                (tabular digits) and never jumps when an upload starts. */}
+            <span className="send-percent" aria-hidden="true">
+              <span className={uploadPercent !== null ? "send-percent-sizer" : undefined}>
+                {mode === "create" ? tr("Send", "发送") : tr("Save", "保存")}
+              </span>
+              <span className="send-percent-sizer">{formatNumber(99)}%</span>
+              {uploadPercent !== null ? <span>{formatNumber(uploadPercent)}%</span> : null}
+            </span>
           </button>
+          {uploadPercent !== null ? (
+            <span
+              className="send-progress-sr"
+              role="progressbar"
+              aria-label={tr("Uploading images", "正在上传图片")}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={uploadPercent}
+            />
+          ) : null}
         </div>
       </div>
 
       <div className="editor-drop" aria-hidden="true">
-        <ImagePlus size={22} aria-hidden="true" />
-        <span>{tr("Release to add images", "松开以添加图片")}</span>
+        {dragKind === "files" ? <ImagePlus size={22} aria-hidden="true" /> : <Link2 size={22} aria-hidden="true" />}
+        <span>{dragKind === "files" ? tr("Release to add images", "松开以添加图片") : tr("Release to insert the link", "松开以插入链接")}</span>
       </div>
     </div>
   );

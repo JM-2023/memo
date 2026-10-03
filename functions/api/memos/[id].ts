@@ -93,13 +93,19 @@ export async function onRequestPut(context: AppContext): Promise<Response> {
       .bind(id)
       .first<MemoHeaderRow>();
     if (!header) return apiError(404, "MEMO_NOT_FOUND", "Memo not found");
+    const wantsPinned = body.pinned === true;
+    // Already in the requested state: the intent is satisfied whatever seq
+    // the client saw (a repeated tap, or another device that pinned it too),
+    // so answer with the state instead of a version conflict. A stale client
+    // gets the whole current memo — a patch onto its old copy would carry
+    // the new seq over outdated content.
+    if (header.deleted_at === null && Boolean(header.pinned_at) === wantsPinned) {
+      if (header.seq === expectedSeq) return json({ memoPatch: { id, pinnedAt: header.pinned_at, seq: header.seq } });
+      return json({ memo: await currentMemoJson(context, id) });
+    }
     if (header.seq !== expectedSeq) return versionConflict(await currentMemoJson(context, id));
     if (header.deleted_at !== null) return apiError(409, "MEMO_TRASHED", "Restore the memo from the recycle bin before editing it.");
 
-    const wantsPinned = body.pinned === true;
-    if (Boolean(header.pinned_at) === wantsPinned) {
-      return json({ memoPatch: { id, pinnedAt: header.pinned_at, seq: header.seq } });
-    }
     const pinnedAt = wantsPinned ? nowIso() : null;
     const db = context.env.DB;
     const results = await db.batch([
@@ -115,11 +121,13 @@ export async function onRequestPut(context: AppContext): Promise<Response> {
 
   const memo = await loadMemo(context, id);
   if (!memo) return apiError(404, "MEMO_NOT_FOUND", "Memo not found");
+  // Restoring a memo that is already out of Trash is a satisfied intent, not
+  // a conflict — whichever seq the client last saw.
+  if (body.restore === true && memo.deleted_at === null) return json({ memo: shapeMemo(memo, await loadImageMeta(context, id)) });
   if (memo.seq !== expectedSeq) return versionConflict(await currentMemoJson(context, id, memo));
 
   const db = context.env.DB;
   if (body.restore === true) {
-    if (memo.deleted_at === null) return json({ memo: shapeMemo(memo, await loadImageMeta(context, id)) });
     const results = await db.batch([
       claimSeq(db, "EXISTS (SELECT 1 FROM memos WHERE id = ? AND seq = ? AND deleted_at IS NOT NULL)", [id, expectedSeq]),
       db
@@ -222,11 +230,11 @@ export async function onRequestPut(context: AppContext): Promise<Response> {
     statements.push(
       db
         .prepare(
-          `INSERT INTO memo_images (id, memo_id, ord, mime, width, height, bytes, data_base64, created_at)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+          `INSERT INTO memo_images (id, memo_id, ord, mime, width, height, bytes, data_base64, thumb_mime, thumb_base64, created_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
            WHERE EXISTS (SELECT 1 FROM memos WHERE id = ? AND mutation_token = ?)`
         )
-        .bind(image.id, id, ord, image.mime, image.width, image.height, bytes, image.dataBase64, now, id, mutationToken)
+        .bind(image.id, id, ord, image.mime, image.width, image.height, bytes, image.dataBase64, image.thumbMime, image.thumbBase64, now, id, mutationToken)
     );
   });
 
@@ -269,6 +277,8 @@ export async function onRequestDelete(context: AppContext): Promise<Response> {
     }
     return apiError(404, "MEMO_NOT_FOUND", "Memo not found");
   }
+  // Same for a second trip to Trash: already there is already done.
+  if (!permanent && memo.deleted_at !== null) return json({ ok: true, memo: shapeMemo(memo, await loadImageMeta(context, id)) });
   if (memo.seq !== expectedSeq) return versionConflict(await currentMemoJson(context, id, memo));
 
   const db = context.env.DB;
@@ -277,17 +287,21 @@ export async function onRequestDelete(context: AppContext): Promise<Response> {
       return apiError(409, "MEMO_NOT_TRASHED", "Move the memo to Trash before permanently deleting it.");
     }
     const predicate = "EXISTS (SELECT 1 FROM memos WHERE id = ? AND seq = ? AND deleted_at IS NOT NULL)";
+    // Attachments go before the tombstone insert: on a full database (the
+    // STORAGE_FULL answer points the owner here) the insert may need a fresh
+    // page, which the freed image pages supply within the same transaction.
+    // The memo row, which every guard reads, is untouched until the last step.
     const results = await db.batch([
       claimSeq(db, predicate, [id, expectedSeq]),
+      db
+        .prepare("DELETE FROM memo_images WHERE memo_id = ? AND EXISTS (SELECT 1 FROM memos WHERE id = ? AND seq = ? AND deleted_at IS NOT NULL)")
+        .bind(id, id, expectedSeq),
       db
         .prepare(
           `INSERT OR REPLACE INTO tombstones (id, seq)
            SELECT ?, ${CURRENT_SEQ_SQL} WHERE EXISTS (SELECT 1 FROM memos WHERE id = ? AND seq = ? AND deleted_at IS NOT NULL)
            RETURNING id, seq`
         )
-        .bind(id, id, expectedSeq),
-      db
-        .prepare("DELETE FROM memo_images WHERE memo_id = ? AND EXISTS (SELECT 1 FROM memos WHERE id = ? AND seq = ? AND deleted_at IS NOT NULL)")
         .bind(id, id, expectedSeq),
       db.prepare("DELETE FROM memos WHERE id = ? AND seq = ? AND deleted_at IS NOT NULL").bind(id, expectedSeq)
     ]);
@@ -296,7 +310,6 @@ export async function onRequestDelete(context: AppContext): Promise<Response> {
     return json({ ok: true, purged: [{ id, seq }], purgedIds: [id] });
   }
 
-  if (memo.deleted_at !== null) return json({ ok: true, memo: shapeMemo(memo, await loadImageMeta(context, id)) });
   const deletedAt = nowIso();
   const results = await db.batch([
     claimSeq(db, "EXISTS (SELECT 1 FROM memos WHERE id = ? AND seq = ? AND deleted_at IS NULL)", [id, expectedSeq]),

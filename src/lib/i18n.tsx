@@ -69,15 +69,29 @@ const KNOWN_ERRORS: Record<string, ErrorTranslation> = {
   "不支持的图片格式": { en: "This image format is not supported.", zh: "不支持的图片格式" }
 };
 
+/**
+ * With no stored choice, follow the browser's first preferred language:
+ * any Chinese variant opens in Simplified Chinese, everything else in
+ * English. public/theme-init.js applies the same rule before first paint.
+ */
+export function defaultLanguage(): Language {
+  try {
+    const preferred = navigator.languages?.[0] ?? navigator.language ?? "";
+    return preferred.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+  } catch {
+    return "en";
+  }
+}
+
 function parseLanguage(value: string | null): Language {
-  return value === "zh-CN" ? "zh-CN" : "en";
+  return value === "zh-CN" || value === "en" ? value : defaultLanguage();
 }
 
 function loadLanguage(): Language {
   try {
     return parseLanguage(localStorage.getItem(STORAGE_KEY));
   } catch {
-    return "en";
+    return defaultLanguage();
   }
 }
 
@@ -101,10 +115,11 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     document.documentElement.lang = language;
     try {
-      // English is the default and needs no durable record. This also keeps a
-      // logout clear stable across tabs: a storage event resets peers to
-      // English, whose effect removes the key instead of writing it back.
-      if (language === "en") localStorage.removeItem(STORAGE_KEY);
+      // The browser-derived default needs no durable record, so a device keeps
+      // following its system language until the owner picks one. A storage
+      // event that removes the key resets peers to that same default, whose
+      // effect then leaves the key absent instead of writing it back.
+      if (language === defaultLanguage()) localStorage.removeItem(STORAGE_KEY);
       else localStorage.setItem(STORAGE_KEY, language);
     } catch {
       // Private browsing or disabled storage: retain the in-memory choice.
@@ -206,6 +221,11 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           return localized("The backup contains an invalid memo. Nothing from this chunk was imported.", "备份中包含无效笔记，本批次未导入任何内容");
         case "BACKUP_IMAGE_INVALID":
           return localized("The backup contains an invalid image attachment. Nothing from this chunk was imported.", "备份中包含无效图片，本批次未导入任何内容");
+        case "EXPORT_FORMAT_UNSUPPORTED":
+          return localized(
+            "The server sent the backup in a format this page can’t read. Reload the page and export again.",
+            "无法识别服务器返回的备份格式，请刷新页面后重新导出"
+          );
         case "TAG_INVALID":
           return localized("The tag name is invalid.", "无效的标签名");
         case "TAG_NAME_UNCHANGED":
@@ -218,6 +238,25 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           return localized("Image not found.", "图片不存在");
         case "INVALID_ORIGIN":
           return localized("This request came from an invalid origin.", "请求来源无效");
+        case "STORAGE_FULL":
+          return localized(
+            "The D1 database is full, so nothing new can be saved. Empty Trash or permanently delete memos with images to free space.",
+            "D1 数据库已满，暂时无法保存新内容。清空回收站或彻底删除带图片的笔记即可释放空间"
+          );
+        case "NETWORK_ERROR":
+          return localized("Couldn’t reach the server. Check your connection and try again.", "无法连接服务器，请检查网络后重试");
+        case "REQUEST_TIMEOUT":
+          return localized("The server took too long to respond. Try again.", "服务器响应超时，请重试");
+        case "SETUP_DISABLED":
+          return localized(
+            "This address can’t create the first passcode. Set APP_PASSWORD_HASH when you deploy, then reload.",
+            "这个地址不能创建首个密码。请在部署时设置 APP_PASSWORD_HASH，然后刷新页面"
+          );
+        case "SERVER_MISCONFIGURED":
+          return localized(
+            "The server is missing SESSION_SECRET. Add it with wrangler pages secret put SESSION_SECRET, then redeploy.",
+            "服务器缺少 SESSION_SECRET。请用 wrangler pages secret put SESSION_SECRET 添加后重新部署"
+          );
         case "INTERNAL_ERROR":
           return localized("The server could not complete the request. Please try again.", "服务器无法完成请求，请重试");
         case "REQUEST_FAILED": {

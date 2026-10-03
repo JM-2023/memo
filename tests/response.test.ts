@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readJson } from "../functions/api/_utils/response";
+import { isStorageFullError, readJson } from "../functions/api/_utils/response";
 
 function streamedRequest(parts: string[]): Request {
   const encoder = new TextEncoder();
@@ -23,5 +23,22 @@ describe("bounded JSON request parsing", () => {
 
   it("rejects actual streamed bytes above the endpoint limit", async () => {
     await expect(readJson(streamedRequest(["{\"value\":\"", "too-large\"}"]), 12)).rejects.toThrow("Request body is too large");
+  });
+});
+
+describe("isStorageFullError", () => {
+  it("recognizes the SQLite and D1 wordings for a full database or account, including on cause", () => {
+    expect(isStorageFullError(new Error("D1_ERROR: database or disk is full: SQLITE_FULL"))).toBe(true);
+    expect(isStorageFullError(new Error("D1_ERROR: Exceeded maximum DB size"))).toBe(true);
+    expect(
+      isStorageFullError(new Error("D1_ERROR: Your account has exceeded D1's maximum account storage limit. Please upgrade your plan."))
+    ).toBe(true);
+    expect(isStorageFullError(new Error("D1_ERROR", { cause: new Error("database or disk is full") }))).toBe(true);
+  });
+
+  it("leaves other D1 failures alone", () => {
+    expect(isStorageFullError(new Error("D1_ERROR: UNIQUE constraint failed: memos.id: SQLITE_CONSTRAINT"))).toBe(false);
+    expect(isStorageFullError(new Error("D1 DB is overloaded. Too many requests queued."))).toBe(false);
+    expect(isStorageFullError(null)).toBe(false);
   });
 });

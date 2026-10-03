@@ -1,10 +1,22 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 
+/** ARIA wiring for the trigger button — spread it onto the button. */
+export interface MenuTriggerProps {
+  id: string;
+  "aria-haspopup": "menu" | "dialog";
+  "aria-expanded": boolean;
+  "aria-controls": string | undefined;
+}
+
 interface MenuProps {
-  /** Renders the trigger button; `open` lets it style its active state. */
-  trigger: (open: boolean) => ReactNode;
+  /**
+   * Renders the trigger button; `open` lets it style its active state, and
+   * `triggerProps` carries the popup/expanded/controls wiring (plus the id
+   * the panel is labelled by) so callers don't each re-derive it.
+   */
+  trigger: (open: boolean, triggerProps: MenuTriggerProps) => ReactNode;
   /** Menu body; call `close()` from item handlers. */
   children: (close: () => void) => ReactNode;
   align?: "left" | "right";
@@ -64,7 +76,13 @@ const PAGE_FOCUSABLE = [
 export function Menu({ trigger, children, align = "right", className, panelClassName, portal = false, kind = "menu", panelLabel, openSignal }: MenuProps) {
   const [phase, setPhase] = useState<"closed" | "open" | "closing">("closed");
   const [pos, setPos] = useState<PortalPos | null>(null);
+  // In-flow (non-portal) panels open downward unless that would run past the
+  // viewport bottom while the space above has room — see the flip effect.
+  const [flipUp, setFlipUp] = useState(false);
   const reducedMotion = useReducedMotion();
+  const baseId = useId();
+  const triggerId = `${baseId}-trigger`;
+  const panelId = `${baseId}-panel`;
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const focusEdgeRef = useRef<"first" | "last">("first");
@@ -101,6 +119,21 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     setPhase((value) => (value === "open" ? "closing" : value));
   }
 
+  /**
+   * Item handlers' close: focus goes back to the trigger now, not after the
+   * exit beat. An item that opens a dialog mounts it in this same commit, and
+   * the dialog makes the page inert before a delayed restore could land — it
+   * would remember the departing item as its opener and drop focus to <body>
+   * on close.
+   */
+  function closeFromItem() {
+    const active = document.activeElement;
+    if (active === document.body || (active instanceof Node && panelRef.current?.contains(active))) {
+      triggerElement()?.focus({ preventScroll: true });
+    }
+    requestClose(false);
+  }
+
   function requestOpen(edge: "first" | "last" = "first") {
     focusEdgeRef.current = edge;
     restoreTriggerRef.current = false;
@@ -129,6 +162,13 @@ export function Menu({ trigger, children, align = "right", className, panelClass
 
   useLayoutEffect(() => {
     if (!open) return;
+    // Name the panel after its trigger. Triggers that spread `triggerProps`
+    // already carry the id; older call sites get it assigned here.
+    const triggerNode = triggerElement();
+    if (!panelLabel && triggerNode && panelRef.current) {
+      if (!triggerNode.id) triggerNode.id = triggerId;
+      panelRef.current.setAttribute("aria-labelledby", triggerNode.id);
+    }
     if (kind === "panel") {
       panelRef.current?.querySelector<HTMLElement>(PAGE_FOCUSABLE)?.focus({ preventScroll: true });
       return;
@@ -142,6 +182,9 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   // confirm/cancel branch. Removing that DOM node sends focus to <body>; put
   // it back on the first item in the new branch (and again when cancelling)
   // so the next Tab does not close the menu before confirmation is reachable.
+  // A branch confirming something irreversible marks its Cancel with
+  // data-menu-autofocus: a reflexive second Enter then backs out instead of
+  // destroying.
   useEffect(() => {
     if (!open || kind !== "menu") return;
     const panel = panelRef.current;
@@ -149,7 +192,8 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     const observer = new MutationObserver(() => {
       const active = document.activeElement;
       if (active instanceof HTMLElement && active !== document.body && active.isConnected) return;
-      menuItems()[0]?.focus({ preventScroll: true });
+      const preferred = panel.querySelector<HTMLElement>("[data-menu-autofocus]");
+      (preferred ?? menuItems()[0])?.focus({ preventScroll: true });
     });
     observer.observe(panel, { childList: true, subtree: true });
     return () => observer.disconnect();
@@ -219,6 +263,23 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     });
   }, [open, portal, align]);
 
+  // In-flow mode: same before-paint measurement, but the answer is only a
+  // direction. The panel stays inside .menu-root (so scrolling keeps it open
+  // and glued to its card); near the bottom edge it opens upward instead of
+  // hanging its last items — often Delete — below the fold.
+  useLayoutEffect(() => {
+    if (!open || portal) return;
+    const anchor = rootRef.current;
+    const panel = panelRef.current;
+    if (!anchor || !panel) return;
+    const rect = anchor.getBoundingClientRect();
+    const panelHeight = panel.offsetHeight;
+    const viewportHeight = window.innerHeight;
+    const spaceBelow = viewportHeight - 8 - (rect.bottom + 6);
+    const spaceAbove = rect.top - 6 - 8;
+    setFlipUp(panelHeight > spaceBelow && (panelHeight <= spaceAbove || spaceAbove > spaceBelow));
+  }, [open, portal]);
+
   useEffect(() => {
     if (!open || !portal) return;
     const close = () => requestClose(false);
@@ -233,6 +294,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   useEffect(() => {
     if (phase !== "closed") return;
     setPos(null);
+    setFlipUp(false);
     if (restoreTriggerRef.current) triggerElement()?.focus({ preventScroll: true });
     restoreTriggerRef.current = false;
   }, [phase]);
@@ -257,13 +319,14 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     phase !== "closed" ? (
       <div
         ref={panelRef}
-        className={`action-menu align-${align}${portal ? " is-portal" : ""}${phase === "closing" ? " is-closing" : ""}${panelClassName ? ` ${panelClassName}` : ""}`}
+        id={panelId}
+        className={`action-menu align-${align}${portal ? " is-portal" : ""}${flipUp ? " is-up" : ""}${phase === "closing" ? " is-closing" : ""}${panelClassName ? ` ${panelClassName}` : ""}`}
         style={panelStyle}
         role={kind === "panel" ? "dialog" : "menu"}
         aria-label={panelLabel}
         aria-orientation={kind === "panel" ? undefined : "vertical"}
       >
-        {children(() => requestClose(true))}
+        {children(closeFromItem)}
       </div>
     ) : null;
 
@@ -278,7 +341,12 @@ export function Menu({ trigger, children, align = "right", className, panelClass
           requestOpen(event.key === "ArrowUp" ? "last" : "first");
         }}
       >
-        {trigger(open)}
+        {trigger(open, {
+          id: triggerId,
+          "aria-haspopup": kind === "panel" ? "dialog" : "menu",
+          "aria-expanded": open,
+          "aria-controls": phase !== "closed" ? panelId : undefined
+        })}
       </div>
       {portal ? (panel ? createPortal(panel, document.body) : null) : panel}
     </div>

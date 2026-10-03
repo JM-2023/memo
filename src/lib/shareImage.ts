@@ -47,16 +47,49 @@ function bitmapToDataUrl(image: HTMLImageElement): string | null {
   }
 }
 
+/** The canvas every engine will actually back. Chromium and Firefox stop at
+    32,767px a side; iOS Safari refuses anything over 16,777,216 pixels in
+    total (4096²), whatever its shape. Past either the context comes back
+    null — or, in Chromium, a blank canvas encodes without complaint. */
+const MAX_CANVAS_SIDE = 32_767;
+const MAX_CANVAS_AREA = 16_777_216;
+/** Below this a long card would come out softer than it reads on screen;
+    rather than hand over a blurry strip, the export says it can't. */
+export const MIN_EXPORT_SCALE = 1;
+
+/** The export can't fit this card on one canvas at any scale worth saving. */
+export class ShareImageTooLargeError extends Error {
+  constructor() {
+    super("Card exceeds the canvas size limit");
+    this.name = "ShareImageTooLargeError";
+  }
+}
+
+/**
+ * The scale a `width`×`height` CSS-px node can rasterize at: `preferred`
+ * when the canvas allows it, else the largest scale that fits both canvas
+ * limits, or null when even MIN_EXPORT_SCALE would not fit.
+ */
+export function exportScaleFor(width: number, height: number, preferred: number): number | null {
+  if (width <= 0 || height <= 0) return preferred;
+  const fit = Math.min(preferred, MAX_CANVAS_SIDE / width, MAX_CANVAS_SIDE / height, Math.sqrt(MAX_CANVAS_AREA / (width * height)));
+  // Round down to a hundredth so the rounded canvas size never tips over.
+  const scale = Math.floor(fit * 100) / 100;
+  return scale >= MIN_EXPORT_SCALE ? Math.min(preferred, scale) : null;
+}
+
 export interface NodePngOptions {
   /** Stylesheet text embedded beside the clone — shareCard.css via ?raw. */
   css: string;
-  /** Rasterization multiplier over the node's CSS-pixel size. */
+  /** Rasterization multiplier over the node's CSS-pixel size — the most
+      the export will use; a card too long for it renders smaller (see
+      exportScaleFor). */
   scale?: number;
 }
 
 /**
- * Rasterize `node` to a PNG blob at `scale`× its layout size. The node must
- * be styled entirely by `css` (plus attributes it carries): the clone is
+ * Rasterize `node` to a PNG blob at up to `scale`× its layout size. The node
+ * must be styled entirely by `css` (plus attributes it carries): the clone is
  * serialized without computed styles. Corners left uncovered by the node's
  * own background stay transparent.
  */
@@ -65,6 +98,8 @@ export async function nodeToPngBlob(node: HTMLElement, { css, scale = 2.5 }: Nod
   // fit-to-dialog transform.
   const width = node.offsetWidth;
   const height = node.offsetHeight;
+  const fitScale = exportScaleFor(width, height, scale);
+  if (fitScale === null) throw new ShareImageTooLargeError();
   const clone = node.cloneNode(true) as HTMLElement;
   clone.style.transform = "none";
 
@@ -87,8 +122,8 @@ export async function nodeToPngBlob(node: HTMLElement, { css, scale = 2.5 }: Nod
   await image.decode();
 
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(width * scale);
-  canvas.height = Math.round(height * scale);
+  canvas.width = Math.round(width * fitScale);
+  canvas.height = Math.round(height * fitScale);
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas 2D unavailable");
   context.drawImage(image, 0, 0, canvas.width, canvas.height);

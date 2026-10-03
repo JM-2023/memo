@@ -1,5 +1,6 @@
 import { Hash, Loader2, Tags, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
@@ -19,6 +20,8 @@ interface BulkTagDialogProps {
   onDismiss: () => void;
   /** Successful request batch, called after the exit animation. */
   onApplied: () => void;
+  /** Settled/total while a large selection spans several requests. */
+  progress?: { done: number; total: number } | null;
 }
 
 const NO_OWNED_TAGS: string[] = [];
@@ -33,8 +36,17 @@ function normalizeTag(value: string): string {
  * changed cards only after its exit has finished, giving the feed transition a
  * clean second beat instead of animating behind the overlay.
  */
-export function BulkTagDialog({ selectedCount, scope = "selection", knownTags, ownedTags = NO_OWNED_TAGS, onApply, onDismiss, onApplied }: BulkTagDialogProps) {
-  const { count, tr } = useI18n();
+export function BulkTagDialog({
+  selectedCount,
+  scope = "selection",
+  knownTags,
+  ownedTags = NO_OWNED_TAGS,
+  onApply,
+  onDismiss,
+  onApplied,
+  progress = null
+}: BulkTagDialogProps) {
+  const { count, formatNumber, tr } = useI18n();
   const [value, setValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -87,6 +99,7 @@ export function BulkTagDialog({ selectedCount, scope = "selection", knownTags, o
     escapeDisabled: submitting,
     initialFocusRef: inputRef
   });
+  useKeyboardInset(overlayRef);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -216,7 +229,13 @@ export function BulkTagDialog({ selectedCount, scope = "selection", knownTags, o
             </button>
             <button type="submit" className="accent-button bulk-tag-submit" disabled={!canSubmit}>
               {submitting ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Tags size={15} aria-hidden="true" />}
-              <span>{submitting ? tr("Adding…", "添加中…") : tr("Add tag", "添加标签")}</span>
+              <span>
+                {submitting
+                  ? progress
+                    ? tr(`Adding… ${formatNumber(progress.done)}/${formatNumber(progress.total)}`, `添加中… ${formatNumber(progress.done)}/${formatNumber(progress.total)}`)
+                    : tr("Adding…", "添加中…")
+                  : tr("Add tag", "添加标签")}
+              </span>
             </button>
           </footer>
         </form>

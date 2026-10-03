@@ -13,20 +13,24 @@
 // memo. Vectors are unit-length (the runtime normalizes), which makes ranking
 // a plain dot product.
 
-import { openDerivedBytes, sealDerivedBytes } from "./cache";
+import { derivedKeyIdentity, openDerivedBytes, sealDerivedBytes, SHARD_COUNT, shardOf } from "./cache";
 import { EMBEDDING_DIM } from "./modelRuntime";
 import type { Memo } from "./types";
 
 /**
  * Granite accepts much longer inputs, but 400-character overlapping windows
  * keep single-threaded browser WASM inference responsive and let the best
- * local passage represent a long memo. Six windows cover ~2.2k characters;
- * a longer memo's tail goes unindexed rather than exploding index time and
- * size (a 40k-character memo would otherwise be ~100 rows on its own).
+ * local passage represent a long memo. Six windows cover ~2.2k characters
+ * back to back; a longer memo keeps the same six-window budget (a 40k-character
+ * memo would otherwise be ~100 rows on its own) but spreads the last four
+ * across the rest of its text, so its later sections still have a window that
+ * can match instead of the tail going unindexed.
  */
 export const SEMANTIC_CHUNK_CHARS = 400;
 export const SEMANTIC_CHUNK_OVERLAP = 50;
 export const SEMANTIC_MAX_CHUNKS = 6;
+/** Windows kept contiguous from the start of a memo too long to cover whole. */
+const SEMANTIC_LEAD_CHUNKS = 2;
 /**
  * Dot-product floor below which a match reads as noise. Calibrated against
  * Granite Embedding 97M Multilingual R2 q8 on representative Chinese,
@@ -60,18 +64,36 @@ export function emptySemanticIndex(modelVersion: string): SemanticIndex {
   return { modelVersion, rows: [], vectors: new Float32Array(0) };
 }
 
+const SEMANTIC_CHUNK_STEP = SEMANTIC_CHUNK_CHARS - SEMANTIC_CHUNK_OVERLAP;
+/** The longest text the contiguous windows reach the end of (2,150 chars). */
+const SEMANTIC_CONTIGUOUS_CHARS = SEMANTIC_CHUNK_STEP * (SEMANTIC_MAX_CHUNKS - 1) + SEMANTIC_CHUNK_CHARS;
+
 /** Overlapping windows over trimmed content; empty for whitespace-only memos. */
 export function chunkMemoContent(content: string): string[] {
   const text = content.trim();
   if (!text) return [];
+  const starts: number[] = [];
+  if (text.length <= SEMANTIC_CONTIGUOUS_CHARS) {
+    // Back to back, exactly as every existing index row was embedded: these
+    // windows (and so their content keys) must not move.
+    for (let start = 0; ; start += SEMANTIC_CHUNK_STEP) {
+      starts.push(start);
+      if (start + SEMANTIC_CHUNK_CHARS >= text.length) break;
+    }
+  } else {
+    // The opening stays contiguous; the remaining windows are spaced evenly
+    // from where it ends to the last character. At exactly the contiguous
+    // length the spacing equals the ordinary step, so the two layouts meet.
+    for (let index = 0; index < SEMANTIC_LEAD_CHUNKS; index += 1) starts.push(index * SEMANTIC_CHUNK_STEP);
+    const first = SEMANTIC_LEAD_CHUNKS * SEMANTIC_CHUNK_STEP;
+    const last = text.length - SEMANTIC_CHUNK_CHARS;
+    const spread = SEMANTIC_MAX_CHUNKS - SEMANTIC_LEAD_CHUNKS - 1;
+    for (let index = 0; index <= spread; index += 1) starts.push(Math.round(first + ((last - first) * index) / spread));
+  }
   const chunks: string[] = [];
-  let start = 0;
-  while (start < text.length && chunks.length < SEMANTIC_MAX_CHUNKS) {
-    const end = Math.min(text.length, start + SEMANTIC_CHUNK_CHARS);
-    const piece = text.slice(start, end).trim();
+  for (const start of starts) {
+    const piece = text.slice(start, Math.min(text.length, start + SEMANTIC_CHUNK_CHARS)).trim();
     if (piece) chunks.push(piece);
-    if (end >= text.length) break;
-    start = end - SEMANTIC_CHUNK_OVERLAP;
   }
   return chunks;
 }
@@ -165,9 +187,17 @@ export function planSemanticIndex(index: SemanticIndex, memos: readonly Memo[]):
         state.rowCount === state.chunkCount &&
         state.chunkIndices.size === state.chunkCount
     );
+    const sameUpdatedAt = state?.updatedAt === memo.updatedAt;
     // Most plans take this O(1) route. Hash text only after updatedAt changes,
-    // which is when an attachment-only edit must be distinguished from text.
-    if (structurallyComplete && state?.updatedAt === memo.updatedAt) {
+    // which is when an attachment-only edit must be distinguished from text —
+    // or when the memo is too long for the contiguous windows: rows embedded
+    // before long memos spread their windows still carry head-only keys under
+    // an unchanged updatedAt, and only hashing (six short slices) finds them.
+    if (
+      structurallyComplete &&
+      sameUpdatedAt &&
+      !(state?.chunkCount === SEMANTIC_MAX_CHUNKS && memo.content.length > SEMANTIC_CONTIGUOUS_CHARS)
+    ) {
       validMemoIds.add(memo.id);
       continue;
     }
@@ -185,7 +215,7 @@ export function planSemanticIndex(index: SemanticIndex, memos: readonly Memo[]):
       state.rowCount === chunks.length
     ) {
       validMemoIds.add(memo.id);
-      refreshedUpdatedAt.push({ id: memo.id, updatedAt: memo.updatedAt });
+      if (!sameUpdatedAt) refreshedUpdatedAt.push({ id: memo.id, updatedAt: memo.updatedAt });
     } else {
       stale.push(memo);
     }
@@ -221,9 +251,18 @@ export interface ReconcileCallbacks {
 // time for steadier progress and a responsive UI without changing embeddings.
 // Exported so the settings panel can report "Batch N of M" truthfully.
 export const EMBED_BATCH_TEXTS = 8;
+/** First checkpoint; later ones wait until the pass has appended half as many
+    rows again as it already had, so a first build seals O(n) bytes in total
+    instead of O(n²) — at the cost of redoing at most a third of the pass if
+    the tab closes mid-build. Rows the pass kept do not count towards the
+    growth, so catching up on an existing index still checkpoints every 256
+    appended rows to begin with. */
 const FLUSH_EVERY_ROWS = 256;
 const PARTIAL_EVERY_ROWS = 256;
-const SEARCH_ROWS_PER_YIELD = 256;
+/** Rows scored between clock checks, and the main-thread budget per slice:
+    a typical index ranks in one or two slices, a huge one still yields. */
+const SEARCH_ROWS_PER_CHECK = 256;
+const SEARCH_SLICE_MS = 8;
 
 function packIndex(modelVersion: string, rows: SemanticRow[], pieces: Float32Array[]): SemanticIndex {
   const vectors = new Float32Array(rows.length * EMBEDDING_DIM);
@@ -273,7 +312,9 @@ export async function reconcileSemanticIndex(
     chunks: string[];
     vectors: Array<Float32Array | undefined>;
     remaining: number;
-    appended: boolean;
+    /** Its rows once appended; the final index reuses these exact objects so
+        persistence can tell by identity which shards a pass changed. */
+    rows: SemanticRow[] | null;
   }
 
   interface PendingChunk {
@@ -297,7 +338,7 @@ export async function reconcileSemanticIndex(
       chunks,
       vectors: new Array<Float32Array | undefined>(chunks.length),
       remaining: chunks.length,
-      appended: false
+      rows: null
     };
     pendingMemos.push(owner);
     for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
@@ -324,23 +365,27 @@ export async function reconcileSemanticIndex(
       kept * EMBEDDING_DIM
     );
   }
+  const completedOrder: PendingMemo[] = [];
   const appendCompletedMemo = (owner: PendingMemo): number => {
-    if (owner.appended || owner.remaining !== 0) return 0;
-    owner.appended = true;
-    const startRows = partialRows.length;
+    if (owner.rows || owner.remaining !== 0) return 0;
+    const rows: SemanticRow[] = [];
     for (let chunkIndex = 0; chunkIndex < owner.chunks.length; chunkIndex += 1) {
       const vector = owner.vectors[chunkIndex];
       if (!vector || vector.length !== EMBEDDING_DIM) throw new Error(`Embedder returned an invalid vector for ${owner.memo.id}`);
-      partialRows.push({
+      const row: SemanticRow = {
         id: owner.memo.id,
         updatedAt: owner.memo.updatedAt,
         contentKey: owner.contentKey,
         chunkIndex,
         chunkCount: owner.chunks.length
-      });
+      };
+      rows.push(row);
+      partialRows.push(row);
       partialVectors.set(vector, (partialRows.length - 1) * EMBEDDING_DIM);
     }
-    return partialRows.length - startRows;
+    owner.rows = rows;
+    completedOrder.push(owner);
+    return rows.length;
   };
   const partialSnapshot = (): SemanticIndex => ({
     modelVersion: index.modelVersion,
@@ -352,25 +397,18 @@ export async function reconcileSemanticIndex(
   if (keptRowIndices.length !== index.rows.length) callbacks.onPartial?.(partialSnapshot());
 
   const finalSnapshot = (): SemanticIndex => {
+    const completed = pendingMemos.filter((owner) => owner.rows !== null);
+    // Memos finished in their final order (one edit, or same-length texts):
+    // the append-only buffer already is the final layout, so skip the copy.
+    if (completed.every((owner, position) => completedOrder[position] === owner)) return partialSnapshot();
     const rows = [...keptRows];
     const pieces: Float32Array[] = [];
     for (const rowIndex of keptRowIndices) {
       pieces.push(index.vectors.subarray(rowIndex * EMBEDDING_DIM, (rowIndex + 1) * EMBEDDING_DIM));
     }
-    for (const owner of pendingMemos) {
-      if (owner.remaining !== 0) continue;
-      for (let chunkIndex = 0; chunkIndex < owner.chunks.length; chunkIndex += 1) {
-        const vector = owner.vectors[chunkIndex];
-        if (!vector || vector.length !== EMBEDDING_DIM) throw new Error(`Embedder returned an invalid vector for ${owner.memo.id}`);
-        rows.push({
-          id: owner.memo.id,
-          updatedAt: owner.memo.updatedAt,
-          contentKey: owner.contentKey,
-          chunkIndex,
-          chunkCount: owner.chunks.length
-        });
-        pieces.push(vector);
-      }
+    for (const owner of completed) {
+      rows.push(...owner.rows!);
+      for (const vector of owner.vectors) pieces.push(vector!);
     }
     return packIndex(index.modelVersion, rows, pieces);
   };
@@ -410,7 +448,8 @@ export async function reconcileSemanticIndex(
       publishedPendingRows = true;
       rowsSincePublish = 0;
     }
-    if (callbacks.onFlush && rowsSinceFlush >= FLUSH_EVERY_ROWS) {
+    const appendedBeforeFlush = partialRows.length - keptRows.length - rowsSinceFlush;
+    if (callbacks.onFlush && rowsSinceFlush >= Math.max(FLUSH_EVERY_ROWS, appendedBeforeFlush / 2)) {
       rowsSinceFlush = 0;
       await callbacks.onFlush(partial ?? partialSnapshot());
     }
@@ -474,10 +513,11 @@ export interface SemanticSearchCallbacks {
 }
 
 /**
- * UI-safe ranking for the live search path. Dot products are split into small
- * slices with a main-thread yield between them; progress therefore reflects
- * rows actually examined and controls remain interactive even for a very
- * large encrypted index.
+ * UI-safe ranking for the live search path. Dot products run in time-boxed
+ * slices with a main-thread yield between them, so controls stay interactive
+ * even for a very large encrypted index while an ordinary one finishes in a
+ * slice or two. Progress is reported at each yield and reflects rows actually
+ * examined.
  */
 export async function searchSemanticIndexAsync(
   index: SemanticIndex,
@@ -488,15 +528,22 @@ export async function searchSemanticIndexAsync(
   const best = new Map<string, number>();
   const total = index.rows.length;
   callbacks.onProgress?.(0, total);
-  for (let start = 0; start < total; start += SEARCH_ROWS_PER_YIELD) {
+  let sliceStart = performance.now();
+  for (let start = 0; start < total; start += SEARCH_ROWS_PER_CHECK) {
     if (callbacks.shouldContinue && !callbacks.shouldContinue()) return new Map();
-    const end = Math.min(start + SEARCH_ROWS_PER_YIELD, total);
+    const end = Math.min(start + SEARCH_ROWS_PER_CHECK, total);
     scoreSemanticRows(index, queryVector, best, start, end, allowedMemoIds);
-    callbacks.onProgress?.(end, total);
-    if (end < total) await yieldToMainThread();
+    if (end < total && performance.now() - sliceStart >= SEARCH_SLICE_MS) {
+      callbacks.onProgress?.(end, total);
+      await yieldToMainThread();
+      sliceStart = performance.now();
+    }
   }
+  if (callbacks.shouldContinue && !callbacks.shouldContinue()) return new Map();
+  callbacks.onProgress?.(total, total);
   return finishSemanticRanking(best);
 }
+
 
 // ---- Serialization ---------------------------------------------------------
 
@@ -507,18 +554,41 @@ interface IndexHeader {
   rows: SemanticRow[];
 }
 
-export function encodeSemanticIndex(index: SemanticIndex): Uint8Array<ArrayBuffer> {
-  const header: IndexHeader = { v: 2, dim: EMBEDDING_DIM, modelVersion: index.modelVersion, rows: index.rows };
+const ROW_BYTES = EMBEDDING_DIM * 4;
+
+/** Header plus packed vectors for the given rows, or for every row. */
+function encodeRows(index: SemanticIndex, rowIndices: readonly number[] | null): Uint8Array<ArrayBuffer> {
+  const rows = rowIndices ? rowIndices.map((row) => index.rows[row]) : index.rows;
+  const header: IndexHeader = { v: 2, dim: EMBEDDING_DIM, modelVersion: index.modelVersion, rows };
   const headerBytes = new TextEncoder().encode(JSON.stringify(header));
   const vectorBytes = new Uint8Array(index.vectors.buffer, index.vectors.byteOffset, index.vectors.byteLength);
-  const payload = new Uint8Array(4 + headerBytes.byteLength + vectorBytes.byteLength);
+  const base = 4 + headerBytes.byteLength;
+  const payload = new Uint8Array(base + rows.length * ROW_BYTES);
   new DataView(payload.buffer).setUint32(0, headerBytes.byteLength, true);
   payload.set(headerBytes, 4);
-  payload.set(vectorBytes, 4 + headerBytes.byteLength);
+  if (!rowIndices) {
+    payload.set(vectorBytes.subarray(0, rows.length * ROW_BYTES), base);
+  } else {
+    for (let position = 0; position < rowIndices.length; position += 1) {
+      const row = rowIndices[position];
+      payload.set(vectorBytes.subarray(row * ROW_BYTES, (row + 1) * ROW_BYTES), base + position * ROW_BYTES);
+    }
+  }
   return payload;
 }
 
-export function decodeSemanticIndex(payload: Uint8Array): SemanticIndex | null {
+export function encodeSemanticIndex(index: SemanticIndex): Uint8Array<ArrayBuffer> {
+  return encodeRows(index, null);
+}
+
+interface ParsedIndexPayload {
+  modelVersion: string;
+  rows: SemanticRow[];
+  /** A view into the payload; callers copy it into an aligned buffer. */
+  vectorBytes: Uint8Array;
+}
+
+function parseIndexPayload(payload: Uint8Array): ParsedIndexPayload | null {
   try {
     if (payload.byteLength < 4) return null;
     const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
@@ -544,34 +614,84 @@ export function decodeSemanticIndex(payload: Uint8Array): SemanticIndex | null {
       }
     }
     const vectorBytes = payload.subarray(4 + headerLength);
-    if (vectorBytes.byteLength !== header.rows.length * EMBEDDING_DIM * 4) return null;
-    // Copy through a fresh buffer: the sealed payload's offset carries no
-    // alignment guarantee for a Float32Array view.
-    const vectors = new Float32Array(vectorBytes.byteLength / 4);
-    new Uint8Array(vectors.buffer).set(vectorBytes);
-    return { modelVersion: header.modelVersion, rows: header.rows as SemanticRow[], vectors };
+    if (vectorBytes.byteLength !== header.rows.length * ROW_BYTES) return null;
+    return { modelVersion: header.modelVersion, rows: header.rows as SemanticRow[], vectorBytes };
   } catch {
     return null;
   }
 }
 
+export function decodeSemanticIndex(payload: Uint8Array): SemanticIndex | null {
+  const parsed = parseIndexPayload(payload);
+  if (!parsed) return null;
+  // Copy through a fresh buffer: the sealed payload's offset carries no
+  // alignment guarantee for a Float32Array view.
+  const vectors = new Float32Array(parsed.vectorBytes.byteLength / 4);
+  new Uint8Array(vectors.buffer).set(parsed.vectorBytes);
+  return { modelVersion: parsed.modelVersion, rows: parsed.rows, vectors };
+}
+
 // ---- Sealed persistence ----------------------------------------------------
+//
+// Stored the way the snapshot cache is: a small sealed manifest plus
+// SHARD_COUNT shards of rows bucketed by memo id (cache.ts shardOf). Each
+// shard is sealed under a fresh id bound into its additional data and listed
+// inside the manifest's ciphertext, so the set only ever opens as the exact
+// state one write produced. A save re-seals just the shards whose rows
+// changed, decided by row identity — reconcile hands unchanged memos' row
+// objects through untouched — never by re-serializing. A version-1 record
+// (the whole index as one sealed blob) still opens, and the next save writes
+// it out in shards: an upgrade costs one write, not a re-embed.
 
 const DB_NAME = "memo-index";
 const STORE = "kv";
 const RECORD_KEY = "index";
-const SEAL_PURPOSE = "memo-index:1";
+const LEGACY_SEAL_PURPOSE = "memo-index:1";
+const MANIFEST_SEAL_PURPOSE = "memo-index:2:manifest";
+const RECORD_VERSION = 2;
 let storeGeneration = 0;
 
-interface SealedIndexRecord {
-  v: number;
+function shardKey(shard: number): string {
+  return `index-shard:${shard}`;
+}
+
+function shardSealPurpose(shard: number, id: string): string {
+  return `memo-index:2:shard:${shard}:${id}`;
+}
+
+interface SealedBox {
   iv: Uint8Array<ArrayBuffer>;
   data: ArrayBuffer;
+}
+
+/** Stored under RECORD_KEY. `shards` is a clear-text copy of the ids the
+    ciphertext lists, used only as a concurrency token, never when opening. */
+interface IndexManifestRecord extends SealedBox {
+  v: number;
+  shards: string[];
+}
+
+interface IndexShardRecord extends SealedBox {
+  id: string;
+}
+
+interface IndexManifestPayload {
+  modelVersion: string;
+  dim: number;
+  shards: string[];
 }
 
 export interface SemanticIndexWriteToken {
   readonly generation: number;
 }
+
+/**
+ * What this tab last wrote or opened: per shard, the stored id and the exact
+ * row objects sealed in it. Tied to the key and model it was sealed under.
+ */
+let baseline: { key: object; modelVersion: string; shardIds: string[]; shardRows: (readonly SemanticRow[])[] } | null = null;
+/** Saves run one at a time, so each compares against the last one's baseline. */
+let saveTail: Promise<void> = Promise.resolve();
 
 /** Capture before long indexing work; a later clear invalidates this token. */
 export function captureSemanticIndexWriteToken(): SemanticIndexWriteToken {
@@ -589,37 +709,175 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
+function isSealedBox(value: unknown): value is SealedBox {
+  const box = value as Partial<SealedBox> | null | undefined;
+  return Boolean(box && box.iv instanceof Uint8Array && box.data instanceof ArrayBuffer);
+}
+
+function sameRows(a: readonly SemanticRow[], b: readonly SemanticRow[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) if (a[index] !== b[index]) return false;
+  return true;
+}
+
+type WriteOutcome = "written" | "skipped" | "conflict";
+
+/**
+ * Write a manifest and the shards it re-sealed. If the stored manifest no
+ * longer lists the ids of the shards this write keeps (the store was cleared
+ * or rewritten elsewhere), nothing is written and the caller writes in full.
+ */
+async function idbWrite(
+  record: IndexManifestRecord,
+  sealed: ReadonlyMap<number, IndexShardRecord>,
+  reused: readonly number[],
+  generation: number
+): Promise<WriteOutcome> {
+  const db = await openDb();
+  try {
+    return await new Promise<WriteOutcome>((resolve, reject) => {
+      const transaction = db.transaction(STORE, "readwrite");
+      const store = transaction.objectStore(STORE);
+      const current = store.get(RECORD_KEY);
+      let outcome: WriteOutcome = "skipped";
+      current.onsuccess = () => {
+        if (generation !== storeGeneration) return;
+        if (reused.length > 0) {
+          const stored = current.result as Partial<IndexManifestRecord> | undefined;
+          const storedShards = stored?.v === RECORD_VERSION && Array.isArray(stored.shards) ? stored.shards : null;
+          if (!storedShards || reused.some((shard) => storedShards[shard] !== record.shards[shard])) {
+            outcome = "conflict";
+            return;
+          }
+        }
+        for (const [shard, shardRecord] of sealed) store.put(shardRecord, shardKey(shard));
+        store.put(record, RECORD_KEY);
+        outcome = "written";
+      };
+      current.onerror = () => transaction.abort();
+      transaction.oncomplete = () => resolve(outcome);
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error ?? new Error("Index transaction aborted"));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function writeShards(index: SemanticIndex, generation: number, forceFull: boolean): Promise<void> {
+  const key = derivedKeyIdentity();
+  if (!key) return;
+  const buckets: number[][] = Array.from({ length: SHARD_COUNT }, () => []);
+  for (let row = 0; row < index.rows.length; row += 1) buckets[shardOf(index.rows[row].id)].push(row);
+  const base = !forceFull && baseline && baseline.key === key && baseline.modelVersion === index.modelVersion ? baseline : null;
+
+  const shardIds: string[] = [];
+  const shardRows: SemanticRow[][] = [];
+  const sealed = new Map<number, IndexShardRecord>();
+  const reused: number[] = [];
+  for (let shard = 0; shard < SHARD_COUNT; shard += 1) {
+    const rows = buckets[shard].map((row) => index.rows[row]);
+    shardRows.push(rows);
+    if (base && sameRows(base.shardRows[shard], rows)) {
+      shardIds.push(base.shardIds[shard]);
+      reused.push(shard);
+      continue;
+    }
+    const id = crypto.randomUUID();
+    const box = await sealDerivedBytes(shardSealPurpose(shard, id), encodeRows(index, buckets[shard]));
+    if (!box || generation !== storeGeneration) return;
+    shardIds.push(id);
+    sealed.set(shard, { id, iv: box.iv, data: box.data });
+  }
+
+  const manifest: IndexManifestPayload = { modelVersion: index.modelVersion, dim: EMBEDDING_DIM, shards: shardIds };
+  const box = await sealDerivedBytes(MANIFEST_SEAL_PURPOSE, new TextEncoder().encode(JSON.stringify(manifest)));
+  // A key swapped mid-write would leave shards sealed under two keys.
+  if (!box || generation !== storeGeneration || derivedKeyIdentity() !== key) return;
+  const outcome = await idbWrite({ v: RECORD_VERSION, iv: box.iv, data: box.data, shards: shardIds }, sealed, reused, generation);
+  if (outcome === "written") {
+    if (generation === storeGeneration) baseline = { key, modelVersion: index.modelVersion, shardIds, shardRows };
+    return;
+  }
+  baseline = null;
+  // Shards this write meant to keep are gone; a full write depends on
+  // nothing already stored.
+  if (outcome === "conflict" && !forceFull) await writeShards(index, generation, true);
+}
+
 /**
  * Persist the sealed index. Without the session key this is a deliberate
  * no-op — an unauthenticated device stores nothing, and the next authorized
  * session re-embeds instead.
  */
-export async function saveSemanticIndex(
+export function saveSemanticIndex(
   index: SemanticIndex,
   token: SemanticIndexWriteToken = captureSemanticIndexWriteToken()
 ): Promise<void> {
-  const generation = token.generation;
-  if (generation !== storeGeneration) return;
-  try {
-    const sealed = await sealDerivedBytes(SEAL_PURPOSE, encodeSemanticIndex(index));
-    if (!sealed || generation !== storeGeneration) return;
-    const record: SealedIndexRecord = { v: 1, iv: sealed.iv, data: sealed.data };
-    const db = await openDb();
+  const run = saveTail.then(async () => {
+    if (token.generation !== storeGeneration) return;
     try {
-      if (generation !== storeGeneration) return;
-      await new Promise<void>((resolve, reject) => {
-        const transaction = db.transaction(STORE, "readwrite");
-        transaction.objectStore(STORE).put(record, RECORD_KEY);
-        transaction.oncomplete = () => resolve();
-        transaction.onerror = () => reject(transaction.error);
-        transaction.onabort = () => reject(transaction.error ?? new Error("Index transaction aborted"));
-      });
-    } finally {
-      db.close();
+      await writeShards(index, token.generation, false);
+    } catch {
+      // Best-effort — a failed write only costs a re-embed next session.
+      baseline = null;
     }
-  } catch {
-    // Best-effort — a failed write only costs a re-embed next session.
+  });
+  saveTail = run;
+  return run;
+}
+
+async function openLegacyIndex(record: SealedBox, modelVersion: string, generation: number): Promise<SemanticIndex | null> {
+  const payload = await openDerivedBytes(LEGACY_SEAL_PURPOSE, record.iv, record.data);
+  if (!payload || generation !== storeGeneration) return null;
+  const index = decodeSemanticIndex(payload);
+  return index && index.modelVersion === modelVersion ? index : null;
+}
+
+async function openShardedIndex(
+  record: SealedBox,
+  shardRecords: readonly unknown[],
+  modelVersion: string,
+  generation: number
+): Promise<SemanticIndex | null> {
+  const key = derivedKeyIdentity();
+  if (!key) return null;
+  const plain = await openDerivedBytes(MANIFEST_SEAL_PURPOSE, record.iv, record.data);
+  if (!plain) return null;
+  const manifest = JSON.parse(new TextDecoder().decode(plain)) as Partial<IndexManifestPayload>;
+  if (
+    manifest.modelVersion !== modelVersion ||
+    manifest.dim !== EMBEDDING_DIM ||
+    !Array.isArray(manifest.shards) ||
+    manifest.shards.length !== SHARD_COUNT
+  ) {
+    return null;
   }
+  // The authenticated id list, not the clear-text copy, decides which shard
+  // ciphertexts belong to this manifest.
+  const parts: ParsedIndexPayload[] = [];
+  let rowCount = 0;
+  for (let shard = 0; shard < SHARD_COUNT; shard += 1) {
+    const id = manifest.shards[shard];
+    const shardRecord = shardRecords[shard] as Partial<IndexShardRecord> | undefined;
+    if (typeof id !== "string" || !shardRecord || shardRecord.id !== id || !isSealedBox(shardRecord)) return null;
+    const payload = await openDerivedBytes(shardSealPurpose(shard, id), shardRecord.iv, shardRecord.data);
+    const parsed = payload ? parseIndexPayload(payload) : null;
+    if (!parsed || parsed.modelVersion !== modelVersion || parsed.rows.some((row) => shardOf(row.id) !== shard)) return null;
+    parts.push(parsed);
+    rowCount += parsed.rows.length;
+  }
+  if (generation !== storeGeneration) return null;
+  const rows: SemanticRow[] = [];
+  const vectors = new Float32Array(rowCount * EMBEDDING_DIM);
+  const vectorBytes = new Uint8Array(vectors.buffer);
+  for (const part of parts) {
+    vectorBytes.set(part.vectorBytes, rows.length * ROW_BYTES);
+    for (const row of part.rows) rows.push(row);
+  }
+  // The very row objects returned here are what the next save compares to.
+  baseline = { key, modelVersion, shardIds: manifest.shards, shardRows: parts.map((part) => part.rows) };
+  return { modelVersion, rows, vectors };
 }
 
 /** The sealed index for this model version, or null (absent, unreadable, stale). */
@@ -627,24 +885,27 @@ export async function loadSemanticIndex(modelVersion: string): Promise<SemanticI
   const generation = storeGeneration;
   try {
     const db = await openDb();
-    let record: SealedIndexRecord | undefined;
+    let record: unknown;
+    let shardRecords: unknown[] = [];
     try {
-      record = await new Promise((resolve, reject) => {
+      [record, shardRecords] = await new Promise<[unknown, unknown[]]>((resolve, reject) => {
+        // One read transaction: the manifest and its shards as one write left them.
         const transaction = db.transaction(STORE, "readonly");
-        const request = transaction.objectStore(STORE).get(RECORD_KEY);
-        request.onsuccess = () => resolve(request.result as SealedIndexRecord | undefined);
-        request.onerror = () => reject(request.error);
+        const store = transaction.objectStore(STORE);
+        const head = store.get(RECORD_KEY);
+        const shards = Array.from({ length: SHARD_COUNT }, (_, shard) => store.get(shardKey(shard)));
+        transaction.oncomplete = () => resolve([head.result, shards.map((request) => request.result)]);
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error ?? new Error("Index transaction aborted"));
       });
     } finally {
       db.close();
     }
-    if (generation !== storeGeneration || !record || record.v !== 1 || !(record.iv instanceof Uint8Array) || !(record.data instanceof ArrayBuffer)) {
-      return null;
-    }
-    const payload = await openDerivedBytes(SEAL_PURPOSE, record.iv, record.data);
-    if (!payload || generation !== storeGeneration) return null;
-    const index = decodeSemanticIndex(payload);
-    return index && index.modelVersion === modelVersion ? index : null;
+    if (generation !== storeGeneration || !isSealedBox(record)) return null;
+    const version = (record as { v?: unknown }).v;
+    if (version === 1) return await openLegacyIndex(record, modelVersion, generation);
+    if (version === RECORD_VERSION) return await openShardedIndex(record, shardRecords, modelVersion, generation);
+    return null;
   } catch {
     return null;
   }
@@ -653,6 +914,7 @@ export async function loadSemanticIndex(modelVersion: string): Promise<SemanticI
 /** Drop the sealed index database entirely (logout cleanup). */
 export function deleteSemanticIndexDb(): Promise<void> {
   storeGeneration += 1;
+  baseline = null;
   return new Promise((resolve) => {
     try {
       const request = indexedDB.deleteDatabase(DB_NAME);

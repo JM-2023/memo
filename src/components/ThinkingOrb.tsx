@@ -78,8 +78,9 @@ interface PaintedOrb {
 export function ThinkingOrb({ state, size = 64, mute = false }: ThinkingOrbProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const reduced = useReducedMotion();
-  // Bumped by either theme channel — the manual [data-theme] override and the
-  // OS preference — so the next effect run re-reads the resolved tokens.
+  // Bumped when [data-theme] changes — it carries the resolved theme, OS
+  // preference included (src/lib/theme.ts) — so the next effect run re-reads
+  // the resolved tokens.
   const [themeEpoch, setThemeEpoch] = useState(0);
 
   // The mark on screen right now, and — during a morph — where it came from.
@@ -91,12 +92,7 @@ export function ThinkingOrb({ state, size = 64, mute = false }: ThinkingOrbProps
     const bump = () => setThemeEpoch((epoch) => epoch + 1);
     const observer = new MutationObserver(bump);
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    const media = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
-    media?.addEventListener("change", bump);
-    return () => {
-      observer.disconnect();
-      media?.removeEventListener("change", bump);
-    };
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {

@@ -1,10 +1,10 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { addDays, dateKey, formatDayLabel, startOfWeek, weekdayLabel } from "../lib/dates";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { addDays, dateFormat, dateKey, formatDayLabel, startOfWeek, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { buildHeatWeeks, type HeatCell, type PeriodKind } from "../lib/stats";
 import { SwapText } from "./SwapText";
-import { useTip } from "./Tip";
+import { useTip, withFocus } from "./Tip";
 
 interface HeatmapProps {
   countsByDay: Map<string, number>;
@@ -82,7 +82,7 @@ function useLocalToday(): Date {
 }
 
 function weekRangeLabel(start: Date, end: Date, locale: string): string {
-  const formatter = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" });
+  const formatter = dateFormat(locale, { month: "short", day: "numeric" });
   const withRange = formatter as Intl.DateTimeFormat & { formatRange?: (a: Date, b: Date) => string };
   return withRange.formatRange ? withRange.formatRange(start, end) : `${formatter.format(start)} – ${formatter.format(end)}`;
 }
@@ -100,7 +100,7 @@ function weekRangeLabel(start: Date, end: Date, locale: string): string {
  * Clicking a day toggles the feed's day filter. Day details ride the shared
  * portal tooltip so neighbouring cells can never cover them.
  */
-export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: HeatmapProps) {
+function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: HeatmapProps) {
   const { count, locale, tr } = useI18n();
   const tip = useTip();
   const now = useLocalToday();
@@ -141,12 +141,12 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
 
   const title = useMemo(() => {
     if (period === "week") return weekRangeLabel(start, end, locale);
-    if (period === "month") return new Intl.DateTimeFormat(locale, { year: "numeric", month: "long" }).format(start);
-    return new Intl.DateTimeFormat(locale, { year: "numeric" }).format(start);
+    if (period === "month") return dateFormat(locale, { year: "numeric", month: "long" }).format(start);
+    return dateFormat(locale, { year: "numeric" }).format(start);
   }, [locale, period, offset, todayStamp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const weekdayLabels = useMemo(() => {
-    const formatter = new Intl.DateTimeFormat(locale, { weekday: "narrow" });
+    const formatter = dateFormat(locale, { weekday: "narrow" });
     const monday = new Date(2026, 0, 5);
     return Array.from({ length: 7 }, (_, index) => formatter.format(new Date(2026, 0, monday.getDate() + index)));
   }, [locale]);
@@ -162,7 +162,7 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
 
   /** Which week column each month starts in (a band's top marks). */
   function monthMarksOf(band: HeatCell[][]): { week: number; label: string }[] {
-    const formatter = new Intl.DateTimeFormat(locale, { month: "short" });
+    const formatter = dateFormat(locale, { month: "short" });
     const marks: { week: number; label: string }[] = [];
     band.forEach((week, index) => {
       const firstOfMonth = week.find((cell) => cell.inRange && cell.key.endsWith("-01"));
@@ -244,15 +244,14 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
         )}
         aria-pressed={activeDay === cell.key}
         tabIndex={cell.key === rovingDay ? 0 : -1}
-        onFocus={() => setFocusedDay(cell.key)}
-        onKeyDown={(event) => moveCellFocus(event, cell.key)}
-        onMouseEnter={(event) =>
-          tip.show(event.currentTarget, {
+        {...withFocus(
+          tip.bind({
             strong: count(cell.count, "memo"),
             text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
-          })
-        }
-        onMouseLeave={tip.hide}
+          }),
+          () => setFocusedDay(cell.key)
+        )}
+        onKeyDown={(event) => moveCellFocus(event, cell.key)}
         onClick={() => onPickDay(activeDay === cell.key ? null : cell.key)}
       />
     ) : (
@@ -341,10 +340,7 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
           type="button"
           className="heatmap-title"
           onClick={goHome}
-          onMouseEnter={(event) => {
-            if (offset !== 0) tip.show(event.currentTarget, { text: tr(homeEn, homeZh) });
-          }}
-          onMouseLeave={tip.hide}
+          {...tip.bind(() => (offset !== 0 ? { text: tr(homeEn, homeZh) } : null))}
         >
           <SwapText id={gridKey} dir={swapDir} tweenWidth={false} className="heatmap-title-swap">
             {title}
@@ -383,3 +379,7 @@ export function Heatmap({ countsByDay, minDay, activeDay, period, onPickDay }: H
     </div>
   );
 }
+
+/** Memoized: a sidebar re-render that leaves these props alone skips the
+    whole subtree. */
+export const Heatmap = memo(HeatmapView);

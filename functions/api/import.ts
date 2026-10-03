@@ -44,12 +44,6 @@ interface CleanMemo {
   images: CleanImage[];
 }
 
-interface MemoResultIndexes {
-  claim: number;
-  images: number | null;
-  imageCount: number;
-}
-
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 // One legal memo may carry nine ~1.2MB base64 images; 14MB accepts that
 // worst-case single item while staying far below the old 95MB request buffer.
@@ -57,8 +51,13 @@ const MAX_REQUEST_BYTES = 14_000_000;
 // Auth consumes another D1 read. Keeping business statements <=36 leaves
 // ample room below the Free-plan 50-query per-invocation ceiling.
 const MAX_WRITE_STATEMENTS = 36;
-const MAX_INPUT_MEMOS = 12;
+// Text memos are written set-wise (one claim + one INSERT per json_each
+// group), so a chunk's statement cost no longer grows with its memo count.
+const MAX_INPUT_MEMOS = 100;
 const MAX_INPUT_TAGS = 18;
+// D1 caps a bound string at 2MB. A JSON group of at most 600k UTF-16 units
+// stays below that even if every unit encodes as three UTF-8 bytes.
+const MAX_GROUP_JSON_CHARS = 600_000;
 
 function isoOr(value: unknown, fallback: string): string {
   return typeof value === "string" && !Number.isNaN(Date.parse(value)) ? value : fallback;
@@ -192,18 +191,21 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
     }
   }
 
-  const statementCost = rawMemos.reduce((sum, memo) => sum + 3 + (memo.images.length > 0 ? 1 : 0), 0) + tags.length * 2;
-  if (statementCost > MAX_WRITE_STATEMENTS) {
+  // Lower bound (one text group); the exact cost is checked after sealing.
+  const imageMemoCount = rawMemos.filter((memo) => memo.images.length > 0).length;
+  const fixedCost = imageMemoCount + tags.length * 2;
+  if ((rawMemos.length > 0 ? 3 : 0) + fixedCost > MAX_WRITE_STATEMENTS) {
     return apiError(413, "INVALID_REQUEST_BODY", "This import chunk is too large. Split it into smaller chunks and retry.");
   }
 
   const db = context.env.DB;
   let pendingMemos = rawMemos;
   if (rawMemos.length > 0) {
-    const memoPlaceholders = rawMemos.map(() => "?").join(", ");
+    // json_each keeps both preflights at one bound value, well inside D1's
+    // 100-parameter ceiling however many memos and images the chunk holds.
     const existingResult = await db
-      .prepare(`SELECT id FROM memos WHERE id IN (${memoPlaceholders})`)
-      .bind(...rawMemos.map((memo) => memo.id))
+      .prepare("SELECT id FROM memos WHERE id IN (SELECT value FROM json_each(?))")
+      .bind(JSON.stringify(rawMemos.map((memo) => memo.id)))
       .all<{ id: string }>();
     const existingIds = new Set((existingResult.results ?? []).map((row) => row.id));
     skipped += existingIds.size;
@@ -212,10 +214,9 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
 
   const pendingImageIds = pendingMemos.flatMap((memo) => memo.images.map((image) => image.id));
   if (pendingImageIds.length > 0) {
-    const imagePlaceholders = pendingImageIds.map(() => "?").join(", ");
     const collision = await db
-      .prepare(`SELECT id FROM memo_images WHERE id IN (${imagePlaceholders}) LIMIT 1`)
-      .bind(...pendingImageIds)
+      .prepare("SELECT id FROM memo_images WHERE id IN (SELECT value FROM json_each(?)) LIMIT 1")
+      .bind(JSON.stringify(pendingImageIds))
       .first<{ id: string }>();
     if (collision) {
       return apiError(409, "BACKUP_IMAGE_INVALID", "An imported image id already belongs to another memo.");
@@ -223,6 +224,10 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   }
 
   const key = await contentKeyOf(context.env);
+  // One token per request: image and tombstone writes still only touch rows
+  // this request inserted, because a concurrent winner carries its own token.
+  const mutationToken = crypto.randomUUID();
+  const format: ContentFormat = key ? "enc1" : "plain";
   const memos = new Array<CleanMemo>(pendingMemos.length);
   let sealCursor = 0;
   const sealers = Array.from({ length: Math.min(4, pendingMemos.length) }, async () => {
@@ -232,46 +237,89 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
       memos[index] = {
         ...memo,
         stored: key ? await sealContent(key, memo.content) : memo.content,
-        format: key ? "enc1" : "plain",
-        mutationToken: crypto.randomUUID()
+        format,
+        mutationToken
       };
     }
   });
   await Promise.all(sealers);
 
-  const statements: D1PreparedStatement[] = [];
-  const memoIndexes: MemoResultIndexes[] = [];
+  // Rows travel as JSON arrays; a group closes before its JSON would pass
+  // the bound-value ceiling. A normal chunk is a single group.
+  const groups: string[][] = [];
+  let groupChars = 0;
   for (const memo of memos) {
-    const claim = statements.length;
+    const row = JSON.stringify([memo.id, memo.stored, memo.createdAt, memo.updatedAt, memo.pinnedAt, memo.deletedAt]);
+    const current = groups[groups.length - 1];
+    if (!current || groupChars + row.length + 1 > MAX_GROUP_JSON_CHARS) {
+      groups.push([row]);
+      groupChars = row.length + 2;
+    } else {
+      current.push(row);
+      groupChars += row.length + 1;
+    }
+  }
+  if (groups.length * 2 + (memos.length > 0 ? 1 : 0) + fixedCost > MAX_WRITE_STATEMENTS) {
+    return apiError(413, "INVALID_REQUEST_BODY", "This import chunk is too large. Split it into smaller chunks and retry.");
+  }
+
+  const statements: D1PreparedStatement[] = [];
+  const insertIndexes: number[] = [];
+  for (const rows of groups) {
+    const rowsJson = `[${rows.join(",")}]`;
+    // Set-based claim, as in trash.ts: the counter advances once by the
+    // number of rows still absent, and the INSERT hands those rows the
+    // claimed range in file order. Both run in one batch transaction, so they
+    // see the same absent set; a group with nothing new claims nothing.
     statements.push(
-      claimSeq(db, "NOT EXISTS (SELECT 1 FROM memos WHERE id = ?)", [memo.id]),
+      db
+        .prepare(
+          `UPDATE sync_counter
+           SET n = n + (SELECT COUNT(*) FROM json_each(?1) j WHERE NOT EXISTS (SELECT 1 FROM memos WHERE id = json_extract(j.value, '$[0]')))
+           WHERE id = 1 AND EXISTS (SELECT 1 FROM json_each(?1) j WHERE NOT EXISTS (SELECT 1 FROM memos WHERE id = json_extract(j.value, '$[0]')))
+           RETURNING n`
+        )
+        .bind(rowsJson)
+    );
+    insertIndexes.push(statements.length);
+    statements.push(
       db
         .prepare(
           `INSERT INTO memos (id, content, content_format, mutation_token, created_at, updated_at, pinned_at, deleted_at, seq)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ${CURRENT_SEQ_SQL}
-           WHERE NOT EXISTS (SELECT 1 FROM memos WHERE id = ?)`
+           SELECT id, content, ?2, ?3, created_at, updated_at, pinned_at, deleted_at,
+                  ${CURRENT_SEQ_SQL} - COUNT(*) OVER () + ROW_NUMBER() OVER (ORDER BY ord)
+           FROM (
+             SELECT CAST(j.key AS INTEGER) AS ord,
+                    json_extract(j.value, '$[0]') AS id,
+                    json_extract(j.value, '$[1]') AS content,
+                    json_extract(j.value, '$[2]') AS created_at,
+                    json_extract(j.value, '$[3]') AS updated_at,
+                    json_extract(j.value, '$[4]') AS pinned_at,
+                    json_extract(j.value, '$[5]') AS deleted_at
+             FROM json_each(?1) j
+           ) AS src
+           WHERE NOT EXISTS (SELECT 1 FROM memos m WHERE m.id = src.id)
+           RETURNING id`
         )
-        .bind(
-          memo.id,
-          memo.stored,
-          memo.format,
-          memo.mutationToken,
-          memo.createdAt,
-          memo.updatedAt,
-          memo.pinnedAt,
-          memo.deletedAt,
-          memo.id
-        ),
-      db
-        .prepare("DELETE FROM tombstones WHERE id = ? AND EXISTS (SELECT 1 FROM memos WHERE id = ? AND mutation_token = ?)")
-        .bind(memo.id, memo.id, memo.mutationToken)
+        .bind(rowsJson, format, mutationToken)
     );
-    let images: number | null = null;
-    if (memo.images.length > 0) {
-      images = statements.length;
-      statements.push(imageInsert(db, memo));
-    }
-    memoIndexes.push({ claim, images, imageCount: memo.images.length });
+  }
+  if (memos.length > 0) {
+    statements.push(
+      db
+        .prepare(
+          `DELETE FROM tombstones
+           WHERE id IN (SELECT value FROM json_each(?1))
+             AND EXISTS (SELECT 1 FROM memos m WHERE m.id = tombstones.id AND m.mutation_token = ?2)`
+        )
+        .bind(JSON.stringify(memos.map((memo) => memo.id)), mutationToken)
+    );
+  }
+  const imageIndexes: { memoId: string; index: number; imageCount: number }[] = [];
+  for (const memo of memos) {
+    if (memo.images.length === 0) continue;
+    imageIndexes.push({ memoId: memo.id, index: statements.length, imageCount: memo.images.length });
+    statements.push(imageInsert(db, memo));
   }
 
   const tagClaimIndexes: number[] = [];
@@ -302,19 +350,20 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
     }
     throw error;
   }
-  let imported = 0;
+  const insertedIds = new Set<string>();
+  for (const index of insertIndexes) {
+    for (const row of (results[index]?.results ?? []) as { id?: unknown }[]) {
+      if (typeof row.id === "string") insertedIds.add(row.id);
+    }
+  }
+  const imported = insertedIds.size;
+  skipped += memos.length - imported;
   let importedImages = 0;
-  memoIndexes.forEach((indexes) => {
-    if (claimedSeq(results[indexes.claim]) === null) {
-      skipped += 1;
-      return;
-    }
-    imported += 1;
-    if (indexes.images !== null) {
-      const changes = Number(results[indexes.images]?.meta?.changes ?? 0);
-      importedImages += Math.max(0, Math.min(indexes.imageCount, changes));
-    }
-  });
+  for (const { memoId, index, imageCount } of imageIndexes) {
+    if (!insertedIds.has(memoId)) continue;
+    const changes = Number(results[index]?.meta?.changes ?? 0);
+    importedImages += Math.max(0, Math.min(imageCount, changes));
+  }
   // Reading the claim results is intentional even though imported tag count
   // is not part of backup-v1's response: it makes missing-counter failures
   // surface through the batch instead of being mistaken for success.

@@ -1,8 +1,23 @@
+import { cacheKeyLookup, getOrCreateCacheKey, pendingContentCheck, settleContentCheck } from "./crypto";
 import { apiError, nowIso } from "./response";
 import type { AppContext, AppEnv } from "./types";
 
 const encoder = new TextEncoder();
 const SESSION_COOKIE = "memo_session";
+const DAY_SECONDS = 60 * 60 * 24;
+/** Lifetime of one issued cookie. */
+const SESSION_MAX_AGE = 30 * DAY_SECONDS;
+/** A cookie with less than this left is re-signed on a renewing request. */
+const SESSION_RENEW_WITHIN = 20 * DAY_SECONDS;
+/** Renewal never carries a session past this long after the passcode entry. */
+const SESSION_ABSOLUTE_MAX = 180 * DAY_SECONDS;
+/**
+ * Low-frequency authenticated GETs that may carry a renewed cookie: the
+ * heartbeat/warm-start sync and the cold bootstrap. Image and mutation
+ * responses never re-sign, and change-password stops the heartbeat while it
+ * rotates the generation, so a renewal cannot overwrite the rotated cookie.
+ */
+const RENEWING_PATHS = new Set(["/api/sync", "/api/bootstrap"]);
 // Migration 0005 keeps these legacy keys synchronized with auth_state during
 // rolling deploys and rollbacks. They also seed an upgraded database once.
 const PASSWORD_HASH_KEY = "local_password_hash";
@@ -97,10 +112,12 @@ function authStateFromRow(row: AuthStateRow): AuthStateSnapshot {
   return { passwordHash, sessionGeneration };
 }
 
+function authStateLookup(db: AuthDatabase): D1PreparedStatement {
+  return db.prepare("SELECT password_hash, session_generation FROM auth_state WHERE id = 1");
+}
+
 async function readAuthState(db: AuthDatabase): Promise<AuthStateSnapshot | null> {
-  const row = await db
-    .prepare("SELECT password_hash, session_generation FROM auth_state WHERE id = 1")
-    .first<AuthStateRow>();
+  const row = await authStateLookup(db).first<AuthStateRow>();
   return row ? authStateFromRow(row) : null;
 }
 
@@ -223,17 +240,24 @@ export async function verifyPassword(password: string, hashSetting: string | und
   return false;
 }
 
-export async function createSessionCookie(env: AppEnv, sessionGeneration: number): Promise<string> {
+/**
+ * Mint a session cookie for `sessionGeneration`. `signedInAt` (epoch seconds)
+ * is when the passcode was last entered; a renewal passes the original value
+ * so sliding renewal stays inside SESSION_ABSOLUTE_MAX.
+ */
+export async function createSessionCookie(env: AppEnv, sessionGeneration: number, signedInAt?: number): Promise<string> {
   if (!env.SESSION_SECRET) {
     throw new Error("SESSION_SECRET is missing");
   }
   if (!Number.isSafeInteger(sessionGeneration) || sessionGeneration < 0) {
     throw new Error("The session generation is invalid");
   }
-  const maxAge = 60 * 60 * 24 * 30;
-  const expiresAt = Math.floor(Date.now() / 1000) + maxAge;
+  const now = Math.floor(Date.now() / 1000);
+  const auth = signedInAt !== undefined && Number.isSafeInteger(signedInAt) && signedInAt <= now ? signedInAt : now;
+  const expiresAt = Math.min(now + SESSION_MAX_AGE, auth + SESSION_ABSOLUTE_MAX);
+  const maxAge = Math.max(0, expiresAt - now);
   const payload = base64UrlEncode(
-    encoder.encode(JSON.stringify({ sub: "owner", exp: expiresAt, gen: sessionGeneration, nonce: crypto.randomUUID() }))
+    encoder.encode(JSON.stringify({ sub: "owner", exp: expiresAt, gen: sessionGeneration, auth, nonce: crypto.randomUUID() }))
   );
   const signature = await hmac(env.SESSION_SECRET, payload);
   return `${SESSION_COOKIE}=${encodeURIComponent(`${payload}.${signature}`)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
@@ -243,49 +267,183 @@ export function clearSessionCookie(): string {
   return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
 }
 
-async function hasValidSession(env: AppEnv, request: Request): Promise<boolean> {
+/** What requireAuth established for this request; read back via verifiedSession. */
+export interface VerifiedSession {
+  /** The auth_state row read in this request (hash + current generation). */
+  state: AuthStateSnapshot;
+  expiresAt: number;
+  signedInAt: number;
+  /** The client cache-key row read in the same D1 batch. */
+  cacheKeyRow: { value_json: string } | null;
+}
+
+/** Keyed by the request's shared `context.data`, so it lives exactly one request. */
+const verifiedSessions = new WeakMap<object, VerifiedSession>();
+
+type SessionCheck = { ok: true; session: VerifiedSession } | { ok: false; revoked: boolean };
+
+interface SessionPayload {
+  sub?: unknown;
+  exp?: unknown;
+  gen?: unknown;
+  auth?: unknown;
+}
+
+function readSignedPayload(token: string): SessionPayload | null {
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(base64UrlDecode(token))) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as SessionPayload) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The cookie half of session validation: signature, subject and expiry are
+ * checked locally, with no D1 read. Returns the generation the cookie was
+ * minted under, or null when the cookie itself is not acceptable. Callers
+ * must still compare the generation with the canonical auth_state row.
+ */
+export async function readSessionClaims(env: AppEnv, request: Request): Promise<{ gen: number } | null> {
   if (!env.SESSION_SECRET) {
     throw new Error("SESSION_SECRET is missing");
   }
   const token = cookieValue(request, SESSION_COOKIE);
-  if (!token) {
-    return false;
-  }
+  if (!token) return null;
   const [payload, signature] = token.split(".");
-  if (!payload || !signature) {
-    return false;
-  }
+  if (!payload || !signature) return null;
   const expected = await hmac(env.SESSION_SECRET, payload);
-  if (!(await timingSafeEqual(signature, expected))) {
-    return false;
+  if (!(await timingSafeEqual(signature, expected))) return null;
+  const parsed = readSignedPayload(payload);
+  if (!parsed || parsed.sub !== "owner" || typeof parsed.exp !== "number" || parsed.exp < Math.floor(Date.now() / 1000)) {
+    return null;
   }
-  try {
-    const parsed = JSON.parse(new TextDecoder().decode(base64UrlDecode(payload))) as { sub?: string; exp?: number; gen?: number };
-    if (parsed.sub !== "owner" || !parsed.exp || parsed.exp < Math.floor(Date.now() / 1000)) {
-      return false;
-    }
-    // Cookies minted before the last passcode change carry a stale generation
-    // and stop being accepted. Reading the canonical row also lazily seeds a
-    // fresh deployment from APP_PASSWORD_HASH.
-    const state = await configuredAuthState(env);
-    return state !== null && (parsed.gen ?? 0) === state.sessionGeneration;
-  } catch {
-    return false;
-  }
+  return { gen: typeof parsed.gen === "number" ? parsed.gen : 0 };
 }
 
-/** Gate for every data endpoint: a Response means "denied", null means "go ahead". */
-export async function requireAuth(context: AppContext): Promise<Response | null> {
-  try {
-    if (await hasValidSession(context.env, context.request)) {
-      return null;
-    }
-  } catch {
-    return apiError(500, "INTERNAL_ERROR", "Authentication could not be verified.");
-  }
+/** The 401 every data endpoint answers with once a session is not valid. */
+export function authRequiredResponse(): Response {
   const denied = apiError(401, "AUTH_REQUIRED", "Authentication required");
   // A revoked/expired session is the other confidentiality boundary where a
   // browser must discard legacy authenticated image cache entries.
   denied.headers.set("Clear-Site-Data", '"cache"');
   return denied;
+}
+
+async function checkSession(env: AppEnv, secret: string, request: Request): Promise<SessionCheck> {
+  const token = cookieValue(request, SESSION_COOKIE);
+  if (!token) {
+    return { ok: false, revoked: false };
+  }
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) {
+    return { ok: false, revoked: false };
+  }
+  const expected = await hmac(secret, payload);
+  if (!(await timingSafeEqual(signature, expected))) {
+    return { ok: false, revoked: false };
+  }
+  const parsed = readSignedPayload(payload);
+  const now = Math.floor(Date.now() / 1000);
+  // Browsers drop a cookie at Max-Age, so an expired one rarely arrives; when
+  // it does it is treated like no cookie at all, never as a revocation.
+  if (!parsed || parsed.sub !== "owner" || typeof parsed.exp !== "number" || parsed.exp < now) {
+    return { ok: false, revoked: false };
+  }
+
+  // One D1 round trip: the generation check, the client cache key this
+  // request may hand out, and (on a cold isolate) the content-key sample.
+  const db = env.DB.withSession("first-primary");
+  const contentCheck = pendingContentCheck(env, db);
+  const [stateResult, cacheKeyResult, sampleResult] = await db.batch([
+    authStateLookup(db),
+    cacheKeyLookup(db),
+    ...(contentCheck ? [contentCheck] : [])
+  ]);
+  if (sampleResult) {
+    await settleContentCheck(env, (sampleResult.results?.[0] as { content: string } | undefined) ?? null);
+  }
+  const stateRow = stateResult.results?.[0] as unknown as AuthStateRow | undefined;
+  // A missing row lazily seeds a fresh deployment from APP_PASSWORD_HASH.
+  const state = stateRow ? authStateFromRow(stateRow) : await configuredAuthState(env);
+
+  // A correctly signed, unexpired cookie whose generation no longer matches
+  // was revoked by a passcode change (or its database was replaced). The
+  // client treats only this case like a logout and clears the device.
+  const generation = typeof parsed.gen === "number" ? parsed.gen : 0;
+  if (state === null || generation !== state.sessionGeneration) {
+    return { ok: false, revoked: true };
+  }
+  const signedInAt =
+    typeof parsed.auth === "number" && Number.isSafeInteger(parsed.auth) ? parsed.auth : parsed.exp - SESSION_MAX_AGE;
+  return {
+    ok: true,
+    session: {
+      state,
+      expiresAt: parsed.exp,
+      signedInAt,
+      cacheKeyRow: (cacheKeyResult.results?.[0] as { value_json: string } | undefined) ?? null
+    }
+  };
+}
+
+/** Gate for every data endpoint: a Response means "denied", null means "go ahead". */
+export async function requireAuth(context: AppContext): Promise<Response | null> {
+  const { env } = context;
+  if (!env.SESSION_SECRET) {
+    return serverMisconfigured();
+  }
+  let check: SessionCheck;
+  try {
+    check = await checkSession(env, env.SESSION_SECRET, context.request);
+  } catch {
+    // A D1 hiccup is not a sign-out: answering 401 here would send a
+    // signed-in device back to the passcode gate.
+    return apiError(500, "INTERNAL_ERROR", "Authentication could not be verified.");
+  }
+  if (check.ok) {
+    verifiedSessions.set(context.data, check.session);
+    return null;
+  }
+  const denied = check.revoked
+    ? apiError(401, "AUTH_REQUIRED", "Authentication required", { reason: "revoked" })
+    : apiError(401, "AUTH_REQUIRED", "Authentication required");
+  // A revoked/expired session is the other confidentiality boundary where a
+  // browser must discard legacy authenticated image cache entries.
+  denied.headers.set("Clear-Site-Data", '"cache"');
+  return denied;
+}
+
+/** The session requireAuth verified for this request, or null before/without it. */
+export function verifiedSession(context: AppContext): VerifiedSession | null {
+  return verifiedSessions.get(context.data) ?? null;
+}
+
+/** The client snapshot key for an authenticated request, reusing requireAuth's read. */
+export function sessionCacheKey(context: AppContext): Promise<string> {
+  return getOrCreateCacheKey(context.env, verifiedSession(context)?.cacheKeyRow);
+}
+
+/**
+ * Sliding renewal: a fresh cookie for a successful renewing GET whose session
+ * has less than SESSION_RENEW_WITHIN left. It carries the generation read in
+ * this same request and the original sign-in time, so it can neither outlive
+ * SESSION_ABSOLUTE_MAX nor resurrect a generation that was already stale.
+ * Costs no D1 work; null means "leave the cookie alone".
+ */
+export async function renewedSessionCookie(context: AppContext): Promise<string | null> {
+  const { request, env } = context;
+  if (request.method !== "GET" || !RENEWING_PATHS.has(new URL(request.url).pathname)) return null;
+  const session = verifiedSession(context);
+  if (!session || !env.SESSION_SECRET) return null;
+  const now = Math.floor(Date.now() / 1000);
+  if (session.expiresAt - now >= SESSION_RENEW_WITHIN) return null;
+  // Already at the absolute cap: re-signing could not extend it.
+  if (session.signedInAt + SESSION_ABSOLUTE_MAX <= session.expiresAt) return null;
+  return createSessionCookie(env, session.state.sessionGeneration, session.signedInAt);
+}
+
+/** SESSION_SECRET is a deploy-time secret; say so instead of "try again". */
+export function serverMisconfigured(): Response {
+  return apiError(500, "SERVER_MISCONFIGURED", "The server is missing SESSION_SECRET.", { secret: "SESSION_SECRET" });
 }

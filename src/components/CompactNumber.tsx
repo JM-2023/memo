@@ -7,7 +7,8 @@ export function CompactNumber({ value }: { value: number }) {
   const { locale, formatNumber } = useI18n();
   const display = compactNumber(value, locale);
   return (
-    <span className="compact-number" role="text" aria-label={formatNumber(value)}>
+    <span className="compact-number">
+      <span className="sr-only">{formatNumber(value)}</span>
       <span aria-hidden="true">
         <RollingText value={value} text={display.number} />
         <RollingText value={value} text={display.unit} align="left" />

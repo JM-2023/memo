@@ -6,6 +6,8 @@ import { useI18n } from "../lib/i18n";
 interface RangeCalendarProps {
   from: string | null;
   to: string | null;
+  /** Earliest day with a memo: earlier days are idle and ‹ stops at its month. */
+  minDay?: string | null;
   /** First tap: a start with an open end ("since"). */
   onStart: (day: string) => void;
   /** Second tap: the whole range at once, ordered. */
@@ -24,12 +26,13 @@ function keyToDate(key: string): Date {
  * the first sets the start and filters "since" right away, the second closes
  * the range — tapped before the start, the two simply swap. While the end is
  * pending the hovered day previews the span. Monday-first like the heatmap;
- * days after today are idle, since no memo can live there.
+ * days after today are idle, since no memo can live there — and so are days
+ * before the first memo, so ‹ never pages into empty years.
  *
  * One cell is tabbable (roving tabindex): arrows step a day / a week, Page
  * keys a month, so the grid is one stop in the panel's tab order, not 42.
  */
-export function RangeCalendar({ from, to, onStart, onRange }: RangeCalendarProps) {
+export function RangeCalendar({ from, to, minDay = null, onStart, onRange }: RangeCalendarProps) {
   const { locale, tr } = useI18n();
   const today = dateKey(new Date());
   const [pickingEnd, setPickingEnd] = useState(false);
@@ -68,7 +71,7 @@ export function RangeCalendar({ from, to, onStart, onRange }: RangeCalendarProps
   const [lo, hi] = from && previewEnd ? (from <= previewEnd ? [from, previewEnd] : [previewEnd, from]) : [from, from];
 
   function moveFocus(next: string) {
-    const clamped = next > today ? today : next;
+    const clamped = next > today ? today : minDay !== null && next < minDay ? minDay : next;
     setFocusKey(clamped);
     requestAnimationFrame(() => gridRef.current?.querySelector<HTMLButtonElement>(`[data-day="${clamped}"]`)?.focus());
   }
@@ -76,7 +79,9 @@ export function RangeCalendar({ from, to, onStart, onRange }: RangeCalendarProps
   function shiftMonth(delta: number) {
     const target = new Date(year, month + delta, 1);
     const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
-    setFocusKey(dateKey(new Date(target.getFullYear(), target.getMonth(), Math.min(focusDate.getDate(), lastDay))));
+    const next = dateKey(new Date(target.getFullYear(), target.getMonth(), Math.min(focusDate.getDate(), lastDay)));
+    // Keep the roving stop on a live cell when the first memo's month opens.
+    setFocusKey(minDay !== null && next < minDay ? minDay : next);
   }
 
   function pick(day: string) {
@@ -105,6 +110,7 @@ export function RangeCalendar({ from, to, onStart, onRange }: RangeCalendarProps
   }
 
   const atCurrentMonth = year === keyToDate(today).getFullYear() && month === keyToDate(today).getMonth();
+  const atFirstMonth = minDay !== null && dateKey(new Date(year, month, 0)) < minDay;
   const startLabel = from ? formatDayLabel(from, locale) : tr("Start", "开始");
   const endLabel = to ? formatDayLabel(to, locale) : awaitingEnd ? tr("Pick an end", "选择结束日") : tr("Today", "今天");
 
@@ -118,7 +124,13 @@ export function RangeCalendar({ from, to, onStart, onRange }: RangeCalendarProps
         <span className={to ? "is-set" : awaitingEnd ? "is-pending" : ""}>{endLabel}</span>
       </div>
       <div className="range-cal-head">
-        <button type="button" className="range-cal-nav" aria-label={tr("Previous month", "上个月")} onClick={() => shiftMonth(-1)}>
+        <button
+          type="button"
+          className="range-cal-nav"
+          aria-label={tr("Previous month", "上个月")}
+          disabled={atFirstMonth}
+          onClick={() => shiftMonth(-1)}
+        >
           <ChevronLeft size={14} aria-hidden="true" />
         </button>
         <span className="range-cal-month">{formatMonthYear(year, month, locale)}</span>
@@ -146,7 +158,7 @@ export function RangeCalendar({ from, to, onStart, onRange }: RangeCalendarProps
           </span>
         ))}
         {cells.map((cell) => {
-          const future = cell.key > today;
+          const idle = cell.key > today || (minDay !== null && cell.key < minDay);
           const inSpan = lo !== null && hi !== null && cell.key >= lo && cell.key <= hi;
           const isEdge = cell.key === lo || cell.key === hi;
           const classes = [
@@ -166,7 +178,7 @@ export function RangeCalendar({ from, to, onStart, onRange }: RangeCalendarProps
               type="button"
               data-day={cell.key}
               className={classes}
-              disabled={future}
+              disabled={idle}
               tabIndex={cell.key === focusKey ? 0 : -1}
               aria-pressed={isEdge && from !== null}
               aria-label={fullDay.format(keyToDate(cell.key))}

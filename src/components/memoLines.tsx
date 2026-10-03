@@ -1,5 +1,5 @@
 import { MathFormula } from "./MathFormula";
-import { Fragment, type CSSProperties, type ReactNode } from "react";
+import { Fragment, memo, type CSSProperties, type ReactNode } from "react";
 import { tokenizeLine } from "../lib/content";
 import { useI18n } from "../lib/i18n";
 import { parseBlock, parseInline, type Inline } from "../lib/markdown";
@@ -24,12 +24,16 @@ interface MemoLineProps {
   nextRaw?: string;
   tagMode: TagMode;
   onPickTag?: (path: string) => void;
+  /** This row's index in memo.content.split("\n"), handed back to onToggleTask. */
+  lineKey?: number;
   /**
-   * Live task checkbox: called with the desired checked state. Only honored
-   * in "button" tag mode — trash cards, ghosts and replay clones render the
-   * same-geometry inert box instead.
+   * Live task checkbox: called with the row's lineKey and the desired checked
+   * state. Taking the key (instead of a per-row closure) lets the card pass
+   * one stable callback, so the memoized row can skip re-rendering. Only
+   * honored in "button" tag mode — trash cards, ghosts and replay clones
+   * render the same-geometry inert box instead.
    */
-  onToggleTask?: (checked: boolean) => void;
+  onToggleTask?: (lineKey: number, checked: boolean) => void;
   /**
    * Optimistic checkbox override while a toggle is in flight. The raw line
    * stays the server truth; only the rendered mark (and its done styling)
@@ -93,8 +97,12 @@ function renderInline(nodes: Inline[], tagMode: TagMode, onPickTag?: (path: stri
  * never appears here; the null branch stays as a guard. The collapse decision
  * below stays on tokenizeLine — lineRenders() in lib/lineDiff mirrors it
  * exactly, and markdown only changes HOW a row renders, never WHETHER.
+ *
+ * Memoized: every prop is a primitive or a stable callback, so a card
+ * re-render (entering select mode, a sibling row's checkbox) re-parses only
+ * the rows whose inputs changed.
  */
-export function MemoLine({ raw, nextRaw, tagMode, onPickTag, onToggleTask, taskCheckedOverride }: MemoLineProps) {
+export const MemoLine = memo(function MemoLine({ raw, nextRaw, tagMode, onPickTag, lineKey, onToggleTask, taskCheckedOverride }: MemoLineProps) {
   const { tr } = useI18n();
   if (!raw) return <p className="memo-blank" />;
   const tokens = tokenizeLine(raw);
@@ -157,7 +165,7 @@ export function MemoLine({ raw, nextRaw, tagMode, onPickTag, onToggleTask, taskC
               role="checkbox"
               aria-checked={checked}
               aria-label={block.text || tr("Task", "任务")}
-              onClick={() => onToggleTask(!checked)}
+              onClick={() => onToggleTask(lineKey ?? 0, !checked)}
             />
           ) : (
             <span className="md-task-box" aria-hidden="true" />
@@ -169,4 +177,4 @@ export function MemoLine({ raw, nextRaw, tagMode, onPickTag, onToggleTask, taskC
     default:
       return <p>{inline}</p>;
   }
-}
+});

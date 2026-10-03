@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AuthRequiredError, syncSince, type SyncResponse } from "./api";
+import { AuthRequiredError, isSessionRevoked, syncSince, type SyncResponse } from "./api";
 import { adoptCacheKey } from "./cache";
 import type { Memo, TagMeta } from "./types";
 import { changesAfterCursor, type PurgedMemo } from "./syncState";
@@ -7,7 +7,8 @@ import { changesAfterCursor, type PurgedMemo } from "./syncState";
 interface UseSyncOptions {
   enabled: boolean;
   applyChanges: (memos: readonly Memo[], purged: readonly PurgedMemo[], tags: readonly TagMeta[], cursor: number) => void;
-  onAuthLost: () => void;
+  /** `revoked`: the passcode changed elsewhere, so the device clears its data. */
+  onAuthLost: (revoked: boolean) => void;
   onPeerLogout: () => void;
   onServerReset: () => void;
 }
@@ -16,7 +17,7 @@ type PeerSyncResponse = Omit<SyncResponse, "cacheKey">;
 type SyncChannelMessage =
   | { type: "changed" }
   | { type: "logout" }
-  | { type: "auth-lost" }
+  | { type: "auth-lost"; revoked?: boolean }
   | { type: "delta"; since: number; data: PeerSyncResponse };
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -144,12 +145,13 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
           if (!enabledRef.current) return;
           if (cause instanceof AuthRequiredError) {
             cancelRetry();
+            const revoked = isSessionRevoked(cause);
             try {
-              channelRef.current?.postMessage({ type: "auth-lost" } satisfies SyncChannelMessage);
+              channelRef.current?.postMessage({ type: "auth-lost", revoked } satisfies SyncChannelMessage);
             } catch {
               // The current tab still locks immediately below.
             }
-            authLostRef.current();
+            authLostRef.current(revoked);
             return;
           }
           scheduleRetry();
@@ -207,7 +209,15 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
 
   const postMessage = useCallback((message: SyncChannelMessage) => {
     try {
-      channelRef.current?.postMessage(message);
+      if (channelRef.current) channelRef.current.postMessage(message);
+      else if (message.type === "logout") {
+        // Logout pauses this hook (closing its channel) before the server
+        // confirms; siblings must still hear about it. Messages already
+        // posted are delivered even though the sender closes at once.
+        const channel = new BroadcastChannel("memo-sync");
+        channel.postMessage(message);
+        channel.close();
+      }
     } catch {
       // A focus/online/heartbeat pull remains as fallback.
     }
@@ -226,7 +236,7 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
         const message = event.data;
         if (message === "changed" || message?.type === "changed") scheduleSync(0);
         else if (message?.type === "logout") peerLogoutRef.current();
-        else if (message?.type === "auth-lost") authLostRef.current();
+        else if (message?.type === "auth-lost") authLostRef.current(message.revoked === true);
         else if (message?.type === "delta") {
           window.clearTimeout(coordinationFallbackRef.current);
           coordinationFallbackRef.current = 0;

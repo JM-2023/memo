@@ -5,7 +5,7 @@ import type { AppContext } from "./_utils/types";
 
 /**
  * Empty Trash as one set-based transaction. The selected set cannot change
- * between tombstone creation, attachment deletion, and memo deletion. Each
+ * between attachment deletion, tombstone creation, and memo deletion. Each
  * tombstone receives its own seq so sync pages remain strictly bounded.
  */
 export async function onRequestDelete(context: AppContext): Promise<Response> {
@@ -20,6 +20,10 @@ export async function onRequestDelete(context: AppContext): Promise<Response> {
   await contentKeyOf(context.env);
 
   const db = context.env.DB;
+  // Attachments go before the tombstone insert: on a full database (the
+  // STORAGE_FULL answer points the owner here) the insert may need a fresh
+  // page, which the freed image pages supply within the same transaction.
+  // The trashed memo rows every step selects on stay until the last step.
   const results = await db.batch([
     db.prepare(
       `UPDATE sync_counter
@@ -27,6 +31,7 @@ export async function onRequestDelete(context: AppContext): Promise<Response> {
        WHERE id = 1 AND EXISTS (SELECT 1 FROM memos WHERE deleted_at IS NOT NULL)
        RETURNING n`
     ),
+    db.prepare("DELETE FROM memo_images WHERE memo_id IN (SELECT id FROM memos WHERE deleted_at IS NOT NULL)"),
     db.prepare(
       `INSERT OR REPLACE INTO tombstones (id, seq)
        SELECT id,
@@ -37,10 +42,9 @@ export async function onRequestDelete(context: AppContext): Promise<Response> {
        WHERE deleted_at IS NOT NULL
        RETURNING id, seq`
     ),
-    db.prepare("DELETE FROM memo_images WHERE memo_id IN (SELECT id FROM memos WHERE deleted_at IS NOT NULL)"),
     db.prepare("DELETE FROM memos WHERE deleted_at IS NOT NULL")
   ]);
 
-  const purged = ((results[1]?.results ?? []) as unknown as { id: string; seq: number }[]).sort((left, right) => left.seq - right.seq);
+  const purged = ((results[2]?.results ?? []) as unknown as { id: string; seq: number }[]).sort((left, right) => left.seq - right.seq);
   return json({ ok: true, purged, purgedIds: purged.map((row) => row.id) });
 }

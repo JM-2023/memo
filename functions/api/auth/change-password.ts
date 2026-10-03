@@ -1,4 +1,12 @@
-import { changePasswordAtomically, configuredAuthState, createSessionCookie, hashPassword, requireAuth, verifyPassword } from "../_utils/auth";
+import {
+  changePasswordAtomically,
+  configuredAuthState,
+  createSessionCookie,
+  hashPassword,
+  requireAuth,
+  verifiedSession,
+  verifyPassword
+} from "../_utils/auth";
 import { apiError, json, readJson, requireSameOrigin } from "../_utils/response";
 import type { AppContext } from "../_utils/types";
 
@@ -24,7 +32,9 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
   }
 
   try {
-    const state = await configuredAuthState(context.env);
+    // requireAuth already read the canonical row in this request; the
+    // conditional UPDATE below still rejects it if it went stale since.
+    const state = verifiedSession(context)?.state ?? (await configuredAuthState(context.env));
     if (!state || !(await verifyPassword(current, state.passwordHash))) {
       return apiError(401, "WRONG_CURRENT_PASSCODE", "Wrong current passcode");
     }

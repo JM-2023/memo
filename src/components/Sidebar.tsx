@@ -1,5 +1,5 @@
 import { ChevronDown, Cpu, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sparkles, Sun, SunMoon, Trash2, Upload, type LucideIcon } from "lucide-react";
-import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { memo, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useI18n } from "../lib/i18n";
 import { dayKeyOf, periodStats, totalStats, type PeriodKind } from "../lib/stats";
 import type { TagNode } from "../lib/tags";
@@ -60,7 +60,7 @@ const THEME_OPTIONS: { choice: ThemeChoice; icon: LucideIcon; en: string; zh: st
   { choice: "dark", icon: Moon, en: "Dark", zh: "深色" }
 ];
 
-export function Sidebar(props: SidebarProps) {
+function SidebarView(props: SidebarProps) {
   const { memos, tagTree, uniqueTagCount, countsByDay, activeTag, activeDay, filtersActive, view, trashCount, theme } = props;
   const { language, setLanguage, tr, count } = useI18n();
   const tip = useTip();
@@ -157,10 +157,7 @@ export function Sidebar(props: SidebarProps) {
                         className={active ? "is-active" : ""}
                         aria-checked={active}
                         aria-label={tr(option.en, option.zh)}
-                        onMouseEnter={(event) => tip.show(event.currentTarget, { text: tr(option.en, option.zh) })}
-                        onMouseLeave={tip.hide}
-                        onFocus={(event) => tip.show(event.currentTarget, { text: tr(option.en, option.zh) })}
-                        onBlur={tip.hide}
+                        {...tip.bind({ text: tr(option.en, option.zh) })}
                         onClick={() => props.onSetTheme(option.choice)}
                       >
                         <Icon size={14} aria-hidden="true" />
@@ -292,10 +289,7 @@ export function Sidebar(props: SidebarProps) {
             type="button"
             className="stat-cell"
             onClick={props.onOpenStats}
-            onMouseEnter={(event) => tip.show(event.currentTarget, { strong: count(totals.memoCount, "memo"), text: tr("View detailed statistics", "查看详细统计") })}
-            onFocus={(event) => tip.show(event.currentTarget, { strong: count(totals.memoCount, "memo"), text: tr("View detailed statistics", "查看详细统计") })}
-            onBlur={tip.hide}
-            onMouseLeave={tip.hide}
+            {...tip.bind({ strong: count(totals.memoCount, "memo"), text: tr("View detailed statistics", "查看详细统计") })}
           >
             <span className="stat-number">
               <CompactNumber value={totals.memoCount} />
@@ -306,10 +300,7 @@ export function Sidebar(props: SidebarProps) {
             type="button"
             className="stat-cell"
             onClick={props.onOpenStats}
-            onMouseEnter={(event) => tip.show(event.currentTarget, { strong: count(uniqueTagCount, "tag"), text: tr("View detailed statistics", "查看详细统计") })}
-            onFocus={(event) => tip.show(event.currentTarget, { strong: count(uniqueTagCount, "tag"), text: tr("View detailed statistics", "查看详细统计") })}
-            onBlur={tip.hide}
-            onMouseLeave={tip.hide}
+            {...tip.bind({ strong: count(uniqueTagCount, "tag"), text: tr("View detailed statistics", "查看详细统计") })}
           >
             <span className="stat-number">
               <CompactNumber value={uniqueTagCount} />
@@ -320,15 +311,10 @@ export function Sidebar(props: SidebarProps) {
             type="button"
             className="stat-cell"
             onClick={props.onOpenStats}
-            onMouseEnter={(event) =>
-              tip.show(event.currentTarget, {
-                strong: tr(`${count(totals.activeDays, "day")} with at least one memo`, `有笔记的天数：${count(totals.activeDays, "day")}`),
-                text: tr(`${count(totals.daySpan, "day")} since the first memo`, `距首条笔记 ${count(totals.daySpan, "day")}`)
-              })
-            }
-            onFocus={(event) => tip.show(event.currentTarget, { strong: count(totals.activeDays, "day"), text: tr(`${count(totals.daySpan, "day")} since the first memo`, `距首条笔记 ${count(totals.daySpan, "day")}`) })}
-            onBlur={tip.hide}
-            onMouseLeave={tip.hide}
+            {...tip.bind({
+              strong: tr(`${count(totals.activeDays, "day")} with at least one memo`, `有笔记的天数：${count(totals.activeDays, "day")}`),
+              text: tr(`${count(totals.daySpan, "day")} since the first memo`, `距首条笔记 ${count(totals.daySpan, "day")}`)
+            })}
           >
             {/* Active days, not the calendar span since the first memo: a
                 span reads like a streak, and it was the one figure here that
@@ -361,11 +347,9 @@ export function Sidebar(props: SidebarProps) {
           <button
             type="button"
             className="period-figures"
+            // A tap shows the figures' bubble on purpose (touch has no hover).
             onClick={(event) => tip.show(event.currentTarget, periodTip)}
-            onMouseEnter={(event) => tip.show(event.currentTarget, periodTip)}
-            onFocus={(event) => tip.show(event.currentTarget, periodTip)}
-            onMouseLeave={tip.hide}
-            onBlur={tip.hide}
+            {...tip.bind(periodTip)}
           >
             <span>
               <strong>
@@ -446,3 +430,7 @@ export function Sidebar(props: SidebarProps) {
     </div>
   );
 }
+
+/** Memoized: App re-renders on every keystroke, and none of that reaches here
+    unless the data or a (stable) handler actually changed. */
+export const Sidebar = memo(SidebarView);

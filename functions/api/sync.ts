@@ -1,5 +1,5 @@
-import { requireAuth } from "./_utils/auth";
-import { getOrCreateCacheKey, openContentRows, scheduleEncryptionBackfill } from "./_utils/crypto";
+import { requireAuth, sessionCacheKey } from "./_utils/auth";
+import { openContentRows, scheduleEncryptionBackfill } from "./_utils/crypto";
 import {
   groupImages,
   MEMO_COLUMNS,
@@ -31,24 +31,54 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
   const limit = parsePageLimit(url.searchParams.get("limit"));
   const db = context.env.DB;
 
-  const [counterResult, cutoffResult] = await db.batch([
+  // One batch, one transaction: every statement derives the same page cutoff
+  // from the combined memo, tombstone, and tag seq stream, so the client pays
+  // a single D1 round trip whether or not anything changed.
+  const cutoffSql = `(WITH changed(seq) AS (
+      SELECT seq FROM memos INDEXED BY idx_memos_seq_id
+        WHERE seq > ?1 AND seq <= (SELECT n FROM sync_counter WHERE id = 1)
+      UNION ALL
+      SELECT seq FROM tombstones INDEXED BY idx_tombstones_seq_id
+        WHERE seq > ?1 AND seq <= (SELECT n FROM sync_counter WHERE id = 1)
+      UNION ALL
+      SELECT seq FROM tag_meta INDEXED BY idx_tag_meta_seq_path
+        WHERE seq > ?1 AND seq <= (SELECT n FROM sync_counter WHERE id = 1)
+    )
+    SELECT MAX(seq) FROM (SELECT seq FROM changed ORDER BY seq LIMIT ?2))`;
+  const statements: D1PreparedStatement[] = [
     db.prepare("SELECT n, sync_epoch FROM sync_counter WHERE id = 1"),
     db
       .prepare(
-        `WITH changed(seq) AS (
-           SELECT seq FROM memos INDEXED BY idx_memos_seq_id
-             WHERE seq > ?1 AND seq <= (SELECT n FROM sync_counter WHERE id = 1)
-           UNION ALL
-           SELECT seq FROM tombstones INDEXED BY idx_tombstones_seq_id
-             WHERE seq > ?1 AND seq <= (SELECT n FROM sync_counter WHERE id = 1)
-           UNION ALL
-           SELECT seq FROM tag_meta INDEXED BY idx_tag_meta_seq_path
-             WHERE seq > ?1 AND seq <= (SELECT n FROM sync_counter WHERE id = 1)
-         )
-         SELECT MAX(seq) AS cutoff FROM (SELECT seq FROM changed ORDER BY seq LIMIT ?2)`
+        `SELECT cutoff, (
+           EXISTS(SELECT 1 FROM memos WHERE seq > cutoff AND seq <= (SELECT n FROM sync_counter WHERE id = 1))
+           OR EXISTS(SELECT 1 FROM tombstones WHERE seq > cutoff AND seq <= (SELECT n FROM sync_counter WHERE id = 1))
+           OR EXISTS(SELECT 1 FROM tag_meta WHERE seq > cutoff AND seq <= (SELECT n FROM sync_counter WHERE id = 1))
+         ) AS has_more
+         FROM (SELECT ${cutoffSql} AS cutoff)`
+      )
+      .bind(since, limit),
+    db
+      .prepare(`SELECT ${MEMO_COLUMNS} FROM memos INDEXED BY idx_memos_seq_id WHERE seq > ?1 AND seq <= ${cutoffSql} ORDER BY seq, id`)
+      .bind(since, limit),
+    db
+      .prepare(
+        `SELECT i.id, i.memo_id, i.ord, i.mime, i.width, i.height, i.bytes
+         FROM memos m INDEXED BY idx_memos_seq_id
+         JOIN memo_images i INDEXED BY idx_memo_images_memo_ord ON i.memo_id = m.id
+         WHERE m.seq > ?1 AND m.seq <= ${cutoffSql}
+         ORDER BY m.seq, m.id, i.ord`
+      )
+      .bind(since, limit),
+    db
+      .prepare(`SELECT id, seq FROM tombstones INDEXED BY idx_tombstones_seq_id WHERE seq > ?1 AND seq <= ${cutoffSql} ORDER BY seq, id`)
+      .bind(since, limit),
+    db
+      .prepare(
+        `SELECT path, pinned_at, seq FROM tag_meta INDEXED BY idx_tag_meta_seq_path WHERE seq > ?1 AND seq <= ${cutoffSql} ORDER BY seq, path`
       )
       .bind(since, limit)
-  ]);
+  ];
+  const [counterResult, cutoffResult, memoResult, imageResult, tombstoneResult, tagResult] = await db.batch(statements);
 
   const counterRow = counterResult.results?.[0] as { n?: unknown; sync_epoch?: unknown } | undefined;
   if (
@@ -61,8 +91,8 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
   }
   const highWater = counterRow.n;
   const syncEpoch = counterRow.sync_epoch;
-  const rawCutoff = (cutoffResult.results?.[0] as { cutoff?: unknown } | undefined)?.cutoff;
-  if (typeof rawCutoff !== "number") {
+  const cutoffRow = cutoffResult.results?.[0] as { cutoff?: unknown; has_more?: unknown } | undefined;
+  if (typeof cutoffRow?.cutoff !== "number") {
     scheduleEncryptionBackfill(context);
     return json({
       memos: [],
@@ -71,41 +101,11 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
       cursor: highWater,
       syncEpoch,
       hasMore: false,
-      cacheKey: includeCacheKey ? await getOrCreateCacheKey(context.env) : undefined,
+      cacheKey: includeCacheKey ? await sessionCacheKey(context) : undefined,
       serverTime: nowIso()
     });
   }
-  const cutoff = rawCutoff;
-
-  const [memoResult, imageResult, tombstoneResult, tagResult, moreResult] = await db.batch([
-    db
-      .prepare(`SELECT ${MEMO_COLUMNS} FROM memos INDEXED BY idx_memos_seq_id WHERE seq > ? AND seq <= ? ORDER BY seq, id`)
-      .bind(since, cutoff),
-    db
-      .prepare(
-        `SELECT i.id, i.memo_id, i.ord, i.mime, i.width, i.height, i.bytes
-         FROM memos m INDEXED BY idx_memos_seq_id
-         JOIN memo_images i INDEXED BY idx_memo_images_memo_ord ON i.memo_id = m.id
-         WHERE m.seq > ? AND m.seq <= ?
-         ORDER BY m.seq, m.id, i.ord`
-      )
-      .bind(since, cutoff),
-    db
-      .prepare("SELECT id, seq FROM tombstones INDEXED BY idx_tombstones_seq_id WHERE seq > ? AND seq <= ? ORDER BY seq, id")
-      .bind(since, cutoff),
-    db
-      .prepare("SELECT path, pinned_at, seq FROM tag_meta INDEXED BY idx_tag_meta_seq_path WHERE seq > ? AND seq <= ? ORDER BY seq, path")
-      .bind(since, cutoff),
-    db
-      .prepare(
-        `SELECT (
-           EXISTS(SELECT 1 FROM memos WHERE seq > ?1 AND seq <= ?2)
-           OR EXISTS(SELECT 1 FROM tombstones WHERE seq > ?1 AND seq <= ?2)
-           OR EXISTS(SELECT 1 FROM tag_meta WHERE seq > ?1 AND seq <= ?2)
-         ) AS has_more`
-      )
-      .bind(cutoff, highWater)
-  ]);
+  const cutoff = cutoffRow.cutoff;
 
   const imagesByMemo = groupImages((imageResult.results ?? []) as unknown as ImageMetaRow[]);
   const memoRows = (memoResult.results ?? []) as unknown as MemoRow[];
@@ -113,7 +113,7 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
   const memos = memoRows.map((memo) => shapeMemo(memo, imagesByMemo.get(memo.id) ?? []));
   const purged = (tombstoneResult.results ?? []) as unknown as { id: string; seq: number }[];
   const tags = ((tagResult.results ?? []) as unknown as TagMetaRow[]).map(shapeTagMeta);
-  const hasMore = Boolean((moreResult.results?.[0] as { has_more?: unknown } | undefined)?.has_more);
+  const hasMore = Boolean(cutoffRow.has_more);
 
   scheduleEncryptionBackfill(context);
   return json({
@@ -123,7 +123,7 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
     cursor: hasMore ? cutoff : highWater,
     syncEpoch,
     hasMore,
-    cacheKey: includeCacheKey ? await getOrCreateCacheKey(context.env) : undefined,
+    cacheKey: includeCacheKey ? await sessionCacheKey(context) : undefined,
     serverTime: nowIso()
   });
 }

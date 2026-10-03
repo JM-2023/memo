@@ -28,6 +28,9 @@ export interface NewImagePayload {
   mime: string;
   width: number;
   height: number;
+  /** Small feed preview; absent when the attachment is already small. */
+  thumbBase64?: string;
+  thumbMime?: string;
   /** Local-only preview URL while composing. */
   previewUrl: string;
 }

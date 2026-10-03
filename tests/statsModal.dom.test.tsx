@@ -165,7 +165,7 @@ describe("all-time ledger", () => {
     expect(labels.indexOf("Active days")).toBeGreaterThanOrEqual(0);
     expect(labels.indexOf("Active days")).toBeLessThan(labels.indexOf("Since first memo"));
     const fact = screen.getByText("Since first memo").closest(".stats-fact");
-    expect(fact?.querySelector(".roll")?.getAttribute("aria-label")).toBe(String(totalStats(memos).daySpan));
+    expect(fact?.querySelector(".roll > .sr-only")?.textContent).toBe(String(totalStats(memos).daySpan));
     expect(fact?.querySelector(".stats-fact-sub")?.textContent).toBe(" days");
   });
 });

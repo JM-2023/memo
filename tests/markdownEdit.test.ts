@@ -149,14 +149,39 @@ describe("shiftListIndent", () => {
 });
 
 describe("toggleBulletLine", () => {
-  it("adds a bullet to a plain line and strips any list form back", () => {
+  // A bullet now steps on to a task (it used to strip back to plain), so the
+  // one list button reaches checklists: plain → bullet → task → plain.
+  it("cycles a line plain → bullet → task → plain; numbered lines strip back", () => {
     expect(toggleBulletLine("note", 4)).toEqual({ value: "- note", start: 6, end: 6 });
-    expect(toggleBulletLine("- note", 6)).toEqual({ value: "note", start: 4, end: 4 });
-    expect(toggleBulletLine("3. note", 7)).toEqual({ value: "note", start: 4, end: 4 });
+    expect(toggleBulletLine("- note", 6)).toEqual({ value: "- [ ] note", start: 10, end: 10 });
+    expect(toggleBulletLine("* note", 0)).toEqual({ value: "* [ ] note", start: 6, end: 6 });
     expect(toggleBulletLine("- [x] note", 10)).toEqual({ value: "note", start: 4, end: 4 });
+    expect(toggleBulletLine("3. note", 7)).toEqual({ value: "note", start: 4, end: 4 });
+    expect(toggleBulletLine("", 0)).toEqual({ value: "- ", start: 2, end: 2 });
   });
 
   it("works on the caret's line inside multi-line drafts", () => {
     expect(toggleBulletLine("a\nb", 3)).toEqual({ value: "a\n- b", start: 5, end: 5 });
+  });
+
+  it("applies to every line the selection covers, keeping indents and skipping blanks", () => {
+    const value = "a\n  b\n\nc\nd";
+    // Whole lines "a" through "c": the selection grows to take the new markers.
+    const patch = toggleBulletLine(value, 0, 8);
+    expect(patch.value).toBe("- a\n  - b\n\n- c\nd");
+    expect(patch.value.slice(patch.start, patch.end)).toBe("- a\n  - b\n\n- c");
+    const tasks = toggleBulletLine(patch.value, patch.start, patch.end);
+    expect(tasks.value).toBe("- [ ] a\n  - [ ] b\n\n- [ ] c\nd");
+    expect(toggleBulletLine(tasks.value, tasks.start, tasks.end).value).toBe(value);
+  });
+
+  it("bullets only the plain lines of a mixed selection", () => {
+    expect(toggleBulletLine("- a\nb\n- [ ] c", 0, 13).value).toBe("- a\n- b\n- [ ] c");
+  });
+
+  it("does not reach into the line after a selection that ends on a newline", () => {
+    const patch = toggleBulletLine("a\nb\nc", 0, 4);
+    expect(patch.value).toBe("- a\n- b\nc");
+    expect(patch.end).toBe(8);
   });
 });

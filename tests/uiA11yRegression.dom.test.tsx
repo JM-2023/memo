@@ -150,13 +150,13 @@ describe("focus recovery", () => {
       </Providers>
     );
 
-    await user.click(screen.getByRole("button", { name: "Memo actions" }));
+    await user.click(screen.getByRole("button", { name: /^Memo actions/ }));
     await user.click(screen.getByRole("menuitem", { name: "Edit" }));
     const editor = await screen.findByRole("combobox", { name: "Memo content" });
     expect(document.activeElement).toBe(editor);
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
-    const trigger = await screen.findByRole("button", { name: "Memo actions" });
+    const trigger = await screen.findByRole("button", { name: /^Memo actions/ });
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
@@ -192,12 +192,12 @@ describe("focus recovery", () => {
         <MemoFixture />
       </Providers>
     );
-    await user.click(screen.getByRole("button", { name: "Memo actions" }));
+    await user.click(screen.getByRole("button", { name: /^Memo actions/ }));
     await user.click(screen.getByRole("menuitem", { name: "Edit" }));
     await user.click(await screen.findByRole("button", { name: "Cancel" }));
 
     const outgoingEditor = screen.getByRole("combobox", { name: "Memo content" });
-    const trigger = await screen.findByRole("button", { name: "Memo actions" });
+    const trigger = await screen.findByRole("button", { name: /^Memo actions/ });
     expect(outgoingEditor.isConnected).toBe(true);
     await waitFor(() => expect(document.activeElement).toBe(trigger));
     expect(outgoingEditor.isConnected).toBe(true);
@@ -217,10 +217,15 @@ describe("selection and scroll affordances", () => {
     if (!surface) throw new Error("Memo view surface was not rendered");
     expect(surface.inert).toBe(true);
     expect(surface.getAttribute("aria-hidden")).toBe("true");
-    expect(surface.querySelector(".memo-tag")?.tagName).toBe("SPAN");
-    expect(within(surface).getByRole("button", { name: "Memo actions", hidden: true }).tabIndex).toBe(-1);
+    // Tags stay buttons (no feed-wide re-render on entering select mode);
+    // the inert surface is what keeps them out of reach.
+    expect(surface.querySelector("button.memo-tag")).not.toBeNull();
+    expect(within(surface).getByRole("button", { name: /^Memo actions/, hidden: true }).tabIndex).toBe(-1);
     expect(within(surface).getByRole("button", { name: "View image", hidden: true }).tabIndex).toBe(-1);
 
+    // jsdom's tab order ignores `inert` (browsers skip the whole subtree), so
+    // emulate it here: everything inside the surface is out of the order.
+    for (const control of surface.querySelectorAll<HTMLElement>("button, a")) control.tabIndex = -1;
     const overlay = screen.getByRole("button", { name: "Select this memo" });
     await user.tab();
     expect(document.activeElement).toBe(overlay);

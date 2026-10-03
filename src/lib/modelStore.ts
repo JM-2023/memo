@@ -1,9 +1,9 @@
 // IndexedDB freeze for the embedding model's verified bytes. A separate
 // database from the snapshot cache, and deliberately outside the encrypted
 // pipeline: model weights are public artifacts, not user data, so sealing
-// them buys nothing. They are still removed on explicit logout (and from the
-// Semantic Search settings) so "clear this device" has one predictable
-// meaning across every local store.
+// them buys nothing. For the same reason they survive logout and session
+// expiry (only notebook-derived stores are cleared); the Semantic Search
+// settings remove them on request.
 //
 // Bytes are hash-verified by the loader before they are written, so reads
 // trust the store instead of re-hashing 123 MB on every startup. Keys are

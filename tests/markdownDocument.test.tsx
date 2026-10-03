@@ -1,6 +1,6 @@
 import React from "react";
 import { readFileSync } from "node:fs";
-import { describe, it, expect, vi } from "vitest";
+import { beforeAll, describe, it, expect, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { markdownRows } from "../src/lib/markdownDocument";
 import { parseBlock, parseInline, type Inline } from "../src/lib/markdown";
@@ -8,6 +8,9 @@ import { visualLinesOf, diffLines } from "../src/lib/lineDiff";
 import { externalImagesOf } from "../src/lib/content";
 import { MemoLine } from "../src/components/memoLines";
 import { MathFormula } from "../src/components/MathFormula";
+import { loadKatex } from "../src/lib/katexLoader";
+// KaTeX loads on demand in the app; render these documents with it present.
+beforeAll(() => loadKatex());
 vi.mock("../src/lib/i18n", () => ({ useI18n: () => ({ tr: (en: string) => en }) }));
 function flatten(nodes: Inline[]): Inline[] {
   return nodes.flatMap(node => "kids" in node ? [node, ...flatten(node.kids)] : [node]);
@@ -71,6 +74,7 @@ describe("pasted research Markdown", () => {
   });
   it("leaves unsafe reference URLs literal and falls back for invalid TeX", () => {
     expect(markdownRows('[x][a]\n[a]: javascript:alert(1)')[0].raw).toBe('[x][a]');
+    expect(renderToStaticMarkup(<MathFormula text="x^2" />)).toContain('class="md-math"');
     expect(renderToStaticMarkup(<MathFormula text={String.raw`\badcommand{<img src=x onerror=alert(1)>}`} />)).not.toContain('<img');
     expect(renderToStaticMarkup(<MathFormula text={String.raw`\href{javascript:alert(1)}{x}`} />)).not.toContain('href="javascript:');
   });

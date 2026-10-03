@@ -19,6 +19,8 @@ interface ExportCursor {
   after: string;
   maxId: string;
   exportedAt: string;
+  /** Set once a page has written a memo, so the next one opens with a comma. */
+  wrote?: 1;
 }
 
 interface ExportMemo {
@@ -59,7 +61,8 @@ function decodeCursor(value: string | null): ExportCursor | null {
       parsed.maxId.length > MAX_ID_CHARS ||
       parsed.after > parsed.maxId ||
       parsed.exportedAt.length > 40 ||
-      Number.isNaN(Date.parse(parsed.exportedAt))
+      Number.isNaN(Date.parse(parsed.exportedAt)) ||
+      (parsed.wrote !== undefined && parsed.wrote !== 1)
     ) {
       return null;
     }
@@ -70,47 +73,33 @@ function decodeCursor(value: string | null): ExportCursor | null {
 }
 
 /** Serialize one bounded page with backpressure instead of one giant string. */
-function streamedPage(
-  exportedAt: string,
-  memos: ExportMemo[],
-  tags: { path: string; pinnedAt: string | null }[],
-  hasMore: boolean,
-  nextAfter: string | null
-): ReadableStream<Uint8Array> {
+function streamedPage(head: string, memos: ExportMemo[], leadingComma: boolean, tail: string): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
-  let phase: "head" | "memos" | "tags-head" | "tags" | "tail" | "done" = "head";
+  let phase: "head" | "memos" | "tail" | "done" = "head";
   let memoIndex = 0;
-  let tagIndex = 0;
   return new ReadableStream<Uint8Array>({
     pull(controller) {
       if (phase === "head") {
-        controller.enqueue(encoder.encode(`{"format":"memo-backup","version":1,"exportedAt":${JSON.stringify(exportedAt)},"memos":[`));
         phase = "memos";
-        return;
+        if (head) {
+          controller.enqueue(encoder.encode(head));
+          return;
+        }
       }
       if (phase === "memos") {
         if (memoIndex < memos.length) {
-          controller.enqueue(encoder.encode(`${memoIndex === 0 ? "" : ","}${JSON.stringify(memos[memoIndex++])}`));
-          return;
-        }
-        phase = "tags-head";
-      }
-      if (phase === "tags-head") {
-        controller.enqueue(encoder.encode(`],"tags":[`));
-        phase = "tags";
-        return;
-      }
-      if (phase === "tags") {
-        if (tagIndex < tags.length) {
-          controller.enqueue(encoder.encode(`${tagIndex === 0 ? "" : ","}${JSON.stringify(tags[tagIndex++])}`));
+          const comma = memoIndex > 0 || leadingComma ? "," : "";
+          controller.enqueue(encoder.encode(`${comma}${JSON.stringify(memos[memoIndex++])}`));
           return;
         }
         phase = "tail";
       }
       if (phase === "tail") {
-        controller.enqueue(encoder.encode(`],"hasMore":${hasMore},"nextAfter":${JSON.stringify(nextAfter)}}`));
         phase = "done";
-        return;
+        if (tail) {
+          controller.enqueue(encoder.encode(tail));
+          return;
+        }
       }
       controller.close();
     }
@@ -118,16 +107,23 @@ function streamedPage(
 }
 
 /**
- * A backup page. The browser follows `nextAfter` across HTTP requests, then
+ * A backup page. The browser follows the cursor across HTTP requests, then
  * assembles the ordinary backup-v1 object. This resets D1's per-invocation
  * query budget on every page; an unbounded loop inside one Worker would still
  * hit the 50-query ceiling even if its response body were streamed.
+ *
+ * With `?parts=1` each body is a verbatim slice of the final file (the first
+ * page opens the object, the last closes it) and the cursor and counts ride
+ * in headers, so the browser can keep every page as an opaque Blob part
+ * instead of parsing and re-serializing the whole notebook in its JS heap.
+ * Without it, a page is a self-contained JSON object (older tabs).
  */
 export async function onRequestGet(context: AppContext): Promise<Response> {
   const denied = await requireAuth(context);
   if (denied) return denied;
 
   const url = new URL(context.request.url);
+  const parts = url.searchParams.get("parts") === "1";
   const afterParam = url.searchParams.get("after");
   const continuation = afterParam === null ? null : decodeCursor(afterParam);
   if (afterParam !== null && !continuation) {
@@ -136,11 +132,15 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
 
   const db = context.env.DB;
   let state: ExportCursor;
+  let total: number | null = null;
   if (continuation) {
     state = continuation;
   } else {
-    const boundary = await db.prepare("SELECT COALESCE(MAX(id), '') AS max_id FROM memos").first<{ max_id: string }>();
+    const boundary = await db
+      .prepare("SELECT COALESCE(MAX(id), '') AS max_id, COUNT(*) AS total FROM memos")
+      .first<{ max_id: string; total: number }>();
     state = { v: 1, after: "", maxId: boundary?.max_id ?? "", exportedAt: nowIso() };
+    total = Number(boundary?.total ?? 0);
   }
 
   const candidateResult = await db
@@ -214,13 +214,26 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
       dataBase64: image.data_base64
     }))
   }));
-  const tags = tagRows.map((tag) => ({ path: tag.path, pinnedAt: tag.pinned_at }));
-  const nextAfter = hasMore ? encodeCursor({ ...state, after: lastId }) : null;
+  const tags = JSON.stringify(tagRows.map((tag) => ({ path: tag.path, pinnedAt: tag.pinned_at })));
+  const wrote = state.wrote === 1 || memos.length > 0;
+  const nextAfter = hasMore ? encodeCursor({ ...state, after: lastId, ...(wrote ? { wrote: 1 as const } : {}) }) : null;
+  const objectHead = `{"format":"memo-backup","version":1,"exportedAt":${JSON.stringify(state.exportedAt)}`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store"
+  };
 
-  return new Response(streamedPage(state.exportedAt, memos, tags, hasMore, nextAfter), {
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store"
-    }
-  });
+  if (!parts) {
+    return new Response(
+      streamedPage(`${objectHead},"memos":[`, memos, false, `],"tags":${tags},"hasMore":${hasMore},"nextAfter":${JSON.stringify(nextAfter)}}`),
+      { headers }
+    );
+  }
+  headers["X-Export-Count"] = String(memos.length);
+  if (total !== null) headers["X-Export-Total"] = String(total);
+  if (nextAfter) headers["X-Export-Next"] = nextAfter;
+  return new Response(
+    streamedPage(continuation ? "" : `${objectHead},"tags":${tags},"memos":[`, memos, state.wrote === 1, hasMore ? "" : "]}"),
+    { headers }
+  );
 }

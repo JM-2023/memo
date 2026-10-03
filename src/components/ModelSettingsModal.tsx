@@ -2,7 +2,12 @@ import { ChevronDown, Download, FileDown, HardDrive, RefreshCw, Trash2, Upload, 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
-import type { SemanticQueryProgress, SemanticSearchStatus } from "../hooks/useSemanticSearch";
+import {
+  useSemanticProgress,
+  type SemanticProgressSource,
+  type SemanticQueryProgress,
+  type SemanticSearchStatus
+} from "../hooks/useSemanticSearch";
 import { useI18n } from "../lib/i18n";
 import {
   cancelModelDownload,
@@ -33,6 +38,10 @@ interface ModelSettingsModalProps {
   semanticStatus?: SemanticSearchStatus;
   semanticProgress?: SemanticIndexProgress | null;
   semanticQueryProgress?: SemanticQueryProgress | null;
+  /** The search hook's live counters. When given, the panel subscribes to
+      them itself (they tick per batch and per slice, and nothing else on the
+      page shows them) and they take the place of the two props above. */
+  semanticLive?: SemanticProgressSource;
   semanticError?: string | null;
   /** Memos with vectors in the live index — the figure the rebuild acts on. */
   semanticIndexedMemos?: number;
@@ -153,8 +162,9 @@ export function ModelSettingsModal({
   onSemanticRetry,
   onSemanticReindex,
   semanticStatus = "off",
-  semanticProgress = null,
-  semanticQueryProgress = null,
+  semanticProgress: semanticProgressProp = null,
+  semanticQueryProgress: semanticQueryProgressProp = null,
+  semanticLive,
   semanticError = null,
   semanticIndexedMemos = 0,
   semanticRebuilding = false,
@@ -169,6 +179,9 @@ export function ModelSettingsModal({
     getModelRuntimeProgress
   );
   const download = useModelDownload();
+  const live = useSemanticProgress(semanticLive);
+  const semanticProgress = live ? live.progress : semanticProgressProp;
+  const semanticQueryProgress = live ? live.queryProgress : semanticQueryProgressProp;
 
   const [local, setLocal] = useState<Local>({ kind: "checking" });
   const [present, setPresent] = useState<ReadonlySet<string>>(() => new Set());
@@ -548,7 +561,7 @@ export function ModelSettingsModal({
       const steps = [
         tr("Loading the private search engine", "加载本地搜索引擎"),
         tr("Reading verified files from storage", "从存储读取已验证文件"),
-        tr("Starting the inference worker", "启动推理 Worker"),
+        tr("Starting the inference worker", "启动后台推理"),
         tr("Checking results with a real inference", "通过真实推理检查结果")
       ];
       const step =
@@ -600,7 +613,7 @@ export function ModelSettingsModal({
         stages: [
           ...(rebuilding ? [row(tr("Previous index discarded", "已丢弃旧索引"), tr("Done", "完成"), "done")] : []),
           row(
-            tr("Memos embedded", "已嵌入笔记"),
+            tr("Memos embedded", "已索引笔记"),
             tr(`${formatNumber(done)} of ${formatNumber(total)}`, `${formatNumber(done)} / ${formatNumber(total)}`),
             "active"
           ),
@@ -623,7 +636,7 @@ export function ModelSettingsModal({
           label: tr("Understanding query", "理解查询"),
           value: tr("Step 1 of 2", "第 1 / 2 步"),
           meta: trimmed
-            ? tr(`Embedding “${trimmed}” on this device.`, `正在此设备上嵌入「${trimmed}」。`)
+            ? tr(`Embedding “${trimmed}” on this device.`, `正在此设备上理解「${trimmed}」。`)
             : tr("Embedding your query on this device.", "正在此设备上理解你的查询。"),
           percent: 35,
           stages: [row(understand, tr("Running", "进行中"), "active"), row(rank, tr("Waiting", "等待中"), "idle")]
@@ -667,7 +680,7 @@ export function ModelSettingsModal({
   // vacated: the row swaps in place instead of growing under the reader.
   const rebuildAsk =
     semanticIndexedMemos > 0
-      ? tr(`Re-embed ${indexedCount} memos?`, `重新嵌入 ${indexedCount} 条笔记？`)
+      ? tr(`Re-embed ${indexedCount} memos?`, `重建 ${indexedCount} 条笔记的索引？`)
       : tr("Index every memo now?", "立即索引所有笔记？");
 
   const actionLabel =

@@ -31,6 +31,9 @@ export type ApiErrorCode =
   | "INVALID_ORIGIN"
   | "VERSION_CONFLICT"
   | "DECRYPTION_FAILED"
+  | "STORAGE_FULL"
+  | "SETUP_DISABLED"
+  | "SERVER_MISCONFIGURED"
   | "INTERNAL_ERROR";
 
 export type ApiErrorParams = Record<string, string | number | boolean | null>;
@@ -41,6 +44,25 @@ export type ApiErrorParams = Record<string, string | number | boolean | null>;
  */
 export function apiError(status: number, code: ApiErrorCode, error: string, params?: ApiErrorParams): Response {
   return json(params ? { code, error, params } : { code, error }, { status });
+}
+
+/**
+ * D1 refuses every write once the database reaches its size limit (500 MB on
+ * the Free plan) or the account reaches its total D1 storage (5 GB on Free,
+ * shared by every database). Depending on the layer that notices, the message
+ * is SQLite's SQLITE_FULL text or one of D1's own size-limit wordings,
+ * sometimes only on `cause`.
+ */
+const STORAGE_FULL_MESSAGE =
+  /database or disk is full|SQLITE_FULL|exceeded (?:the )?max(?:imum)? (?:db|database) size|max(?:imum)? account storage limit/i;
+
+export function isStorageFullError(error: unknown): boolean {
+  for (let current = error, depth = 0; current && depth < 4; depth += 1) {
+    const message = current instanceof Error ? current.message : typeof current === "string" ? current : "";
+    if (STORAGE_FULL_MESSAGE.test(message)) return true;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
 }
 
 export async function readJson<T>(request: Request, maxBytes = 1_000_000): Promise<T> {

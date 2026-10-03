@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
+import { LIVE_REGION_ATTR } from "../lib/liveAnnouncer";
 
 const FOCUSABLE = [
   "a[href]",
@@ -91,6 +92,8 @@ function isolateOutside(container: HTMLElement, exemptSelector?: string): HTMLEl
     for (const sibling of parent.children) {
       if (sibling === branch || !(sibling instanceof HTMLElement)) continue;
       if (exemptSelector && sibling.matches(exemptSelector)) continue;
+      // The app's live regions must keep speaking while a modal is up.
+      if (sibling.hasAttribute(LIVE_REGION_ATTR)) continue;
       isolate(sibling);
       changed.push(sibling);
     }
@@ -99,6 +102,21 @@ function isolateOutside(container: HTMLElement, exemptSelector?: string): HTMLEl
     parent = parent.parentElement;
   }
   return changed;
+}
+
+/**
+ * Where the opener sat in tab order: the next few stops after it, then the
+ * few before (nearest first). An opener can unmount while its modal is up
+ * (a renamed tag's row is re-keyed), and focus should land beside where it
+ * stood rather than on <body>. A few, not one: the nearest stops are often
+ * gone too (the closing menu's items, the opener's own row).
+ */
+function tabNeighbours(element: HTMLElement | null, modal: HTMLElement): HTMLElement[] {
+  if (!element) return [];
+  const all = [...document.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((item) => !modal.contains(item));
+  const index = all.indexOf(element);
+  if (index < 0) return [];
+  return [...all.slice(index + 1, index + 5), ...all.slice(Math.max(0, index - 4), index).reverse()];
 }
 
 function focusableWithin(container: HTMLElement): HTMLElement[] {
@@ -144,6 +162,7 @@ export function useModalA11y<T extends HTMLElement>({
     const modal: HTMLElement = container;
     const token = Symbol("modal");
     let restoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    let fallbackFocus = tabNeighbours(restoreFocus, modal);
     modalStack.push(token);
     lockBody();
 
@@ -196,6 +215,7 @@ export function useModalA11y<T extends HTMLElement>({
       // A closing menu can return focus to its trigger after this modal has
       // mounted. Remember that useful destination, then keep focus trapped.
       restoreFocus = target;
+      fallbackFocus = tabNeighbours(target, modal);
       (focusableWithin(modal)[0] ?? modal).focus({ preventScroll: true });
     }
 
@@ -208,7 +228,20 @@ export function useModalA11y<T extends HTMLElement>({
       if (index >= 0) modalStack.splice(index, 1);
       for (const element of changed) restoreIsolation(element);
       unlockBody();
-      if (restoreFocus?.isConnected && !restoreFocus.inert) restoreFocus.focus({ preventScroll: true });
+      const settleFocus = () => {
+        for (const candidate of [restoreFocus, ...fallbackFocus]) {
+          if (!candidate?.isConnected || candidate.inert || candidate.matches(":disabled")) continue;
+          candidate.focus({ preventScroll: true });
+          if (document.activeElement === candidate) return;
+        }
+      };
+      settleFocus();
+      // The commit that closes the modal can remove the opener after this
+      // cleanup ran (it sits later in the tree); try again once it is done.
+      queueMicrotask(() => {
+        const active = document.activeElement;
+        if (!active || active === document.body || !active.isConnected) settleFocus();
+      });
     };
     // The refs intentionally keep callbacks and busy state current without
     // tearing down the trap during a modal's closing animation.
