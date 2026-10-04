@@ -84,4 +84,31 @@ export function useTopbarTuck(ref: RefObject<HTMLElement>, enabled: boolean): vo
       delete bar.dataset.tuck;
     };
   }, [ref, enabled]);
+
+  // The band's bottom hairline fades in over the first 16px of scroll. Where
+  // scroll-driven animations run, CSS does it alone (see .topbar::after);
+  // elsewhere a 16px sentinel at the top of the page flips data-scrolled
+  // once it has scrolled out, and the hairline transitions in.
+  useEffect(() => {
+    const bar = ref.current;
+    if (!enabled || !bar) return;
+    if (typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("animation-timeline: scroll()")) return;
+    if (typeof IntersectionObserver !== "function") return;
+    const sentinel = document.createElement("div");
+    sentinel.setAttribute("aria-hidden", "true");
+    sentinel.style.cssText = "position:absolute;top:0;left:0;width:1px;height:16px;pointer-events:none;visibility:hidden";
+    document.body.insertBefore(sentinel, document.body.firstChild);
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries.at(-1);
+      if (!entry) return;
+      if (entry.isIntersecting) delete bar.dataset.scrolled;
+      else bar.dataset.scrolled = "";
+    });
+    observer.observe(sentinel);
+    return () => {
+      observer.disconnect();
+      sentinel.remove();
+      delete bar.dataset.scrolled;
+    };
+  }, [ref, enabled]);
 }

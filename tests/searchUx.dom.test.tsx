@@ -194,7 +194,7 @@ describe("search box", () => {
     renderApp();
     const search = await screen.findByRole("searchbox", { name: "Search memos" });
     await user.type(search, "fruit");
-    expect(await screen.findByText("Found 2 memos", { selector: ".search-summary" })).toBeTruthy();
+    expect(await screen.findByText("Found 2 memos", { selector: ".search-summary > .sr-only" })).toBeTruthy();
     await waitFor(() => expect(document.querySelector(".search-sr[role='status']")?.textContent).toBe("Found 2 memos"), { timeout: 1500 });
   });
 
@@ -227,7 +227,7 @@ describe("search box", () => {
     fireEvent.change(search, { target: { value: "Window" } });
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(1));
     expect(search.value).toBe("Window");
-    expect(screen.getByText("Found 1 memo", { selector: ".search-summary" })).toBeTruthy();
+    expect(screen.getByText("Found 1 memo", { selector: ".search-summary > .sr-only" })).toBeTruthy();
     // A further keystroke after the composition filters live again.
     fireEvent.change(search, { target: { value: "Windo" } });
     await waitFor(() => expect(search.value).toBe("Windo"));
@@ -266,8 +266,24 @@ describe("search with meaning", () => {
     const user = userEvent.setup();
     renderApp();
     await user.type(await screen.findByRole("searchbox", { name: "Search by meaning" }), "fruit");
-    expect(await screen.findByText("Found 3 memos · 1 related by meaning", { selector: ".search-summary" })).toBeTruthy();
+    expect(await screen.findByText("Found 3 memos · 1 related by meaning", { selector: ".search-summary > .sr-only" })).toBeTruthy();
     await waitFor(() => expect(document.querySelector(".search-sr[role='status']")?.textContent).toBe("Found 3 memos · 1 related by meaning"), { timeout: 1500 });
+  });
+
+  it("says the count may still grow while meaning is on its way, and rolls it", async () => {
+    localStorage.setItem("memo:semantic-search", "1");
+    // A live index with no ranking back yet: the keyword tier has answered.
+    mocks.semanticResults = null;
+    const user = userEvent.setup();
+    renderApp();
+    await user.type(await screen.findByRole("searchbox", { name: "Search by meaning" }), "fruit");
+    expect(await screen.findByText("Found 2 memos · looking for related…", { selector: ".search-summary > .sr-only" })).toBeTruthy();
+    const line = document.querySelector(".search-summary > [aria-hidden='true']");
+    expect(line?.querySelector(".search-summary-pending")?.textContent).toBe(" · looking for related…");
+    expect(line?.querySelector(".roll")).toBeTruthy();
+    // The live region waits for the settled answer.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(document.querySelector(".search-sr[role='status']")?.textContent).toBe("");
   });
 
   it("says the same in Chinese", async () => {
@@ -280,7 +296,7 @@ describe("search with meaning", () => {
     const user = userEvent.setup();
     renderApp();
     await user.type(await screen.findByRole("searchbox", { name: "按意思搜索" }), "fruit");
-    expect(await screen.findByText("找到 3 条笔记 · 其中 1 条意思相近", { selector: ".search-summary" })).toBeTruthy();
+    expect(await screen.findByText("找到 3 条笔记 · 其中 1 条意思相近", { selector: ".search-summary > .sr-only" })).toBeTruthy();
   });
 });
 
@@ -301,7 +317,7 @@ describe("scoped search", () => {
     await user.click(screen.getByRole("button", { name: "Search all memos" }));
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(1));
     expect(screen.getByRole("searchbox", { name: "Search memos" })).toHaveProperty("value", "salad");
-    expect(screen.getByText("Found 1 memo", { selector: ".search-summary" })).toBeTruthy();
+    expect(screen.getByText("Found 1 memo", { selector: ".search-summary > .sr-only" })).toBeTruthy();
   });
 
   it("says the scope in the result line", async () => {
@@ -312,7 +328,7 @@ describe("scoped search", () => {
     if (!journalCard) throw new Error("journal memo missing");
     await user.click(within(journalCard).getByRole("button", { name: "#journal" }));
     await user.type(screen.getByRole("searchbox", { name: "Search in #journal" }), "fruit");
-    expect(await screen.findByText("Found 1 memo in #journal", { selector: ".search-summary" })).toBeTruthy();
+    expect(await screen.findByText("Found 1 memo in #journal", { selector: ".search-summary > .sr-only" })).toBeTruthy();
   });
 });
 
@@ -423,7 +439,7 @@ describe("creating under a lens", () => {
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(1));
     const search = screen.getByRole("searchbox", { name: "Search memos" });
     await user.type(search, "fruit");
-    expect(await screen.findByText("Found 1 memo within the current filters", { selector: ".search-summary" })).toBeTruthy();
+    expect(await screen.findByText("Found 1 memo within the current filters", { selector: ".search-summary > .sr-only" })).toBeTruthy();
 
     await user.type(screen.getByRole("combobox", { name: "Memo content" }), "More fruit");
     await user.click(screen.getByRole("button", { name: "Send" }));

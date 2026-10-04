@@ -1,8 +1,10 @@
 import { ChevronRight, Hash, MoreHorizontal, Pencil, Pin, PinOff, Tag, Trash2, X } from "lucide-react";
-import { memo, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useI18n } from "../lib/i18n";
 import type { TagNode } from "../lib/tags";
 import { Menu } from "./Menu";
+import { RollingText } from "./RollingText";
+import { bindTruncationTip, useOptionalTip } from "./truncationTip";
 
 /** Every path under `node`, depth-first — what a removal takes with it. */
 function descendantPaths(node: TagNode): string[] {
@@ -134,6 +136,11 @@ interface TagRowProps extends TagCallbacks {
   openPaths: ReadonlySet<string>;
   closingPaths: ReadonlySet<string>;
   onToggle: (path: string) => void;
+  /** The one label in the tree's tab order (roving tabindex). */
+  tabStop: string | null;
+  onLabelFocus: (path: string) => void;
+  onLabelKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>, node: TagNode) => void;
+  tip: ReturnType<typeof useOptionalTip>;
 }
 
 /** Every ancestor path of a tag: "a/b/c" → ["a", "a/b"]. */
@@ -143,9 +150,16 @@ function ancestorsOf(path: string | null): string[] {
   return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/"));
 }
 
-function TagRow({ node, depth, activeTag, pinnedTags, openPaths, closingPaths, onToggle, onPickTag, onPinTag, onRenameTag, onRemoveTag }: TagRowProps) {
-  const { count, formatNumber, tr } = useI18n();
+function TagRow(props: TagRowProps) {
+  const { node, depth, activeTag, pinnedTags, openPaths, closingPaths, onToggle, onPickTag, onPinTag, onRenameTag, onRemoveTag } = props;
+  const { tabStop, onLabelFocus, onLabelKeyDown, tip } = props;
+  const { count, tr } = useI18n();
   const rowRef = useRef<HTMLDivElement>(null);
+  const labelRef = useRef<HTMLButtonElement>(null);
+  // Set while a pointer is pressing the ⋯: that focus is the click's own.
+  const morePointerRef = useRef(false);
+  // A name the sidebar cuts short shows its whole path in the bubble.
+  const truncationTip = bindTruncationTip(tip, `#${node.path}`, ".tag-name");
   const hasChildren = node.children.length > 0;
   const isActive = activeTag === node.path;
   const expanded = openPaths.has(node.path);
@@ -167,9 +181,12 @@ function TagRow({ node, depth, activeTag, pinnedTags, openPaths, closingPaths, o
   return (
     <li className="tag-item" data-flip={node.path}>
       <div ref={rowRef} className={`tag-row${isActive ? " is-active" : ""}${pinned ? " is-pinned" : ""}`} style={{ paddingLeft: `${10 + depth * 18}px` }}>
+        {/* Chevron and ⋯ stay out of the tab order: the label is the row's
+            one stop, → / ← fold and unfold, Shift+F10 opens the ⋯ menu. */}
         {hasChildren ? (
           <button
             type="button"
+            tabIndex={-1}
             className={`tag-expand${expanded ? " is-expanded" : ""}`}
             onClick={() => onToggle(node.path)}
             aria-expanded={expanded}
@@ -190,14 +207,26 @@ function TagRow({ node, depth, activeTag, pinnedTags, openPaths, closingPaths, o
             out "work2" — and because the pinned state is drawn as a mark in the
             row's margin, which no assistive tech can read. */}
         <button
+          ref={labelRef}
           type="button"
           className="tag-label"
+          data-path={node.path}
+          tabIndex={node.path === tabStop ? 0 : -1}
           aria-pressed={isActive}
           aria-label={label}
           onClick={() => onPickTag(isActive ? null : node.path)}
+          {...truncationTip}
+          onFocus={(event) => {
+            onLabelFocus(node.path);
+            truncationTip.onFocus?.(event);
+          }}
+          onKeyDown={(event) => onLabelKeyDown(event, node)}
         >
           <span className="tag-name">{node.name}</span>
-          <span className="tag-count">{formatNumber(node.count)}</span>
+          {/* Rolls when a memo joins or leaves the tag, like the counts above. */}
+          <span className="tag-count">
+            <RollingText value={node.count} />
+          </span>
         </button>
         <Menu
           portal
@@ -206,8 +235,22 @@ function TagRow({ node, depth, activeTag, pinnedTags, openPaths, closingPaths, o
             <button
               type="button"
               {...triggerProps}
+              tabIndex={-1}
               className={`tag-more${open ? " is-open" : ""}`}
               aria-label={tr(`Actions for tag ${node.path}`, `标签 ${node.path} 的操作`)}
+              onPointerDown={() => {
+                morePointerRef.current = true;
+              }}
+              onClick={() => {
+                // WebKit doesn't focus a pressed button; don't let the flag linger.
+                morePointerRef.current = false;
+              }}
+              onFocus={() => {
+                // Focus handed back here as the menu closes belongs to the
+                // row's label, the tree's own stop; a press keeps its own.
+                if (morePointerRef.current) morePointerRef.current = false;
+                else labelRef.current?.focus({ preventScroll: true });
+              }}
             >
               <MoreHorizontal size={15} aria-hidden="true" />
             </button>
@@ -240,20 +283,7 @@ function TagRow({ node, depth, activeTag, pinnedTags, openPaths, closingPaths, o
         >
           <ul>
             {node.children.map((child) => (
-              <TagRow
-                key={child.path}
-                node={child}
-                depth={depth + 1}
-                activeTag={activeTag}
-                pinnedTags={pinnedTags}
-                openPaths={openPaths}
-                closingPaths={closingPaths}
-                onToggle={onToggle}
-                onPickTag={onPickTag}
-                onPinTag={onPinTag}
-                onRenameTag={onRenameTag}
-                onRemoveTag={onRemoveTag}
-              />
+              <TagRow key={child.path} {...props} node={child} depth={depth + 1} />
             ))}
           </ul>
         </div>
@@ -301,6 +331,68 @@ function TagTreeView({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenam
     }
   };
   const settle = (path: string) => setClosingPaths((current) => (current.has(path) ? new Set([...current].filter((p) => p !== path)) : current));
+
+  // Keyboard: the tree is one tab stop (roving tabindex, the heatmap's and
+  // the period switch's convention) — the label last focused, else the
+  // active tag, else the first. ↑ ↓ walk the visible labels, → unfolds or
+  // steps into the children, ← folds or steps out to the parent, Home / End
+  // jump to the ends; Shift+F10 or the context-menu key opens the row's ⋯.
+  const tip = useOptionalTip();
+  const [focusPath, setFocusPath] = useState<string | null>(null);
+  const visible: TagNode[] = [];
+  const walk = (nodes: TagNode[]) => {
+    for (const node of nodes) {
+      visible.push(node);
+      if (node.children.length > 0 && openPaths.has(node.path)) walk(node.children);
+    }
+  };
+  walk(tree);
+  const isVisible = (path: string | null) => path !== null && visible.some((node) => node.path === path);
+  const tabStop = isVisible(focusPath) ? focusPath : isVisible(activeTag) ? activeTag : (visible[0]?.path ?? null);
+
+  const focusLabel = (path: string) => {
+    for (const label of listRef.current?.querySelectorAll<HTMLButtonElement>(".tag-label") ?? []) {
+      if (label.dataset.path === path) {
+        label.focus();
+        return;
+      }
+    }
+  };
+
+  const onLabelKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, node: TagNode) => {
+    if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+      event.preventDefault();
+      event.currentTarget.closest(".tag-row")?.querySelector<HTMLButtonElement>(".tag-more")?.click();
+      return;
+    }
+    const index = visible.findIndex((item) => item.path === node.path);
+    const expanded = node.children.length > 0 && openPaths.has(node.path);
+    let target: string | undefined;
+    if (event.key === "ArrowDown") target = visible[index + 1]?.path;
+    else if (event.key === "ArrowUp") target = visible[index - 1]?.path;
+    else if (event.key === "Home") target = visible[0]?.path;
+    else if (event.key === "End") target = visible.at(-1)?.path;
+    else if (event.key === "ArrowRight") {
+      if (node.children.length === 0) return;
+      if (!expanded) {
+        event.preventDefault();
+        toggle(node.path);
+        return;
+      }
+      target = node.children[0]?.path;
+    } else if (event.key === "ArrowLeft") {
+      if (expanded) {
+        event.preventDefault();
+        toggle(node.path);
+        return;
+      }
+      target = ancestorsOf(node.path).at(-1);
+    } else return;
+    event.preventDefault();
+    if (target === undefined || target === node.path) return;
+    setFocusPath(target);
+    focusLabel(target);
+  };
 
   // Set while a fold has just finished: that render only removes the closed
   // track, whose space the rows below already took while it shut.
@@ -439,6 +531,10 @@ function TagTreeView({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenam
               onPinTag={onPinTag}
               onRenameTag={onRenameTag}
               onRemoveTag={onRemoveTag}
+              tabStop={tabStop}
+              onLabelFocus={setFocusPath}
+              onLabelKeyDown={onLabelKeyDown}
+              tip={tip}
             />
           ))}
         </ul>

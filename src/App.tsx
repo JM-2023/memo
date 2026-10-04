@@ -36,13 +36,15 @@ import { LoginScreen } from "./components/LoginScreen";
 import { MemoCard } from "./components/MemoCard";
 import { Menu } from "./components/Menu";
 import { PromptDialog } from "./components/PromptDialog";
-import { RollingText } from "./components/RollingText";
+import { RollingCount, RollingText } from "./components/RollingText";
 import { ScrollTopButton } from "./components/ScrollTopButton";
-import { FACET_ROWS, SearchFilter } from "./components/SearchFilter";
+import { FACET_ROWS, SearchFilter, type FilterOpenTarget } from "./components/SearchFilter";
 import { Sidebar } from "./components/Sidebar";
 import { SwapText } from "./components/SwapText";
 import { useTip } from "./components/Tip";
+import { bindAnchored, isTruncated } from "./components/truncationTip";
 import { useModalA11y } from "./hooks/useModalA11y";
+import { useDrawerSwipe } from "./hooks/useDrawerSwipe";
 import { useSearchHighlight } from "./hooks/useSearchHighlight";
 import { useTopbarTuck } from "./hooks/useTopbarTuck";
 import { useSemanticSearch } from "./hooks/useSemanticSearch";
@@ -84,7 +86,7 @@ import { clearLocalDeviceData } from "./lib/logoutCleanup";
 import { splitTaskLine } from "./lib/markdown";
 import { useModelDownloadPhase } from "./lib/modelDownload";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
-import { captureFeedPlace, createNavStore, isRootLens, lensesEqual, navIdOf, restoreFeedPlace, ROOT_LENS, type NavLens, type NavPlace, type NavStore } from "./lib/navHistory";
+import { captureFeedPlace, createNavStore, isLayerState, isRootLens, lensesEqual, navIdOf, restoreFeedPlace, ROOT_LENS, type NavLens, type NavPlace, type NavStore } from "./lib/navHistory";
 import { applyOptimisticLayer, withOptimistic, withoutPatch, withPatch, type OptimisticLayer, type OptimisticPatch } from "./lib/optimisticMemos";
 import {
   buildReviewDay,
@@ -875,8 +877,10 @@ export default function App() {
   const [drawerClosing, setDrawerClosing] = useState(false);
   const [toasts, setToasts] = useState<ToastState[]>([]);
   const [reveal, setReveal] = useState(false);
-  // The panel a lens chip reopens; bumping the counter opens it.
+  // The panel a lens chip reopens; bumping the counter opens it, at the
+  // control the chip stands for (the calendar, or its facet's row).
   const [filterOpenRequest, setFilterOpenRequest] = useState(0);
+  const [filterOpenTarget, setFilterOpenTarget] = useState<FilterOpenTarget>("range");
 
   // Per-toast clocks. A paused entry (pointer or focus on the stack) keeps
   // only its remaining time; resuming re-arms from there.
@@ -892,6 +896,12 @@ export default function App() {
   const drawerCloseTimerRef = useRef(0);
   const drawerCallbackFrameRef = useRef(0);
   const drawerAfterCloseRef = useRef<Array<() => void>>([]);
+  const drawerBackdropRef = useRef<HTMLDivElement>(null);
+  // A layer (drawer, Stats, lightbox) stands on a history entry of its own
+  // while it is up — see the layer effect beside the popstate handler.
+  const layerEntryRef = useRef(false);
+  const layerSkipPopsRef = useRef(0);
+  const layerBackTimerRef = useRef(0);
   const logoutBusyRef = useRef(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const topbarRef = useRef<HTMLDivElement>(null);
@@ -1782,6 +1792,12 @@ export default function App() {
   // meaning added. Memo text is lowercased once per snapshot (search.ts), so
   // a second pass over the result list costs little.
   const searching = view === "memos" && !queryIsEmpty(parsedQuery);
+  // Trash's keyword search answers the same way: a count line, its hits
+  // marked in the cards, the settled count read out. Every result there is
+  // a literal hit.
+  const trashParsedQuery = useMemo(() => parseSearchQuery(trashSearch), [trashSearch]);
+  const trashSearching = view === "trash" && !queryIsEmpty(trashParsedQuery);
+  const trashHitIds = useMemo(() => (trashSearching ? new Set(trashFeedMemos.map((memo) => memo.id)) : null), [trashSearching, trashFeedMemos]);
   const keywordHitIds = useMemo(() => {
     if (!searching) return null;
     const ids = new Set<string>();
@@ -1792,9 +1808,12 @@ export default function App() {
     () => (keywordHitIds && semanticResults ? visibleMemos.filter((memo) => !keywordHitIds.has(memo.id) && semanticResults.has(memo.id)).length : 0),
     [keywordHitIds, semanticResults, visibleMemos]
   );
-  const searchNeedleList = useMemo(() => (searching ? searchNeedles(parsedQuery) : []), [searching, parsedQuery]);
+  const searchNeedleList = useMemo(
+    () => (searching ? searchNeedles(parsedQuery) : trashSearching ? searchNeedles(trashParsedQuery) : []),
+    [searching, parsedQuery, trashSearching, trashParsedQuery]
+  );
   const feedRef = useRef<HTMLElement | null>(null);
-  useSearchHighlight(feedRef, searchNeedleList, keywordHitIds);
+  useSearchHighlight(feedRef, searchNeedleList, searching ? keywordHitIds : trashHitIds);
   // A tag, day, stats bar or filter quietly narrows what the query searches;
   // the result line and the empty state say so instead of implying the whole
   // notebook was searched.
@@ -1821,12 +1840,50 @@ export default function App() {
           ? tr(`Found ${count(foundCount, "memo")} ${searchScopeText}`, `${searchScopeText}找到 ${count(foundCount, "memo")}`)
           : tr(`Found ${count(foundCount, "memo")}`, `找到 ${count(foundCount, "memo")}`)
       }${relatedCount > 0 ? tr(` · ${relatedCount} related by meaning`, ` · 其中 ${relatedCount} 条意思相近`) : ""}`;
+  // While meaning is still on its way the count is about to grow, so the
+  // line says so in words — and its figures roll when the answer lands
+  // instead of snapping from "3" to "7 · 4 related".
+  const searchPendingNote = semanticPending ? tr(" · looking for related…", " · 正在查找相关…") : "";
+  const searchSummaryLine = !searching ? null : (
+    <>
+      {tr("Found ", `${searchScopeText ?? ""}找到 `)}
+      <RollingCount value={foundCount} unit="memo" />
+      {tr(searchScopeText ? ` ${searchScopeText}` : "", "")}
+      {relatedCount > 0 ? (
+        <>
+          {tr(" · ", " · 其中 ")}
+          <RollingText value={relatedCount} />
+          {tr(" related by meaning", " 条意思相近")}
+        </>
+      ) : null}
+      {searchPendingNote ? <span className="search-summary-pending">{searchPendingNote}</span> : null}
+    </>
+  );
+  const trashSummary = trashSearching
+    ? tr(`Found ${formatNumber(trashFeedMemos.length)} in Trash`, `回收站中找到 ${formatNumber(trashFeedMemos.length)} 条`)
+    : "";
+  const trashSummaryLine = !trashSearching ? null : (
+    <>
+      {tr("Found ", "回收站中找到 ")}
+      <RollingText value={trashFeedMemos.length} />
+      {tr(" in Trash", " 条")}
+    </>
+  );
   const searchEmptyTitle = searchScopeText
     ? tr(`No matching memos ${searchScopeText}`, `${searchScopeText}没有找到相关笔记`)
     : tr("No matching memos", "没有找到相关笔记");
   // What the polite live region reads: the settled answer, not every
   // keystroke's (or the "still looking" state's) intermediate one.
-  const searchSettled = searching && !semanticPending ? (feedMemos.length === 0 ? searchEmptyTitle : searchSummary) : "";
+  const searchSettled =
+    searching && !semanticPending
+      ? feedMemos.length === 0
+        ? searchEmptyTitle
+        : searchSummary
+      : trashSearching
+        ? trashFeedMemos.length === 0
+          ? tr("No matching memos in Trash", "回收站里没有相关笔记")
+          : trashSummary
+        : "";
   const [searchAnnouncement, setSearchAnnouncement] = useState("");
   useEffect(() => {
     const timer = window.setTimeout(() => setSearchAnnouncement(searchSettled), searchSettled ? 400 : 0);
@@ -1887,18 +1944,40 @@ export default function App() {
     setDrawerClosing(true);
     window.clearTimeout(drawerCloseTimerRef.current);
     const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 170;
-    drawerCloseTimerRef.current = window.setTimeout(() => {
-      setDrawerOpen(false);
-      setDrawerClosing(false);
-      if (drawerAfterCloseRef.current.length > 0) {
-        window.cancelAnimationFrame(drawerCallbackFrameRef.current);
-        drawerCallbackFrameRef.current = window.requestAnimationFrame(() => {
-          const callbacks = drawerAfterCloseRef.current.splice(0);
-          for (const callback of callbacks) callback();
-        });
-      }
-    }, delay);
+    drawerCloseTimerRef.current = window.setTimeout(finishDrawerClose, delay);
   }
+
+  /** The drawer's last beat: gone, and whatever waited for it runs. */
+  function finishDrawerClose() {
+    window.clearTimeout(drawerCloseTimerRef.current);
+    setDrawerOpen(false);
+    setDrawerClosing(false);
+    if (drawerAfterCloseRef.current.length > 0) {
+      window.cancelAnimationFrame(drawerCallbackFrameRef.current);
+      drawerCallbackFrameRef.current = window.requestAnimationFrame(() => {
+        const callbacks = drawerAfterCloseRef.current.splice(0);
+        for (const callback of callbacks) callback();
+      });
+    }
+  }
+
+  // The drawer exists only below 900px. Widened past it (an iPad turned to
+  // landscape), the sidebar is back in the layout and the drawer has nothing
+  // left to cover — it goes at once, taking its modal lock, inert page and
+  // focus trap with it, instead of trapping Tab behind a hidden toggle.
+  useEffect(() => {
+    if (!drawerOpen || typeof window.matchMedia !== "function") return;
+    const narrow = window.matchMedia("(max-width: 900px)");
+    const onChange = () => {
+      if (!narrow.matches) finishDrawerClose();
+    };
+    narrow.addEventListener?.("change", onChange);
+    return () => narrow.removeEventListener?.("change", onChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- finishDrawerClose only touches setters and refs
+  }, [drawerOpen]);
+
+  // A leftward swipe on the open drawer closes it (touch only).
+  useDrawerSwipe(drawerRef, drawerBackdropRef, drawerOpen, () => closeDrawer());
 
   useEffect(
     () => () => {
@@ -2298,15 +2377,23 @@ export default function App() {
 
   const deleteSavedFilter = useCallback(
     (item: SavedFilter) => {
+      // Undo puts the preset back where it stood, not at the end of the list.
+      const index = savedFilters.findIndex((entry) => entry.id === item.id);
       setSavedFilters((current) => current.filter((entry) => entry.id !== item.id));
       showToast(tr(`Deleted “${item.name}”`, `已删除「${item.name}」`), "info", {
         action: {
           label: tr("Undo", "撤销"),
-          run: () => setSavedFilters((current) => (current.some((entry) => entry.id === item.id) ? current : [...current, item]))
+          run: () =>
+            setSavedFilters((current) => {
+              if (current.some((entry) => entry.id === item.id)) return current;
+              const next = [...current];
+              next.splice(index < 0 ? next.length : Math.min(index, next.length), 0, item);
+              return next;
+            })
         }
       });
     },
-    [showToast, tr]
+    [savedFilters, showToast, tr]
   );
 
   function handleSaveFilterConfirmed(name: string) {
@@ -2475,6 +2562,13 @@ export default function App() {
       const id = navIdOf(window.history.state);
       const entry = id ? store.get(id) : null;
       if (id && entry) {
+        // Reloaded on a layer's entry (the drawer was open): the layer isn't,
+        // so step down to the lens entry it covered rather than leave a Back
+        // press that changes nothing.
+        if (isLayerState(window.history.state)) {
+          layerSkipPopsRef.current += 1;
+          window.history.back();
+        }
         currentNavIdRef.current = id;
         if (!lensesEqual(entry.lens, navLens)) applyNavLens(entry.lens);
         if (entry.place) {
@@ -2491,15 +2585,71 @@ export default function App() {
     const id = currentNavIdRef.current;
     const entry = id ? store.get(id) : null;
     if (entry && lensesEqual(entry.lens, navLens)) return;
+    if (intent === "push" && entry && layerEntryRef.current) {
+      // A pick made inside a layer (a tag in the drawer, a Stats bar) takes
+      // over the layer's own entry: one Back step back to the lens the layer
+      // covered, and closing the layer has no entry left to step off.
+      layerEntryRef.current = false;
+      currentNavIdRef.current = store.replace(null, navLens);
+      return;
+    }
     currentNavIdRef.current = intent === "push" && entry ? store.push(navLens) : store.replace(id, navLens);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs per lens change; applyNavLens reads this render
   }, [phase, navLens]);
 
+  // The tab's title names the lens the way the location trail does, so the
+  // long-press Back menu reads as a list of places rather than a column of
+  // "MEMO". Declared after the recorder above: a lens change pushes its entry
+  // first and titles it second, so each entry keeps its own title. Tag paths
+  // and search words never reach it: they are memo content, and a title
+  // outlives a logout in the browser's global history (see navHistory.ts).
+  // A tag lens reads as "Tag", a search as "Search".
+  const lensTitle =
+    view === "trash"
+      ? tr("Trash", "回收站")
+      : view === "review"
+        ? tr("Daily review", "每日回顾")
+        : [
+            activeTag ? tr("Tag", "标签") : null,
+            activeDay ? formatDayLabel(activeDay, locale) : null,
+            statsDrilldown?.kind === "tag" ? tr("Tag", "标签") : statsChipLabel,
+            rangeChipLabel,
+            ...FACET_ROWS.filter((row) => filters[row.key]).map((row) => tr(row.en, row.zh)),
+            trimmedQuery ? tr("Search", "搜索") : null
+          ]
+            .filter(Boolean)
+            .join(" · ");
+  useLayoutEffect(() => {
+    document.title = phase === "ready" && lensTitle ? `${lensTitle} · MEMO` : "MEMO";
+  }, [phase, lensTitle]);
+
   const popNavRef = useRef<(state: unknown, browserAnimated: boolean) => void>(() => undefined);
   popNavRef.current = (state, browserAnimated) => {
+    // Our own step off a layer's entry, after the layer closed from the UI.
+    if (layerSkipPopsRef.current > 0) {
+      layerSkipPopsRef.current -= 1;
+      return;
+    }
     const store = navStoreRef.current;
     if (!store) return;
     const id = navIdOf(state);
+    if (layerEntryRef.current) {
+      layerEntryRef.current = false;
+      // Back off the layer's entry onto the lens it covered: the layer
+      // closes, and that is all — the feed behind it stays where it is.
+      if (id !== null && id === currentNavIdRef.current) {
+        if (drawerOpen) closeDrawer();
+        setStatsOpen(false);
+        setLightbox(null);
+        return;
+      }
+    } else if (isLayerState(state)) {
+      // Forward onto the entry of a layer that has since closed: there is
+      // nothing to reopen, so step back over it.
+      layerSkipPopsRef.current += 1;
+      window.history.back();
+      return;
+    }
     const entry = id ? store.get(id) : null;
     const lens = entry?.lens ?? ROOT_LENS;
     const current = navLensRef.current;
@@ -2519,6 +2669,7 @@ export default function App() {
     currentNavIdRef.current = id && entry ? id : store.replace(id, lens);
     if (drawerOpen) closeDrawer();
     setStatsOpen(false);
+    setLightbox(null);
     if (lensesEqual(lens, current)) {
       if (entry?.place) restoreFeedPlace(entry.place);
       return;
@@ -2544,6 +2695,40 @@ export default function App() {
       window.removeEventListener("pagehide", onPageHide);
     };
   }, [phase]);
+
+  // Back closes the topmost layer and nothing else. Opening the drawer,
+  // Stats or the lightbox pushes a transient entry over the lens entry (same
+  // lens id); Back steps off it and the popstate above only closes the layer
+  // — on Android that keeps Back inside #work, and at the root it no longer
+  // leaves the app. Closed from the UI instead, the layer steps off its entry
+  // itself, a beat later so a layer handing over to the next (the drawer's
+  // Statistics item) keeps it rather than stepping off and on again. A pick
+  // made inside a layer takes the entry over (the recorder above).
+  const layerOpen = drawerOpen || statsOpen || lightbox !== null;
+  useEffect(() => {
+    if (phase !== "ready") {
+      layerEntryRef.current = false;
+      layerSkipPopsRef.current = 0;
+      return;
+    }
+    if (layerOpen) {
+      const id = currentNavIdRef.current;
+      if (!layerEntryRef.current && id) {
+        layerEntryRef.current = true;
+        navStoreRef.current?.pushLayer(id);
+      }
+      return;
+    }
+    if (!layerEntryRef.current) return;
+    layerBackTimerRef.current = window.setTimeout(() => {
+      if (!layerEntryRef.current) return;
+      layerEntryRef.current = false;
+      if (!isLayerState(window.history.state)) return;
+      layerSkipPopsRef.current += 1;
+      window.history.back();
+    }, 80);
+    return () => window.clearTimeout(layerBackTimerRef.current);
+  }, [phase, layerOpen]);
 
   function handleSaveReviewSettings(next: ReviewSettings) {
     setReviewSettingsOpen(false);
@@ -4076,7 +4261,7 @@ export default function App() {
           {...sidebarHandlers}
         />
       </aside>
-      {drawerOpen ? <div className={`drawer-backdrop${drawerClosing ? " is-closing" : ""}`} onClick={() => closeDrawer()} /> : null}
+      {drawerOpen ? <div ref={drawerBackdropRef} className={`drawer-backdrop${drawerClosing ? " is-closing" : ""}`} onClick={() => closeDrawer()} /> : null}
 
       <main id="main-content" className="main-column">
         <div ref={topbarRef} className="topbar">
@@ -4237,10 +4422,14 @@ export default function App() {
                       {...triggerProps}
                       className={`loc-trigger${open ? " is-open" : ""}${activeTag ? "" : " is-root"}`}
                       aria-describedby={`${triggerProps.id}-desc`}
-                      {...tip.bind(() => ({
-                        strong: tr("Sort & select", "排序与多选"),
-                        text: sortOptions.find((option) => option.key === sortKey)?.label ?? ""
-                      }))}
+                      {...bindAnchored(tip, (anchor) => {
+                        const sortLabel = sortOptions.find((option) => option.key === sortKey)?.label ?? "";
+                        // A name cut short by its ellipsis leads the bubble
+                        // in full; the sort follows it.
+                        return isTruncated(anchor.querySelector(".loc-label"))
+                          ? { strong: activeTag ? `#${activeTag}` : tr("All memos", "全部笔记"), text: `${tr("Sort & select", "排序与多选")} · ${sortLabel}` }
+                          : { strong: tr("Sort & select", "排序与多选"), text: sortLabel };
+                      })}
                       onPointerDown={tip.hide}
                     >
                       <span className="loc-label">{activeTag ? activeTag.split("/").at(-1) : tr("All memos", "全部笔记")}</span>
@@ -4385,7 +4574,10 @@ export default function App() {
                     transitionName="range-filter-chip"
                     delay={chipDelay("range")}
                     onClear={clearDateRange}
-                    onEdit={() => setFilterOpenRequest((n) => n + 1)}
+                    onEdit={() => {
+                      setFilterOpenTarget("range");
+                      setFilterOpenRequest((n) => n + 1);
+                    }}
                   />
                 ) : null}
                 {FACET_ROWS.filter((row) => filters[row.key]).map((row) => (
@@ -4398,7 +4590,10 @@ export default function App() {
                     transitionName={`facet-chip-${row.key}`}
                     delay={chipDelay(row.key)}
                     onClear={() => toggleFacet(row.key)}
-                    onEdit={() => setFilterOpenRequest((n) => n + 1)}
+                    onEdit={() => {
+                      setFilterOpenTarget(row.key);
+                      setFilterOpenRequest((n) => n + 1);
+                    }}
                   />
                 ))}
               </>
@@ -4561,6 +4756,7 @@ export default function App() {
                 activeTag={activeTag}
                 minDay={minDay}
                 openRequest={filterOpenRequest}
+                openTarget={filterOpenTarget}
                 onToggleFacet={toggleFacet}
                 onDateChange={patchDateRange}
                 onPresetRange={applyPresetRange}
@@ -4577,14 +4773,33 @@ export default function App() {
           ) : view === "trash" && trashedMemos.length > 0 ? (
             // Trash's search: the same box, keywords only — no Brain, no
             // funnel. Its text never follows the reader out of Trash.
-            <div className="search-tools">
+            <div className="search-tools" role="search">
               <div className={`searchbox${searchOpen || trashQuery ? " is-open" : ""}`}>
                 <Search size={15} className="searchbox-icon" aria-hidden="true" />
                 <input
+                  type="search"
                   value={trashQuery}
                   placeholder={tr("Search Trash", "搜索回收站")}
                   aria-label={tr("Search Trash", "搜索回收站")}
+                  enterKeyHint="search"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
                   onChange={(event) => setTrashQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                    if (event.key === "Escape") {
+                      // Clears first, then lets go — as the memo search does.
+                      if (trashQuery) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        changeFeed(() => setTrashQuery(""));
+                      } else event.currentTarget.blur();
+                    } else if (event.key === "Enter" && window.matchMedia("(pointer: coarse)").matches) {
+                      event.currentTarget.blur();
+                    }
+                  }}
                   onFocus={() => setSearchOpen(true)}
                   onBlur={() => setSearchOpen(false)}
                 />
@@ -4604,6 +4819,9 @@ export default function App() {
                   </button>
                 ) : null}
               </div>
+              <p className="search-sr" role="status">
+                {searchAnnouncement}
+              </p>
             </div>
           ) : null}
         </div>
@@ -4685,11 +4903,13 @@ export default function App() {
               </span>
             </div>
           ) : null}
-          {searching && feedMemos.length > 0 ? (
+          {(searching || trashSearching) && feedMemos.length > 0 ? (
             // Announced through the live region in the search tools, once
-            // typing settles; this line is the one sighted readers scan.
+            // typing settles; this line is the one sighted readers scan. Its
+            // figures roll, so the sentence is read from a plain copy.
             <p className="search-summary">
-              {searchSummary}
+              <span className="sr-only">{searching ? `${searchSummary}${searchPendingNote}` : trashSummary}</span>
+              <span aria-hidden="true">{searching ? searchSummaryLine : trashSummaryLine}</span>
             </p>
           ) : null}
           {feedMemos.length === 0 ? (

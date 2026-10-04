@@ -228,12 +228,27 @@ describe("trash search", () => {
     expect(screen.queryByRole("button", { name: "Semantic Search" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Filter memos" })).toBeNull();
 
-    await user.type(screen.getByRole("textbox", { name: "Search Trash" }), "letter");
+    const search = screen.getByRole("searchbox", { name: "Search Trash" });
+    expect(search.closest("[role='search']")).toBeTruthy();
+    expect(search.getAttribute("enterkeyhint")).toBe("search");
+    expect(search.getAttribute("spellcheck")).toBe("false");
+    await user.type(search, "letter");
     await waitFor(() => expect(screen.queryByText(/old receipt/)).toBeNull());
     expect(screen.getByText(/draft letter/)).toBeTruthy();
+    // The same answer line as the memo search, read out once typing settles.
+    expect(screen.getByText("Found 1 in Trash", { selector: ".search-summary > .sr-only" })).toBeTruthy();
+    await waitFor(() => expect(search.closest(".search-tools")?.querySelector("[role='status']")?.textContent).toBe("Found 1 in Trash"), { timeout: 1500 });
 
-    await user.clear(screen.getByRole("textbox", { name: "Search Trash" }));
-    await user.type(screen.getByRole("textbox", { name: "Search Trash" }), "nothing like it");
+    // Esc clears first, then lets go of the field.
+    search.focus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect((search as HTMLInputElement).value).toBe(""));
+    expect(document.activeElement).toBe(search);
+    await screen.findByText(/old receipt/);
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).not.toBe(search);
+
+    await user.type(search, "nothing like it");
     expect(await screen.findByText("No matching memos in Trash")).toBeTruthy();
   });
 });

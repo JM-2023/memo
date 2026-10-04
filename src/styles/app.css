@@ -1272,8 +1272,10 @@ a:hover { text-decoration: underline; }
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
-@media (hover: hover) { .heatmap-title:hover { background: var(--wash); color: var(--ink); } }
-.heatmap-title:active { transform: scale(0.96); }
+@media (hover: hover) { .heatmap-title:hover:not([aria-disabled="true"]) { background: var(--wash); color: var(--ink); } }
+.heatmap-title:active:not([aria-disabled="true"]) { transform: scale(0.96); }
+/* On the current page the title has nowhere to return to: no hover, no press. */
+.heatmap-title[aria-disabled="true"] { cursor: default; }
 .heatmap-total { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
 /* Title swaps as one block (label + count) in step with the grid slide. When
    the row is too narrow for both, the count wraps under the range (the text
@@ -1614,6 +1616,32 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
      past the sidebar breakpoint, not on the smallest phone. */
   container: topbar / inline-size;
 }
+/* The band's edge: a hairline that fades in over the first 16px of scroll,
+   so cards sliding under the frosted bar meet a line instead of a smear —
+   never a drop shadow. Drawn inside the band's bottom padding rather than
+   below it, so the phone tuck's clip (which follows it up, see the 440px
+   section) can't cut it off. Scroll-driven where supported; elsewhere
+   useTopbarTuck flips data-scrolled from a sentinel. */
+.topbar::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 1px;
+  background: var(--line);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t) var(--ease);
+}
+.topbar[data-scrolled]::after { opacity: 1; }
+@supports (animation-timeline: scroll()) {
+  .topbar::after {
+    transition: none;
+    animation: topbar-edge linear both;
+    animation-timeline: scroll(root block);
+    animation-range: 0 16px;
+  }
+}
+@keyframes topbar-edge { to { opacity: 1; } }
 .drawer-toggle { display: none; }
 
 /* position: relative anchors the to-root ghost trail (see .crumb-ghosts.is-home).
@@ -2071,7 +2099,12 @@ button.crumb:active { background: var(--wash-strong); }
 }
 @media (hover: hover) { .range-cal-nav:hover:not(:disabled) { background: var(--wash); color: var(--ink); } }
 .range-cal-nav:disabled { opacity: 0.35; }
-.range-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; }
+.range-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; overflow: hidden; overflow: clip; }
+/* Six week rows, always (RangeCalendar), paged as one sheet with the
+   heatmap's slide; the grid clips the 20px it travels. */
+.range-cal-days { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; }
+.range-cal-days.slide-left { animation: heat-slide-left 0.22s var(--ease-out) both; }
+.range-cal-days.slide-right { animation: heat-slide-right 0.22s var(--ease-out) both; }
 .range-cal-weekday { padding: 2px 0 4px; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; text-align: center; }
 .range-cal-day {
   position: relative;
@@ -2742,6 +2775,9 @@ button.crumb:active { background: var(--wash-strong); }
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
+/* "· looking for related…" while meaning is still on its way: a rung
+   quieter than the count it qualifies. */
+.search-summary-pending { font-weight: 400; }
 /* Keyword hits inside the cards (CSS Custom Highlight API: no DOM change).
    A wash only: a highlight's text-decoration would also recolour the card's
    own decorations (the open task's transparent strike, link underlines).
@@ -4832,6 +4868,10 @@ button.stats-tag-row:active { scale: 0.992; }
     padding-bottom: max(24px, env(safe-area-inset-bottom));
     overscroll-behavior: contain;
   }
+  /* Vertical pans stay the browser's (the sidebar scrolls); a sideways
+     drag reaches useDrawerSwipe, which swipes the drawer shut. */
+  .sidebar,
+  .sidebar-inner { touch-action: pan-y pinch-zoom; }
   .sidebar.is-open.is-closing { transform: translateX(-102%); transition: transform 0.16s var(--ease); animation: none; }
   .drawer-backdrop {
     position: fixed;
@@ -4976,6 +5016,9 @@ button.stats-tag-row:active { scale: 0.992; }
     clip-path: inset(0 0 var(--topbar-tuck) 0);
   }
   .topbar[data-tuck="in"] .search-tools { visibility: hidden; opacity: 0; }
+  /* The edge hairline rides up with the clip, staying on the band's
+     visible bottom. */
+  .topbar[data-tuck="in"]::after { translate: 0 calc(-1 * var(--topbar-tuck)); }
   .main-column:has(.topbar[data-tuck="in"]) .scroll-top-slot { --scroll-top-anchor: 88px; }
   .breadcrumb { flex: 0 0 calc(100% - 40px); }
   .breadcrumb:has(.filter-chip) .crumbs { flex: 1; }
@@ -4996,6 +5039,9 @@ button.stats-tag-row:active { scale: 0.992; }
   .topbar[data-tuck="in"] .search-tools { transition: opacity 0.14s var(--ease), visibility 0s linear 0.2s; }
   .topbar[data-tuck="out"] { animation: topbar-untuck 0.22s var(--ease-out) both; }
   .topbar[data-tuck="out"] .search-tools { transition: opacity 0.18s var(--ease) 0.04s; }
+  /* In step with the clip's tuck and untuck. */
+  .topbar[data-tuck="in"]::after { transition: opacity var(--t) var(--ease), translate 0.2s var(--ease); }
+  .topbar[data-tuck="out"]::after { transition: opacity var(--t) var(--ease), translate 0.22s var(--ease-out); }
 }
 @keyframes topbar-tuck {
   from { clip-path: inset(0 0 0 0); }
@@ -5076,6 +5122,7 @@ button.stats-tag-row:active { scale: 0.992; }
    ========================================================================= */
 @media (pointer: coarse) {
   :where(.icon-button, .memo-restore, .memo-fold-toggle, .tag-expand, .tag-more, .attachment-remove) { position: relative; }
+  :where(.filter-chip.is-editable > .filter-chip-x, .range-cal-nav, .saved-delete, .filter-mini-clear) { position: relative; }
   .icon-button::before,
   .memo-restore::before,
   .memo-fold-toggle::before,
@@ -5083,7 +5130,12 @@ button.stats-tag-row:active { scale: 0.992; }
   .tag-more::before,
   .searchbox-clear::before,
   .attachment-remove::before,
-  .lang-seg button::before { content: ""; position: absolute; }
+  .lang-seg button::before,
+  .filter-chip.is-editable > .filter-chip-x::before,
+  .range-cal-nav::before,
+  .saved-delete::before,
+  .filter-mini-clear::before,
+  .period-seg button::before { content: ""; position: absolute; }
   /* 32 → 44; the 26px card ⋯ sits in 13–15px of card padding: 26 → 44. */
   .icon-button::before { inset: -6px; }
   .memo-menu-trigger::before { inset: -9px; }
@@ -5103,6 +5155,22 @@ button.stats-tag-row:active { scale: 0.992; }
   .tag-label { align-self: stretch; }
   .tag-expand::before { inset: -11px -3px -11px -10px; }
   .tag-more::before { inset: -10px -10px -10px -4px; }
+  /* A chip's × grows up, down and outward — never over the chip's edit
+     half, where a near miss would open the panel instead. 8px vertically
+     stays within the row gap of a second row of chips. */
+  .filter-chip.is-editable > .filter-chip-x::before { inset: -8px -7px -8px 0; }
+  /* 26 → 44: above is the range line, beside the month label, below the
+     weekday letters — none of them interactive. */
+  .range-cal-nav::before { inset: -9px; }
+  /* Rows are 36px apart, so the × takes its row's height and a little of
+     the name's empty end, never the next row. */
+  .saved-delete::before { inset: -6px -3px -6px -6px; }
+  /* Grows up into the caption row's air; only 5px down, where the quick
+     ranges begin. */
+  .filter-mini-clear::before { inset: -14px -6px -5px; }
+  /* 26 → 44: the track's neighbours (stat cells, the figures) are 12px and
+     8px away; the 9px reach stays clear of both. */
+  .period-seg button::before { inset: -9px 0; }
 }
 
 /* =========================================================================

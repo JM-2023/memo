@@ -149,13 +149,26 @@ export function navIdOf(state: unknown): string | null {
   return typeof id === "string" && id ? id : null;
 }
 
+/**
+ * A layer's entry: pushed over the lens entry while the drawer, Stats or the
+ * lightbox is up. It carries the same lens id, so Back closes that layer and
+ * lands on the lens it covered instead of changing the feed behind it.
+ */
+export function isLayerState(state: unknown): boolean {
+  return typeof state === "object" && state !== null && (state as Record<string, unknown>).memoLayer === true;
+}
+
 function newId(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function historyState(id: string): Record<string, unknown> {
   const current = window.history.state;
-  return { ...(typeof current === "object" && current !== null ? current : {}), memoNav: id };
+  const rest: Record<string, unknown> = { ...(typeof current === "object" && current !== null ? current : {}) };
+  // A lens taking over a layer's entry (a pick made inside the drawer) makes
+  // it an ordinary lens entry again.
+  delete rest.memoLayer;
+  return { ...rest, memoNav: id };
 }
 
 export interface NavStore {
@@ -164,6 +177,8 @@ export interface NavStore {
   replace(id: string | null, lens: NavLens): string;
   /** Add a history entry for `lens` on top of the current one. */
   push(lens: NavLens): string;
+  /** Add a layer's entry over the lens entry `id` (see isLayerState). */
+  pushLayer(id: string): void;
   setPlace(id: string, place: NavPlace | null): void;
   /** Write pending changes now (pagehide). */
   flush(): void;
@@ -242,6 +257,13 @@ export function createNavStore(): NavStore {
         // Rate-limited: the lens is applied, it just isn't a Back step.
       }
       return key;
+    },
+    pushLayer(id) {
+      try {
+        window.history.pushState({ memoNav: id, memoLayer: true }, "");
+      } catch {
+        // Rate-limited: Back has no layer step to close; it steps the lens.
+      }
     },
     setPlace(id, place) {
       const entry = entries.get(id);

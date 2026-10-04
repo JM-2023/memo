@@ -6,6 +6,7 @@ import type { FacetKey, FeedFilters } from "../lib/search";
 import { Menu } from "./Menu";
 import { RangeCalendar } from "./RangeCalendar";
 import { useTip } from "./Tip";
+import { bindTruncationTip } from "./truncationTip";
 
 /** One row per structured facet — shared with App's breadcrumb chips so the
     panel rows and the chips always speak the same labels. */
@@ -15,6 +16,9 @@ export const FACET_ROWS: { key: FacetKey; icon: LucideIcon; en: string; zh: stri
   { key: "hasLink", icon: Link2, en: "With links", zh: "含链接" },
   { key: "hasOpenTask", icon: ListTodo, en: "With open tasks", zh: "含未完成任务" }
 ];
+
+/** Where a chip's edit half lands in the panel: the calendar, or a facet's row. */
+export type FilterOpenTarget = "range" | FacetKey;
 
 interface RangePreset {
   key: string;
@@ -49,6 +53,8 @@ interface SearchFilterProps {
   minDay?: string | null;
   /** Bump to open the panel from outside (a chip's edit half). */
   openRequest?: number;
+  /** The control that open lands on — the chip's own lens. */
+  openTarget?: FilterOpenTarget;
   onToggleFacet: (key: FacetKey) => void;
   onDateChange: (patch: Partial<Pick<FeedFilters, "dateFrom" | "dateTo">>) => void;
   /** A whole range at once (quick-range chips): one morph, not two edits. */
@@ -84,6 +90,15 @@ export function SearchFilter(props: SearchFilterProps) {
       panelClassName="filter-panel"
       panelLabel={tr("Search filters", "搜索筛选")}
       openSignal={props.openRequest}
+      // Not the panel's first control ("No tags"): the range chip opens on
+      // the calendar's roving day, a facet chip on its own row.
+      openSignalFocus={
+        props.openTarget === undefined
+          ? undefined
+          : props.openTarget === "range"
+            ? ".range-cal-day[tabindex='0']"
+            : `[data-facet='${props.openTarget}']`
+      }
       trigger={(open) => (
         <button
           type="button"
@@ -114,6 +129,7 @@ export function SearchFilter(props: SearchFilterProps) {
               <button
                 key={row.key}
                 type="button"
+                data-facet={row.key}
                 aria-pressed={active}
                 disabled={idle}
                 className={active ? "is-selected" : ""}
@@ -179,6 +195,7 @@ export function SearchFilter(props: SearchFilterProps) {
                       close();
                       props.onApplySaved(item);
                     }}
+                    {...bindTruncationTip(tip, item.name, ".saved-name")}
                   >
                     <Bookmark size={16} aria-hidden="true" />
                     <span className="saved-name">{item.name}</span>

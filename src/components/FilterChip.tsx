@@ -1,5 +1,6 @@
 import { X, type LucideIcon } from "lucide-react";
 import { useState, type CSSProperties } from "react";
+import { bindTruncationTip, useOptionalTip } from "./truncationTip";
 
 interface FilterChipProps {
   /** Lens-type glyph — the same icon as the filter's source row (heatmap day,
@@ -39,11 +40,13 @@ interface FilterChipProps {
  */
 export function FilterChip({ icon: Icon, label, clearLabel, transitionName, delay, onClear, onEdit, editLabel }: FilterChipProps) {
   const [entranceDelay] = useState(delay);
+  // A label the chip's width cuts short shows in full in the bubble.
+  const truncationTip = bindTruncationTip(useOptionalTip(), label, ".filter-chip-label");
   const style: CSSProperties = { viewTransitionName: transitionName };
   if (entranceDelay) style.animationDelay = entranceDelay;
   if (!onEdit) {
     return (
-      <button type="button" className="filter-chip" style={style} aria-label={clearLabel} onClick={onClear}>
+      <button type="button" className="filter-chip" style={style} aria-label={clearLabel} onClick={onClear} {...truncationTip}>
         <Icon size={13} aria-hidden="true" />
         <span className="filter-chip-label">{label}</span>
         <X size={12} className="filter-chip-x" aria-hidden="true" />
@@ -52,7 +55,7 @@ export function FilterChip({ icon: Icon, label, clearLabel, transitionName, dela
   }
   return (
     <span className="filter-chip is-editable" style={style}>
-      <button type="button" className="filter-chip-main" aria-label={editLabel} onClick={onEdit}>
+      <button type="button" className="filter-chip-main" aria-label={editLabel} onClick={onEdit} {...truncationTip}>
         <Icon size={13} aria-hidden="true" />
         <span className="filter-chip-label">{label}</span>
       </button>

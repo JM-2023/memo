@@ -3,6 +3,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Keybo
 import { addDays, dateFormat, dateKey, formatDayLabel, startOfWeek, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { buildHeatWeeks, type HeatCell, type PeriodKind } from "../lib/stats";
+import { RollingCount } from "./RollingText";
 import { SwapText } from "./SwapText";
 import { useTip, withFocus } from "./Tip";
 
@@ -81,6 +82,26 @@ function useLocalToday(): Date {
   return today;
 }
 
+function keyToDate(key: string): Date {
+  const [year, month, day] = key.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+/** Which page of `period` holds `day`, counted from the one holding `now`. */
+function offsetOf(period: PeriodKind, day: Date, now: Date): number {
+  if (period === "week") return Math.round((startOfWeek(day).getTime() - startOfWeek(now).getTime()) / (7 * 86_400_000));
+  if (period === "month") return (day.getFullYear() - now.getFullYear()) * 12 + day.getMonth() - now.getMonth();
+  return day.getFullYear() - now.getFullYear();
+}
+
+/** The same place one page over: a week on, the same date a month or a year on (clamped to the month's end). */
+function pageOver(period: PeriodKind, day: Date, delta: number): Date {
+  if (period === "week") return addDays(day, delta * 7);
+  const target = period === "month" ? new Date(day.getFullYear(), day.getMonth() + delta, 1) : new Date(day.getFullYear() + delta, day.getMonth(), 1);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  return new Date(target.getFullYear(), target.getMonth(), Math.min(day.getDate(), lastDay));
+}
+
 function weekRangeLabel(start: Date, end: Date, locale: string): string {
   const formatter = dateFormat(locale, { month: "short", day: "numeric" });
   const withRange = formatter as Intl.DateTimeFormat & { formatRange?: (a: Date, b: Date) => string };
@@ -105,10 +126,24 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
   const tip = useTip();
   const now = useLocalToday();
   const todayStamp = `${dateKey(now)}:${now.getTimezoneOffset()}`;
-  // Paging within the selected period. Switching periods derives back to
-  // offset 0 (no effect needed — `nav.period` going stale resets it).
-  const [nav, setNav] = useState({ period, offset: 0, direction: 0 });
-  const offset = nav.period === period ? nav.offset : 0;
+  // Paging within the selected period. Switching periods derives back to the
+  // page holding the active day, else the current one (no effect needed —
+  // `nav.period` going stale resets it).
+  const pageOf = (day: string | null) => (day ? Math.min(0, offsetOf(period, keyToDate(day), now)) : 0);
+  const [nav, setNav] = useState(() => ({ period, offset: pageOf(activeDay), direction: 0 }));
+  // A day picked somewhere else — a saved filter, Back, a reload — that the
+  // shown page doesn't hold brings its page in, sliding the way it lies.
+  // Only a change of day does: paging away from it by hand stays put.
+  const [seenDay, setSeenDay] = useState(activeDay);
+  if (seenDay !== activeDay) {
+    setSeenDay(activeDay);
+    const shown = nav.period === period ? nav.offset : pageOf(seenDay);
+    const target = pageOf(activeDay);
+    if (activeDay && target !== shown) setNav({ period, offset: target, direction: Math.sign(target - shown) });
+    // Otherwise the page on screen stays — clearing the day included.
+    else if (nav.period !== period) setNav({ period, offset: shown, direction: 0 });
+  }
+  const offset = nav.period === period ? nav.offset : pageOf(activeDay);
   const direction = nav.period === period ? nav.direction : 0;
 
   const { start, end } = rangeOf(period, offset, now);
@@ -187,33 +222,61 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
 
   const [homeEn, homeZh] = HOME_LABEL[period];
 
+  // A key that walks off the page turns it: focus lands on the matching cell
+  // of the page it opens, once that page has rendered.
+  const pendingFocusRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const key = pendingFocusRef.current;
+    if (!key) return;
+    pendingFocusRef.current = null;
+    cellRefs.current.get(key)?.focus({ preventScroll: true });
+  });
+
+  /** Pages the ‹ › arrows could reach: the first memo's page through today's. */
+  function canShowPage(page: number): boolean {
+    return page <= 0 && (page === offset || (minDay !== null && page >= Math.min(0, offsetOf(period, keyToDate(minDay), now))));
+  }
+
+  /**
+   * Arrows step a day (← →) or a week (↑ ↓) — on the year bands, a week
+   * column (← →) or a day (↑ ↓) — and Page Up / Down a whole page, all by
+   * date: a step off the page's edge turns the page, as the range calendar
+   * does, instead of stopping dead. Days after today hold nothing; a page
+   * key landing past today lands on today.
+   */
   function moveCellFocus(event: ReactKeyboardEvent<HTMLButtonElement>, key: string) {
-    const current = navigableCells.find((cell) => cell.key === key);
-    if (!current) return;
-    let target = current;
-    if (event.key === "Home") target = navigableCells[0] ?? current;
-    else if (event.key === "End") target = navigableCells.at(-1) ?? current;
+    if (!navigableKeys.has(key)) return;
+    const todayKey = dateKey(now);
+    let target: string | undefined;
+    if (event.key === "Home") target = navigableCells[0]?.key;
+    else if (event.key === "End") target = navigableCells.at(-1)?.key;
     else {
-      let weekIndex = current.weekIndex;
-      let dayIndex = current.dayIndex;
-      if (period === "year") {
-        if (event.key === "ArrowLeft") weekIndex -= 1;
-        else if (event.key === "ArrowRight") weekIndex += 1;
-        else if (event.key === "ArrowUp") dayIndex -= 1;
-        else if (event.key === "ArrowDown") dayIndex += 1;
-        else return;
+      const day = keyToDate(key);
+      let next: Date;
+      if (event.key === "PageUp" || event.key === "PageDown") {
+        next = pageOver(period, day, event.key === "PageUp" ? -1 : 1);
+        if (dateKey(next) > todayKey) next = now;
       } else {
-        if (event.key === "ArrowLeft") dayIndex -= 1;
-        else if (event.key === "ArrowRight") dayIndex += 1;
-        else if (event.key === "ArrowUp") weekIndex -= 1;
-        else if (event.key === "ArrowDown") weekIndex += 1;
-        else return;
+        const steps: Record<string, number> =
+          period === "year" ? { ArrowLeft: -7, ArrowRight: 7, ArrowUp: -1, ArrowDown: 1 } : { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
+        if (!(event.key in steps)) return;
+        next = addDays(day, steps[event.key]);
       }
-      target = navigableCells.find((cell) => cell.weekIndex === weekIndex && cell.dayIndex === dayIndex) ?? current;
+      const nextKey = dateKey(next);
+      const page = offsetOf(period, next, now);
+      if (nextKey <= todayKey && (navigableKeys.has(nextKey) || (page !== offset && canShowPage(page)))) target = nextKey;
     }
     event.preventDefault();
-    setFocusedDay(target.key);
-    cellRefs.current.get(target.key)?.focus({ preventScroll: true });
+    if (!target || target === key) return;
+    setFocusedDay(target);
+    const page = offsetOf(period, keyToDate(target), now);
+    if (page !== offset) {
+      tip.hide();
+      pendingFocusRef.current = target;
+      setNav({ period, offset: page, direction: Math.sign(page - offset) });
+      return;
+    }
+    cellRefs.current.get(target)?.focus({ preventScroll: true });
   }
 
   // ---- Grid transition machinery ----
@@ -336,15 +399,22 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
         >
           <ChevronLeft size={15} aria-hidden="true" />
         </button>
+        {/* On the current page there is nowhere to return to: the title says
+            so (aria-disabled, no hover or press) rather than acting dead. */}
         <button
           type="button"
           className="heatmap-title"
+          aria-disabled={offset === 0 ? true : undefined}
           onClick={goHome}
           {...tip.bind(() => (offset !== 0 ? { text: tr(homeEn, homeZh) } : null))}
         >
           <SwapText id={gridKey} dir={swapDir} tweenWidth={false} className="heatmap-title-swap">
             {title}
-            <span className="heatmap-total">{count(rangeTotal, "memo")}</span>
+            {/* A memo added on this page rolls the count; a new page swaps
+                it with the title. */}
+            <span className="heatmap-total">
+              <RollingCount value={rangeTotal} unit="memo" />
+            </span>
           </SwapText>
         </button>
         <button

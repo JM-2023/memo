@@ -387,9 +387,23 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown }: Stat
     let next = current;
     if (event.key === "Home") next = 0;
     else if (event.key === "End") next = activeHeatDays.length - 1;
-    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = Math.max(0, current - 1);
-    else if (event.key === "ArrowRight" || event.key === "ArrowDown") next = Math.min(activeHeatDays.length - 1, current + 1);
-    else return;
+    else if (event.key === "ArrowLeft") next = Math.max(0, current - 1);
+    else if (event.key === "ArrowRight") next = Math.min(activeHeatDays.length - 1, current + 1);
+    else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      // A week up or down, as the grid reads (and the sidebar heatmap moves):
+      // only active days are stops, so the nearest one to that date, on that
+      // side of this one.
+      const down = event.key === "ArrowDown";
+      const goal = parseDayKey(key).getTime() + (down ? 7 : -7) * 86_400_000;
+      let bestDistance = Infinity;
+      for (let index = down ? current + 1 : current - 1; index >= 0 && index < activeHeatDays.length; index += down ? 1 : -1) {
+        const distance = Math.abs(parseDayKey(activeHeatDays[index]).getTime() - goal);
+        // Ties go to the day further along: the step should feel like a step.
+        if (distance > bestDistance) break;
+        next = index;
+        bestDistance = distance;
+      }
+    } else return;
     event.preventDefault();
     const target = activeHeatDays[next];
     setFocusedHeatDay(target);

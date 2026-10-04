@@ -1,6 +1,7 @@
 import { ChevronRight, Home } from "lucide-react";
 import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../lib/i18n";
+import { bindTruncationTip, useOptionalTip } from "./truncationTip";
 
 interface CrumbsProps {
   /** Active tag path, e.g. "欢迎/简介"; null at the root (All memos). */
@@ -44,6 +45,8 @@ interface GhostTrail {
 
 interface TrailCrumbProps {
   part: string;
+  /** The segment's whole path ("a/b"), shown when the crumb ellipsizes. */
+  path: string;
   /** This crumb is the spot the pill just vacated — resolve in place. */
   settle: boolean;
   sepDelay: string;
@@ -58,8 +61,9 @@ interface TrailCrumbProps {
  * on) would swap animation-name and replay the entrance on a crumb that is
  * standing still. Only a remount (the prefix key) legitimately restarts it.
  */
-function TrailCrumb({ part, settle, sepDelay, crumbDelay, onPick }: TrailCrumbProps) {
+function TrailCrumb({ part, path, settle, sepDelay, crumbDelay, onPick }: TrailCrumbProps) {
   const [entrance] = useState(() => ({ settle, sepDelay, crumbDelay }));
+  const truncationTip = bindTruncationTip(useOptionalTip(), `#${path}`);
   const cls = entrance.settle ? " is-settling" : "";
   return (
     <>
@@ -74,6 +78,7 @@ function TrailCrumb({ part, settle, sepDelay, crumbDelay, onPick }: TrailCrumbPr
         className={`crumb${cls}`}
         onClick={onPick}
         style={entrance.settle ? undefined : { animationDelay: entrance.crumbDelay }}
+        {...truncationTip}
       >
         {part}
       </button>
@@ -135,6 +140,7 @@ export function Crumbs({ path, onHome, onPick, children }: CrumbsProps) {
                 <TrailCrumb
                   key={prefix}
                   part={part}
+                  path={prefix}
                   // Drilled exactly one level: this crumb is where the pill
                   // just was — resolve it in place instead of sliding it in.
                   settle={prefix === prevPath}

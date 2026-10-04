@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type AnimationEvent, type CSSProperties } from "react";
-import { useI18n } from "../lib/i18n";
+import { useI18n, type CountUnit } from "../lib/i18n";
 
 interface RollingTextProps {
   /** Numeric value behind the text; its change decides the roll direction. */
@@ -192,5 +192,22 @@ export function RollingText({ value, text, align = "right", className }: Rolling
         ))}
       </span>
     </span>
+  );
+}
+
+/**
+ * A count with its unit — "12 memos", "12 条笔记" — where the figure rolls
+ * and an English plural rolls with it (memo → memos), the way the sidebar's
+ * period figures read. Keyed by language: a locale switch swaps the noun
+ * instantly like the rest of the UI.
+ */
+export function RollingCount({ value, unit }: { value: number; unit: CountUnit }) {
+  const { count, language } = useI18n();
+  // The unit is whatever follows the figure in the locale's own phrasing.
+  const noun = count(value, unit).replace(/^\S+\s/, "");
+  return (
+    <>
+      <RollingText value={value} /> <RollingText key={language} value={value} text={noun} align="left" />
+    </>
   );
 }

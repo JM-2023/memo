@@ -46,6 +46,12 @@ interface MenuProps {
    * the panel it came from). 0 / undefined never opens.
    */
   openSignal?: number;
+  /**
+   * Where an openSignal open puts focus (a selector inside the panel): the
+   * control the outside caller stands for, scrolled into the panel's view.
+   * Falls back to the usual first control when nothing matches.
+   */
+  openSignalFocus?: string;
 }
 
 interface PortalPos {
@@ -73,7 +79,7 @@ const PAGE_FOCUSABLE = [
  * Closing holds the panel one beat in a "closing" phase so it can play the
  * reverse morph before unmounting.
  */
-export function Menu({ trigger, children, align = "right", className, panelClassName, portal = false, kind = "menu", panelLabel, openSignal }: MenuProps) {
+export function Menu({ trigger, children, align = "right", className, panelClassName, portal = false, kind = "menu", panelLabel, openSignal, openSignalFocus }: MenuProps) {
   const [phase, setPhase] = useState<"closed" | "open" | "closing">("closed");
   const [pos, setPos] = useState<PortalPos | null>(null);
   // In-flow (non-portal) panels open downward unless that would run past the
@@ -134,8 +140,9 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     requestClose(false);
   }
 
-  function requestOpen(edge: "first" | "last" = "first") {
+  function requestOpen(edge: "first" | "last" = "first", focusSelector: string | null = null) {
     focusEdgeRef.current = edge;
+    focusTargetRef.current = focusSelector;
     restoreTriggerRef.current = false;
     setPhase("open");
   }
@@ -143,12 +150,30 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   // Only a bump after mount opens: a menu that (re)mounts while the counter
   // already stands at 3 was not asked to open — the view it lives in was.
   const seenOpenSignalRef = useRef(openSignal);
+  const focusTargetRef = useRef<string | null>(null);
   useEffect(() => {
     if (openSignal === seenOpenSignalRef.current) return;
     seenOpenSignalRef.current = openSignal;
-    if (openSignal) requestOpen("first");
+    if (openSignal) {
+      // Already open (a second chip's edit half): just move to its control.
+      if (phase === "open") focusSignalTarget(openSignalFocus ?? null);
+      else requestOpen("first", openSignalFocus ?? null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one open per bump
   }, [openSignal]);
+
+  /** Focus the signal's target, scrolling it into the panel's own view. */
+  function focusSignalTarget(selector: string | null): boolean {
+    const panel = panelRef.current;
+    const target = selector && panel ? panel.querySelector<HTMLElement>(selector) : null;
+    if (!panel || !target) return false;
+    target.focus({ preventScroll: true });
+    const panelRect = panel.getBoundingClientRect();
+    const rect = target.getBoundingClientRect();
+    if (rect.bottom > panelRect.bottom) panel.scrollTop += rect.bottom - panelRect.bottom + 8;
+    else if (rect.top < panelRect.top) panel.scrollTop -= panelRect.top - rect.top + 8;
+    return true;
+  }
 
   useEffect(() => {
     if (phase !== "closing") return;
@@ -169,6 +194,9 @@ export function Menu({ trigger, children, align = "right", className, panelClass
       if (!triggerNode.id) triggerNode.id = triggerId;
       panelRef.current.setAttribute("aria-labelledby", triggerNode.id);
     }
+    const focusTarget = focusTargetRef.current;
+    focusTargetRef.current = null;
+    if (focusSignalTarget(focusTarget)) return;
     if (kind === "panel") {
       panelRef.current?.querySelector<HTMLElement>(PAGE_FOCUSABLE)?.focus({ preventScroll: true });
       return;
