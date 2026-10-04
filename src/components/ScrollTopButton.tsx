@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useI18n } from "../lib/i18n";
 
 /** Below this the page counts as "at the top" and the button hides. */
@@ -159,9 +159,25 @@ export function ScrollTopButton() {
     flightFrameRef.current = window.requestAnimationFrame(tick);
   };
 
+  // The button goes inert as the page lands, which drops keyboard focus on
+  // <body>. A keyboard press (detail 0: no pointer clicks counted) hands
+  // focus to the top of the main column instead, where the reader now is.
+  const onActivate = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    const viaKeyboard = event.detail === 0;
+    scrollToTop();
+    if (!viaKeyboard) return;
+    const main = document.getElementById("main-content");
+    if (!main) return;
+    if (!main.hasAttribute("tabindex")) {
+      main.setAttribute("tabindex", "-1");
+      main.addEventListener("blur", () => main.removeAttribute("tabindex"), { once: true });
+    }
+    main.focus({ preventScroll: true });
+  };
+
   return (
     <div ref={slotRef} className={`scroll-top-slot${shown ? " is-shown" : ""}`} aria-hidden={!shown}>
-      <button type="button" className="scroll-top-btn" aria-label={tr("Back to top", "回到顶部")} tabIndex={shown ? 0 : -1} onClick={scrollToTop}>
+      <button type="button" className="scroll-top-btn" aria-label={tr("Back to top", "回到顶部")} tabIndex={shown ? 0 : -1} onClick={onActivate}>
         {/* The demo's arrow glyph, rotated to point up. */}
         <svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor" aria-hidden="true">
           <path

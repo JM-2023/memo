@@ -5,7 +5,21 @@
 //   2. a bare URL whose path ends in a common image extension.
 
 export const MD_IMAGE_PATTERN = /!\[[^\]\n]*\]\((https?:\/\/[^\s)]+)\)/gu;
-export const URL_PATTERN = /https?:\/\/[^\s]+/gu;
+
+/**
+ * What ends a bare URL besides whitespace: Han ideographs, kana, Hangul, CJK
+ * punctuation (U+3000–303F), full-width forms (U+FF00–FFEF), and the curly
+ * quotes, ellipsis and dash that CJK prose sets right against a link. None of
+ * them appears unencoded in an address a browser copies, so in
+ * "参考https://a.com/x，然后再看#读书" only the address links and #读书 stays a
+ * tag. Every bare-URL pattern is built from this one source — the card, tag
+ * extraction (client and server), word counts and search must agree on where
+ * a link ends.
+ */
+const BARE_URL_STOP = "\\s\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}\\u3000-\\u303f\\uff00-\\uffef\\u2014\\u2018-\\u201f\\u2026";
+/** A bare http(s) URL, as regex source (needs the `u` flag). */
+export const BARE_URL_SOURCE = `https?:\\/\\/[^${BARE_URL_STOP}]+`;
+export const URL_PATTERN = new RegExp(BARE_URL_SOURCE, "gu");
 
 const IMAGE_EXT_PATTERN = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
 // Punctuation that reads as sentence-trailing rather than part of the URL.
@@ -29,6 +43,49 @@ export function splitTrailingPunct(raw: string): { url: string; trailing: string
   return { url: raw.slice(0, raw.length - match[0].length), trailing: match[0] };
 }
 
+/** Longest a bare link's visible text runs, in Latin-letter widths (a CJK
+    character counts two), before its middle gives way to "…". */
+const URL_DISPLAY_MAX = 48;
+const WIDE_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\u3000-\u303f\uff00-\uff60\uffe0-\uffe6]/u;
+
+function charWidth(char: string): number {
+  return WIDE_CHAR.test(char) ? 2 : 1;
+}
+
+/**
+ * The visible text of a bare link; its href stays the exact URL. A link
+ * copied from a browser arrives percent-encoded (…/wiki/%E7%AC%94…, three
+ * lines of escapes for one word), so it is decoded where that is safe, and
+ * the parts a reader never needs — the scheme, a leading "www.", a trailing
+ * "/" — are dropped. A long remainder keeps its host and its last segment
+ * with an ellipsis between.
+ */
+export function displayUrl(url: string): string {
+  let text = url;
+  try {
+    const decoded = decodeURI(url);
+    // Escapes that decode to whitespace, controls or bidi marks stay
+    // escaped: decoded, they would hide or reorder the address.
+    if (!/[\s\p{Cc}\p{Cf}]/u.test(decoded)) text = decoded;
+  } catch {
+    // A malformed escape: show the URL as written.
+  }
+  text = text.replace(/^https?:\/\//i, "").replace(/^www\./i, "");
+  if (text.endsWith("/") && text.length > 1) text = text.slice(0, -1);
+  const chars = Array.from(text);
+  if (chars.reduce((sum, char) => sum + charWidth(char), 0) <= URL_DISPLAY_MAX) return text;
+  // Three fifths of the room before the ellipsis (the host and the path's
+  // start), the rest after it (the last segment, which names the page).
+  const tailBudget = Math.floor((URL_DISPLAY_MAX - 1) * 0.4);
+  let headBudget = URL_DISPLAY_MAX - 1 - tailBudget;
+  let head = 0;
+  while (head < chars.length && headBudget - charWidth(chars[head]) >= 0) headBudget -= charWidth(chars[head++]);
+  let tail = chars.length;
+  let tailLeft = tailBudget;
+  while (tail > head && tailLeft - charWidth(chars[tail - 1]) >= 0) tailLeft -= charWidth(chars[--tail]);
+  return `${chars.slice(0, head).join("")}…${chars.slice(tail).join("")}`;
+}
+
 export function isImageUrl(url: string): boolean {
   if (!/^https?:\/\//i.test(url)) return false;
   try {
@@ -50,7 +107,7 @@ export type ContentToken =
   /** Pulled out of the text flow; rendered in the media grid instead. */
   | { kind: "image"; url: string };
 
-const TOKEN_PATTERN = /(!\[[^\]\n]*\]\((?:https?:\/\/[^\s)]+)\))|(https?:\/\/[^\s]+)|(#[\p{L}\p{N}_\-/·]+)/gu;
+const TOKEN_PATTERN = new RegExp(`(!\\[[^\\]\\n]*\\]\\((?:https?:\\/\\/[^\\s)]+)\\))|(${BARE_URL_SOURCE})|(#[\\p{L}\\p{N}_\\-/·]+)`, "gu");
 
 export function tokenizeLine(line: string): ContentToken[] {
   const tokens: ContentToken[] = [];

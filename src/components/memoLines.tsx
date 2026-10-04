@@ -1,6 +1,6 @@
 import { MathFormula } from "./MathFormula";
-import { Fragment, memo, type CSSProperties, type ReactNode } from "react";
-import { tokenizeLine } from "../lib/content";
+import { Fragment, memo, useId, type CSSProperties, type ReactNode } from "react";
+import { displayUrl, tokenizeLine } from "../lib/content";
 import { useI18n } from "../lib/i18n";
 import { parseBlock, parseInline, type Inline } from "../lib/markdown";
 
@@ -63,12 +63,15 @@ function renderInline(nodes: Inline[], tagMode: TagMode, onPickTag?: (path: stri
             {renderInline(node.kids, tagMode, onPickTag)}
           </a>
         );
-      case "url":
+      case "url": {
+        // Readable text, exact href; a shortened link names itself in full on hover.
+        const text = displayUrl(node.url);
         return (
-          <a key={index} href={node.url} target="_blank" rel="noreferrer noopener">
-            {node.url}
+          <a key={index} href={node.url} target="_blank" rel="noreferrer noopener" title={text.includes("…") ? node.url : undefined}>
+            {text}
           </a>
         );
+      }
       case "tag":
         if (tagMode === "button") {
           return (
@@ -104,6 +107,7 @@ function renderInline(nodes: Inline[], tagMode: TagMode, onPickTag?: (path: stri
  */
 export const MemoLine = memo(function MemoLine({ raw, nextRaw, tagMode, onPickTag, lineKey, onToggleTask, taskCheckedOverride }: MemoLineProps) {
   const { tr } = useI18n();
+  const bodyId = useId();
   if (!raw) return <p className="memo-blank" />;
   const tokens = tokenizeLine(raw);
   // Image tokens leave the text flow (they render in the media grid); a line
@@ -143,8 +147,16 @@ export const MemoLine = memo(function MemoLine({ raw, nextRaw, tagMode, onPickTa
       // one wrapping flex item (bare text children would each become their
       // own flex item and stop wrapping as continuous text).
       const style = block.depth > 0 ? ({ "--md-depth": block.depth } as CSSProperties) : undefined;
+      const ordered = block.kind === "ordered";
+      // data-wide: digits past the first hang left of the marker column, so
+      // "10." ends where "9." does and the text column stays put.
       return (
-        <p className={block.kind === "bullet" ? "md-li md-bullet" : "md-li md-ordered"} style={style} data-ord={block.kind === "ordered" ? block.ordinal : undefined}>
+        <p
+          className={ordered ? "md-li md-ordered" : "md-li md-bullet"}
+          style={style}
+          data-ord={ordered ? block.ordinal : undefined}
+          data-wide={ordered && block.ordinal.length > 1 ? block.ordinal.length : undefined}
+        >
           <span className="md-body">{inline}</span>
         </p>
       );
@@ -157,20 +169,24 @@ export const MemoLine = memo(function MemoLine({ raw, nextRaw, tagMode, onPickTa
         <p className={`md-li md-task${checked ? " is-done" : ""}`} style={style}>
           {/* One .md-task-box in every mode: the live feed gets the real
               control, everything else (trash, ghosts, replay clones) gets a
-              pixel-identical inert span. */}
+              pixel-identical inert span. The control is named by the
+              rendered text beside it, not by the raw Markdown under it. */}
           {live ? (
             <button
               type="button"
               className="md-task-box"
               role="checkbox"
               aria-checked={checked}
-              aria-label={block.text || tr("Task", "任务")}
+              aria-labelledby={block.text.trim() ? bodyId : undefined}
+              aria-label={block.text.trim() ? undefined : tr("Task", "任务")}
               onClick={() => onToggleTask(lineKey ?? 0, !checked)}
             />
           ) : (
             <span className="md-task-box" aria-hidden="true" />
           )}
-          <span className="md-body">{inline}</span>
+          <span className="md-body" id={live ? bodyId : undefined}>
+            {inline}
+          </span>
         </p>
       );
     }

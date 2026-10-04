@@ -46,6 +46,8 @@ export interface TagMeta {
 export interface LightboxItem {
   src: string;
   external?: boolean;
+  /** A stored attachment's id: the lightbox draws it through the image cache. */
+  imageId?: string;
 }
 
 export type SortKey = "created-desc" | "created-asc" | "updated-desc" | "updated-asc";

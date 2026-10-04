@@ -1,7 +1,8 @@
 import { ChevronDown } from "lucide-react";
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { useI18n } from "../lib/i18n";
+import { SwapText } from "./SwapText";
 
 /** Visible body height of a folded memo — keep in step with .memo-fold's max-height. */
 export const FOLD_HEIGHT = 320;
@@ -33,6 +34,28 @@ interface MemoFoldProps {
 }
 
 const EASE_OUT = "cubic-bezier(0.16, 1, 0.3, 1)";
+/** Depth of the fade at the folded edge — keep in step with --fold-fade's initial value. */
+const FOLD_FADE = "56px";
+
+/* Search hits a folded body hides. useSearchHighlight publishes, per fold
+   element, how many hits there are when every one of them sits below the
+   cut, and the toggle says so: a highlight nobody can see is no help. Keyed
+   by element so the fold needs no memo id; each paint replaces the whole
+   map, so a fold that left the feed leaves the map with it. */
+let hiddenHits: ReadonlyMap<Element, number> = new Map();
+const hiddenHitListeners = new Set<() => void>();
+
+/** Replace the hidden-hit counts; an empty map clears them. */
+export function publishHiddenHits(next: ReadonlyMap<Element, number>): void {
+  if (next.size === hiddenHits.size && [...next].every(([fold, count]) => hiddenHits.get(fold) === count)) return;
+  hiddenHits = next;
+  for (const listener of hiddenHitListeners) listener();
+}
+
+function subscribeHiddenHits(listener: () => void): () => void {
+  hiddenHitListeners.add(listener);
+  return () => hiddenHitListeners.delete(listener);
+}
 
 /**
  * Height clamp for a long memo body, with a Show more / Show less toggle.
@@ -44,10 +67,18 @@ const EASE_OUT = "cubic-bezier(0.16, 1, 0.3, 1)";
  * aim at the unfolded size. CSS hides the toggle while the attribute is absent.
  */
 export function MemoFold({ content, expanded, onExpandedChange, regionId, children }: MemoFoldProps) {
-  const { tr } = useI18n();
+  const { formatNumber, tr } = useI18n();
   const foldRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
+  const motionRef = useRef<Animation | null>(null);
+  // .is-unfolding keeps the fade on past .is-expanded while it drains away.
+  const [unfolding, setUnfolding] = useState(false);
   const live = onExpandedChange !== undefined;
+  const hidden = useSyncExternalStore(
+    subscribeHiddenHits,
+    () => (live && foldRef.current ? hiddenHits.get(foldRef.current) ?? 0 : 0),
+    () => 0
+  );
 
   useLayoutEffect(() => {
     const fold = foldRef.current;
@@ -67,25 +98,70 @@ export function MemoFold({ content, expanded, onExpandedChange, regionId, childr
     const button = toggleRef.current;
     if (!fold || !button || !onExpandedChange) return;
     const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const canAnimate = !reduced && typeof fold.animate === "function";
+    // A reversal mid-flight starts from wherever the box is now.
+    const running = motionRef.current;
+    motionRef.current = null;
     if (!expanded) {
       const from = fold.getBoundingClientRect().height;
-      flushSync(() => onExpandedChange(true));
+      running?.cancel();
+      flushSync(() => {
+        onExpandedChange(true);
+        setUnfolding(canAnimate);
+      });
       const to = fold.getBoundingClientRect().height;
-      if (reduced || typeof fold.animate !== "function" || to <= from) return;
-      // Unfold on one curve instead of a jump; clip while the box is short.
-      fold.style.overflow = "clip";
-      const animation = fold.animate([{ height: `${from}px` }, { height: `${to}px` }], { duration: 260, easing: EASE_OUT });
+      if (!canAnimate || to <= from) {
+        if (canAnimate) setUnfolding(false);
+        return;
+      }
+      // Unfold on one curve instead of a jump. The fade drains on the same
+      // curve, so the edge dissolves as the text arrives instead of a hard
+      // cut sliding down the card. Held at its end state until the class
+      // that keeps the mask on is gone, so the fade never flashes back.
+      const animation = fold.animate(
+        [
+          { height: `${from}px`, "--fold-fade": FOLD_FADE },
+          { height: `${to}px`, "--fold-fade": "0px" }
+        ],
+        { duration: 260, easing: EASE_OUT, fill: "forwards" }
+      );
+      motionRef.current = animation;
       const release = () => {
-        fold.style.overflow = "";
+        if (motionRef.current !== animation) return;
+        motionRef.current = null;
+        flushSync(() => setUnfolding(false));
+        animation.cancel();
       };
-      animation.finished.then(release, release);
+      animation.finished.then(release, () => undefined);
       return;
     }
-    // Folding a long body pulls everything below it up by hundreds of
-    // pixels; keep the toggle where the pointer is so the reader does not
-    // land in some later memo.
+    // Folding pulls everything below the body up by hundreds of pixels. With
+    // the card's top in view the reader watches it close in place: the box
+    // eases down to the fold while the fade comes back. With the top above
+    // the viewport there is nothing to watch, so it snaps, and the toggle
+    // stays where the pointer is so the reader does not land in some later
+    // memo.
+    const cardTop = (fold.closest(".memo-card") ?? fold).getBoundingClientRect().top;
+    const from = fold.getBoundingClientRect().height;
     const before = button.getBoundingClientRect().top;
-    flushSync(() => onExpandedChange(false));
+    running?.cancel();
+    flushSync(() => {
+      onExpandedChange(false);
+      setUnfolding(false);
+    });
+    const to = fold.getBoundingClientRect().height;
+    if (canAnimate && cardTop >= 0 && from > to) {
+      // max-height rather than height: the folded rule's own cap takes over
+      // exactly where the animation lands.
+      motionRef.current = fold.animate(
+        [
+          { maxHeight: `${from}px`, "--fold-fade": "0px" },
+          { maxHeight: `${to}px`, "--fold-fade": FOLD_FADE }
+        ],
+        { duration: 220, easing: EASE_OUT }
+      );
+      return;
+    }
     const after = button.getBoundingClientRect().top;
     if (after < before) window.scrollBy({ top: after - before, behavior: "instant" });
   }
@@ -95,15 +171,26 @@ export function MemoFold({ content, expanded, onExpandedChange, regionId, childr
   function revealFocused(target: EventTarget) {
     const fold = foldRef.current;
     if (expanded || !onExpandedChange || !fold?.hasAttribute("data-overflow") || !(target instanceof Element)) return;
-    if (target.getBoundingClientRect().bottom > fold.getBoundingClientRect().bottom - 24) onExpandedChange(true);
+    if (target.getBoundingClientRect().bottom > fold.getBoundingClientRect().bottom - 24) {
+      // A fold still closing would otherwise keep capping the opened box.
+      motionRef.current?.cancel();
+      motionRef.current = null;
+      onExpandedChange(true);
+    }
   }
+
+  const label = expanded
+    ? tr("Show less", "收起")
+    : hidden > 0
+      ? tr(`Show more · ${formatNumber(hidden)} ${hidden === 1 ? "match" : "matches"}`, `展开 · ${formatNumber(hidden)} 处匹配`)
+      : tr("Show more", "展开全文");
 
   return (
     <>
       <div
         ref={foldRef}
         id={regionId}
-        className={`memo-fold${expanded ? " is-expanded" : ""}`}
+        className={`memo-fold${expanded ? " is-expanded" : ""}${unfolding ? " is-unfolding" : ""}`}
         onFocus={live ? (event) => revealFocused(event.target) : undefined}
       >
         {children}
@@ -117,7 +204,7 @@ export function MemoFold({ content, expanded, onExpandedChange, regionId, childr
         tabIndex={live ? undefined : -1}
         onClick={live ? toggle : undefined}
       >
-        <span>{expanded ? tr("Show less", "收起") : tr("Show more", "展开全文")}</span>
+        <SwapText id={label}>{label}</SwapText>
         <ChevronDown size={14} aria-hidden="true" />
       </button>
     </>

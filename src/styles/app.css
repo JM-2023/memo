@@ -236,8 +236,9 @@
   --tip-muted: rgba(245, 246, 250, 0.64);
   --tip-rim: rgba(255, 255, 255, 0.09);
 
-  /* The in-app monospace stack: inline code and model identifiers. Code blocks
-     keep the stack mirrored in shareCard.css so exports match the preview. */
+  /* The in-app monospace stack: inline and block code, model identifiers.
+     The share card's code blocks keep it mirrored in shareCard.css so
+     exports match the preview. */
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 
   background: var(--bg);
@@ -2918,12 +2919,19 @@ button.crumb:active { background: var(--wash-strong); }
 /* ---- Long-memo fold ----
    A body taller than the fold (MemoFold measures it and sets data-overflow)
    shows its first 320px, fading out toward the toggle — a gradient with a
-   direction and a job. The toggle only exists while the attribute does. */
-.memo-fold[data-overflow]:not(.is-expanded) {
-  max-height: 320px;
+   direction and a job. The toggle only exists while the attribute does.
+   The fade's depth is a registered length so MemoFold can drain it while
+   unfolding (.is-unfolding keeps the mask on until it reaches 0) and pour it
+   back while folding. The box reaches 12px into the card's side padding so
+   the clip and the mask spare a list number hanging left of the text. */
+@property --fold-fade { syntax: "<length>"; inherits: false; initial-value: 56px; }
+.memo-fold { margin-inline: -12px; padding-inline: 12px; }
+.memo-fold[data-overflow]:not(.is-expanded) { max-height: 320px; }
+.memo-fold[data-overflow]:not(.is-expanded),
+.memo-fold.is-unfolding {
   overflow: clip;
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fold-fade)), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fold-fade)), transparent);
 }
 .memo-fold-toggle {
   display: inline-flex;
@@ -2947,6 +2955,12 @@ button.crumb:active { background: var(--wash-strong); }
    sentence sits on its own width. Where a column has to line up anyway —
    ordered-list markers, table cells — the rule below asks for tabular again. */
 .memo-content { display: grid; gap: 2px; font-size: var(--fs-md); font-variant-numeric: normal; line-height: 1.7; overflow-wrap: anywhere; }
+/* Feed cards only (live body, ghosts and replay clones all sit inside the
+   card): the 1/8em gap between Han and Latin or digits, set explicitly
+   rather than left to each engine's default, and no one-character last
+   lines. The share card's text is matched pixel for pixel by its canvas ink
+   and keeps its own breaks — it is outside .memo-card and never matches. */
+.memo-card .memo-content { text-autospace: normal; text-wrap: pretty; }
 .memo-content p { margin: 0; }
 .memo-blank { min-height: 0.6em; }
 .memo-content a { text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--primary) 40%, transparent); text-underline-offset: 2px; }
@@ -2973,6 +2987,11 @@ button.crumb:active { background: var(--wash-strong); }
 /* line box ≈ 25.8px (0.95rem × 1.7) — margins center the fixed markers. */
 .md-bullet::before { content: ""; flex: none; width: 5px; height: 5px; margin-top: 10px; border-radius: 50%; background: var(--muted); }
 .md-ordered::before { content: attr(data-ord) "."; flex: none; min-width: 1.1em; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* "10." would widen its box and push its text ~6px right of "9.". Each digit
+   past the first hangs into the margin instead (the box grows leftward by the
+   same 1ch it gains), so the periods and the text keep one column. */
+.md-ordered[data-wide]::before { min-width: calc(1.1em + 1ch); margin-inline-start: -1ch; }
+.md-ordered[data-wide="3"]::before { min-width: calc(1.1em + 2ch); margin-inline-start: -2ch; }
 /* The task box is a real element — a button in the live feed, the same-
    geometry inert span in trash cards, ghosts and replay clones — so the
    checkbox can be clicked, focused and CSS-transitioned. The tick paints in
@@ -3008,9 +3027,17 @@ button.crumb:active { background: var(--wash-strong); }
   transition: opacity 0.16s var(--ease), transform 0.16s var(--ease);
 }
 .md-task.is-done .md-task-box { border-color: var(--primary); background-color: var(--primary); }
-.md-task.is-done .md-task-box::after { opacity: 1; transform: scale(1); }
+/* Checking pops the tick on the overshoot curve, like the select ring's
+   check; unchecking (the base rule's transition) recedes without a bounce. */
+.md-task.is-done .md-task-box::after {
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity 0.16s var(--ease), transform 0.2s var(--ease-pop);
+}
 button.md-task-box { cursor: pointer; }
-button.md-task-box:hover { border-color: var(--primary); }
+/* Hover only where there is one: a tap's sticky hover left a sage edge on
+   an open box, which read as half-checked. */
+@media (hover: hover) { button.md-task-box:hover { border-color: var(--primary); } }
 button.md-task-box:active { transform: scale(0.88); }
 /* The strike fades with the same transition as the box instead of snapping.
    The line itself is only on while done: a search-hit highlight repaints the
@@ -3064,6 +3091,10 @@ button.md-task-box:active { transform: scale(0.88); }
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
+/* The page's selection is the same tint as a highlight, so selecting inside
+   ==marked== text showed nothing; a deeper wash of the accent reads on it in
+   both themes. */
+.memo-content mark::selection { background: color-mix(in srgb, var(--primary) 32%, transparent); }
 .memo-content code {
   font-family: var(--font-mono);
   font-size: 0.855em;
@@ -3130,10 +3161,17 @@ button.memo-tag:active {
   border-radius: var(--r-sm);
   overflow: hidden;
   border: 1px solid var(--line);
+  transition: background-color 0.16s var(--ease);
 }
+/* A tile opens the viewer; a failed one retries instead (pointer). */
+.memo-image:not(.is-failed) { cursor: zoom-in; }
 /* A neutral ground while a stored image loads; it retires once the picture
-   paints so transparent images keep the card behind them. */
+   paints so transparent images keep the card behind them — crossfading with
+   the picture's own arrival below. */
 .memo-image.is-loading { background: var(--surface-2); }
+/* A picture that had to be waited for fades in; one already in memory at
+   mount draws at once, so ghost and replay copies stay pixel-identical. */
+.memo-image.is-arriving img { animation: fade-in 0.16s var(--ease) both; }
 .memo-image.is-failed { border-style: dashed; border-color: var(--line-strong); }
 .memo-image-failed {
   position: absolute;
@@ -3158,7 +3196,7 @@ button.memo-tag:active {
   .memo-image:hover img { filter: brightness(1.06); }
 }
 .memo-image:active img { filter: brightness(0.94); }
-.memo-image:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent); outline-offset: 2px; }
+.memo-image:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 78%, transparent); outline-offset: 2px; }
 /* External links wear a small corner badge; the bytes never touch D1. */
 .memo-image .ext-badge {
   position: absolute;
@@ -3438,6 +3476,8 @@ button.memo-tag:active {
   background: none;
   /* Single-finger swipes are ours; two-finger pinch stays the browser's. */
   touch-action: pinch-zoom;
+  /* A click on the backdrop closes; one on the picture does nothing. */
+  cursor: zoom-out;
 }
 .lightbox.is-zoomed { touch-action: auto; }
 .lightbox::before {
@@ -3467,6 +3507,7 @@ button.memo-tag:active {
   scale: calc(1 - 0.15 * var(--lb-fade, 0));
   transition: translate 0.26s var(--ease-out), scale 0.26s var(--ease-out);
   animation: lightbox-zoom 0.22s var(--ease-out) both;
+  cursor: default;
 }
 /* The zoom is the opening; later pages slide in from the side they came. */
 .lightbox-image.dir-fwd { animation: swap-in-fwd 0.22s var(--ease-out) both; }
@@ -3474,6 +3515,14 @@ button.memo-tag:active {
 /* Until it has pixels the image holds still and invisible; the entrance
    plays once it can be seen. */
 .lightbox-image.is-pending { opacity: 0; animation: none; }
+/* The page it replaces holds, still, until then — no black gap — and leaves
+   toward the side it was sent while the new one slides in. */
+.lightbox-image.is-leaving { animation: none; pointer-events: none; }
+.lightbox-image.is-leaving.out-fwd { animation: swap-out-fwd 0.16s var(--ease) both; }
+.lightbox-image.is-leaving.out-back { animation: swap-out-back 0.16s var(--ease) both; }
+/* Closing, the picture recedes with the scrim — unless a swipe already
+   carried it off, where it stays where the finger let it go. */
+.lightbox.is-closing:not(.is-flung) .lightbox-image { animation: card-depart 0.16s var(--ease) both; }
 .lightbox.is-dragging .lightbox-image,
 .lightbox.is-dragging::before { transition: none; }
 .lightbox-status {
@@ -3488,6 +3537,25 @@ button.memo-tag:active {
 }
 /* A fast load never flashes the spinner. */
 .lightbox-status.is-loading { animation: fade-in 0.2s var(--ease) 0.15s both; }
+/* A failed picture says so, with a way to try again under the words — the
+   feed tile's retry, in the viewer's ghost material. */
+.lightbox-status.is-failed { flex-direction: column; gap: 12px; }
+.lightbox-status.is-failed > p { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
+.lightbox-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  pointer-events: auto;
+  transition: background var(--t) var(--ease), scale var(--t-fast) var(--ease);
+}
+@media (hover: hover) { .lightbox-retry:hover { background: rgba(255, 255, 255, 0.24); } }
+.lightbox-retry:active { scale: 0.96; }
 .lightbox-close,
 .lightbox-nav {
   position: absolute;
@@ -3525,7 +3593,7 @@ button.memo-tag:active {
   background: rgba(12, 14, 19, 0.55);
   border-radius: var(--r-sm);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   transition: opacity 0.26s var(--ease-out);
 }
 .lightbox-source {
@@ -4430,7 +4498,9 @@ button.stats-tag-row:active { scale: 0.992; }
   box-shadow:
     0 4px 4px 0 rgba(0, 0, 0, 0.04),
     0 0 1px 0 rgba(0, 0, 0, 0.62);
+  transition: background var(--t) var(--ease), scale var(--t-fast) var(--ease);
 }
+.scroll-top-btn:active { scale: 0.92; }
 @media (min-width: 640px) {
   .scroll-top-btn {
     box-shadow:
@@ -4443,7 +4513,7 @@ button.stats-tag-row:active { scale: 0.992; }
   .scroll-top-btn:hover { background: color-mix(in oklab, var(--surface-2) 75%, transparent); }
 }
 .scroll-top-btn:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--primary) 78%, transparent);
   outline-offset: 2px;
 }
 :root[data-theme="dark"] .scroll-top-btn { border-color: rgba(255, 255, 255, 0.15); }
@@ -5545,9 +5615,40 @@ button.stats-tag-row:active { scale: 0.992; }
 
 /* Feed blocks: code preserves diagram spacing; long lines and formulas
    scroll. The share card sets its own in shareCard.css, where nothing may. */
-.md-codeblock { white-space: pre; overflow-x: auto; padding: 12px; border-radius: var(--r-md); background: var(--surface-3); tab-size: 4; }
-.md-codeblock code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; background: none; padding: 0; }
-.md-math-block { overflow-x: auto; overflow-y: hidden; padding: .5em 0; }
+/* A sideways swipe that runs past a block's edge stays in the block
+   (overscroll-behavior): chained to the page it became history Back. */
+.md-codeblock { white-space: pre; overflow-x: auto; overscroll-behavior-x: contain; padding: 12px; border-radius: var(--r-md); background: var(--surface-3); tab-size: 4; }
+.md-codeblock code { font-family: var(--font-mono); font-size: .85em; background: none; padding: 0; }
+.md-math-block { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; padding: .5em 0; }
+/* Feed only (the share card never scrolls and sets its own type): code sets
+   its size on the block so the line height is the code's own, a touch
+   tighter than prose; and each edge the content runs past wears a faint
+   neutral shade. The shades are fixed to the box; covers in the block's own
+   ground ride with the content (attachment: local) and hide a shade once
+   its edge is reached. */
+.memo-content .md-codeblock {
+  font-size: .85em;
+  line-height: 1.55;
+  background:
+    linear-gradient(to right, var(--surface-3) 40%, transparent) left / 24px 100% no-repeat local,
+    linear-gradient(to left, var(--surface-3) 40%, transparent) right / 24px 100% no-repeat local,
+    linear-gradient(to right, var(--wash-strong), transparent) left / 10px 100% no-repeat,
+    linear-gradient(to left, var(--wash-strong), transparent) right / 10px 100% no-repeat,
+    var(--surface-3);
+}
+.memo-content .md-codeblock code { font-size: 1em; }
+.memo-content .md-math-block {
+  background:
+    linear-gradient(to right, var(--surface) 40%, transparent) left / 24px 100% no-repeat local,
+    linear-gradient(to left, var(--surface) 40%, transparent) right / 24px 100% no-repeat local,
+    linear-gradient(to right, var(--wash-strong), transparent) left / 10px 100% no-repeat,
+    linear-gradient(to left, var(--wash-strong), transparent) right / 10px 100% no-repeat;
+}
 .md-math math { font-family: math; }
+/* TeX source waiting on KaTeX reads as a placeholder, and the typeset form
+   it was standing in for fades in rather than popping (MathFormula marks
+   only formulas that were pending on screen). */
+.md-math-pending { opacity: 0.55; }
+.md-math.is-arriving { animation: fade-in 0.14s var(--ease) both; }
 /* Chromium does not draw MathML menclose boxes natively. */
 .md-math menclose[notation="box"] { border: 1px solid currentColor; padding: .2em .4em; }

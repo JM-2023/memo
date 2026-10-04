@@ -332,6 +332,46 @@ describe("search hit highlighting", () => {
     await user.clear(search);
     await waitFor(() => expect(registry.has("search-hit")).toBe(false));
   });
+
+  it("paints the hits inside a long memo's fold and counts them on the toggle when the fold hides them all", async () => {
+    const registry = new Map<string, unknown>();
+    vi.stubGlobal("CSS", { highlights: registry });
+    vi.stubGlobal("Highlight", FakeHighlight);
+    const long = memo(4, [...Array.from({ length: 30 }, (_, index) => `filler line ${index + 1}`), "a kumquat at the very end"].join("\n"));
+    mocks.bootstrap.mockResolvedValue({
+      memos: [...NOTEBOOK, long],
+      tags: [],
+      cursor: NOTEBOOK.length + 1,
+      syncEpoch: "epoch-a",
+      serverTime: "2026-01-01T00:02:00.000Z",
+      hasMore: false,
+      nextAfter: null
+    });
+    // The long body measures past the fold, and its one hit sits far below
+    // the 320px cut (the fold itself starts at 0 in jsdom).
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("memo-content") ? 900 : 0;
+    });
+    Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, value: () => new DOMRect(0, 760, 40, 20) });
+    try {
+      const user = userEvent.setup();
+      renderApp();
+      const search = await screen.findByRole("searchbox", { name: "Search memos" });
+      expect(screen.getByRole("button", { name: "Show more" })).toBeTruthy();
+
+      await user.type(search, "kumquat");
+      await waitFor(() => {
+        const highlight = registry.get("search-hit") as FakeHighlight | undefined;
+        expect(highlight?.ranges.map((range) => range.toString())).toEqual(["kumquat"]);
+      });
+      expect(await screen.findByRole("button", { name: "Show more · 1 match" })).toBeTruthy();
+
+      await user.clear(search);
+      expect(await screen.findByRole("button", { name: "Show more" })).toBeTruthy();
+    } finally {
+      delete (Range.prototype as Partial<Range>).getBoundingClientRect;
+    }
+  });
 });
 
 describe("creating under a lens", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyOptimisticLayer, withOptimistic, withoutPatch, withPatch, type OptimisticLayer } from "../src/lib/optimisticMemos";
-import { formatTime } from "../src/lib/dates";
+import { formatCardTime, formatTime } from "../src/lib/dates";
 import type { Memo } from "../src/lib/types";
 
 function memo(id: string): Memo {
@@ -52,5 +52,22 @@ describe("formatTime", () => {
     const first = formatTime(iso, "en-US");
     expect(formatTime(iso, "en-US")).toBe(first);
     expect(formatTime(iso, "zh-CN")).not.toBe(first);
+  });
+});
+
+describe("formatCardTime", () => {
+  const now = new Date(2026, 9, 5, 12, 0);
+
+  it("leaves the year out within the current year", () => {
+    const iso = new Date(2026, 7, 17, 9, 12).toISOString();
+    expect(formatCardTime(iso, "en-US", now)).toBe("Aug 17, 09:12");
+    expect(formatCardTime(iso, "zh-CN", now)).toBe("8月17日 09:12");
+  });
+
+  it("keeps the full date for any other year, as formatTime does", () => {
+    const iso = new Date(2025, 7, 17, 9, 12).toISOString();
+    expect(formatCardTime(iso, "en-US", now)).toBe("Aug 17, 2025, 09:12");
+    expect(formatCardTime(iso, "zh-CN", now)).toBe("2025年8月17日 09:12");
+    expect(formatCardTime(iso, "en-US", now)).toBe(formatTime(iso, "en-US"));
   });
 });

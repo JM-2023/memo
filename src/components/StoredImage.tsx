@@ -52,6 +52,18 @@ function wantedVariant(image: MemoImage, sizing: ImageSizing, element: HTMLEleme
   return previewCovers(image, rect.width, rect.height, window.devicePixelRatio || 1) ? "thumb" : "full";
 }
 
+/** A retry shows its "Retrying…" at least this long, so a failure that comes
+    straight back still reads as an answer to the tap rather than as nothing. */
+const RETRY_HOLD_MS = 400;
+
+interface TileState {
+  src: string | null;
+  status: Status;
+  /** The picture had to be waited for (the tile was blank first), so it
+      fades in; one already in memory at mount draws at once. */
+  arriving: boolean;
+}
+
 /**
  * Load a stored attachment through the in-memory / sealed cache. The first
  * render already shows a cached copy (MemoStage's ghost layers depend on
@@ -59,30 +71,47 @@ function wantedVariant(image: MemoImage, sizing: ImageSizing, element: HTMLEleme
  */
 export function useStoredImage(image: MemoImage, sizing: ImageSizing, ref: RefObject<HTMLElement | null>, mode: LoadMode = "lazy") {
   const { id } = image;
-  const [state, setState] = useState<{ src: string | null; status: Status }>(() => {
+  const [state, setState] = useState<TileState>(() => {
     const cached = cachedVariant(id, sizing);
-    if (cached) return { src: cached.url, status: "ready" };
-    return { src: null, status: mode === "ghost" && imageFailed(id) ? "error" : "idle" };
+    if (cached) return { src: cached.url, status: "ready", arriving: false };
+    return { src: null, status: mode === "ghost" && imageFailed(id) ? "error" : "idle", arriving: false };
   });
   const [attempt, setAttempt] = useState(0);
+  // While a retry runs the tile keeps its failed chrome and says so.
+  const [retrying, setRetrying] = useState(false);
+  const retryAtRef = useRef(0);
   const heldRef = useRef<Held | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let observer: IntersectionObserver | null = null;
+    let settleTimer = 0;
     const live = mode !== "ghost";
+    // An outcome lands at once, unless a retry began less than
+    // RETRY_HOLD_MS ago: then it waits out the rest of the hold.
+    const settle = (apply: () => void) => {
+      const wait = retryAtRef.current ? retryAtRef.current + RETRY_HOLD_MS - performance.now() : 0;
+      const run = () => {
+        if (cancelled) return;
+        retryAtRef.current = 0;
+        setRetrying(false);
+        apply();
+      };
+      if (wait > 0) settleTimer = window.setTimeout(run, wait);
+      else run();
+    };
     const hold = (next: Held) => {
       const previous = heldRef.current;
       heldRef.current = next;
       if (previous) releaseImage(id, previous.variant, previous.url);
       if (live) noteImageFailed(id, false);
-      setState({ src: next.url, status: "ready" });
+      settle(() => setState((current) => ({ src: next.url, status: "ready", arriving: current.arriving || current.src === null })));
     };
     const fail = () => {
       // A preview already on screen stays there when its original fails.
       if (cancelled || heldRef.current) return;
       if (live) noteImageFailed(id, true);
-      setState({ src: null, status: "error" });
+      settle(() => setState({ src: null, status: "error", arriving: false }));
     };
     const covered = (wanted: ImageVariant) => {
       const held = heldRef.current;
@@ -101,7 +130,10 @@ export function useStoredImage(image: MemoImage, sizing: ImageSizing, ref: RefOb
     const load = () => {
       const wanted = wantedVariant(image, sizing, ref.current);
       if (covered(wanted)) return;
-      if (!heldRef.current) setState((current) => (current.status === "loading" ? current : { src: null, status: "loading" }));
+      // (A retry keeps the failed tile up, spinning its icon, instead.)
+      if (!heldRef.current && !retryAtRef.current) {
+        setState((current) => (current.status === "loading" ? current : { src: null, status: "loading", arriving: current.arriving }));
+      }
       const loadWanted = () => {
         if (cancelled) return;
         acquireImage(id, wanted).then((url) => {
@@ -128,7 +160,7 @@ export function useStoredImage(image: MemoImage, sizing: ImageSizing, ref: RefOb
 
     const element = ref.current;
     if (!live && !heldRef.current && imageFailed(id)) {
-      setState({ src: null, status: "error" });
+      setState({ src: null, status: "error", arriving: false });
     } else if (covered(wantedVariant(image, sizing, element))) {
       // Memory already holds what this tile needs.
     } else if (mode === "lazy" && element && typeof IntersectionObserver !== "undefined") {
@@ -148,6 +180,7 @@ export function useStoredImage(image: MemoImage, sizing: ImageSizing, ref: RefOb
 
     return () => {
       cancelled = true;
+      window.clearTimeout(settleTimer);
       observer?.disconnect();
       const held = heldRef.current;
       heldRef.current = null;
@@ -165,26 +198,31 @@ export function useStoredImage(image: MemoImage, sizing: ImageSizing, ref: RefOb
       discardImage(id, held.variant);
     }
     if (mode !== "ghost") noteImageFailed(id, true);
-    setState({ src: null, status: "error" });
+    setState({ src: null, status: "error", arriving: false });
   }, [id, mode]);
 
-  const retry = useCallback(() => setAttempt((value) => value + 1), []);
+  const retry = useCallback(() => {
+    if (retryAtRef.current) return;
+    retryAtRef.current = performance.now();
+    setRetrying(true);
+    setAttempt((value) => value + 1);
+  }, []);
 
-  return { src: state.src, status: state.status, retry, onDecodeError };
+  return { src: state.src, status: state.status, arriving: state.arriving, retrying, retry, onDecodeError };
 }
 
-function FailedLabel() {
+function FailedLabel({ retrying = false }: { retrying?: boolean }) {
   const { tr } = useI18n();
   return (
     <span className="memo-image-failed" aria-hidden="true">
-      <RotateCw size={16} />
-      <span>{tr("Couldn’t load image", "图片加载失败")}</span>
+      <RotateCw size={16} className={retrying ? "spin" : undefined} />
+      <span>{retrying ? tr("Retrying…", "正在重试…") : tr("Couldn’t load image", "图片加载失败")}</span>
     </span>
   );
 }
 
-function tileClass(status: Status): string {
-  return `memo-image${status === "ready" ? "" : " is-loading"}${status === "error" ? " is-failed" : ""}`;
+function tileClass(status: Status, arriving = false): string {
+  return `memo-image${status === "ready" ? "" : " is-loading"}${status === "error" ? " is-failed" : ""}${arriving && status === "ready" ? " is-arriving" : ""}`;
 }
 
 interface StoredImageButtonProps {
@@ -192,29 +230,33 @@ interface StoredImageButtonProps {
   sizing: ImageSizing;
   label: string;
   tabIndex?: number;
+  /** This tile's place in the lightbox's items, so closing the viewer can
+      return focus to the tile of the picture last shown. */
+  lightboxIndex?: number;
   onOpen: () => void;
 }
 
 /** A feed tile: opens the lightbox, or retries in place after a failed load. */
-export function StoredImageButton({ image, sizing, label, tabIndex, onOpen }: StoredImageButtonProps) {
+export function StoredImageButton({ image, sizing, label, tabIndex, lightboxIndex, onOpen }: StoredImageButtonProps) {
   const { tr } = useI18n();
   const ref = useRef<HTMLButtonElement>(null);
-  const { src, status, retry, onDecodeError } = useStoredImage(image, sizing, ref);
+  const { src, status, arriving, retrying, retry, onDecodeError } = useStoredImage(image, sizing, ref);
   const failed = status === "error";
   return (
     <button
       ref={ref}
       type="button"
-      className={tileClass(status)}
+      className={tileClass(status, arriving)}
       tabIndex={tabIndex}
+      data-lightbox-index={lightboxIndex}
       onClick={failed ? retry : onOpen}
-      aria-label={failed ? tr("Couldn’t load image. Retry", "图片加载失败，点按重试") : label}
-      aria-busy={status === "loading" || undefined}
+      aria-label={failed ? (retrying ? tr("Retrying image…", "正在重试加载图片…") : tr("Couldn’t load image. Retry", "图片加载失败，点按重试")) : label}
+      aria-busy={status === "loading" || retrying || undefined}
     >
       {src ? (
         <img src={src} alt="" decoding="async" width={image.width || undefined} height={image.height || undefined} onError={onDecodeError} />
       ) : null}
-      {failed ? <FailedLabel /> : null}
+      {failed ? <FailedLabel retrying={retrying} /> : null}
     </button>
   );
 }

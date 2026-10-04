@@ -89,6 +89,14 @@ describe("feed task checkboxes", () => {
     expect(screen.getByRole("checkbox", { name: "Task" })).toBeTruthy();
   });
 
+  it("names a box by the task's rendered text, not the Markdown under it", () => {
+    renderCard({ memo: { ...memo, content: "- [ ] read **Dune** and [notes](https://a.com/n) #books" } });
+    const box = screen.getByRole("checkbox", { name: "read Dune and notes #books" });
+    const body = document.getElementById(box.getAttribute("aria-labelledby") ?? "");
+    expect(body?.classList.contains("md-body")).toBe(true);
+    expect(box.hasAttribute("aria-label")).toBe(false);
+  });
+
   it("reports the source line index and the desired state on click", async () => {
     const user = userEvent.setup();
     const { onToggleTask } = renderCard();

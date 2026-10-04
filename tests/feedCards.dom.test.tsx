@@ -12,7 +12,7 @@ import { MemoCard } from "../src/components/MemoCard";
 import { mightFold } from "../src/components/MemoFold";
 import { Menu } from "../src/components/Menu";
 import { TagTree } from "../src/components/TagTree";
-import { formatTime } from "../src/lib/dates";
+import { formatCardTime } from "../src/lib/dates";
 import { LanguageProvider } from "../src/lib/i18n";
 import type { TagNode } from "../src/lib/tags";
 import type { Memo } from "../src/lib/types";
@@ -134,6 +134,95 @@ describe("long-memo fold", () => {
     expect(fold?.classList.contains("is-expanded")).toBe(false);
   });
 
+  describe("fold motion", () => {
+    interface Recorded {
+      el: Element;
+      keyframes: Keyframe[];
+      options: KeyframeAnimationOptions;
+      finish: () => void;
+      cancel: ReturnType<typeof vi.fn>;
+    }
+    let animations: Recorded[];
+
+    function foldAnimations() {
+      return animations.filter((animation) => animation.el.classList.contains("memo-fold"));
+    }
+
+    function setup(cardTop: number) {
+      stubMatchMedia(false);
+      animations = [];
+      Object.defineProperty(Element.prototype, "animate", {
+        configurable: true,
+        value: vi.fn(function (this: Element, keyframes: Keyframe[], options: KeyframeAnimationOptions) {
+          let resolve!: () => void;
+          const finished = new Promise<void>((done) => (resolve = done));
+          const cancel = vi.fn();
+          animations.push({ el: this, keyframes, options, finish: () => resolve(), cancel });
+          return { finished, cancel };
+        })
+      });
+      vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains("memo-content") ? 900 : 0;
+      });
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+        if (this.classList.contains("memo-fold")) return new DOMRect(0, cardTop + 30, 300, this.classList.contains("is-expanded") ? 900 : 320);
+        if (this.classList.contains("memo-card")) return new DOMRect(0, cardTop, 330, 1000);
+        return new DOMRect(0, 0, 0, 0);
+      });
+      const scrollBy = vi.fn();
+      Object.defineProperty(window, "scrollBy", { configurable: true, value: scrollBy });
+      return { ...renderCard({ memo: { ...baseMemo, content: LONG } }), scrollBy };
+    }
+
+    it("drains the fade with the height while unfolding, and eases back down with the card's top in view", async () => {
+      const user = userEvent.setup();
+      const { container, scrollBy } = setup(40);
+      const fold = container.querySelector<HTMLElement>(".memo-fold")!;
+
+      await user.click(screen.getByRole("button", { name: "Show more" }));
+      expect(fold.classList.contains("is-expanded")).toBe(true);
+      // The mask stays on while it drains, so no hard edge slides down.
+      expect(fold.classList.contains("is-unfolding")).toBe(true);
+      const [unfold] = foldAnimations();
+      expect(unfold.keyframes).toEqual([
+        { height: "320px", "--fold-fade": "56px" },
+        { height: "900px", "--fold-fade": "0px" }
+      ]);
+      expect(unfold.options).toMatchObject({ duration: 260, fill: "forwards" });
+      await act(async () => unfold.finish());
+      expect(fold.classList.contains("is-unfolding")).toBe(false);
+      expect(unfold.cancel).toHaveBeenCalled();
+
+      await user.click(screen.getByRole("button", { name: "Show less" }));
+      expect(fold.classList.contains("is-expanded")).toBe(false);
+      const fold2 = foldAnimations()[1];
+      expect(fold2.keyframes).toEqual([
+        { maxHeight: "900px", "--fold-fade": "0px" },
+        { maxHeight: "320px", "--fold-fade": "56px" }
+      ]);
+      expect(fold2.options).toMatchObject({ duration: 220 });
+      expect(scrollBy).not.toHaveBeenCalled();
+    });
+
+    it("snaps shut and keeps the toggle under the pointer when the card's top is above the viewport", async () => {
+      const user = userEvent.setup();
+      const { container, scrollBy } = setup(-700);
+      await user.click(screen.getByRole("button", { name: "Show more" }));
+      await act(async () => foldAnimations()[0].finish());
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("memo-fold-toggle")) return new DOMRect(0, this.previousElementSibling?.classList.contains("is-expanded") ? 300 : -280, 80, 20);
+        if (this.classList.contains("memo-fold")) return new DOMRect(0, -670, 300, this.classList.contains("is-expanded") ? 900 : 320);
+        if (this.classList.contains("memo-card")) return new DOMRect(0, -700, 330, 1000);
+        return new DOMRect(0, 0, 0, 0);
+      });
+
+      await user.click(screen.getByRole("button", { name: "Show less" }));
+      expect(container.querySelector(".memo-fold")?.classList.contains("is-expanded")).toBe(false);
+      expect(foldAnimations()).toHaveLength(1);
+      expect(scrollBy).toHaveBeenCalledWith({ top: -580, behavior: "instant" });
+    });
+  });
+
   it("leaves a body that fits alone: no clamp, no toggle", () => {
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(300);
     const { container } = renderCard({ memo: { ...baseMemo, content: LONG } });
@@ -162,7 +251,7 @@ describe("memo card menu", () => {
   it("names each ⋯ by its memo and wires popup state to the panel", async () => {
     const user = userEvent.setup();
     renderCard();
-    const trigger = screen.getByRole("button", { name: `Memo actions, ${formatTime(baseMemo.createdAt, "en-US")}` });
+    const trigger = screen.getByRole("button", { name: `Memo actions, ${formatCardTime(baseMemo.createdAt, "en-US")}` });
     expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
 
@@ -238,7 +327,7 @@ describe("trash card", () => {
   it("offers Restore on the card and states the deletion in words", async () => {
     const user = userEvent.setup();
     const { props, container } = renderCard({ memo: trashed, variant: "trash" });
-    const stamp = formatTime(trashed.deletedAt!, "en-US");
+    const stamp = formatCardTime(trashed.deletedAt!, "en-US");
     expect(container.querySelector(".memo-time")?.textContent).toBe(`Deleted ${stamp}`);
     await user.click(screen.getByRole("button", { name: `Restore memo deleted ${stamp}` }));
     expect(props.onRestore).toHaveBeenCalledTimes(1);

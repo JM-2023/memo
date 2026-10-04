@@ -1,7 +1,7 @@
 import { Check, Copy, ImageOff, Link2, ListChecks, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Share, Tags, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { externalImagesOf } from "../lib/content";
-import { formatTime } from "../lib/dates";
+import { formatCardTime } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { mediaGridProps } from "../lib/imageLayout";
 import { visualLinesOf } from "../lib/lineDiff";
@@ -255,7 +255,7 @@ function MemoMenuBody({ memo, close, inTrash, pinned, busy, onTogglePin, onStart
                 send time). */}
             {memo.updatedAt !== memo.createdAt ? (
               <time dateTime={memo.updatedAt}>
-                {tr("Edited", "编辑于")} {formatTime(memo.updatedAt, locale)}
+                {tr("Edited", "编辑于")} {formatCardTime(memo.updatedAt, locale)}
               </time>
             ) : null}
           </div>
@@ -308,7 +308,8 @@ export function MemoCard(props: MemoCardProps) {
   const externalUrls = useMemo(() => externalImagesOf(memo.content), [memo.content]);
   const lightboxItems = useMemo<LightboxItem[]>(
     () => [
-      ...memo.images.map((image) => ({ src: `/api/images/${image.id}` })),
+      // The id lets the viewer draw the copy the tile already holds.
+      ...memo.images.map((image) => ({ src: `/api/images/${image.id}`, imageId: image.id })),
       ...externalUrls.filter((url) => !brokenUrls.has(url)).map((url) => ({ src: url, external: true }))
     ],
     [memo.images, externalUrls, brokenUrls]
@@ -327,9 +328,11 @@ export function MemoCard(props: MemoCardProps) {
     if (editing || selecting || inTrash) return;
 
     // Preserve the behavior of controls embedded in a memo. A double-click on
-    // a tag, link, image or action button belongs to that control; the card's
-    // otherwise inert surface is the shortcut for entering edit mode.
-    if (target instanceof Element && target.closest("button, a, input, textarea, select, [contenteditable]")) return;
+    // a tag, link, image or action button belongs to that control, and one
+    // inside a code or formula block selects a word (a triple-click, a line)
+    // to copy; the card's otherwise inert surface is the shortcut for
+    // entering edit mode.
+    if (target instanceof Element && target.closest("button, a, input, textarea, select, [contenteditable], .md-codeblock, .md-math-block")) return;
 
     editCaretRef.current = caretFromDoubleClick(target, clientY);
     props.onStartEdit();
@@ -391,7 +394,7 @@ export function MemoCard(props: MemoCardProps) {
 
   // In Trash the stamp is the deletion time, and the state is said in words
   // and weight ("Deleted" at 600) rather than in alarm red.
-  const stamp = formatTime(inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt, locale);
+  const stamp = formatCardTime(inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt, locale);
   const timeLabel = inTrash ? (
     <>
       <span className="memo-time-state">{tr("Deleted", "删除于")}</span> {stamp}
@@ -570,6 +573,7 @@ export function MemoCard(props: MemoCardProps) {
                 image={image}
                 sizing={mediaCount === 1 ? "auto" : "thumb"}
                 tabIndex={selecting ? -1 : undefined}
+                lightboxIndex={index}
                 onOpen={() => props.onOpenImage(lightboxItems, index)}
                 label={mediaCount > 1 ? tr(`View image ${index + 1} of ${mediaCount}`, `查看图片 ${index + 1}/${mediaCount}`) : tr("View image", "查看图片")}
               />
@@ -594,6 +598,7 @@ export function MemoCard(props: MemoCardProps) {
                   type="button"
                   className="memo-image is-external"
                   tabIndex={selecting ? -1 : undefined}
+                  data-lightbox-index={lightboxItems.findIndex((item) => item.src === url)}
                   onClick={() => props.onOpenImage(lightboxItems, Math.max(0, lightboxItems.findIndex((item) => item.src === url)))}
                   aria-label={
                     mediaCount > 1

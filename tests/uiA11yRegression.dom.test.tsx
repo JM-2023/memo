@@ -256,6 +256,35 @@ describe("selection and scroll affordances", () => {
     expect(slot.inert).toBe(false);
     composer.remove();
   });
+
+  it("hands keyboard focus to the main column when back-to-top is pressed from the keyboard", async () => {
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 900, writable: true });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 600, writable: true });
+    Object.defineProperty(window, "scrollTo", { configurable: true, value: vi.fn() });
+    const main = document.createElement("main");
+    main.id = "main-content";
+    document.body.append(main);
+    try {
+      render(
+        <Providers>
+          <ScrollTopButton />
+        </Providers>
+      );
+      const button = await screen.findByRole("button", { name: "Back to top" });
+      // A pointer click (detail 1) leaves focus alone…
+      button.focus();
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+      expect(document.activeElement).toBe(button);
+      // …a keyboard press (detail 0) moves it where the reader lands.
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 }));
+      expect(document.activeElement).toBe(main);
+      expect(main.getAttribute("tabindex")).toBe("-1");
+      main.blur();
+      expect(main.hasAttribute("tabindex")).toBe(false);
+    } finally {
+      main.remove();
+    }
+  });
 });
 
 describe("selected and expanded semantics", () => {

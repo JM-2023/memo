@@ -161,7 +161,50 @@ describe("stored image tiles", () => {
     expect(fetchMock.mock.calls.filter((call) => call[0] === "/api/images/flaky?size=thumb")).toHaveLength(2);
 
     await user.click(screen.getAllByRole("button", { name: /^View image/ })[0]);
-    expect(onOpenImage).toHaveBeenCalledWith([{ src: "/api/images/flaky" }, { src: "/api/images/fine" }], 0);
+    expect(onOpenImage).toHaveBeenCalledWith(
+      [
+        { src: "/api/images/flaky", imageId: "flaky" },
+        { src: "/api/images/fine", imageId: "fine" }
+      ],
+      0
+    );
+  });
+
+  it("keeps the failed tile up while retrying, says so, and holds even a fast second failure", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(new Response("{}", { status: 503, headers: { "Content-Type": "application/json" } }));
+    renderCard(memoWith([image("down"), image("down-too")]));
+    const [tile] = await screen.findAllByRole("button", { name: "Couldn’t load image. Retry" });
+    const tapped = performance.now();
+
+    await user.click(tile);
+    // The failed chrome stays; the icon spins and the words say what is happening.
+    expect(tile.className).toContain("is-failed");
+    expect(tile.getAttribute("aria-label")).toBe("Retrying image…");
+    expect(tile.textContent).toContain("Retrying…");
+    expect(tile.querySelector("svg")?.classList.contains("spin")).toBe(true);
+
+    // The request fails again at once; the answer still waits out the hold.
+    await waitFor(() => expect(tile.getAttribute("aria-label")).toBe("Couldn’t load image. Retry"));
+    expect(performance.now() - tapped).toBeGreaterThanOrEqual(390);
+    expect(tile.textContent).toContain("Couldn’t load image");
+    expect(tile.querySelector("svg")?.classList.contains("spin")).toBe(false);
+  });
+
+  it("fades in a picture it had to wait for, and draws a cached one at once", async () => {
+    primeImage("warm", "thumb", new Blob([new Uint8Array([1])], { type: "image/webp" }));
+    renderCard(memoWith([image("warm"), image("cold")]));
+    const [warm, cold] = screen.getAllByRole("button", { name: /^View image/ });
+    expect(warm.className).not.toContain("is-arriving");
+    await waitFor(() => expect(cold.querySelector("img")?.getAttribute("src")).toMatch(/^blob:/));
+    expect(cold.className).toContain("is-arriving");
+    expect(warm.className).not.toContain("is-arriving");
+  });
+
+  it("tags each tile with its place in the viewer", () => {
+    renderCard(memoWith([image("one"), image("two")]));
+    const tiles = screen.getAllByRole("button", { name: /^View image/ });
+    expect(tiles.map((tile) => tile.getAttribute("data-lightbox-index"))).toEqual(["0", "1"]);
   });
 
   describe("a lone image drawn larger than its preview", () => {

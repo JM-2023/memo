@@ -39,8 +39,26 @@ const TIME_OPTIONS: Intl.DateTimeFormatOptions = {
   hourCycle: "h23"
 };
 
+const TIME_OPTIONS_THIS_YEAR: Intl.DateTimeFormatOptions = {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23"
+};
+
+/** The full stamp, year included — for a time read out of context (a shared image). */
 export function formatTime(iso: string, locale = "en-US"): string {
   return dateFormat(locale, TIME_OPTIONS).format(new Date(iso));
+}
+
+/**
+ * A feed card's stamp: within the current year the year goes without saying
+ * ("Aug 17, 09:12" / "8月17日 09:12"); any other year keeps it in full.
+ */
+export function formatCardTime(iso: string, locale = "en-US", now: Date = new Date()): string {
+  const date = new Date(iso);
+  return dateFormat(locale, date.getFullYear() === now.getFullYear() ? TIME_OPTIONS_THIS_YEAR : TIME_OPTIONS).format(date);
 }
 
 export function formatDayLabel(key: string, locale = "en-US"): string {

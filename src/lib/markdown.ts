@@ -1,7 +1,7 @@
 // Document constructs are grouped into self-contained visual rows before
 // rendering, so feed, share cards and edit replay use the same grammar.
 
-import { inlineCodeSpanEnd, isImageUrl, splitTrailingPunct } from "./content";
+import { BARE_URL_SOURCE, inlineCodeSpanEnd, isImageUrl, splitTrailingPunct } from "./content";
 
 export type Block =
   | { kind: "p"; text: string }
@@ -135,7 +135,7 @@ export type Inline =
 // Sticky probes anchored at the scan position (lastIndex is set per use).
 const IMAGE_AT = /!\[[^\]\n]*\]\((https?:\/\/[^\s)]+)\)/uy;
 const LINK_AT = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/uy;
-const URL_AT = /https?:\/\/[^\s]+/uy;
+const URL_AT = new RegExp(BARE_URL_SOURCE, "uy");
 const TAG_AT = /#[\p{L}\p{N}_\-/·]+/uy;
 
 const WORD_CHAR = /[\p{L}\p{N}]/u;
@@ -246,15 +246,19 @@ export function parseInline(text: string, depth = 0, plain = false): Inline[] {
 
     if (ch === "h" && (text.startsWith("https://", i) || text.startsWith("http://", i))) {
       URL_AT.lastIndex = i;
-      const match = URL_AT.exec(text)!;
-      const { url, trailing } = splitTrailingPunct(match[0]);
-      flush();
-      if (plain) buffer += url;
-      else if (isImageUrl(url)) out.push({ t: "image", url });
-      else out.push({ t: "url", url });
-      buffer += trailing;
-      i += match[0].length;
-      continue;
+      // No match when nothing addressable follows the scheme ("https:// "
+      // or "https://中文"): the scheme then stays plain text.
+      const match = URL_AT.exec(text);
+      if (match) {
+        const { url, trailing } = splitTrailingPunct(match[0]);
+        flush();
+        if (plain) buffer += url;
+        else if (isImageUrl(url)) out.push({ t: "image", url });
+        else out.push({ t: "url", url });
+        buffer += trailing;
+        i += match[0].length;
+        continue;
+      }
     }
 
     if (ch === "#") {
