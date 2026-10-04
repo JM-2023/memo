@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
+import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { externalImagesOf, tokenizeLine } from "../lib/content";
@@ -381,6 +382,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   }
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, escapeDisabled: busy !== null, initialFocusRef: saveRef });
+  const backdrop = useBackdropDismiss(requestClose);
 
   useEffect(
     () => () => {
@@ -697,7 +699,7 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
       aria-label={tr("Share as image", "分享为图片")}
       aria-busy={busy !== null || undefined}
       tabIndex={-1}
-      onClick={requestClose}
+      {...backdrop}
     >
       <div className={`share-modal${layout === "landscape" ? " is-wide" : ""}`} onClick={(event) => event.stopPropagation()}>
         <header className="share-head">

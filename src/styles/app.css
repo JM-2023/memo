@@ -214,6 +214,11 @@
   --wash: rgba(20, 27, 45, 0.05);
   --wash-strong: rgba(20, 27, 45, 0.08);
 
+  /* The one scrim: dialogs and the phone drawer dim and soften the page
+     behind them alike. */
+  --scrim: rgba(10, 12, 18, 0.44);
+  --scrim-blur: 7px;
+
   /* Heatmap ramp — the one accent at four strengths, so a day's activity
      reads in the same green as the rest of the page instead of bringing a
      second family (the old GitHub greens) onto it. */
@@ -329,6 +334,10 @@
   --wash: rgba(255, 255, 255, 0.06);
   --wash-strong: rgba(255, 255, 255, 0.1);
 
+  /* A dark page needs a deeper scrim to read as dimmed at all. */
+  --scrim: rgba(0, 0, 0, 0.5);
+  --scrim-blur: 7px;
+
   /* Dark grows brighter with activity: the pale accent at full strength
      is the busiest day, the quiet days sink toward the surface. */
   --heat-1: color-mix(in srgb, var(--primary) 26%, var(--surface-3));
@@ -343,6 +352,15 @@
   --tip-muted: rgba(238, 240, 246, 0.62);
   --tip-rim: rgba(255, 255, 255, 0.13);
 }
+
+/* A theme flip is one frame for everything: with ~85 rules transitioning
+   colours while the page ground and body text snap, cards would hold the
+   old surface under the new ink for a beat. src/lib/theme.ts sets this for
+   the two frames around the flip. The theme radio's thumb is exempt — its
+   slide is the control answering, and it carries no colour. */
+:root[data-theme-switching] :not(.lang-seg-thumb),
+:root[data-theme-switching] ::before,
+:root[data-theme-switching] ::after { transition: none !important; }
 
 /* @property lets --lx/--ly drift smoothly (living sheen, dark mode only). */
 @property --lx { syntax: "<percentage>"; inherits: true; initial-value: 26%; }
@@ -366,7 +384,7 @@
 /* Sheen joins (never replaces) the pad's own entrance/shake: a name kept
    across a list swap keeps running, so shake↔calm swaps leave it seamless. */
 :root[data-theme="dark"] .pin-pad { animation: scale-in 0.24s var(--ease-out) both, glass-sheen-drift 22s ease-in-out infinite; }
-:root[data-theme="dark"] .pin-pad.shake { animation: shake 0.28s var(--ease), glass-sheen-drift 22s ease-in-out infinite; }
+:root[data-theme="dark"] .pin-pad.shake { animation: scale-in 0.24s var(--ease-out) both, shake 0.28s var(--ease), glass-sheen-drift 22s ease-in-out infinite; }
 
 /* =========================================================================
    Base
@@ -702,10 +720,18 @@ a:hover { text-decoration: underline; }
 @media (hover: hover) {
   .action-menu > button:hover { background: var(--wash-strong); color: var(--ink); }
   .action-menu > button:hover svg { color: var(--ink); }
+  /* While the keyboard holds a row, a resting pointer's row stays quiet. */
+  .action-menu:has(> button:focus-visible) > button:hover:not(:focus-visible) { background: transparent; }
 }
+/* Keyboard focus is the hover wash, not the page's ring: rows sit 2px
+   apart, so a 2px outside ring spilled into the neighbour. Menu.tsx moves
+   focus with the pointer, so the two are always the same row. */
+.action-menu > button:focus-visible { outline: none; background: var(--wash-strong); color: var(--ink); }
+.action-menu > button:focus-visible svg { color: var(--ink); }
 .action-menu > button:active { transform: scale(0.985); }
 .action-menu > button.danger, .action-menu > button.danger svg { color: var(--danger); }
 @media (hover: hover) { .action-menu > button.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); } }
+.action-menu > button.danger:focus-visible { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .action-menu > button.is-selected { color: var(--primary-dark); }
 .action-menu .menu-check { margin-left: auto; color: var(--primary-dark); }
 .action-menu__sep { display: block; height: 1px; margin: 5px 8px; background: var(--glass-rim); }
@@ -851,7 +877,9 @@ a:hover { text-decoration: underline; }
   box-shadow: var(--primary-shadow);
   animation: pop-in 0.24s var(--ease-pop) both;
 }
-.splash-spinner { color: var(--muted); }
+/* Only a start that takes a while shows it: a warm start is over before the
+   spinner fades in. (Reduced motion keeps the slowed .spin, at once.) */
+.splash-spinner { color: var(--muted); animation: spin 0.8s linear infinite, fade-in 0.2s var(--ease) 0.5s both; }
 
 .login-screen {
   display: grid;
@@ -871,7 +899,10 @@ a:hover { text-decoration: underline; }
   box-shadow: var(--glass-highlight), var(--shadow-lg);
   animation: scale-in 0.24s var(--ease-out) both;
 }
-.pin-pad.shake { animation: shake 0.28s var(--ease); }
+/* The shake joins the entrance rather than replacing it: a name kept across
+   the list swap keeps running, so when the shake comes off, scale-in does
+   not restart (the first key after a wrong code no longer replays it). */
+.pin-pad.shake { animation: scale-in 0.24s var(--ease-out) both, shake 0.28s var(--ease); }
 .pin-brand { display: grid; justify-items: center; gap: 5px; text-align: center; }
 .pin-logo {
   display: grid;
@@ -889,6 +920,10 @@ a:hover { text-decoration: underline; }
 .pin-brand h1 { margin: 0; font-size: var(--fs-xl); font-weight: 800; letter-spacing: -0.02em; }
 .pin-brand p { margin: 0; color: var(--muted); font-size: var(--fs-sm); font-weight: 400; transition: color var(--t) var(--ease); }
 .pin-pad.shake .pin-brand p { color: var(--danger); }
+/* current → new → confirm: each step's words slide in the way the flow goes. */
+.pin-step { display: inline-block; }
+.pin-step.dir-fwd { animation: swap-in-fwd 0.22s var(--ease-out) both; }
+.pin-step.dir-back { animation: swap-in-back 0.22s var(--ease-out) both; }
 /* One dot per typed digit — no fixed slots, so the row never betrays how long
    the passcode is. Long entries compress the dots instead of wrapping. */
 /* min-width: 0 defeats the grid item's auto minimum, which would otherwise
@@ -939,6 +974,8 @@ a:hover { text-decoration: underline; }
   animation: pop-in 0.14s var(--ease-pop);
 }
 .pin-dots.error span { background: var(--danger); }
+/* PasscodePad holds a refused entry, red, through the shake, then fades it. */
+.pin-dots.is-clearing span { opacity: 0; transition: opacity 0.12s var(--ease); }
 
 .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .keypad button {
@@ -953,14 +990,20 @@ a:hover { text-decoration: underline; }
   border: 1.25px solid var(--chip-rim);
   border-radius: var(--r-md);
   box-shadow: var(--chip-shadow);
-  transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease), transform 0.12s var(--ease);
+  transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease), transform 0.12s var(--ease), opacity var(--t) var(--ease);
 }
 @media (hover: hover) { .keypad button:hover:not(:disabled) { background: var(--chip-hover-fill); box-shadow: var(--chip-hover-shadow); } }
 .keypad button:active:not(:disabled) { transform: scale(0.94); }
+/* A hardware key echoes on its on-screen twin (PasscodePad, 120ms). */
+.keypad button.is-pressed:not(:disabled) { transform: scale(0.94); background: var(--chip-hover-fill); box-shadow: var(--chip-hover-shadow); }
 .keypad button.keypad-action { color: var(--muted); font-size: var(--fs-lg); background: transparent; border-color: transparent; box-shadow: none; }
 @media (hover: hover) { .keypad button.keypad-action:hover:not(:disabled) { background: var(--wash); box-shadow: none; } }
+.keypad button.keypad-action.is-pressed:not(:disabled) { background: var(--wash); box-shadow: none; }
 .keypad button.keypad-action.confirm:not(:disabled) { color: var(--primary); }
 .keypad button:disabled { opacity: 0.4; }
+/* Checking a passcode is usually quicker than a beat: the keypad dims only
+   if it takes longer (and comes back at once). */
+.pin-pad[aria-busy="true"] .keypad button:disabled { transition-delay: 0s, 0s, 0s, 0.15s; }
 
 .passcode-overlay {
   position: fixed;
@@ -976,6 +1019,9 @@ a:hover { text-decoration: underline; }
   overscroll-behavior: contain;
   animation: fade-in var(--t-slow) var(--ease) both;
 }
+.passcode-overlay.is-closing { animation: fade-out 0.16s var(--ease) both; pointer-events: none; }
+.passcode-overlay.is-closing .pin-pad,
+.passcode-overlay.is-closing .pin-pad.shake { animation: modal-out 0.16s var(--ease) both; }
 
 /* =========================================================================
    App shell — sidebar + main column
@@ -2716,12 +2762,24 @@ button.crumb:active { background: var(--wash-strong); }
    while online. One quiet line in the composer's column, in the masthead's
    voice — words first, a glyph, and the one verb that helps. Not red: the
    notebook is intact, it is the connection that is not. */
+/* The slot carries the line's place in the column, so leaving can fold it:
+   rows 1fr → 0fr with the fade, like a toast's slot. Its top margin lands
+   on 0 while the composer's grows back from the 12px beat to its own 20px,
+   so nothing below jumps when the slot finally unmounts. */
+.sync-notice-slot {
+  display: grid;
+  grid-template-rows: 1fr;
+  width: calc(100% - var(--content-inset) * 2);
+  margin-top: 16px;
+  transition: grid-template-rows 0.16s var(--ease), margin-top 0.16s var(--ease), opacity 0.16s var(--ease);
+}
+.sync-notice-slot.is-leaving { grid-template-rows: 0fr; margin-top: 0; opacity: 0; pointer-events: none; }
+.sync-notice-clip { min-height: 0; }
+.sync-notice-slot.is-leaving .sync-notice-clip { overflow: hidden; }
 .sync-notice {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: calc(100% - var(--content-inset) * 2);
-  margin-top: 16px;
   padding: 8px 12px;
   color: var(--ink-soft);
   font-size: var(--fs-sm);
@@ -2733,6 +2791,7 @@ button.crumb:active { background: var(--wash-strong); }
   view-transition-name: sync-notice;
 }
 .sync-notice > svg { flex: none; color: var(--muted); }
+.sync-notice.is-restored > svg { color: var(--primary); }
 .sync-notice-text { flex: 1; min-width: 0; }
 .sync-notice-retry {
   flex: none;
@@ -2743,10 +2802,12 @@ button.crumb:active { background: var(--wash-strong); }
   border-radius: var(--r-xs);
   transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
-@media (hover: hover) { .sync-notice-retry:hover { background: var(--primary-tint); } }
+@media (hover: hover) { .sync-notice-retry:hover:not(:disabled) { background: var(--primary-tint); } }
 .sync-notice-retry:active { transform: scale(0.96); }
+.sync-notice-retry:disabled { opacity: 1; color: var(--muted); }
 /* The composer's own top margin follows; the notice keeps the 16px beat. */
-.sync-notice + .composer { margin-top: 12px; }
+.sync-notice-slot + .composer { margin-top: 12px; }
+.sync-notice-slot.is-leaving + .composer { margin-top: 20px; transition: margin-top 0.16s var(--ease); }
 
 /* Daily-review masthead: the day's date and batch size, quiet type above the
    cards. Its view-transition-name keeps it steady while a settings change
@@ -2929,7 +2990,7 @@ button.crumb:active { background: var(--wash-strong); }
   animation: fade-in 0.2s var(--ease) both;
   -webkit-tap-highlight-color: transparent;
 }
-.memo-select-overlay:focus-visible { background: var(--wash); }
+.memo-select-overlay:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 78%, transparent); outline-offset: -2px; }
 /* The ⋯ trigger and the check ring live stacked in one 26px cell — swapping
    them never shifts layout. */
 .memo-tool-slot { display: grid; width: 26px; height: 26px; place-items: center; }
@@ -3367,12 +3428,13 @@ button.memo-tag:active {
     max(24px, env(safe-area-inset-right))
     max(24px, env(safe-area-inset-bottom), var(--kb-inset, 0px) + 12px)
     max(24px, env(safe-area-inset-left));
-  background: rgba(10, 12, 18, 0.44);
-  -webkit-backdrop-filter: blur(7px);
-  backdrop-filter: blur(7px);
+  background: var(--scrim);
+  -webkit-backdrop-filter: blur(var(--scrim-blur));
+  backdrop-filter: blur(var(--scrim-blur));
   animation: fade-in 0.18s var(--ease) both;
 }
-.overlay.is-closing { animation: fade-out 0.16s var(--ease) both; }
+/* A leaving dialog is already gone as far as the hand is concerned. */
+.overlay.is-closing { animation: fade-out 0.16s var(--ease) both; pointer-events: none; }
 
 .confirm-card {
   display: grid;
@@ -3389,6 +3451,13 @@ button.memo-tag:active {
 .confirm-card h2 { margin: 0; font-size: var(--fs-lg); font-weight: 700; overflow-wrap: anywhere; }
 .confirm-card p { margin: 0 0 10px; color: var(--muted); font-size: var(--fs-md); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* A button that turns busy keeps its width: idle and busy labels (and the
+   widest progress figure, where one counts) share one grid cell, and only
+   the active one shows. Figures are tabular app-wide, so a count ticking
+   up never shifts the label either. */
+.busy-swap { display: inline-grid; justify-items: center; }
+.busy-swap > * { grid-area: 1 / 1; }
+.busy-swap > [aria-hidden="true"] { visibility: hidden; }
 /* A long-running confirm (backup import) counts up above its actions on the
    model panel's track. */
 .confirm-progress { display: grid; gap: 8px; margin: 0 0 12px; }
@@ -3409,7 +3478,10 @@ button.memo-tag:active {
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
 .prompt-input:focus { border-color: var(--line-focus); }
-.prompt-note { margin: -2px 0 0; font-size: var(--fs-xs); font-weight: 500; color: var(--muted); animation: fade-up 0.18s var(--ease) both; }
+/* The note row is always there — sized for the larger, strong line — so a
+   note arriving or leaving never changes the card's (or sheet's) height. */
+.prompt-note { min-height: calc(var(--fs-md) * 1.35); margin: -2px 0 0; font-size: var(--fs-xs); font-weight: 500; line-height: 1.35; color: var(--muted); }
+.prompt-note > span { display: inline-block; animation: fade-up 0.18s var(--ease) both; }
 .prompt-note.is-error { color: var(--danger); }
 /* A consequence that cannot be undone (a tag merge) is said in ink and
    weight, above the grey body copy — never as the quietest line. */
@@ -4402,7 +4474,7 @@ button.stats-tag-row:active { scale: 0.992; }
   .share-seg button:hover:not(:disabled):not(.is-active) { color: var(--ink-soft); }
   .share-seg button:hover:not(:disabled):not(.is-active) > * { transform: var(--glyph-tilt) scale(1.09); }
 }
-.share-seg button:focus-visible { outline: none; background: var(--wash-strong); }
+.share-seg button:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 78%, transparent); outline-offset: -2px; }
 .share-seg button:active:not(:disabled) { transform: scale(0.94); }
 .share-seg button.is-active { color: var(--ink); }
 /* Sample chips of the two stocks, mirroring --sc-sheet in shareCard.css.
@@ -4665,6 +4737,8 @@ button.stats-tag-row:active { scale: 0.992; }
   font-weight: 600;
   line-height: 20px;
   pointer-events: auto;
+  /* Vertical drags are the toast's own (swipe up to dismiss, App.tsx). */
+  touch-action: pan-x;
   animation: toast-in 0.22s var(--ease-pop) both;
 }
 .toast-stack { gap: 0; }
@@ -4681,6 +4755,8 @@ button.stats-tag-row:active { scale: 0.992; }
 .toast-slot.is-leaving { grid-template-rows: 0fr; padding-bottom: 0; pointer-events: none; }
 .toast-clip { min-height: 0; min-width: 0; }
 .toast-slot.is-leaving .toast-clip { overflow: hidden; }
+/* A flicked toast carries on from where it was let go, above its slot. */
+.toast-slot.is-leaving.is-swiped .toast-clip { overflow: visible; }
 .toast.is-leaving { animation: toast-out 0.16s var(--ease) both; pointer-events: none; }
 .toast-text { min-width: 0; }
 .toast-text:only-child { text-align: center; }
@@ -4877,9 +4953,9 @@ button.stats-tag-row:active { scale: 0.992; }
     position: fixed;
     inset: 0;
     z-index: 145;
-    background: rgba(10, 12, 18, 0.4);
-    -webkit-backdrop-filter: blur(3px);
-    backdrop-filter: blur(3px);
+    background: var(--scrim);
+    -webkit-backdrop-filter: blur(var(--scrim-blur));
+    backdrop-filter: blur(var(--scrim-blur));
     animation: fade-in 0.18s var(--ease) both;
   }
   .drawer-backdrop.is-closing { animation: fade-out 0.16s var(--ease) both; }
@@ -5726,6 +5802,29 @@ button.stats-tag-row:active { scale: 0.992; }
   .overlay.is-closing > :is(.confirm-card, .stats-modal, .review-modal, .model-panel, .share-modal) {
     animation: sheet-down 0.16s var(--ease) both;
   }
+  /* The grabber says the sheet can be pulled down; the header row under it
+     is where the pull starts (useBackdropDismiss). Those rows keep the
+     touch to themselves, so the drag is never taken for a page pan. */
+  .overlay > :is(.confirm-card, .stats-modal, .review-modal, .model-panel, .share-modal) { position: relative; }
+  .overlay > :is(.confirm-card, .stats-modal, .review-modal, .model-panel, .share-modal)::before {
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    z-index: 1;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    background: var(--line-strong);
+    border-radius: 2px;
+    pointer-events: none;
+  }
+  .overlay > .confirm-card > h2,
+  .overlay .bulk-tag-head,
+  .overlay .stats-head,
+  .overlay .review-head,
+  .overlay .model-panel-head,
+  .overlay .share-head { touch-action: none; }
 }
 
 /* The semantic toggle sits between the searchbox and the filter funnel and

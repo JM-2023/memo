@@ -23,11 +23,42 @@ function darkQuery(): MediaQueryList | null {
 // token block. "system" resolves here (and in theme-init.js before first
 // paint) and follows the OS while the page is open through this listener.
 let systemQuery: MediaQueryList | null = null;
+
+/**
+ * The flip itself must be instant. Some 85 rules transition colours (cards,
+ * chips, rows), while the page ground and body text snap — so for a few
+ * frames light ink would sit on still-white cards. [data-theme-switching]
+ * (app.css) turns every transition off for the two frames around the flip.
+ * A view transition would do it too, but the app's many named groups would
+ * make each theme change a heavy whole-page snapshot.
+ */
+let cancelSwitchFrame: (() => void) | null = null;
+function nextFrame(callback: () => void): () => void {
+  if (typeof window.requestAnimationFrame === "function") {
+    const id = window.requestAnimationFrame(callback);
+    return () => window.cancelAnimationFrame?.(id);
+  }
+  const id = window.setTimeout(callback, 16);
+  return () => window.clearTimeout(id);
+}
+function suppressTransitions(root: HTMLElement): void {
+  cancelSwitchFrame?.();
+  root.setAttribute("data-theme-switching", "");
+  cancelSwitchFrame = nextFrame(() => {
+    cancelSwitchFrame = nextFrame(() => {
+      cancelSwitchFrame = null;
+      root.removeAttribute("data-theme-switching");
+    });
+  });
+}
+
 function setResolvedTheme(theme: "light" | "dark"): void {
   // Unchanged values are skipped: [data-theme] observers (the orb) re-read
   // tokens on every mutation record, even a same-value one.
   const root = document.documentElement;
-  if (root.getAttribute("data-theme") !== theme) root.setAttribute("data-theme", theme);
+  if (root.getAttribute("data-theme") === theme) return;
+  suppressTransitions(root);
+  root.setAttribute("data-theme", theme);
 }
 function syncSystemTheme(): void {
   setResolvedTheme(systemQuery?.matches ? "dark" : "light");

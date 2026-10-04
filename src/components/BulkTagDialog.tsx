@@ -1,8 +1,10 @@
 import { Hash, Loader2, Tags, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
+import { MEMO_TAG_BATCH_CHUNK } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { isValidTagPath } from "../lib/tags";
 
@@ -71,6 +73,8 @@ export function BulkTagDialog({
     return knownTags.filter((item) => !owned.has(item) && (!query || item.toLocaleLowerCase().includes(query))).slice(0, 8);
   }, [knownTags, owned, value]);
   const canSubmit = selectedCount > 0 && Boolean(tag) && !error && !alreadyOwned && !submitting && !closing;
+  // Only a selection spanning several requests counts its progress.
+  const reserveTotal = progress ? progress.total : scope === "selection" && selectedCount > MEMO_TAG_BATCH_CHUNK ? selectedCount : 0;
   const noteKey = error
     ? "validation-error"
     : applyError
@@ -100,6 +104,7 @@ export function BulkTagDialog({
     initialFocusRef: inputRef
   });
   useKeyboardInset(overlayRef);
+  const backdrop = useBackdropDismiss(requestDismiss);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -138,7 +143,7 @@ export function BulkTagDialog({
       aria-label={scope === "memo" ? tr("Add tag to this memo", "为这条笔记添加标签") : tr("Add tag to selected memos", "为所选笔记添加标签")}
       aria-busy={submitting || undefined}
       tabIndex={-1}
-      onClick={requestDismiss}
+      {...backdrop}
     >
       <div className="confirm-card bulk-tag-card" onClick={(event) => event.stopPropagation()}>
         <header className="bulk-tag-head">
@@ -229,12 +234,21 @@ export function BulkTagDialog({
             </button>
             <button type="submit" className="accent-button bulk-tag-submit" disabled={!canSubmit}>
               {submitting ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Tags size={15} aria-hidden="true" />}
-              <span>
-                {submitting
-                  ? progress
+              {/* Idle and busy labels share one cell, and a selection that
+                  will count its chunks reserves the widest count up front,
+                  so the button never grows mid-run and slides Cancel. */}
+              <span className="busy-swap">
+                <span aria-hidden={submitting || undefined}>{tr("Add tag", "添加标签")}</span>
+                <span aria-hidden={!submitting || undefined}>
+                  {progress
                     ? tr(`Adding… ${formatNumber(progress.done)}/${formatNumber(progress.total)}`, `添加中… ${formatNumber(progress.done)}/${formatNumber(progress.total)}`)
-                    : tr("Adding…", "添加中…")
-                  : tr("Add tag", "添加标签")}
+                    : tr("Adding…", "添加中…")}
+                </span>
+                {reserveTotal > 0 ? (
+                  <span aria-hidden="true">
+                    {tr(`Adding… ${formatNumber(reserveTotal)}/${formatNumber(reserveTotal)}`, `添加中… ${formatNumber(reserveTotal)}/${formatNumber(reserveTotal)}`)}
+                  </span>
+                ) : null}
               </span>
             </button>
           </footer>

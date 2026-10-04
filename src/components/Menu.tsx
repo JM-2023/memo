@@ -64,6 +64,17 @@ interface PortalPos {
   up: boolean;
 }
 
+/** Type-ahead keeps its letters this long between presses. */
+const TYPEAHEAD_RESET_MS = 500;
+
+function itemLabel(item: HTMLElement): string {
+  return (item.textContent || item.getAttribute("aria-label") || "").trim().toLocaleLowerCase();
+}
+
+function isTextEntry(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || target.matches("input, textarea, select"));
+}
+
 const PAGE_FOCUSABLE = [
   "a[href]",
   "button:not([disabled])",
@@ -93,6 +104,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   const panelRef = useRef<HTMLDivElement>(null);
   const focusEdgeRef = useRef<"first" | "last">("first");
   const restoreTriggerRef = useRef(false);
+  const typeaheadRef = useRef({ text: "", timer: 0 });
   const open = phase === "open";
 
   function triggerElement() {
@@ -229,10 +241,39 @@ export function Menu({ trigger, children, align = "right", className, panelClass
 
   useEffect(() => {
     if (!open) return;
+    const panel = panelRef.current;
     function onPointerDown(event: PointerEvent) {
       const target = event.target as Node;
       if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return;
       requestClose(false);
+    }
+    // The pointer moves focus with it, so the row under the mouse and the
+    // keyboard's row are always the same one — one highlight, not two.
+    function onPointerMove(event: PointerEvent) {
+      if (kind === "panel" || event.pointerType === "touch") return;
+      const item = event.target instanceof Element ? event.target.closest<HTMLElement>("[role='menuitem'], [role='menuitemradio'], [role='menuitemcheckbox']") : null;
+      if (!item || item === document.activeElement || !menuItems().includes(item)) return;
+      item.focus({ preventScroll: true });
+    }
+    /** First-letter type-ahead: the next row whose label starts with what was typed. */
+    function typeahead(event: KeyboardEvent, items: HTMLElement[], activeIndex: number): HTMLElement | undefined {
+      if (event.key.length !== 1 || event.key === " " || event.ctrlKey || event.metaKey || event.altKey || isTextEntry(event.target)) return undefined;
+      const state = typeaheadRef.current;
+      window.clearTimeout(state.timer);
+      state.text += event.key.toLocaleLowerCase();
+      state.timer = window.setTimeout(() => {
+        state.text = "";
+      }, TYPEAHEAD_RESET_MS);
+      // One letter pressed again cycles through the rows it starts; a longer
+      // run keeps matching from the current row.
+      const repeated = [...state.text].every((char) => char === state.text[0]);
+      const query = repeated ? state.text[0] : state.text;
+      const start = repeated ? activeIndex + 1 : Math.max(0, activeIndex);
+      for (let step = 0; step < items.length; step += 1) {
+        const item = items[(start + step) % items.length];
+        if (itemLabel(item).startsWith(query)) return item;
+      }
+      return undefined;
     }
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") {
@@ -258,6 +299,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
       else if (event.key === "ArrowUp") target = activeIndex < 0 ? items.at(-1) : items[(activeIndex - 1 + items.length) % items.length];
       else if (event.key === "Home") target = items[0];
       else if (event.key === "End") target = items.at(-1);
+      else target = typeahead(event, items, activeIndex);
       if (target) {
         event.preventDefault();
         target.focus();
@@ -265,9 +307,13 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     }
     window.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKey, true);
+    panel?.addEventListener("pointermove", onPointerMove);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKey, true);
+      panel?.removeEventListener("pointermove", onPointerMove);
+      window.clearTimeout(typeaheadRef.current.timer);
+      typeaheadRef.current.text = "";
     };
   }, [open, kind]);
 

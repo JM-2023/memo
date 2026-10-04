@@ -182,8 +182,9 @@ describe("tag rename follow-ups", () => {
 
     const { dialog, input } = await openRename(user, "work");
     await user.type(input, "life");
-    const warning = within(dialog).getByText("#life already exists. Merging the two tags can’t be undone.");
-    expect(warning.classList.contains("is-strong")).toBe(true);
+    // Said once typing pauses, in the note row's strong voice.
+    const warning = await within(dialog).findByText("#life already exists. Merging the two tags can’t be undone.");
+    expect(warning.closest(".prompt-note")?.classList.contains("is-strong")).toBe(true);
     await user.click(within(dialog).getByRole("button", { name: "Merge" }));
 
     expect(await screen.findByText("Merged #work into #life in 1 memo", { selector: ".toast *" })).not.toBeNull();

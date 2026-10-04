@@ -391,7 +391,7 @@ export interface MemoBatchResult {
 // Server ceilings (functions/api/memos/batch.ts): set-based ops are a fixed
 // few statements per request; tagging is one statement per memo.
 const MEMO_BATCH_CHUNK = 200;
-const MEMO_TAG_BATCH_CHUNK = 30;
+export const MEMO_TAG_BATCH_CHUNK = 30;
 
 /**
  * Apply one action to many memos through POST /api/memos/batch, a chunk per

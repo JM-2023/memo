@@ -8,7 +8,6 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
-  CloudOff,
   Home,
   ListChecks,
   Loader2,
@@ -20,7 +19,6 @@ import {
   Sparkles,
   Tags,
   Trash2,
-  WifiOff,
   X
 } from "lucide-react";
 import { Component, lazy, memo as reactMemo, startTransition, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -41,6 +39,7 @@ import { ScrollTopButton } from "./components/ScrollTopButton";
 import { FACET_ROWS, SearchFilter, type FilterOpenTarget } from "./components/SearchFilter";
 import { Sidebar } from "./components/Sidebar";
 import { SwapText } from "./components/SwapText";
+import { SyncNotice } from "./components/SyncNotice";
 import { useTip } from "./components/Tip";
 import { bindAnchored, isTruncated } from "./components/truncationTip";
 import { useModalA11y } from "./hooks/useModalA11y";
@@ -135,6 +134,7 @@ import { useSnapshotWriterLease } from "./lib/snapshotWriter";
 import { applySyncDelta, createSyncState, memosOf, purgedOf, tagsOfState, type PurgedMemo, type SyncState } from "./lib/syncState";
 import { buildTagTree, inheritTagContext, isValidTagPath, tagMatches, tagRenamePathsOverlap, tagsOf } from "./lib/tags";
 import { applyTaskFlips, freshestTaskMemo, type TaskFlipQueue } from "./lib/taskFlips";
+import { startToastSwipe } from "./lib/toastSwipe";
 import { applyTheme, loadTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
@@ -238,6 +238,11 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onR
   const stackRef = useRef<HTMLDivElement>(null);
   // Where focus stood before it entered the stack.
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  // Toasts flicked away: they leave from where the finger let go, unclipped.
+  const swipedRef = useRef(new Set<number>());
+  useEffect(() => {
+    for (const id of swipedRef.current) if (!toasts.some((toast) => toast.id === id)) swipedRef.current.delete(id);
+  }, [toasts]);
   const hasAction = toasts.some((toast) => toast.action && !toast.leaving);
 
   function handBackFocus() {
@@ -297,9 +302,20 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onR
       }}
     >
       {toasts.map((toast) => (
-        <div key={toast.id} className={`toast-slot${toast.leaving ? " is-leaving" : ""}`}>
+        <div key={toast.id} className={`toast-slot${toast.leaving ? " is-leaving" : ""}${toast.leaving && swipedRef.current.has(toast.id) ? " is-swiped" : ""}`}>
           <div className="toast-clip">
-            <div className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`}>
+            <div
+              className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`}
+              // Any toast, Undo or not, can be flicked up and away on a touch
+              // screen — the only way to clear an action-less one early.
+              onPointerDown={(event) => {
+                if (toast.leaving) return;
+                startToastSwipe(event.nativeEvent, event.currentTarget, () => {
+                  swipedRef.current.add(toast.id);
+                  settle(toast.id);
+                });
+              }}
+            >
               {toast.tone === "error" ? <CircleAlert size={15} className="toast-mark" aria-hidden="true" /> : null}
               <span className="toast-text">
                 {toast.text}
@@ -882,11 +898,15 @@ export default function App() {
   const [filterOpenRequest, setFilterOpenRequest] = useState(0);
   const [filterOpenTarget, setFilterOpenTarget] = useState<FilterOpenTarget>("range");
 
-  // Per-toast clocks. A paused entry (pointer or focus on the stack) keeps
-  // only its remaining time; resuming re-arms from there.
+  // Per-toast clocks. A paused entry (pointer or focus on the stack, or the
+  // tab in the background) keeps only its remaining time; resuming re-arms
+  // from there once nothing holds the clocks any more.
   const toastTimersRef = useRef(new Map<number, { timer: number; expiresAt: number; remaining: number }>());
   const toastSeqRef = useRef(0);
   const toastsPausedRef = useRef(false);
+  const toastHoldsRef = useRef(new Set<"stack" | "hidden">());
+  // The gate's "session expired" toast, dismissed once the passcode unlocks.
+  const authToastRef = useRef(0);
   const toastsRef = useRef(toasts);
   toastsRef.current = toasts;
   // The selection-pruned notice replaces itself rather than stacking up
@@ -956,29 +976,52 @@ export default function App() {
     setToasts((current) => (current.some((toast) => toast.id === id && !toast.leaving) ? current.map((toast) => (toast.id === id ? { ...toast, detail } : toast)) : current));
   }, []);
 
-  const pauseToasts = useCallback(() => {
-    if (toastsPausedRef.current) return;
-    toastsPausedRef.current = true;
-    const now = Date.now();
-    for (const [id, entry] of toastTimersRef.current) {
-      if (entry.timer) window.clearTimeout(entry.timer);
-      // Leaving the stack always grants a beat to finish reading.
-      const remaining = entry.timer ? Math.max(800, entry.expiresAt - now) : entry.remaining;
-      toastTimersRef.current.set(id, { timer: 0, expiresAt: 0, remaining });
-    }
-  }, []);
+  /**
+   * Holds or releases the clocks for one reason. An Undo must not run out
+   * while the reader is in another tab, any more than while their pointer
+   * rests on it; the clocks run again only once neither holds them.
+   */
+  const holdToasts = useCallback(
+    (reason: "stack" | "hidden", held: boolean) => {
+      const holds = toastHoldsRef.current;
+      if (held === holds.has(reason)) return;
+      if (held) holds.add(reason);
+      else holds.delete(reason);
+      const paused = holds.size > 0;
+      if (paused === toastsPausedRef.current) return;
+      toastsPausedRef.current = paused;
+      if (!paused) {
+        for (const [id, entry] of toastTimersRef.current) if (!entry.timer) armToast(id, entry.remaining);
+        return;
+      }
+      const now = Date.now();
+      for (const [id, entry] of toastTimersRef.current) {
+        if (entry.timer) window.clearTimeout(entry.timer);
+        // Coming back always grants a beat to finish reading.
+        const remaining = entry.timer ? Math.max(800, entry.expiresAt - now) : entry.remaining;
+        toastTimersRef.current.set(id, { timer: 0, expiresAt: 0, remaining });
+      }
+    },
+    [armToast]
+  );
+  const pauseToasts = useCallback(() => holdToasts("stack", true), [holdToasts]);
+  const resumeToasts = useCallback(() => holdToasts("stack", false), [holdToasts]);
 
-  const resumeToasts = useCallback(() => {
-    if (!toastsPausedRef.current) return;
-    toastsPausedRef.current = false;
-    for (const [id, entry] of toastTimersRef.current) if (!entry.timer) armToast(id, entry.remaining);
-  }, [armToast]);
+  useEffect(() => {
+    const onVisibility = () => holdToasts("hidden", document.visibilityState === "hidden");
+    onVisibility();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [holdToasts]);
 
   const clearToasts = useCallback(() => {
     for (const entry of toastTimersRef.current.values()) window.clearTimeout(entry.timer);
     toastTimersRef.current.clear();
-    toastsPausedRef.current = false;
+    // The stack's own hold goes with its toasts; a background tab still holds.
+    toastHoldsRef.current.delete("stack");
+    toastsPausedRef.current = toastHoldsRef.current.size > 0;
     selectionNoticeRef.current = 0;
+    authToastRef.current = 0;
     setToasts([]);
   }, []);
 
@@ -1082,7 +1125,8 @@ export default function App() {
     isolateExemptSelector: ".drawer-backdrop"
   });
 
-  useEffect(() => {
+  // Before paint, so the theme radio's thumb and the page change in one frame.
+  useLayoutEffect(() => {
     applyTheme(theme);
   }, [theme]);
 
@@ -1140,7 +1184,7 @@ export default function App() {
       }
       resetSessionUi();
       setPhase("login");
-      showToast(
+      authToastRef.current = showToast(
         wipe
           ? tr("Your passcode changed. Enter the new one to continue.", "密码已更改，请输入新密码继续")
           : tr("Your session has expired. Enter your passcode again.", "登录已过期，请重新输入密码"),
@@ -1157,7 +1201,7 @@ export default function App() {
     resetSessionUi();
     resetLocalWorkspaceState();
     setPhase("login");
-    showToast(tr("Another tab logged out. Enter your passcode again.", "另一个标签页已退出，请重新输入密码"), "error");
+    authToastRef.current = showToast(tr("Another tab logged out. Enter your passcode again.", "另一个标签页已退出，请重新输入密码"), "error");
   }, [discardHeldDrafts, resetLocalWorkspaceState, resetSessionUi, showToast, tr]);
 
   // Hand held drafts back once the notebook is on screen again: the composer
@@ -1298,9 +1342,17 @@ export default function App() {
   }, [handleServerReset]);
   pumpBootstrapRef.current = pumpBootstrap;
 
-  /** The reader's own "try again" for a stalled cold load. */
-  const retryBootstrap = useCallback(() => {
-    void pumpBootstrapRef.current();
+  /**
+   * The reader's own "try again" for a stalled cold load; resolves whether
+   * the load got going again (the notice says so when it didn't).
+   */
+  const retryBootstrap = useCallback(async (): Promise<boolean> => {
+    const job = bootstrapJobRef.current;
+    if (!job) return true;
+    await pumpBootstrapRef.current();
+    // A pump already in flight (its backoff just ran out) returned at once.
+    while (bootstrapJobRef.current === job && job.running) await new Promise((resolve) => window.setTimeout(resolve, 100));
+    return bootstrapJobRef.current !== job || job.failures === 0;
   }, []);
 
   useEffect(() => {
@@ -2396,15 +2448,16 @@ export default function App() {
     [savedFilters, showToast, tr]
   );
 
-  function handleSaveFilterConfirmed(name: string) {
+  /** True: the dialog plays its exit, then onDone closes it. */
+  function handleSaveFilterConfirmed(name: string): boolean {
     const snapshot = { name, query: query.trim(), tag: activeTag, day: activeDay, filters };
     setSavedFilters((current) => {
       const existing = current.find((entry) => entry.name === name);
       if (existing) return current.map((entry) => (entry.id === existing.id ? { ...snapshot, id: existing.id } : entry));
       return [...current, { ...snapshot, id: crypto.randomUUID() }];
     });
-    setSavingFilter(false);
     showToast(tr(`Saved “${name}”`, `已保存「${name}」`));
+    return true;
   }
 
   // The preset whose snapshot equals the live feed state — its row gets the
@@ -2835,9 +2888,16 @@ export default function App() {
     [mutateSelection]
   );
 
+  /** The gate's "enter your passcode again" toast has done its job once the passcode is in. */
+  function dismissAuthToast() {
+    if (authToastRef.current) dismissToast(authToastRef.current);
+    authToastRef.current = 0;
+  }
+
   async function handleLogin(pin: string) {
     sessionEpochRef.current += 1;
     await login(pin);
+    dismissAuthToast();
     try {
       await enterApp(true);
     } catch (cause) {
@@ -2851,6 +2911,7 @@ export default function App() {
     sessionEpochRef.current += 1;
     await setupPassword(pin);
     setNeedsSetup(false);
+    dismissAuthToast();
     try {
       await enterApp(true);
     } catch (cause) {
@@ -2860,8 +2921,14 @@ export default function App() {
     }
   }
 
-  async function handleLogout() {
-    if (logoutBusyRef.current) return;
+  /**
+   * Resolves true once the server has ended the session. Nothing answered
+   * with the old cookie counts from here (epoch), and sibling tabs hear it
+   * now; this tab's dialog plays its exit first, still saying "Logging
+   * out…", and finishLogout then clears the device and shows the gate.
+   */
+  async function handleLogout(): Promise<boolean> {
+    if (logoutBusyRef.current) return false;
     logoutBusyRef.current = true;
     setLoggingOut(true);
     try {
@@ -2872,7 +2939,7 @@ export default function App() {
         setLoggingOut(false);
         setConfirmLogout(false);
         showToast(tr("Logout wasn’t confirmed. Your session remains open.", "退出未得到服务器确认，当前登录仍然有效"), "error");
-        return;
+        return false;
       }
     } finally {
       logoutBusyRef.current = false;
@@ -2880,13 +2947,17 @@ export default function App() {
 
     sessionEpochRef.current += 1;
     notifyLogout();
+    return true;
+  }
+
+  function finishLogout() {
     const localCleanup = clearLocalDeviceData();
     discardHeldDrafts();
     resetSessionUi();
     resetLocalWorkspaceState();
     setLoggingOut(false);
     setPhase("login");
-    await localCleanup;
+    void localCleanup;
   }
 
   /**
@@ -3789,11 +3860,23 @@ export default function App() {
   useEffect(() => prefetchLazyDialogs(), []);
 
   /**
+   * An armed pill fires on its next click — but the arming morph puts the
+   * live confirm under the cursor at once, so a double-click (or a twitchy
+   * second click) would delete forever. A confirming click counts only as a
+   * fresh single click at least 450ms after arming; Enter or Space (detail
+   * 0) after that beat still confirms.
+   */
+  const emptyTrashArmedAtRef = useRef(0);
+  const batchDeleteArmedAtRef = useRef(0);
+  const confirmTooSoon = (armedAt: number, event?: { detail: number }) => (event?.detail ?? 0) > 1 || performance.now() - armedAt < 450;
+
+  /**
    * Arming/disarming Empty Trash swaps the pill's label (and width) — run it
    * through a view transition so the pill morphs instead of snapping. Blur
    * and view-switch disarms stay plain setState: they race other transitions.
    */
   const setEmptyTrashArm = useCallback((value: boolean) => {
+    if (value) emptyTrashArmedAtRef.current = performance.now();
     withViewTransition(() => flushSync(() => setConfirmEmptyTrash(value)));
   }, []);
   // A primed Empty Trash button disarms on its own if the second click
@@ -3811,6 +3894,7 @@ export default function App() {
 
   /** Batch-delete arming: same pill-morph language as Empty Trash. */
   const setBatchDeleteArm = useCallback((value: boolean) => {
+    if (value) batchDeleteArmedAtRef.current = performance.now();
     withViewTransition(() => flushSync(() => setConfirmBatchDelete(value)));
   }, []);
   useEffect(() => {
@@ -3879,12 +3963,13 @@ export default function App() {
     }
   }
 
-  async function handleRenameTagConfirmed(to: string) {
-    if (!renameTagTarget) return;
+  /** Resolves true once renamed: the dialog exits in its busy look, then onDone closes it. */
+  async function handleRenameTagConfirmed(to: string): Promise<boolean> {
+    if (!renameTagTarget) return false;
     const from = renameTagTarget;
     if (tagRenamePathsOverlap(from, to)) {
       showToast(tr("A tag cannot be renamed to its own parent or child path.", "标签不能重命名到自身的上级或下级路径"), "error");
-      return;
+      return false;
     }
     // Onto a path already in use the two tags merge, and their memos can no
     // longer be told apart — no Undo for that. A plain rename reverses exactly.
@@ -3892,8 +3977,7 @@ export default function App() {
     setDialogBusy(true);
     try {
       const result = await performTagRename(from, to, setRenameProgress);
-      if (!result) return;
-      setRenameTagTarget(null);
+      if (!result) return false;
       if (merges) {
         showToast(tr(`Merged #${from} into #${to} in ${count(result.updated, "memo")}`, `已将 #${from} 合并到 #${to}，更新了 ${count(result.updated, "memo")}`));
       } else {
@@ -3901,10 +3985,12 @@ export default function App() {
           action: { label: tr("Undo", "撤销"), run: () => void tagRenameUndoRef.current(from, to) }
         });
       }
+      return true;
     } catch (cause) {
       void runSync();
       notifyPeers();
       showToast(errorMessage(cause, "Couldn’t rename the tag.", "重命名标签失败"), "error");
+      return false;
     } finally {
       setDialogBusy(false);
       setRenameProgress(null);
@@ -4062,8 +4148,12 @@ export default function App() {
     setImportProgress((current) => (current ? { ...current, stopping: true } : current));
   }
 
-  async function handleImportConfirmed() {
-    if (!importTarget || importAbortRef.current) return;
+  /**
+   * Resolves true once the import is over (done, or stopped part-way): the
+   * dialog exits in its busy look, then onDone closes it.
+   */
+  async function handleImportConfirmed(): Promise<boolean> {
+    if (!importTarget || importAbortRef.current) return false;
     const { file } = importTarget;
     const controller = new AbortController();
     importAbortRef.current = controller;
@@ -4080,10 +4170,10 @@ export default function App() {
           }
         })
       );
-      if (!result) return;
-      setImportTarget(null);
+      if (!result) return false;
       // The imported rows carry fresh seqs, so one incremental sync pulls
-      // them in (and sibling tabs hear about it too).
+      // them in (and sibling tabs hear about it too) — the dialog leaves
+      // once they are in the feed behind it.
       await runSync();
       notifyPeers();
       if (result.imported > 0) {
@@ -4105,20 +4195,20 @@ export default function App() {
       } else {
         showToast(tr("Import complete — no new memos", "导入完成，没有新的笔记"));
       }
+      return true;
     } catch (cause) {
       // Earlier chunks are already committed; reconcile them and let a rerun
       // skip their stable ids.
       void runSync();
       notifyPeers();
       if (controller.signal.aborted) {
-        setImportTarget(null);
         showToast(
           tr(
             `Stopped the import after ${count(done, "memo")}. Import the file again to pick up where it left off.`,
             `已停止导入，已处理 ${count(done, "memo")}。再次导入同一文件即可从中断处继续`
           )
         );
-        return;
+        return true;
       }
       const reason = errorMessage(cause, "Couldn’t import the backup.", "导入备份失败");
       // A rerun resumes past the committed chunks, but only a transient
@@ -4131,6 +4221,7 @@ export default function App() {
       } else {
         showToast(reason, "error");
       }
+      return false;
     } finally {
       if (importAbortRef.current === controller) importAbortRef.current = null;
       setDialogBusy(false);
@@ -4138,8 +4229,18 @@ export default function App() {
     }
   }
 
+  // One stack for every phase, at one place in the tree: a toast raised at
+  // the gate ("session expired") survives the unlock without remounting and
+  // replaying its entrance (it is dismissed once the passcode is in).
+  const withToasts = (page: ReactNode) => (
+    <>
+      {page}
+      <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} regionLabel={tr("Notifications", "通知")} onDismiss={dismissToast} onPause={pauseToasts} onResume={resumeToasts} />
+    </>
+  );
+
   if (phase === "checking") {
-    return (
+    return withToasts(
       <div className="splash" aria-label={tr("Loading", "加载中")}>
         <div className="splash-logo">
           <NotebookPen size={26} aria-hidden="true" />
@@ -4150,7 +4251,7 @@ export default function App() {
   }
 
   if (phase === "error") {
-    return (
+    return withToasts(
       <section className="splash" role="alert" aria-label={tr("Startup failed", "启动失败") }>
         <div className="splash-logo">
           <NotebookPen size={26} aria-hidden="true" />
@@ -4164,12 +4265,7 @@ export default function App() {
   }
 
   if (phase === "login") {
-    return (
-      <>
-        <LoginScreen needsSetup={needsSetup} setupAllowed={setupAllowed} onLogin={handleLogin} onSetup={handleSetup} />
-        <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} regionLabel={tr("Notifications", "通知")} onDismiss={dismissToast} onPause={pauseToasts} onResume={resumeToasts} />
-      </>
-    );
+    return withToasts(<LoginScreen needsSetup={needsSetup} setupAllowed={setupAllowed} onLogin={handleLogin} onSetup={handleSetup} />);
   }
 
   const visibleSelectedCount = visibleSelected.size;
@@ -4190,12 +4286,13 @@ export default function App() {
   // from its toast, so an ordinary selection goes in one click; only a sweep
   // past BATCH_TRASH_CONFIRM_AT (a Select all over a big lens) still shows
   // the count first.
-  function handleBatchDeleteClick() {
+  function handleBatchDeleteClick(event?: { detail: number }) {
     if (batchBusy) return;
     if (!confirmBatchDelete && (selectingTrash || visibleSelectedCount > BATCH_TRASH_CONFIRM_AT)) {
       if (visibleSelectedCount > 0) setBatchDeleteArm(true);
       return;
     }
+    if (confirmBatchDelete && confirmTooSoon(batchDeleteArmedAtRef.current, event)) return;
     setConfirmBatchDelete(false);
     if (selectingTrash) void purgeMany(selectedMemos(true));
     else void trashMany(selectedMemos(false), true);
@@ -4219,7 +4316,7 @@ export default function App() {
     ? tr(`Working… ${formatNumber(batchProgress.done)}/${formatNumber(batchProgress.total)}`, `处理中… ${formatNumber(batchProgress.done)}/${formatNumber(batchProgress.total)}`)
     : tr("Working…", "处理中…");
 
-  return (
+  return withToasts(
     <div className={`app-shell${reveal ? " first-reveal" : ""}`}>
       {/* Keyboard users skip the sidebar (stats, heatmap, the whole tag
           tree) and land at the top of the feed column: location, search,
@@ -4504,11 +4601,12 @@ export default function App() {
                     ? tr(`Delete ${count(trashedMemos.length, "memo")} forever?`, `彻底删除 ${count(trashedMemos.length, "memo")}？`)
                     : tr("Empty Trash", "清空回收站")
                 }
-                onClick={() => {
+                onClick={(event) => {
                   if (!confirmEmptyTrash) {
                     setEmptyTrashArm(true);
                     return;
                   }
+                  if (confirmTooSoon(emptyTrashArmedAtRef.current, event)) return;
                   void handleEmptyTrash();
                 }}
                 onBlur={() => {
@@ -4826,49 +4924,58 @@ export default function App() {
           ) : null}
         </div>
 
-        {bootstrapLoad ? (
-          // A cold start shows its first page at once; this line counts the
-          // rest in, and says so plainly if a page keeps failing (the next
-          // attempt resumes where loading stopped). Not a live region: the
-          // count ticks per page, so only a failure is spoken (see above).
-          <div className="sync-notice">
-            {bootstrapLoad.failed ? <CloudOff size={14} aria-hidden="true" /> : <Loader2 size={14} className="spin" aria-hidden="true" />}
-            <span className="sync-notice-text">
-              {bootstrapLoad.total === null
-                ? bootstrapLoad.failed
-                  ? tr(`Couldn’t load the rest of your memos · ${formatNumber(loadedMemoCount)} loaded`, `其余笔记载入失败 · 已载入 ${formatNumber(loadedMemoCount)} 条`)
-                  : tr(`Loading memos · ${formatNumber(loadedMemoCount)} loaded`, `正在载入笔记 · 已载入 ${formatNumber(loadedMemoCount)} 条`)
-                : bootstrapLoad.failed
-                  ? tr(
-                      `Couldn’t load the rest of your memos · ${formatNumber(loadedMemoCount)} of ${formatNumber(bootstrapLoad.total)} loaded`,
-                      `其余笔记载入失败 · 已载入 ${formatNumber(loadedMemoCount)} / ${formatNumber(bootstrapLoad.total)}`
-                    )
-                  : tr(
-                      `Loading memos · ${formatNumber(loadedMemoCount)} of ${formatNumber(bootstrapLoad.total)}`,
-                      `正在载入笔记 · ${formatNumber(loadedMemoCount)} / ${formatNumber(bootstrapLoad.total)}`
-                    )}
-            </span>
-            {bootstrapLoad.failed ? (
-              <button type="button" className="sync-notice-retry" onClick={retryBootstrap}>
-                {tr("Retry", "重试")}
-              </button>
-            ) : null}
-          </div>
-        ) : syncNotice ? (
-          // Offline, or pulls failing while online. Until it clears, the feed
-          // is the last good sync — which is still the whole notebook. Not a
-          // live region itself: it mounts with its text, so the standing
-          // regions speak it (see syncNotice).
-          <div className="sync-notice">
-            {syncStatus.online ? <CloudOff size={14} aria-hidden="true" /> : <WifiOff size={14} aria-hidden="true" />}
-            <span className="sync-notice-text">{syncNotice}</span>
-            {syncStatus.online ? (
-              <button type="button" className="sync-notice-retry" onClick={retrySync}>
-                {tr("Retry", "重试")}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+        <SyncNotice
+          notice={
+            bootstrapLoad
+              ? // A cold start shows its first page at once; this line counts
+                // the rest in, and says so plainly if a page keeps failing
+                // (the next attempt resumes where loading stopped). Not a
+                // live region: the count ticks per page, so only a failure
+                // is spoken (see above).
+                bootstrapLoad.failed
+                ? {
+                    kind: "load-failed",
+                    text:
+                      bootstrapLoad.total === null
+                        ? tr(`Couldn’t load the rest of your memos · ${formatNumber(loadedMemoCount)} loaded`, `其余笔记载入失败 · 已载入 ${formatNumber(loadedMemoCount)} 条`)
+                        : tr(
+                            `Couldn’t load the rest of your memos · ${formatNumber(loadedMemoCount)} of ${formatNumber(bootstrapLoad.total)} loaded`,
+                            `其余笔记载入失败 · 已载入 ${formatNumber(loadedMemoCount)} / ${formatNumber(bootstrapLoad.total)}`
+                          ),
+                    failedText:
+                      bootstrapLoad.total === null
+                        ? tr(`Still couldn’t load the rest of your memos · ${formatNumber(loadedMemoCount)} loaded`, `其余笔记仍未载入 · 已载入 ${formatNumber(loadedMemoCount)} 条`)
+                        : tr(
+                            `Still couldn’t load the rest of your memos · ${formatNumber(loadedMemoCount)} of ${formatNumber(bootstrapLoad.total)} loaded`,
+                            `其余笔记仍未载入 · 已载入 ${formatNumber(loadedMemoCount)} / ${formatNumber(bootstrapLoad.total)}`
+                          ),
+                    onRetry: retryBootstrap
+                  }
+                : {
+                    kind: "loading",
+                    text:
+                      bootstrapLoad.total === null
+                        ? tr(`Loading memos · ${formatNumber(loadedMemoCount)} loaded`, `正在载入笔记 · 已载入 ${formatNumber(loadedMemoCount)} 条`)
+                        : tr(
+                            `Loading memos · ${formatNumber(loadedMemoCount)} of ${formatNumber(bootstrapLoad.total)}`,
+                            `正在载入笔记 · ${formatNumber(loadedMemoCount)} / ${formatNumber(bootstrapLoad.total)}`
+                          )
+                  }
+              : syncNotice
+                ? // Offline, or pulls failing while online. Until it clears,
+                  // the feed is the last good sync — which is still the
+                  // whole notebook (see syncNotice).
+                  syncStatus.online
+                  ? {
+                      kind: "unreachable",
+                      text: syncNotice,
+                      failedText: tr("Still can’t reach the server · showing your last synced memos", "仍无法连接服务器 · 显示上次同步的笔记"),
+                      onRetry: retrySync
+                    }
+                  : { kind: "offline", text: syncNotice }
+                : null
+          }
+        />
 
         {/* data-searching: on phones an empty composer folds away while a
             search is up, so results start under the search box (app.css). */}
@@ -5113,7 +5220,8 @@ export default function App() {
           onCancel={() => {
             if (!dialogBusy) setImportTarget(null);
           }}
-          onConfirm={() => void handleImportConfirmed()}
+          onConfirm={handleImportConfirmed}
+          onDone={() => setImportTarget(null)}
         />
       ) : null}
       {renameTagTarget ? (
@@ -5131,6 +5239,7 @@ export default function App() {
               ? tr("Renaming…", "重命名中…")
               : tr(`Renaming… ${formatNumber(Math.floor(renameProgress * 100))}%`, `重命名中… ${formatNumber(Math.floor(renameProgress * 100))}%`)
           }
+          busyReserve={tr(`Renaming… ${formatNumber(100)}%`, `重命名中… ${formatNumber(100)}%`)}
           busy={dialogBusy}
           validate={(value) => {
             if (value === renameTagTarget) return tr("The new name is unchanged", "新旧名称相同");
@@ -5149,14 +5258,16 @@ export default function App() {
                   busyLabel:
                     renameProgress === null
                       ? tr("Merging…", "合并中…")
-                      : tr(`Merging… ${formatNumber(Math.floor(renameProgress * 100))}%`, `合并中… ${formatNumber(Math.floor(renameProgress * 100))}%`)
+                      : tr(`Merging… ${formatNumber(Math.floor(renameProgress * 100))}%`, `合并中… ${formatNumber(Math.floor(renameProgress * 100))}%`),
+                  busyReserve: tr(`Merging… ${formatNumber(100)}%`, `合并中… ${formatNumber(100)}%`)
                 }
               : null
           }
           onCancel={() => {
             if (!dialogBusy) setRenameTagTarget(null);
           }}
-          onConfirm={(value) => void handleRenameTagConfirmed(value)}
+          onConfirm={handleRenameTagConfirmed}
+          onDone={() => setRenameTagTarget(null)}
         />
       ) : null}
       {savingFilter ? (
@@ -5183,6 +5294,7 @@ export default function App() {
           }
           onCancel={() => setSavingFilter(false)}
           onConfirm={handleSaveFilterConfirmed}
+          onDone={() => setSavingFilter(false)}
         />
       ) : null}
       {changingPasscode ? (
@@ -5208,10 +5320,10 @@ export default function App() {
           onCancel={() => {
             if (!loggingOut) setConfirmLogout(false);
           }}
-          onConfirm={() => void handleLogout()}
+          onConfirm={handleLogout}
+          onDone={finishLogout}
         />
       ) : null}
-      <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} regionLabel={tr("Notifications", "通知")} onDismiss={dismissToast} onPause={pauseToasts} onResume={resumeToasts} />
     </div>
   );
 }

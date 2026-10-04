@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { dateFormat, dateKey, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
@@ -360,6 +361,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown }: Stat
   }
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
+  const backdrop = useBackdropDismiss(requestClose);
 
   useEffect(() => {
     return () => window.clearTimeout(closeTimer.current);
@@ -469,7 +471,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown }: Stat
       aria-modal="true"
       aria-label={tr("Detailed statistics", "详细统计")}
       tabIndex={-1}
-      onClick={requestClose}
+      {...backdrop}
     >
       <div className="stats-modal" onClick={(event) => event.stopPropagation()}>
         <header className="stats-head">

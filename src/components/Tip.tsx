@@ -26,6 +26,14 @@ interface TipState extends TipContent {
   below: boolean;
 }
 
+export interface TipOptions {
+  /**
+   * The first-show delay for this anchor, in ms. Tips that are read while
+   * scanning (a heat grid) can ask for less than the default hover intent.
+   */
+  delay?: number;
+}
+
 export interface TipBinding {
   onPointerEnter: (event: PointerEvent<HTMLElement>) => void;
   onPointerLeave: () => void;
@@ -34,7 +42,7 @@ export interface TipBinding {
 }
 
 interface TipApi {
-  show: (anchor: Element, tip: TipContent) => void;
+  show: (anchor: Element, tip: TipContent, options?: TipOptions) => void;
   hide: () => void;
   /**
    * Spread onto an anchor: the tip shows for a hovering mouse or pen and for
@@ -44,7 +52,7 @@ interface TipApi {
    * anything it says beyond the anchor's name must also reach the anchor's
    * accessible name, description or aria-keyshortcuts.
    */
-  bind: (content: TipContent | (() => TipContent | null)) => TipBinding;
+  bind: (content: TipContent | (() => TipContent | null), options?: TipOptions) => TipBinding;
 }
 
 /** A tip binding whose onFocus also runs the anchor's own focus handler. */
@@ -74,15 +82,19 @@ export function useTip(): TipApi {
   return api;
 }
 
-const SHOW_DELAY = 90;
+/** Hover intent: a cursor merely crossing the topbar shows nothing. */
+const SHOW_DELAY = 400;
+/** A tip asked for this soon after the last one hid shows at once. */
+const SKIP_DELAY_WINDOW = 400;
 const HIDE_GRACE = 80;
 
 /**
  * One floating tooltip for the whole app, portaled to <body> so it can never
  * hide under sibling cells, cards or modals (the old data-tip pseudo-element
- * could). Hover-intent timing: a short delay before the first show, a grace
- * period on leave — so sweeping across a heat grid makes the bubble glide
- * from cell to cell instead of flickering.
+ * could). Hover-intent timing: a deliberate pause before the first show, a
+ * grace period on leave — so sweeping across a heat grid makes the bubble
+ * glide from cell to cell instead of flickering — and skip-delay grouping:
+ * once one tip has been read, the next one within a beat needs no pause.
  */
 export function TipProvider({ children }: { children: ReactNode }) {
   const [tip, setTip] = useState<TipState | null>(null);
@@ -95,6 +107,15 @@ export function TipProvider({ children }: { children: ReactNode }) {
   const hideTimer = useRef(0);
   const visibleRef = useRef(false);
   visibleRef.current = visible;
+  const lastHiddenAtRef = useRef(Number.NEGATIVE_INFINITY);
+
+  useEffect(() => {
+    // Only a hide counts (not the initial hidden state): it opens the
+    // skip-delay window for the next anchor.
+    return () => {
+      if (visible) lastHiddenAtRef.current = performance.now();
+    };
+  }, [visible]);
 
   const place = useCallback((anchor: Element, content: TipContent): TipState => {
     const rect = anchor.getBoundingClientRect();
@@ -103,7 +124,7 @@ export function TipProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const show = useCallback(
-    (anchor: Element, content: TipContent) => {
+    (anchor: Element, content: TipContent, options?: TipOptions) => {
       window.clearTimeout(hideTimer.current);
       if (visibleRef.current) {
         window.clearTimeout(showTimer.current);
@@ -112,11 +133,15 @@ export function TipProvider({ children }: { children: ReactNode }) {
         return;
       }
       window.clearTimeout(showTimer.current);
-      showTimer.current = window.setTimeout(() => {
+      const reveal = () => {
         setSnap(true);
         setTip(place(anchor, content));
         setVisible(true);
-      }, SHOW_DELAY);
+      };
+      const grouped = performance.now() - lastHiddenAtRef.current < SKIP_DELAY_WINDOW;
+      const delay = grouped ? 0 : options?.delay ?? SHOW_DELAY;
+      if (delay <= 0) reveal();
+      else showTimer.current = window.setTimeout(reveal, delay);
     },
     [place]
   );
@@ -172,11 +197,11 @@ export function TipProvider({ children }: { children: ReactNode }) {
   }, [tip]);
 
   const bind = useCallback(
-    (content: TipContent | (() => TipContent | null)): TipBinding => {
+    (content: TipContent | (() => TipContent | null), options?: TipOptions): TipBinding => {
       // A function may return null: nothing to say in the current state.
       const showFor = (anchor: HTMLElement) => {
         const value = typeof content === "function" ? content() : content;
-        if (value) show(anchor, value);
+        if (value) show(anchor, value, options);
       };
       return {
         onPointerEnter: (event) => {

@@ -1,5 +1,6 @@
 import { ChevronDown, Download, FileDown, HardDrive, RefreshCw, Trash2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import {
@@ -268,6 +269,7 @@ export function ModelSettingsModal({
   }, [closing, reducedMotion]);
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
+  const backdrop = useBackdropDismiss(requestClose);
 
   async function handleImport(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
@@ -826,7 +828,7 @@ export function ModelSettingsModal({
       aria-modal="true"
       aria-label={tr("Semantic Search", "语义搜索")}
       tabIndex={-1}
-      onClick={requestClose}
+      {...backdrop}
     >
       <div className="model-panel" onClick={(event) => event.stopPropagation()}>
         <header className="model-panel-head">

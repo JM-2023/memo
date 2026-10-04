@@ -51,6 +51,8 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
   const triggerTimerRef = useRef(0);
   const coordinationFallbackRef = useRef(0);
   const failureCountRef = useRef(0);
+  // A reader's Retry waits on the next pull's outcome.
+  const outcomeWaitersRef = useRef<Array<(ok: boolean) => void>>([]);
 
   const applyRef = useRef(applyChanges);
   applyRef.current = applyChanges;
@@ -74,6 +76,13 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
   const cancelRetry = useCallback(() => {
     window.clearTimeout(retryTimerRef.current);
     retryTimerRef.current = 0;
+  }, []);
+
+  const settleOutcome = useCallback((ok: boolean) => {
+    const waiters = outcomeWaitersRef.current;
+    if (waiters.length === 0) return;
+    outcomeWaitersRef.current = [];
+    for (const waiter of waiters) waiter(ok);
   }, []);
 
   const runSyncRef = useRef<() => Promise<void>>(async () => undefined);
@@ -136,6 +145,7 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
           failureCountRef.current = 0;
           cancelRetry();
           setStatus((current) => (current.degraded ? { ...current, degraded: false } : current));
+          settleOutcome(true);
           if (data.hasMore) {
             // A paginated endpoint must make progress or it would hot-loop.
             if (nextCursor <= requestedCursor) throw new Error("Sync page did not advance its cursor");
@@ -151,10 +161,12 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
             } catch {
               // The current tab still locks immediately below.
             }
+            settleOutcome(false);
             authLostRef.current(revoked);
             return;
           }
           scheduleRetry();
+          settleOutcome(false);
           return;
         } finally {
           window.clearTimeout(timeout);
@@ -164,7 +176,7 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
     } finally {
       busyRef.current = false;
     }
-  }, [cancelRetry, scheduleRetry]);
+  }, [cancelRetry, scheduleRetry, settleOutcome]);
 
   const runSync = useCallback(async () => {
     if (!enabledRef.current) return;
@@ -309,14 +321,31 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
       abortRef.current = null;
       channelRef.current = null;
       channel?.close();
+      settleOutcome(false);
     };
-  }, [enabled, scheduleSync, cancelRetry]);
+  }, [enabled, scheduleSync, cancelRetry, settleOutcome]);
 
-  /** The reader's own "try again": restarts the backoff from zero. */
-  const retryNow = useCallback(() => {
+  /**
+   * The reader's own "try again": restarts the backoff from zero. Resolves
+   * whether the pull it starts got through, so the notice can say so.
+   */
+  const retryNow = useCallback((): Promise<boolean> => {
     failureCountRef.current = 0;
     cancelRetry();
+    if (!enabledRef.current) return Promise.resolve(false);
+    const outcome = new Promise<boolean>((resolve) => {
+      // Another tab may hold the network lock and answer for this one; give
+      // up waiting after a request's worth of time.
+      const timer = window.setTimeout(() => finish(false), REQUEST_TIMEOUT_MS + 5_000);
+      function finish(ok: boolean) {
+        window.clearTimeout(timer);
+        outcomeWaitersRef.current = outcomeWaitersRef.current.filter((waiter) => waiter !== finish);
+        resolve(ok);
+      }
+      outcomeWaitersRef.current.push(finish);
+    });
     scheduleSync(0);
+    return outcome;
   }, [cancelRetry, scheduleSync]);
 
   return { setCursor, setSyncEpoch, runSync, notifyPeers, notifyLogout, status, retryNow };

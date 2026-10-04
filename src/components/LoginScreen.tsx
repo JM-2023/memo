@@ -70,7 +70,10 @@ export function LoginScreen({ needsSetup, setupAllowed = true, onLogin, onSetup 
   }
 
   const title = needsSetup ? (step === "enter" ? tr("Create an access passcode", "创建访问密码") : tr("Enter it again to confirm", "再次输入确认")) : "MEMO";
+  // While the passcode is checked and the first page loads, say so.
+  const busyLine = busy ? (needsSetup ? tr("Saving your passcode…", "正在保存密码…") : tr("Unlocking…", "正在解锁…")) : null;
   const subtitle =
+    busyLine ??
     subtitleOverride ??
     (needsSetup
       ? step === "enter"
@@ -122,6 +125,7 @@ export function LoginScreen({ needsSetup, setupAllowed = true, onLogin, onSetup 
         error={error}
         busy={busy}
         entryKey={entryKey}
+        step={needsSetup && step === "confirm" ? 1 : 0}
         onInput={() => {
           setError(false);
           setSubtitleOverride(null);

@@ -1,5 +1,6 @@
 import { Minus, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
@@ -121,6 +122,7 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
   }
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
+  const backdrop = useBackdropDismiss(requestClose);
 
   useEffect(() => {
     return () => window.clearTimeout(dismissTimer.current);
@@ -225,7 +227,7 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
       aria-modal="true"
       aria-label={tr("Daily Review Settings", "每日回顾设置")}
       tabIndex={-1}
-      onClick={requestClose}
+      {...backdrop}
     >
       <div className="review-modal" onClick={(event) => event.stopPropagation()}>
         <header className="review-head">

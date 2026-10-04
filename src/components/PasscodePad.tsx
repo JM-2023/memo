@@ -1,5 +1,6 @@
 import { Check, Delete } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
 
 const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "delete", "0", "submit"] as const;
@@ -7,6 +8,12 @@ type PadKey = (typeof keys)[number] | "clear";
 
 export const MIN_PIN_LENGTH = 4;
 export const MAX_PIN_LENGTH = 18;
+
+/** A refused entry's dots stay up, red, through the shake before they go. */
+const ERROR_HOLD_MS = 320;
+const ERROR_FADE_MS = 120;
+/** A hardware key's echo on its on-screen twin. */
+const KEY_ECHO_MS = 120;
 
 interface PasscodePadProps {
   icon: ReactNode;
@@ -16,6 +23,8 @@ interface PasscodePadProps {
   busy?: boolean;
   /** Bump to clear the current entry (step change or failed attempt). */
   entryKey?: number;
+  /** Ordinal of a multi-step flow (current → new → confirm); a change slides the title in. */
+  step?: number;
   /** Fires on every accepted key press, so the owner can clear its error state. */
   onInput?: () => void;
   onComplete: (pin: string) => void;
@@ -55,19 +64,33 @@ export function PasscodePad({
   error,
   busy,
   entryKey = 0,
+  step = 0,
   onInput,
   onComplete,
   autoComplete = "current-password",
   rootRef
 }: PasscodePadProps) {
   const { tr } = useI18n();
+  const reducedMotion = useReducedMotion();
   const [value, setValue] = useState("");
+  // A refused entry's dots: "hold" while the card shakes, then "fade".
+  const [dotsExit, setDotsExit] = useState<"hold" | "fade" | null>(null);
+  const [echoKey, setEchoKey] = useState<string | null>(null);
+  const [shownStep, setShownStep] = useState(step);
+  const [stepDir, setStepDir] = useState(0);
+  if (shownStep !== step) {
+    setShownStep(step);
+    setStepDir(step > shownStep ? 1 : -1);
+  }
   const fieldRef = useRef<HTMLInputElement>(null);
   const valueRef = useRef(value);
   const busyRef = useRef(Boolean(busy));
   const completingRef = useRef(false);
   const onInputRef = useRef(onInput);
   const onCompleteRef = useRef(onComplete);
+  const exitTimerRef = useRef(0);
+  const echoTimerRef = useRef(0);
+  const firstEntryRef = useRef(true);
 
   useEffect(() => {
     busyRef.current = Boolean(busy);
@@ -75,11 +98,56 @@ export function PasscodePad({
     onCompleteRef.current = onComplete;
   });
 
-  useEffect(() => {
+  /** Drops the held (refused) entry at once — the next key starts afresh. */
+  function dropHeldEntry() {
+    if (!exitTimerRef.current) return;
+    window.clearTimeout(exitTimerRef.current);
+    exitTimerRef.current = 0;
     valueRef.current = "";
-    completingRef.current = false;
     setValue("");
+    setDotsExit(null);
+  }
+
+  useEffect(() => {
+    window.clearTimeout(exitTimerRef.current);
+    exitTimerRef.current = 0;
+    completingRef.current = false;
+    const refused = Boolean(error) && !firstEntryRef.current;
+    firstEntryRef.current = false;
+    if (refused) {
+      try {
+        navigator.vibrate?.([12, 40, 12]);
+      } catch {
+        // Haptics are a courtesy.
+      }
+    }
+    const clear = () => {
+      exitTimerRef.current = 0;
+      valueRef.current = "";
+      setValue("");
+      setDotsExit(null);
+    };
+    // A refused entry stays on screen in red while the card shakes, so the
+    // reader sees what was rejected; a step change simply starts afresh.
+    if (!refused || reducedMotion || !valueRef.current) {
+      clear();
+      return;
+    }
+    setDotsExit("hold");
+    exitTimerRef.current = window.setTimeout(() => {
+      setDotsExit("fade");
+      exitTimerRef.current = window.setTimeout(clear, ERROR_FADE_MS);
+    }, ERROR_HOLD_MS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs per entry
   }, [entryKey]);
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(exitTimerRef.current);
+      window.clearTimeout(echoTimerRef.current);
+    },
+    []
+  );
 
   useEffect(() => {
     if (!busy) completingRef.current = false;
@@ -90,8 +158,17 @@ export function PasscodePad({
     setValue(next);
   }
 
+  /** Flash the on-screen key a hardware key stands for. */
+  function echo(key: PadKey) {
+    if (busyRef.current) return;
+    window.clearTimeout(echoTimerRef.current);
+    setEchoKey(key);
+    echoTimerRef.current = window.setTimeout(() => setEchoKey(null), KEY_ECHO_MS);
+  }
+
   function press(key: PadKey) {
     if (busyRef.current) return;
+    dropHeldEntry();
     if (key === "submit") {
       if (valueRef.current.length < MIN_PIN_LENGTH || completingRef.current) return;
       completingRef.current = true;
@@ -116,9 +193,19 @@ export function PasscodePad({
   /** Autofill, paste or typing into the field: its digits become the entry. */
   function fill(text: string) {
     if (busyRef.current) return;
+    let next = text.replace(/\D/g, "");
+    if (exitTimerRef.current) {
+      // The field still mirrors the refused entry: a key typed after it
+      // starts a new one, a deletion just clears it, and anything else
+      // (autofill, paste) replaces it whole.
+      const held = valueRef.current;
+      dropHeldEntry();
+      if (next.startsWith(held)) next = next.slice(held.length);
+      else if (held.startsWith(next)) next = "";
+    }
     completingRef.current = false;
     onInputRef.current?.();
-    update(text.replace(/\D/g, "").slice(0, MAX_PIN_LENGTH));
+    update(next.slice(0, MAX_PIN_LENGTH));
   }
 
   const pressRef = useRef(press);
@@ -150,7 +237,10 @@ export function PasscodePad({
       // Typing into the focused field edits its value natively; onChange
       // mirrors that into the entry, so the shortcut must not add it twice.
       const inField = event.target === fieldRef.current;
-      if (inField && ((event.key >= "0" && event.key <= "9") || event.key === "Backspace")) return;
+      const digit = event.key.length === 1 && event.key >= "0" && event.key <= "9";
+      if (digit) echo(event.key as PadKey);
+      else if (event.key === "Backspace") echo("delete");
+      if (inField && (digit || event.key === "Backspace")) return;
       if (event.key >= "0" && event.key <= "9") {
         pressRef.current(event.key as PadKey);
       } else if (event.key === "Backspace") {
@@ -172,13 +262,23 @@ export function PasscodePad({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Keyed by step: a step change slides its words in (forward or back); an
+  // error or busy line swaps in place.
+  const stepClass = stepDir > 0 ? "pin-step dir-fwd" : stepDir < 0 ? "pin-step dir-back" : "pin-step";
+
   return (
     <section ref={rootRef} className={`pin-pad${error ? " shake" : ""}`} aria-label={title} aria-busy={busy || undefined} tabIndex={-1}>
       <div className="pin-brand">
         <div className="pin-logo">{icon}</div>
-        <h1>{title}</h1>
+        <h1>
+          <span key={step} className={stepClass}>
+            {title}
+          </span>
+        </h1>
         <p role={error ? "alert" : "status"} aria-live={error ? "assertive" : "polite"} aria-atomic="true">
-          {subtitle}
+          <span key={step} className={stepClass}>
+            {subtitle}
+          </span>
         </p>
       </div>
 
@@ -207,7 +307,7 @@ export function PasscodePad({
           readOnly={busy}
           onChange={(event) => fill(event.target.value)}
         />
-        <div className={`pin-dots${error ? " error" : ""}`} aria-hidden="true">
+        <div className={`pin-dots${error ? " error" : ""}${dotsExit === "fade" ? " is-clearing" : ""}`} aria-hidden="true">
           {Array.from({ length: value.length }).map((_, index) => (
             <span key={index} />
           ))}
@@ -221,7 +321,7 @@ export function PasscodePad({
               <button
                 key={key}
                 type="button"
-                className="keypad-action"
+                className={`keypad-action${echoKey === key ? " is-pressed" : ""}`}
                 onClick={() => press(key)}
                 disabled={busy || !value}
                 aria-label={tr("Delete", "删除")}
@@ -245,7 +345,7 @@ export function PasscodePad({
             );
           }
           return (
-            <button key={key} type="button" onClick={() => press(key)} disabled={busy} aria-label={key}>
+            <button key={key} type="button" className={echoKey === key ? "is-pressed" : undefined} onClick={() => press(key)} disabled={busy} aria-label={key}>
               {key}
             </button>
           );
