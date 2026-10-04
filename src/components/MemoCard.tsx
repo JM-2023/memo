@@ -1,7 +1,7 @@
 import { Check, Copy, ImageOff, Link2, ListChecks, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Share, Tags, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { externalImagesOf } from "../lib/content";
-import { formatCardTime } from "../lib/dates";
+import { formatTime } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { mediaGridProps } from "../lib/imageLayout";
 import { visualLinesOf } from "../lib/lineDiff";
@@ -255,7 +255,7 @@ function MemoMenuBody({ memo, close, inTrash, pinned, busy, onTogglePin, onStart
                 send time). */}
             {memo.updatedAt !== memo.createdAt ? (
               <time dateTime={memo.updatedAt}>
-                {tr("Edited", "编辑于")} {formatCardTime(memo.updatedAt, locale)}
+                {tr("Edited", "编辑于")} {formatTime(memo.updatedAt, locale)}
               </time>
             ) : null}
           </div>
@@ -394,7 +394,7 @@ export function MemoCard(props: MemoCardProps) {
 
   // In Trash the stamp is the deletion time, and the state is said in words
   // and weight ("Deleted" at 600) rather than in alarm red.
-  const stamp = formatCardTime(inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt, locale);
+  const stamp = formatTime(inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt, locale);
   const timeLabel = inTrash ? (
     <>
       <span className="memo-time-state">{tr("Deleted", "删除于")}</span> {stamp}

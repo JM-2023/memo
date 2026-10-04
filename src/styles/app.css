@@ -2610,29 +2610,10 @@ button.crumb:active { background: var(--wash-strong); }
 
 .icon-button.is-active-tool { background: var(--primary-tint); color: var(--primary-dark); }
 
-/* A size container, so the ⌘↩ keycap can leave a bar too narrow for it. */
+/* A size container, so the preparing note can leave a bar too narrow for it. */
 .editor-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; container: editor-bar / inline-size; }
 .editor-tools { display: flex; align-items: center; gap: 2px; }
 .editor-actions { display: flex; align-items: center; gap: 8px; }
-/* The send shortcut as a faint keycap beside Send, once there is text. Only
-   for a mouse and keyboard, and only where the bar has room for it beside
-   the six tools, Cancel and Save (480px clears both at the 901px layout). */
-.send-hint {
-  display: none;
-  padding: 1px 5px;
-  color: var(--muted);
-  font-family: inherit;
-  font-size: var(--fs-2xs);
-  font-weight: 500;
-  line-height: 1.4;
-  white-space: nowrap;
-  border: 1px solid var(--line);
-  border-radius: var(--r-xs);
-  animation: fade-in var(--t) var(--ease) both;
-}
-@media (pointer: fine) {
-  @container editor-bar (min-width: 480px) { .send-hint { display: inline-block; } }
-}
 /* The preparing note leaves first where it would push Send off the bar
    (the chip's sending state and a spoken status still say it). */
 @container editor-bar (max-width: 459px) { .editor-status { display: none; } }

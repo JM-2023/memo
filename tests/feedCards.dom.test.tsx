@@ -12,7 +12,7 @@ import { MemoCard } from "../src/components/MemoCard";
 import { mightFold } from "../src/components/MemoFold";
 import { Menu } from "../src/components/Menu";
 import { TagTree } from "../src/components/TagTree";
-import { formatCardTime } from "../src/lib/dates";
+import { formatTime } from "../src/lib/dates";
 import { LanguageProvider } from "../src/lib/i18n";
 import type { TagNode } from "../src/lib/tags";
 import type { Memo } from "../src/lib/types";
@@ -251,7 +251,7 @@ describe("memo card menu", () => {
   it("names each ⋯ by its memo and wires popup state to the panel", async () => {
     const user = userEvent.setup();
     renderCard();
-    const trigger = screen.getByRole("button", { name: `Memo actions, ${formatCardTime(baseMemo.createdAt, "en-US")}` });
+    const trigger = screen.getByRole("button", { name: `Memo actions, ${formatTime(baseMemo.createdAt, "en-US")}` });
     expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
 
@@ -327,7 +327,7 @@ describe("trash card", () => {
   it("offers Restore on the card and states the deletion in words", async () => {
     const user = userEvent.setup();
     const { props, container } = renderCard({ memo: trashed, variant: "trash" });
-    const stamp = formatCardTime(trashed.deletedAt!, "en-US");
+    const stamp = formatTime(trashed.deletedAt!, "en-US");
     expect(container.querySelector(".memo-time")?.textContent).toBe(`Deleted ${stamp}`);
     await user.click(screen.getByRole("button", { name: `Restore memo deleted ${stamp}` }));
     expect(props.onRestore).toHaveBeenCalledTimes(1);

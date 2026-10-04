@@ -377,16 +377,6 @@ describe("Editor send", () => {
     expect(onSubmit).not.toHaveBeenCalled();
     expect(area.value).toBe("with a photo");
   });
-
-  it("shows the send keycap once there is text", async () => {
-    const user = userEvent.setup();
-    const { area } = renderCreate();
-    expect(document.querySelector(".send-hint")).toBeNull();
-    await user.type(area, "x");
-    const hint = document.querySelector(".send-hint");
-    expect(hint?.textContent).toMatch(/↩$/);
-    expect(hint?.getAttribute("aria-hidden")).toBe("true");
-  });
 });
 
 describe("Editor edit state", () => {

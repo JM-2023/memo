@@ -55,8 +55,6 @@ export interface EditDraft {
 const APPLE_KEYS = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 const MOD = APPLE_KEYS ? "⌘" : "Ctrl+";
 const ENTER = APPLE_KEYS ? "↩" : "Enter";
-/** The keycap beside Send once there is something to send. */
-const SEND_KEYS = APPLE_KEYS ? "⌘↩" : "Ctrl ↩";
 /** A fast send never shows the spinner: the Send glyph holds this long first. */
 const SPINNER_DELAY_MS = 150;
 
@@ -1230,9 +1228,6 @@ export function Editor({
   }
   const veil = veilRef.current;
   const showCounter = effectiveContentLength >= COUNTER_FROM;
-  // The ⌘↩ keycap: once there is text to send, and never beside the counter
-  // or the preparing note (the bar has no room for all three).
-  const showKeyHint = submittedContent.length > 0 && !showCounter && !sendQueued;
 
   return (
     <div
@@ -1573,13 +1568,6 @@ export function Editor({
             <button type="button" className="ghost-button" onClick={cancel} disabled={locked}>
               {tr("Cancel", "取消")}
             </button>
-          ) : null}
-          {/* The shortcut, said where the eye already is; the button's own
-              aria-keyshortcuts carries it for assistive tech. */}
-          {showKeyHint ? (
-            <kbd className="send-hint" aria-hidden="true">
-              {SEND_KEYS}
-            </kbd>
           ) : null}
           <button
             type="button"

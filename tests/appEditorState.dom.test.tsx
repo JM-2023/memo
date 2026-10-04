@@ -8,7 +8,7 @@ import App from "../src/App";
 import { Editor } from "../src/components/Editor";
 import { TipProvider } from "../src/components/Tip";
 import { ApiError } from "../src/lib/api";
-import { formatCardTime } from "../src/lib/dates";
+import { formatTime } from "../src/lib/dates";
 import { LanguageProvider } from "../src/lib/i18n";
 import type { Memo, MemoImage, NewImagePayload } from "../src/lib/types";
 
@@ -531,14 +531,14 @@ describe("Memo menu metadata", () => {
     const content = await screen.findByText(/hello world/);
     const card = content.closest("article");
     if (!card) throw new Error("Memo card was not rendered");
-    expect(within(card).getByText(formatCardTime(createdAt, "en-US"))).not.toBeNull();
+    expect(within(card).getByText(formatTime(createdAt, "en-US"))).not.toBeNull();
 
     await user.click(within(card).getByRole("button", { name: /^Memo actions/ }));
     const menu = screen.getByRole("menu");
     expect(within(menu).getByText("10 characters")).not.toBeNull();
-    const edited = within(menu).getByText(`Edited ${formatCardTime(updatedAt, "en-US")}`);
+    const edited = within(menu).getByText(`Edited ${formatTime(updatedAt, "en-US")}`);
     expect(edited.getAttribute("datetime")).toBe(updatedAt);
-    expect(within(card).getByText(formatCardTime(createdAt, "en-US"))).not.toBeNull();
+    expect(within(card).getByText(formatTime(createdAt, "en-US"))).not.toBeNull();
   });
 
   it("shows the word count but no edited time for a memo that was never edited", async () => {
