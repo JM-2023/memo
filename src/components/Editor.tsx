@@ -688,20 +688,26 @@ export function Editor({
   }
 
   /**
-   * Swap the whole `#token` under the caret for the picked tag — through its
-   * end, not just up to the caret, so `#wo|rk` becomes `#work`, never
-   * `#work rk`. A space follows unless the text already goes on with one
-   * (or with punctuation or a line break); the caret lands after it.
+   * Swap the `#token` under the caret for the picked tag. The run after the
+   * caret joins the swap only while the whole token still spells part of the
+   * tag, so `#wo|rk` becomes `#work`, never `#work rk`. Any other run is the
+   * writer's own text — in Chinese prose, the rest of the sentence, since
+   * nothing there ends a tag — and stays put behind the inserted tag. A space
+   * follows unless the text already goes on with one (or with punctuation or
+   * a line break); the caret lands after it.
    */
   function applySuggestion(tag: string) {
     if (busy || submittingRef.current) return;
     const area = areaRef.current;
     if (!area || !suggestion) return;
     const value = area.value;
-    let end = Math.max(area.selectionEnd, suggestion.tokenStart + 1);
-    while (end < value.length && TAG_CHAR.test(value[end])) end += 1;
+    const caret = Math.max(area.selectionEnd, suggestion.tokenStart + 1);
+    let runEnd = caret;
+    while (runEnd < value.length && TAG_CHAR.test(value[runEnd])) runEnd += 1;
+    const token = value.slice(suggestion.tokenStart + 1, runEnd).toLowerCase();
+    const end = tag.toLowerCase().includes(token) ? runEnd : caret;
     const after = value[end];
-    const spacer = after === undefined || after === "#" ? " " : "";
+    const spacer = after === undefined || after === "#" || TAG_CHAR.test(after) ? " " : "";
     const position = suggestion.tokenStart + 1 + tag.length + spacer.length + (after === " " ? 1 : 0);
     landValue(`${value.slice(0, suggestion.tokenStart)}#${tag}${spacer}${value.slice(end)}`, position, position, false);
   }

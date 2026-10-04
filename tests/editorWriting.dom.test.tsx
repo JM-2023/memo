@@ -174,6 +174,41 @@ describe("Editor tag suggestions follow the caret", () => {
     expect(area.selectionStart).toBe(5);
   });
 
+  it("keeps the rest of a Chinese sentence when a tag is completed inside it", async () => {
+    installExecCommand();
+    const user = userEvent.setup();
+    const { area } = renderCreate(["书籍"]);
+    await user.type(area, "今天读了很好看的书");
+    area.setSelectionRange(4, 4);
+    await user.keyboard("#书");
+    expect(area.value).toBe("今天读了#书很好看的书");
+    await user.keyboard("{Enter}");
+    expect(area.value).toBe("今天读了#书籍 很好看的书");
+    expect(area.selectionStart).toBe(8);
+  });
+
+  it("keeps a word the tag was typed against", async () => {
+    installExecCommand();
+    const user = userEvent.setup();
+    const { area } = renderCreate(["cooking"]);
+    await user.type(area, "I love baking");
+    area.setSelectionRange(7, 7);
+    await user.keyboard("#co{Tab}");
+    expect(area.value).toBe("I love #cooking baking");
+    expect(area.selectionStart).toBe(16);
+  });
+
+  it("still takes in the run after the caret when the tag contains the whole token", async () => {
+    installExecCommand();
+    const user = userEvent.setup();
+    const { area } = renderCreate(["life/cooking"]);
+    await user.type(area, "#ok");
+    area.setSelectionRange(1, 1);
+    await user.keyboard("co{Enter}");
+    expect(area.value).toBe("#life/cooking ");
+    expect(area.selectionStart).toBe(14);
+  });
+
   it("keeps the list shut while an IME composes, then offers it for the result", () => {
     const { area } = renderCreate(["life"]);
     fireEvent.compositionStart(area);
