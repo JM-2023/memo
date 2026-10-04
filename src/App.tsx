@@ -886,6 +886,9 @@ export default function App() {
   // Memo being shared as an image card; holds a snapshot until dismissed.
   const [shareMemo, setShareMemo] = useState<Memo | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
+  // Back over an open Stats panel or lightbox asks it to leave with its own
+  // exit (bumped here, watched by both) rather than unmounting it mid-frame.
+  const [layerCloseSignal, setLayerCloseSignal] = useState(0);
   const [changingPasscode, setChangingPasscode] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -2692,8 +2695,7 @@ export default function App() {
       // closes, and that is all — the feed behind it stays where it is.
       if (id !== null && id === currentNavIdRef.current) {
         if (drawerOpen) closeDrawer();
-        setStatsOpen(false);
-        setLightbox(null);
+        if (statsOpen || lightbox) setLayerCloseSignal((count) => count + 1);
         return;
       }
     } else if (isLayerState(state)) {
@@ -5103,7 +5105,7 @@ export default function App() {
         <ScrollTopButton />
       </main>
 
-      {lightbox ? <Lightbox items={lightbox.items} index={lightbox.index} onClose={() => setLightbox(null)} /> : null}
+      {lightbox ? <Lightbox items={lightbox.items} index={lightbox.index} onClose={() => setLightbox(null)} closeSignal={layerCloseSignal} /> : null}
       {shareMemo ? (
         <LazyDialog onFail={lazyDialogFailed}>
           <ShareDialog memo={shareMemo} onToast={showToast} onClose={() => setShareMemo(null)} />
@@ -5111,7 +5113,13 @@ export default function App() {
       ) : null}
       {statsOpen ? (
         <LazyDialog onFail={lazyDialogFailed}>
-          <StatsModal memos={activeMemos} uniqueTagCount={uniqueTagCount} onClose={() => setStatsOpen(false)} onDrilldown={openStatsDrilldown} />
+          <StatsModal
+            memos={activeMemos}
+            uniqueTagCount={uniqueTagCount}
+            onClose={() => setStatsOpen(false)}
+            onDrilldown={openStatsDrilldown}
+            closeSignal={layerCloseSignal}
+          />
         </LazyDialog>
       ) : null}
       {bulkTagOpen ? (

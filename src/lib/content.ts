@@ -58,9 +58,10 @@ function charWidth(char: string): number {
  * lines of escapes for one word), so it is decoded where that is safe, and
  * the parts a reader never needs — the scheme, a leading "www.", a trailing
  * "/" — are dropped. A long remainder keeps its host and its last segment
- * with an ellipsis between.
+ * with an ellipsis between, unless `shorten` is off: a share card is a
+ * picture, with no href to hover or follow, so it prints the whole address.
  */
-export function displayUrl(url: string): string {
+export function displayUrl(url: string, { shorten = true }: { shorten?: boolean } = {}): string {
   let text = url;
   try {
     const decoded = decodeURI(url);
@@ -73,7 +74,7 @@ export function displayUrl(url: string): string {
   text = text.replace(/^https?:\/\//i, "").replace(/^www\./i, "");
   if (text.endsWith("/") && text.length > 1) text = text.slice(0, -1);
   const chars = Array.from(text);
-  if (chars.reduce((sum, char) => sum + charWidth(char), 0) <= URL_DISPLAY_MAX) return text;
+  if (!shorten || chars.reduce((sum, char) => sum + charWidth(char), 0) <= URL_DISPLAY_MAX) return text;
   // Three fifths of the room before the ellipsis (the host and the path's
   // start), the rest after it (the last segment, which names the page).
   const tailBudget = Math.floor((URL_DISPLAY_MAX - 1) * 0.4);

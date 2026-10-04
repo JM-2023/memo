@@ -10,13 +10,15 @@ import type { StatsDrilldown } from "../lib/statsDrilldown";
 import { tagsOf } from "../lib/tags";
 import type { Memo } from "../lib/types";
 import { RollingText } from "./RollingText";
-import { useTip, withFocus } from "./Tip";
+import { DATA_TIP_DELAY, useTip, withFocus } from "./Tip";
 
 interface StatsModalProps {
   memos: Memo[];
   uniqueTagCount: number;
   onClose: () => void;
   onDrilldown: (filter: StatsDrilldown) => void;
+  /** Bumped by the owner to close the panel the way its own ✕ does (Back). */
+  closeSignal?: number;
 }
 
 interface BarChartProps {
@@ -80,7 +82,7 @@ function BarChart({ label, values, max, labels, tips, onPick }: BarChartProps) {
             disabled={value === 0}
             aria-label={`${tips[index]}: ${count(value, "memo")}`}
             onClick={() => onPick(index)}
-            {...tip.bind({ strong: count(value, "memo"), text: tips[index] })}
+            {...tip.bind({ strong: count(value, "memo"), text: tips[index] }, { delay: DATA_TIP_DELAY })}
           >
             <span
               className={`stats-bar${value > 0 ? "" : " is-zero"}`}
@@ -318,7 +320,7 @@ function buildYearData(memos: Memo[], byDay: Map<string, number>, year: number, 
  * all derived client-side from the already-loaded memos. Opens from the
  * sidebar stat tiles.
  */
-export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown }: StatsModalProps) {
+export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeSignal = 0 }: StatsModalProps) {
   const { count, formatNumber, locale, tr } = useI18n();
   const tip = useTip();
   const now = useMemo(() => new Date(), []);
@@ -355,6 +357,15 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown }: Stat
   function requestClose() {
     leave(() => closeRef.current());
   }
+
+  // Back closes the panel with its own exit (see Lightbox's closeSignal).
+  const closeSignalRef = useRef(closeSignal);
+  useEffect(() => {
+    if (closeSignal === closeSignalRef.current) return;
+    closeSignalRef.current = closeSignal;
+    requestClose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closeSignal]);
 
   function requestDrilldown(filter: StatsDrilldown) {
     leave(() => drilldownRef.current(filter));
@@ -610,10 +621,13 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown }: Stat
                               )}
                               tabIndex={cell.key === rovingHeatDay ? 0 : -1}
                               {...withFocus(
-                                tip.bind({
-                                  strong: count(cell.count, "memo"),
-                                  text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
-                                }),
+                                tip.bind(
+                                  {
+                                    strong: count(cell.count, "memo"),
+                                    text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
+                                  },
+                                  { delay: DATA_TIP_DELAY }
+                                ),
                                 () => setFocusedHeatDay(cell.key)
                               )}
                               onKeyDown={(event) => moveHeatDayFocus(event, cell.key)}

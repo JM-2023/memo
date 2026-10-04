@@ -348,7 +348,7 @@ function SidebarView(props: SidebarProps) {
             type="button"
             className="period-figures"
             // A tap shows the figures' bubble on purpose (touch has no hover).
-            onClick={(event) => tip.show(event.currentTarget, periodTip)}
+            onClick={(event) => tip.show(event.currentTarget, periodTip, { delay: 0 })}
             {...tip.bind(periodTip)}
           >
             <span>

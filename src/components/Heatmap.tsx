@@ -5,7 +5,7 @@ import { useI18n } from "../lib/i18n";
 import { buildHeatWeeks, type HeatCell, type PeriodKind } from "../lib/stats";
 import { RollingCount } from "./RollingText";
 import { SwapText } from "./SwapText";
-import { useTip, withFocus } from "./Tip";
+import { DATA_TIP_DELAY, useTip, withFocus } from "./Tip";
 
 interface HeatmapProps {
   countsByDay: Map<string, number>;
@@ -308,10 +308,14 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
         aria-pressed={activeDay === cell.key}
         tabIndex={cell.key === rovingDay ? 0 : -1}
         {...withFocus(
-          tip.bind({
-            strong: count(cell.count, "memo"),
-            text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
-          }),
+          tip.bind(
+            {
+              strong: count(cell.count, "memo"),
+              text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
+            },
+            // Cells are read by scanning, not crossed on the way elsewhere.
+            { delay: DATA_TIP_DELAY }
+          ),
           () => setFocusedDay(cell.key)
         )}
         onKeyDown={(event) => moveCellFocus(event, cell.key)}

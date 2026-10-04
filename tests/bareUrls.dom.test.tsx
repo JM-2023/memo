@@ -91,6 +91,12 @@ describe("how a bare URL reads", () => {
     expect(text).toBe("github.com/JM-2023/memo/blob/…nents/MemoCard.tsx");
   });
 
+  it("prints the whole address when asked not to shorten (the share card)", () => {
+    const url = "https://github.com/JM-2023/memo/blob/main/src/components/MemoCard.tsx";
+    expect(displayUrl(url, { shorten: false })).toBe("github.com/JM-2023/memo/blob/main/src/components/MemoCard.tsx");
+    expect(displayUrl("https://zh.wikipedia.org/wiki/%E7%AC%94%E8%AE%B0", { shorten: false })).toBe("zh.wikipedia.org/wiki/笔记");
+  });
+
   it("renders the readable text with the exact href", () => {
     const url = "https://zh.wikipedia.org/wiki/%E7%AC%94%E8%AE%B0%E6%9C%AC%E7%94%B5%E8%84%91%E7%9A%84%E5%8E%86%E5%8F%B2%E4%B8%8E%E5%8F%91%E5%B1%95%E6%A6%82%E8%BF%B0%E5%92%8C%E5%BD%B1%E5%93%8D%E5%88%86%E6%9E%90";
     render(

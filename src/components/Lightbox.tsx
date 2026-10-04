@@ -10,6 +10,8 @@ interface LightboxProps {
   items: LightboxItem[];
   index: number;
   onClose: () => void;
+  /** Bumped by the owner to close the viewer the way its own ✕ does (Back). */
+  closeSignal?: number;
 }
 
 /** Travel before a touch commits to an axis; under it a touch is still a tap. */
@@ -134,7 +136,7 @@ function useLightboxSource(item: LightboxItem, attempt: number) {
  * A page change never cuts to black: the outgoing picture stays on its own
  * aria-hidden layer until the incoming one can be seen, then the two swap.
  */
-export function Lightbox({ items, index, onClose }: LightboxProps) {
+export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxProps) {
   const { tr } = useI18n();
   // `dir` picks the entrance: null is the first open (zoom), then the
   // direction of travel for each page change.
@@ -183,6 +185,16 @@ export function Lightbox({ items, index, onClose }: LightboxProps) {
     setFlung(swiped);
     closeTimer.current = window.setTimeout(() => closeRef.current(), 170);
   }
+
+  // Back closes the viewer with its own exit, not an unmount. Only a change
+  // after mount counts: the value it opened with is the owner's old count.
+  const closeSignalRef = useRef(closeSignal);
+  useEffect(() => {
+    if (closeSignal === closeSignalRef.current) return;
+    closeSignalRef.current = closeSignal;
+    requestClose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closeSignal]);
 
   function goTo(next: number, dir: Dir) {
     if (next === current) return;

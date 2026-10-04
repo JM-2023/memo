@@ -84,6 +84,8 @@ export function useTip(): TipApi {
 
 /** Hover intent: a cursor merely crossing the topbar shows nothing. */
 const SHOW_DELAY = 400;
+/** First-show delay for data cells (heat grids, bars) that are read by scanning. */
+export const DATA_TIP_DELAY = 150;
 /** A tip asked for this soon after the last one hid shows at once. */
 const SKIP_DELAY_WINDOW = 400;
 const HIDE_GRACE = 80;

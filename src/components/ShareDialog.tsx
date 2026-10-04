@@ -16,7 +16,7 @@ import { flushSync } from "react-dom";
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
-import { externalImagesOf, tokenizeLine } from "../lib/content";
+import { displayUrl, externalImagesOf, tokenizeLine } from "../lib/content";
 import { dateKey } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { visualLinesOf } from "../lib/lineDiff";
@@ -184,7 +184,7 @@ function cardInline(nodes: Inline[], ink: CardInk): ReactNode[] {
       case "url":
         return (
           <span key={index} className="sc-a">
-            {node.url}
+            {displayUrl(node.url, { shorten: false })}
           </span>
         );
       case "tag":
