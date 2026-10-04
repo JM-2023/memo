@@ -199,11 +199,20 @@ describe("Editor paste and drop", () => {
     await vi.waitFor(() => expect(area.value).toMatch(/ https:\/\/example\.com\/post $/));
   });
 
-  it("names a link drag as an insert, not an image upload", () => {
+  it("leaves a link drag over the field to the browser, so it drops at the drop caret", () => {
     const area = renderCreate();
     const editor = area.closest(".editor")!;
-    fireEvent.dragEnter(editor, dataTransfer({ "text/uri-list": "https://example.com" }));
-    expect(screen.getByText("Release to insert the link")).not.toBeNull();
+    // No veil: it would cover the native drop caret.
+    expect(fireEvent.dragEnter(area, dataTransfer({ "text/uri-list": "https://example.com" }))).toBe(true);
+    expect(editor.classList.contains("is-dropping")).toBe(false);
+    // Over the field the browser keeps the drop (and its caret); beside it,
+    // the editor accepts the link for the field's own caret.
+    expect(fireEvent.dragOver(area, dataTransfer({ "text/uri-list": "https://example.com" }))).toBe(true);
+    expect(fireEvent.dragOver(editor.querySelector(".editor-bar")!, dataTransfer({ "text/uri-list": "https://example.com" }))).toBe(false);
+    // A plain-text drop (or a selection moved within the field) is not cancelled.
+    expect(fireEvent.drop(area, dataTransfer({ "text/plain": "moved words" }))).toBe(true);
+    expect(fireEvent.drop(area, dataTransfer({ "text/uri-list": "https://example.com/page", "text/plain": "https://example.com/page" }))).toBe(true);
+    expect(area.value).toBe("");
   });
 });
 

@@ -2704,6 +2704,37 @@ export default function App() {
     await localCleanup;
   }
 
+  /**
+   * Land a confirmed create in one view transition: the cards below glide
+   * down to make room, the new card drops in from just under the composer
+   * (fade + 8px, app.css `data-vt-create`) rather than rising from below,
+   * and the composer — cleared inside this same update through
+   * onCommitted — morphs shut instead of snapping a frame later. The slot
+   * skips its own entrance while the snapshot plays it. Resolves once the
+   * DOM holds the new state; reduced motion lands it directly.
+   */
+  function landCreated(saved: Memo, data: EditorSubmission): Promise<void> {
+    return new Promise((resolve) => {
+      withViewTransition((animated) => {
+        const root = document.documentElement;
+        if (animated) {
+          root.dataset.vtCreate = "";
+          window.setTimeout(() => delete root.dataset.vtCreate, 600);
+        }
+        enterSuppressRef.current = animated;
+        try {
+          flushSync(() => {
+            commitMutation({ memos: [saved] });
+            data.onCommitted?.(animated);
+          });
+        } finally {
+          enterSuppressRef.current = false;
+          resolve();
+        }
+      });
+    });
+  }
+
   async function handleCreate(data: EditorSubmission): Promise<boolean> {
     const content = activeTag ? inheritTagContext(data.content, activeTag) : data.content;
     setCreating(true);
@@ -2728,23 +2759,26 @@ export default function App() {
         if (!resumed?.memo) return false;
         saved = resumed.memo;
       }
-      commitMutation({ memos: [saved] });
-      for (const image of data.newImages) URL.revokeObjectURL(image.previewUrl);
       // The composer stays up under a search, a day or a filter, and a memo
       // those lenses exclude would just vanish as the editor clears — read
       // as a failed send. Say where it went and offer the way to it.
       const lens = lensRef.current;
       const savedId = saved.id;
-      if (lens.view === "memos" && !(memoMatchesSearchScope(saved, lens) && memoMatchesQuery(saved, lens.parsedQuery))) {
-        showToast(tr("Saved the memo — this view hides it", "已保存这条笔记，当前视图下看不到它"), "info", {
-          action: { label: tr("Show", "显示"), run: () => revealMemo(savedId) }
-        });
-      } else if (lens.view === "memos") {
-        // In the view, but maybe past the render window (see the effect).
+      const hidden = lens.view === "memos" && !(memoMatchesSearchScope(saved, lens) && memoMatchesQuery(saved, lens.parsedQuery));
+      if (lens.view === "memos" && !hidden) {
+        // In the view, but maybe past the render window (see the effect —
+        // it runs as the memo lands, so this is marked first).
         createdPlacementRef.current = savedId;
         window.setTimeout(() => {
           if (createdPlacementRef.current === savedId) createdPlacementRef.current = null;
         }, 1000);
+      }
+      await landCreated(saved, data);
+      for (const image of data.newImages) URL.revokeObjectURL(image.previewUrl);
+      if (hidden) {
+        showToast(tr("Saved the memo — this view hides it", "已保存这条笔记，当前视图下看不到它"), "info", {
+          action: { label: tr("Show", "显示"), run: () => revealMemo(savedId) }
+        });
       }
       return true;
     } catch (cause) {
@@ -2754,7 +2788,7 @@ export default function App() {
             // The recovery update itself committed but its response was lost.
             // The desired server value is authoritative success; clearing this
             // draft avoids rotating the id and creating a duplicate memo.
-            commitMutation({ memos: [cause.current] });
+            await landCreated(cause.current, data);
             for (const image of data.newImages) URL.revokeObjectURL(image.previewUrl);
             return true;
           }
@@ -2869,7 +2903,7 @@ export default function App() {
       else land();
       void runSync();
       notifyPeers();
-      showToast(tr("Saved", "已保存"));
+      showToast(tr("Saved your edits", "已保存这次修改"));
       return true;
     } catch (cause) {
       if (reconcileVersionConflict(cause, true)) return false;

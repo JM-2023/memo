@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  backspaceListMarker,
   continueListOnEnter,
   insertTableTemplate,
   setTaskMark,
@@ -62,6 +63,30 @@ describe("continueListOnEnter", () => {
   it("returns null for plain lines and for Enter inside the prefix", () => {
     expect(continueListOnEnter("plain text", 5)).toBeNull();
     expect(continueListOnEnter("- one", 1)).toBeNull();
+  });
+
+  // Cards print the literal numbers, so a stale tail read 1, 2, 2, 3.
+  it("renumbers the later items of the same list when one is inserted mid-list", () => {
+    expect(continueListOnEnter("1. a\n2. b\n3. c", 4)).toEqual({ value: "1. a\n2. \n3. b\n4. c", start: 8, end: 8 });
+    // A split item carries its tail onto the new number; later ones follow.
+    expect(continueListOnEnter("1. ab\n2. c", 4).value).toBe("1. a\n2. b\n3. c");
+    expect(continueListOnEnter("1) a\n2) b", 4).value).toBe("1) a\n2) \n3) b");
+  });
+
+  it("renumbers only siblings: nested lines are stepped over, a blank line or another list ends it", () => {
+    expect(continueListOnEnter("1. a\n  1. x\n  2. y\n2. b", 4).value).toBe("1. a\n2. \n  1. x\n  2. y\n3. b");
+    expect(continueListOnEnter("1. a\n  1. x\n  2. y\n2. b", 11).value).toBe("1. a\n  1. x\n  2. \n  3. y\n2. b");
+    expect(continueListOnEnter("1. a\n2. b\n\n3. c", 4).value).toBe("1. a\n2. \n3. b\n\n3. c");
+    expect(continueListOnEnter("1. a\n2) b", 4).value).toBe("1. a\n2. \n2) b");
+    expect(continueListOnEnter("1. a\n- b\n2. c", 4).value).toBe("1. a\n2. \n- b\n2. c");
+  });
+
+  it("closes the gap an emptied item leaves", () => {
+    expect(continueListOnEnter("1. a\n2. \n3. b\n4. c", 8)).toEqual({ value: "1. a\n\n2. b\n3. c", start: 5, end: 5 });
+  });
+
+  it("leaves bullets and tasks unnumbered", () => {
+    expect(continueListOnEnter("- a\n- b", 3).value).toBe("- a\n- \n- b");
   });
 });
 
@@ -145,6 +170,56 @@ describe("shiftListIndent", () => {
     expect(shiftListIndent("  - a", 5, -1)).toEqual({ value: "- a", start: 3, end: 3 });
     expect(shiftListIndent("plain", 3, 1)).toBeNull();
     expect(shiftListIndent("- a", 3, -1)).toBeNull();
+  });
+
+  it("shifts every selected list line and keeps the selection spanning them", () => {
+    const value = "- a\n- b\n- c";
+    const indented = shiftListIndent(value, 0, 1, value.length)!;
+    expect(indented.value).toBe("  - a\n  - b\n  - c");
+    expect(indented.value.slice(indented.start, indented.end)).toBe("  - a\n  - b\n  - c");
+    const back = shiftListIndent(indented.value, indented.start, -1, indented.end)!;
+    expect(back.value).toBe(value);
+    expect(back.value.slice(back.start, back.end)).toBe(value);
+  });
+
+  it("keeps a partial selection on the same text and leaves non-list lines alone", () => {
+    // "a" through "b": both list lines shift, the selected text stays selected.
+    const patch = shiftListIndent("- a\nnote\n- b", 2, 1, 12)!;
+    expect(patch.value).toBe("  - a\nnote\n  - b");
+    expect(patch.value.slice(patch.start, patch.end)).toBe("a\nnote\n  - b");
+    // Lines already at the margin stay put on Shift+Tab; nothing to do is null.
+    expect(shiftListIndent("- a\n  - b", 0, -1, 9)!.value).toBe("- a\n- b");
+    expect(shiftListIndent("- a\n- b", 0, -1, 7)).toBeNull();
+  });
+
+  it("does not reach into the line after a selection that ends on a newline", () => {
+    const patch = shiftListIndent("- a\n- b", 0, 1, 4)!;
+    expect(patch.value).toBe("  - a\n- b");
+    expect(patch.end).toBe(6);
+  });
+});
+
+describe("backspaceListMarker", () => {
+  it("takes an empty item's whole marker in one press", () => {
+    expect(backspaceListMarker("- a\n- ", 6)).toEqual({ value: "- a\n", start: 4, end: 4 });
+    expect(backspaceListMarker("- [ ] a\n- [ ] ", 14)).toEqual({ value: "- [ ] a\n", start: 8, end: 8 });
+    expect(backspaceListMarker("> q\n> ", 6)).toEqual({ value: "> q\n", start: 4, end: 4 });
+  });
+
+  it("outdents an indented empty item first", () => {
+    expect(backspaceListMarker("- a\n  - ", 8)).toEqual({ value: "- a\n- ", start: 6, end: 6 });
+  });
+
+  it("closes the numbering gap a removed item leaves", () => {
+    expect(backspaceListMarker("1. a\n2. \n3. b", 8)).toEqual({ value: "1. a\n\n2. b", start: 5, end: 5 });
+  });
+
+  it("stays native anywhere else", () => {
+    expect(backspaceListMarker("- a", 3)).toBeNull();
+    expect(backspaceListMarker("- a", 2)).toBeNull();
+    expect(backspaceListMarker("- ", 1)).toBeNull();
+    expect(backspaceListMarker("- ", 0, 2)).toBeNull();
+    expect(backspaceListMarker("plain ", 6)).toBeNull();
   });
 });
 

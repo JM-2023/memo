@@ -79,13 +79,77 @@ export function continueListOnEnter(value: string, caret: number): EditPatch | n
   if (caret < start + matchedLength) return null;
 
   if (line.slice(matchedLength).trim() === "" && caret === end) {
-    // Empty item: exit the list by clearing the line.
-    return { value: value.slice(0, start) + value.slice(end), start, end: start };
+    // Empty item: exit the list by clearing the line. Numbered items after
+    // it close the gap it leaves (cards print the literal numbers).
+    let cleared = value.slice(0, start) + value.slice(end);
+    if (ordered) cleared = renumberFollowing(cleared, start + 1, ordered[1].length, ordered[3], Number(ordered[2]));
+    return { value: cleared, start, end: start };
   }
 
   const inserted = `\n${prefix}`;
   const position = caret + inserted.length;
-  return { value: value.slice(0, caret) + inserted + value.slice(caret), start: position, end: position };
+  let next = value.slice(0, caret) + inserted + value.slice(caret);
+  if (ordered) {
+    // The new item took the next number: every later sibling moves up one,
+    // in the same patch, so one ⌘Z takes the whole insert back.
+    const newLineEnd = next.indexOf("\n", position);
+    if (newLineEnd !== -1) next = renumberFollowing(next, newLineEnd + 1, ordered[1].length, ordered[3], Number(ordered[2]) + 2);
+  }
+  return { value: next, start: position, end: position };
+}
+
+/**
+ * Renumber the numbered items of one list from the line starting at `from`:
+ * siblings at exactly `indent` take `first`, `first + 1`, …; deeper lines
+ * (nested items, continuation text) are stepped over; a blank line, a
+ * shallower line, or a sibling that is not a numbered item with the same
+ * delimiter ends the list. Only digits change.
+ */
+function renumberFollowing(value: string, from: number, indent: number, delimiter: string, first: number): string {
+  if (from > value.length) return value;
+  const lines = value.slice(from).split("\n");
+  let next = first;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim() === "") break;
+    const lead = /^\s*/.exec(line)![0].length;
+    if (lead < indent) break;
+    if (lead > indent) continue;
+    const item = ORDERED_PREFIX.exec(line);
+    if (!item || item[3] !== delimiter) break;
+    lines[index] = `${item[1]}${next}${line.slice(item[1].length + item[2].length)}`;
+    next += 1;
+  }
+  return value.slice(0, from) + lines.join("\n");
+}
+
+/**
+ * Backspace right after the marker of an empty item (`- `, `- [ ] `, `3. `,
+ * `> `): the whole marker goes in one press instead of leaving a stray `-`
+ * or `[ ]` behind; an indented item outdents one level first (two spaces),
+ * like Shift+Tab. Numbered siblings after a removed item close the gap.
+ * Null anywhere else, so Backspace stays native.
+ */
+export function backspaceListMarker(value: string, selStart: number, selEnd = selStart): EditPatch | null {
+  if (selStart !== selEnd) return null;
+  const { start, end } = lineRangeAt(value, selStart);
+  if (selStart !== end) return null;
+  const line = value.slice(start, end);
+  const task = TASK_PREFIX.exec(line);
+  const bullet = task ? null : BULLET_PREFIX.exec(line);
+  const ordered = task || bullet ? null : ORDERED_PREFIX.exec(line);
+  const quote = task || bullet || ordered ? null : /^>\s+/.exec(line);
+  const match = task ?? bullet ?? ordered ?? quote;
+  if (!match || match[0].length !== line.length) return null;
+  const indent = task || bullet || ordered ? match[1].length : 0;
+  if (indent > 0) {
+    const removable = Math.min(2, indent);
+    const position = selStart - removable;
+    return { value: value.slice(0, start) + value.slice(start + removable), start: position, end: position };
+  }
+  let cleared = value.slice(0, start) + value.slice(end);
+  if (ordered) cleared = renumberFollowing(cleared, start + 1, 0, ordered[3], Number(ordered[2]));
+  return { value: cleared, start, end: start };
 }
 
 /**
@@ -135,19 +199,58 @@ export function toggleWrap(value: string, start: number, end: number, marker: st
   return { value: value.slice(0, s) + marker + inner + marker + value.slice(e), start: s + m, end: e + m };
 }
 
-/** Tab / Shift+Tab on a list line: two spaces of indent per level. */
-export function shiftListIndent(value: string, caret: number, delta: 1 | -1): EditPatch | null {
-  const { start, end } = lineRangeAt(value, caret);
-  const line = value.slice(start, end);
-  if (!TASK_PREFIX.test(line) && !BULLET_PREFIX.test(line) && !ORDERED_PREFIX.test(line)) return null;
+/**
+ * Tab / Shift+Tab on list lines: two spaces of indent per level. A selection
+ * shifts every list line it touches (other lines are left alone) and keeps
+ * spanning them; a caret moves with its line's text. Null when no line is a
+ * list item, or Shift+Tab finds nothing to outdent — Tab then keeps moving
+ * focus.
+ */
+export function shiftListIndent(value: string, selStart: number, delta: 1 | -1, selEnd = selStart): EditPatch | null {
+  const from = lineRangeAt(value, selStart).start;
+  // A selection that ends right after a newline does not reach into the
+  // next line (see toggleBulletLine).
+  const last = selEnd > selStart && value[selEnd - 1] === "\n" ? selEnd - 1 : selEnd;
+  const to = lineRangeAt(value, Math.max(from, last)).end;
 
-  if (delta > 0) {
-    return { value: value.slice(0, start) + "  " + value.slice(start), start: caret + 2, end: caret + 2 };
+  // Each edit inserts "  " at `at` (removed 0) or removes `removed` chars.
+  const edits: Array<{ at: number; removed: number; inserted: string }> = [];
+  for (let start = from; start <= to; ) {
+    const found = value.indexOf("\n", start);
+    const end = found === -1 || found > to ? to : found;
+    const line = value.slice(start, end);
+    if (TASK_PREFIX.test(line) || BULLET_PREFIX.test(line) || ORDERED_PREFIX.test(line)) {
+      if (delta > 0) edits.push({ at: start, removed: 0, inserted: "  " });
+      else {
+        const removable = Math.min(2, /^\s*/.exec(line)![0].length);
+        if (removable > 0) edits.push({ at: start, removed: removable, inserted: "" });
+      }
+    }
+    start = end + 1;
   }
-  const removable = Math.min(2, /^\s*/.exec(line)![0].length);
-  if (removable === 0) return null;
-  const position = Math.max(start, caret - removable);
-  return { value: value.slice(0, start) + value.slice(start + removable), start: position, end: position };
+  if (edits.length === 0) return null;
+
+  let out = "";
+  let cursor = 0;
+  for (const edit of edits) {
+    out += value.slice(cursor, edit.at) + edit.inserted;
+    cursor = edit.at + edit.removed;
+  }
+  out += value.slice(cursor);
+
+  // A caret at a line's very start rides along with its text; the head of a
+  // real selection stays in front of new indent, so whole lines stay whole.
+  const range = selEnd > selStart;
+  const map = (pos: number, head: boolean) => {
+    let shift = 0;
+    for (const edit of edits) {
+      if (pos < edit.at || (head && range && edit.removed === 0 && pos === edit.at)) break;
+      if (pos < edit.at + edit.removed) return edit.at + shift;
+      shift += edit.inserted.length - edit.removed;
+    }
+    return pos + shift;
+  };
+  return { value: out, start: map(selStart, true), end: range ? map(selEnd, false) : map(selStart, true) };
 }
 
 /**

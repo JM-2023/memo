@@ -1,13 +1,15 @@
-import { Bold, Hash, Image as ImageIcon, ImagePlus, Link2, List, Loader2, Send, Table, X } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { Bold, Hash, Image as ImageIcon, ImageOff, ImagePlus, Link2, List, Loader2, Send, Table, X } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { ApiError } from "../lib/api";
 import { isImageUrl } from "../lib/content";
 import { htmlToMarkdown } from "../lib/htmlToMarkdown";
 import { ImageSlotLedger } from "../lib/imageSlots";
 import { compressImage } from "../lib/images";
 import { useI18n } from "../lib/i18n";
+import { announce } from "../lib/liveAnnouncer";
 import { inheritTagContext } from "../lib/tags";
 import {
+  backspaceListMarker,
   continueListOnEnter,
   insertTableTemplate,
   shiftListIndent,
@@ -53,6 +55,151 @@ export interface EditDraft {
 const APPLE_KEYS = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 const MOD = APPLE_KEYS ? "⌘" : "Ctrl+";
 const ENTER = APPLE_KEYS ? "↩" : "Enter";
+/** The keycap beside Send once there is something to send. */
+const SEND_KEYS = APPLE_KEYS ? "⌘↩" : "Ctrl ↩";
+/** A fast send never shows the spinner: the Send glyph holds this long first. */
+const SPINNER_DELAY_MS = 150;
+
+/** Characters a tag can hold (TAG_PATTERN in lib/tags). */
+const TAG_CHAR = /[\p{L}\p{N}_\-/·]/u;
+
+/** The `#run` the caret sits in (or right after), if any. */
+function tagTokenAt(value: string, caret: number): { hashStart: number; query: string } | null {
+  let start = caret;
+  while (start > 0 && !/[\s#]/.test(value[start - 1])) start -= 1;
+  if (start === 0 || value[start - 1] !== "#") return null;
+  return { hashStart: start - 1, query: value.slice(start, caret) };
+}
+
+/**
+ * What a file drag carries, read from its item types (dragenter cannot read
+ * the files themselves). A browser that keeps the types back until the drop
+ * counts as images: the veil must never refuse what it cannot see.
+ */
+type FileDragKind = "images" | "other";
+
+function isFileDrag(event: { dataTransfer: DataTransfer | null }): boolean {
+  return [...(event.dataTransfer?.types ?? [])].includes("Files");
+}
+
+function fileDragKind(data: DataTransfer | null): FileDragKind {
+  const files = [...(data?.items ?? [])].filter((item) => item.kind === "file");
+  return files.length > 0 && files.every((item) => item.type && !item.type.startsWith("image/")) ? "other" : "images";
+}
+
+/**
+ * Window-level file-drop guard, shared by every mounted editor. A file let
+ * go anywhere but on an editor — a few pixels off the composer, over a card
+ * or the sidebar — would open in the tab and take the in-memory draft and
+ * any open edit with it. So file drags are claimed window-wide and land in
+ * the active editor: the open inline edit, else the visible composer, whose
+ * veil lights for as long as the drag is over the window.
+ */
+interface DropTarget {
+  mode: "create" | "edit";
+  root: () => HTMLElement | null;
+  /** Whether a drop of this kind would add anything (room left, images). */
+  accepts: (kind: FileDragKind) => boolean;
+  /** Light the veil for a drag elsewhere in the window, or put it out. */
+  light: (kind: FileDragKind | null) => void;
+  take: (files: File[]) => void;
+}
+
+const dropTargets = new Set<DropTarget>();
+let releaseDropGuard: (() => void) | null = null;
+
+function activeDropTarget(): DropTarget | null {
+  let composer: DropTarget | null = null;
+  for (const target of dropTargets) {
+    const root = target.root();
+    if (!root || root.closest("[hidden]")) continue;
+    if (target.mode === "edit") return target;
+    composer ??= target;
+  }
+  return composer;
+}
+
+function installDropGuard(): () => void {
+  // Counter, not boolean: dragenter/leave fire per element crossed.
+  let depth = 0;
+  let lit: DropTarget | null = null;
+  let idle = 0;
+  const reset = () => {
+    depth = 0;
+    window.clearTimeout(idle);
+    lit?.light(null);
+    lit = null;
+  };
+  const onEnter = (event: globalThis.DragEvent) => {
+    if (!isFileDrag(event)) return;
+    depth += 1;
+    if (lit) return;
+    lit = activeDropTarget();
+    lit?.light(fileDragKind(event.dataTransfer));
+  };
+  const onLeave = (event: globalThis.DragEvent) => {
+    if (!isFileDrag(event)) return;
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) reset();
+  };
+  const onOver = (event: globalThis.DragEvent) => {
+    if (!isFileDrag(event)) return;
+    // Some browsers skip the last dragleave when a drag leaves the window;
+    // dragover repeats while it is still here, so its silence puts the
+    // veil out.
+    window.clearTimeout(idle);
+    idle = window.setTimeout(reset, 1000);
+    // An editor under the pointer has already answered for itself.
+    if (event.defaultPrevented) return;
+    event.preventDefault();
+    const target = activeDropTarget();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = target?.accepts(fileDragKind(event.dataTransfer)) ? "copy" : "none";
+  };
+  const onDrop = (event: globalThis.DragEvent) => {
+    reset();
+    if (!isFileDrag(event) || event.defaultPrevented) return;
+    event.preventDefault();
+    activeDropTarget()?.take([...(event.dataTransfer?.files ?? [])]);
+  };
+  window.addEventListener("dragenter", onEnter, true);
+  window.addEventListener("dragleave", onLeave, true);
+  window.addEventListener("dragover", onOver);
+  window.addEventListener("drop", onDrop);
+  window.addEventListener("dragend", reset, true);
+  return () => {
+    window.removeEventListener("dragenter", onEnter, true);
+    window.removeEventListener("dragleave", onLeave, true);
+    window.removeEventListener("dragover", onOver);
+    window.removeEventListener("drop", onDrop);
+    window.removeEventListener("dragend", reset, true);
+    reset();
+  };
+}
+
+function registerDropTarget(target: DropTarget): () => void {
+  dropTargets.add(target);
+  releaseDropGuard ??= installDropGuard();
+  return () => {
+    dropTargets.delete(target);
+    if (dropTargets.size > 0) return;
+    releaseDropGuard?.();
+    releaseDropGuard = null;
+  };
+}
+
+/** `text` with [from, to) set in weight 600, the matched run of a suggestion. */
+function withHit(text: string, from: number, to: number): ReactNode {
+  const start = Math.max(0, Math.min(text.length, from));
+  const end = Math.max(start, Math.min(text.length, to));
+  if (start === end) return text;
+  return (
+    <>
+      {text.slice(0, start)}
+      <b className="tag-suggest-hit">{text.slice(start, end)}</b>
+      {text.slice(end)}
+    </>
+  );
+}
 
 interface EditorProps {
   mode: "create" | "edit";
@@ -85,6 +232,11 @@ export interface EditorSubmission {
   removeImageIds: string[];
   /** Set when the save carries new images: reports the sent fraction (0..1). */
   onUploadProgress?: (fraction: number) => void;
+  /** Create mode: the owner calls this inside the update that lands the new
+   * memo, so the composer clears in that same commit (and the same view
+   * transition, `animated`) instead of a frame later. Optional: a create
+   * resolved true without it clears afterwards as before. */
+  onCommitted?: (animated: boolean) => void;
 }
 
 interface Suggestion {
@@ -144,16 +296,32 @@ export function Editor({
   // is not the memo being saved.
   const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // `cause` lets an error leave once what raised it is gone: the link
+  // complaint with the link row, the image cap once an image is removed.
+  const [error, setError] = useState<{ text: string; cause: "link" | "limit" | "other" } | null>(null);
   // Counter, not boolean: dragenter/leave fire per child element.
   const [dragDepth, setDragDepth] = useState(0);
-  // What the drag carries: files say "add images", a bare link says "insert".
-  const [dragKind, setDragKind] = useState<"files" | "link">("files");
+  // What a file drag over this editor carries.
+  const [dragKind, setDragKind] = useState<FileDragKind>("images");
+  // A file drag elsewhere in the window, when this is the editor it would land in.
+  const [windowDrag, setWindowDrag] = useState<FileDragKind | null>(null);
+  const veilRef = useRef({ label: "", refused: false });
+  // Send pressed while an image was still compressing: it goes out on its own
+  // once the last one lands.
+  const [sendQueued, setSendQueued] = useState(false);
+  const sendQueuedRef = useRef(false);
+  sendQueuedRef.current = sendQueued;
+  const [spinnerShown, setSpinnerShown] = useState(false);
+  // Bumped when a confirmed create clears the composer; the layout effect
+  // below then sizes the emptied field in that same commit.
+  const [clears, setClears] = useState(0);
+  const clearGrowRef = useRef<"instant" | "smooth" | null>(null);
   // Attachments play their exit animation before the state actually drops
   // them — keys are image ids (existing) or preview URLs (pending).
   const [removingKeys, setRemovingKeys] = useState<ReadonlySet<string>>(new Set());
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const overflowRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -161,6 +329,11 @@ export function Editor({
   const suggestRef = useRef<HTMLDivElement>(null);
   // ⌘⇧V / Ctrl+Shift+V asks for plain text even when HTML is on offer.
   const plainPasteRef = useRef(false);
+  // Between compositionstart and compositionend the IME owns the text.
+  const composingRef = useRef(false);
+  // A selection this editor set itself (landValue): its select event must
+  // not reopen the tag list a completion just closed.
+  const quietSelectRef = useRef<{ start: number; end: number } | null>(null);
   const suggestionListId = useId();
   const contextTagDescriptionId = useId();
   // Stable across ambiguous network failures; rotate only after a confirmed
@@ -173,7 +346,7 @@ export function Editor({
   const keptExisting = useMemo(() => existingImages.filter((image) => !removedIds.includes(image.id)), [existingImages, removedIds]);
 
   function beginRemove(key: string) {
-    if (busy || submittingRef.current) return;
+    if (busy || submittingRef.current || sendQueuedRef.current) return;
     setRemovingKeys((value) => new Set(value).add(key));
   }
   function settleRemove(key: string, drop: () => void) {
@@ -184,16 +357,35 @@ export function Editor({
       return next;
     });
     drop();
+    clearError("limit");
+  }
+  function fail(text: string, cause: "link" | "limit" | "other" = "other") {
+    setError({ text, cause });
+  }
+  function clearError(cause: "link" | "limit") {
+    setError((current) => (current?.cause === cause ? null : current));
   }
   const totalImages = keptExisting.length + newImages.length;
-  const locked = busy || submitting;
+  const sending = submitting || sendQueued;
+  const locked = busy || sending;
   const imageLimitExceeded = totalImages > MAX_IMAGES;
   const submittedContent = content.trim();
   const effectiveContent = mode === "create" && contextTag ? inheritTagContext(submittedContent, contextTag) : submittedContent;
   const effectiveContentLength = effectiveContent.length;
   const overLimit = effectiveContentLength > MAX_CONTENT_CHARS;
-  const canSubmit =
-    !locked && !conflictMessage && compressing === 0 && !overLimit && !imageLimitExceeded && (submittedContent.length > 0 || totalImages > 0);
+  // Attachments mid-exit-animation count as removed already.
+  const keptNewImages = newImages.filter((image) => !removingKeys.has(image.previewUrl));
+  const removedImageIds = [...removedIds, ...existingImages.filter((image) => removingKeys.has(image.id)).map((image) => image.id)];
+  // An edit is clean until its text or images differ from what it opened on
+  // (an image still compressing counts as a change). Save rests until then,
+  // and ⌘↩ on a clean edit just closes it, like Esc.
+  const dirty =
+    mode === "create" || content.trim() !== openedOn.trim() || keptNewImages.length > 0 || removedImageIds.length > 0 || compressing > 0;
+  const hasPayload = submittedContent.length > 0 || totalImages > 0;
+  const ready = !busy && !submitting && !conflictMessage && !overLimit && !imageLimitExceeded && dirty;
+  const canSubmit = ready && !sendQueued && compressing === 0 && hasPayload;
+  // Send pressed mid-compression is accepted and held (see submit).
+  const canQueue = ready && !sendQueued && compressing > 0;
 
   useLayoutEffect(() => {
     imageSlots.syncCommitted(totalImages);
@@ -225,7 +417,7 @@ export function Editor({
   // selection, the double-clicked spot, or else the end (menu › Edit, the
   // usual "add a line" case).
   useLayoutEffect(() => {
-    autoGrow();
+    autoGrow(true);
     if (autoFocus) {
       const area = areaRef.current;
       if (area) {
@@ -240,6 +432,9 @@ export function Editor({
         } else {
           area.setSelectionRange(end, end);
         }
+        // Opening an edit is not a caret move: a memo that ends on a tag
+        // must not open with the tag list up.
+        quietSelectRef.current = { start: area.selectionStart, end: area.selectionEnd };
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -250,7 +445,7 @@ export function Editor({
   useEffect(() => {
     const viewport = window.visualViewport;
     if (!viewport) return;
-    const onResize = () => autoGrow();
+    const onResize = () => autoGrow(true);
     viewport.addEventListener("resize", onResize);
     return () => viewport.removeEventListener("resize", onResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -295,6 +490,54 @@ export function Editor({
     setSuggestion(null);
   }, [locked]);
 
+  // Sending reads the same as resting for a beat: a fast send never flashes
+  // the spinner, a slow one fades it in.
+  useEffect(() => {
+    if (!sending) {
+      setSpinnerShown(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSpinnerShown(true), SPINNER_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [sending]);
+
+  // A queued send goes out as soon as the last image has landed; one that
+  // can no longer go (a compression failed, a conflict arrived) is dropped.
+  useEffect(() => {
+    if (!sendQueued || compressing > 0) return;
+    setSendQueued(false);
+    if (ready && hasPayload) void submit(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sendQueued, compressing]);
+
+  // A confirmed create emptied the field: size it in the same commit, so a
+  // view transition captures the composer at its final height.
+  useLayoutEffect(() => {
+    const grow = clearGrowRef.current;
+    if (!grow) return;
+    clearGrowRef.current = null;
+    autoGrow(grow === "instant");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clears]);
+
+  // The window-wide file-drop guard (see installDropGuard). The callbacks
+  // read the latest render through refs; the registration lives as long as
+  // the editor.
+  const addFilesRef = useRef<(files: File[]) => void>(() => undefined);
+  const acceptsRef = useRef<(kind: FileDragKind) => boolean>(() => false);
+  useEffect(
+    () =>
+      registerDropTarget({
+        mode,
+        root: () => rootRef.current,
+        accepts: (kind) => acceptsRef.current(kind),
+        light: setWindowDrag,
+        take: (files) => addFilesRef.current(files)
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
   // If an update committed but its response was lost, the conflict payload
   // will contain our stable image ids. Retire the matching local payloads so
   // accepting the new base does not try to insert the same attachments again.
@@ -322,7 +565,16 @@ export function Editor({
     };
   }, []);
 
-  function autoGrow() {
+  /**
+   * Size the field to its text (up to the cap). Measuring goes through
+   * height "auto", which no transition can interpolate from — so a growing
+   * or shrinking field puts its current height back and commits it before
+   * writing the new one, and `transition: height` (app.css) eases each new
+   * line in and an emptied composer shut. `instant` skips the ease: the
+   * first sizing on mount (the card stage measures the editor right after),
+   * a viewport resize, and a clear that a view transition is morphing.
+   */
+  function autoGrow(instant = false) {
     const area = areaRef.current;
     if (!area) return;
     const viewport = window.visualViewport?.height ?? window.innerHeight;
@@ -330,9 +582,20 @@ export function Editor({
     // Measuring at "auto" resets the inner scroll; put it back so a long
     // draft does not jump while it is typed into.
     const scrollTop = area.scrollTop;
+    // The height on screen right now — mid-ease if a line was just added.
+    const from = area.style.height ? area.offsetHeight : 0;
     area.style.height = "auto";
-    area.style.height = `${Math.min(cap, Math.max(mode === "create" ? 68 : 96, area.scrollHeight))}px`;
-    area.scrollTop = scrollTop;
+    const textHeight = area.scrollHeight;
+    const next = Math.min(cap, Math.max(mode === "create" ? 68 : 96, textHeight));
+    if (!instant && from > 0 && from !== next) {
+      area.style.height = `${from}px`;
+      // Commit the start height so the write below transitions from it.
+      void area.offsetHeight;
+    }
+    area.style.height = `${next}px`;
+    // Text that fits the new height starts at the top: the new line is
+    // uncovered as the field eases open instead of the text sliding down.
+    area.scrollTop = textHeight <= next ? 0 : scrollTop;
   }
 
   /**
@@ -359,19 +622,13 @@ export function Editor({
   }
 
   function refreshSuggestion(value: string, caret: number) {
-    if (busy || submittingRef.current) return;
-    let start = caret;
-    while (start > 0 && !/[\s#]/.test(value[start - 1])) start -= 1;
-    const hashStart = start > 0 && value[start - 1] === "#" ? start - 1 : -1;
-    if (hashStart < 0 || knownTags.length === 0) {
+    if (busy || submittingRef.current || sendQueuedRef.current) return;
+    const token = tagTokenAt(value, caret);
+    if (!token || knownTags.length === 0) {
       setSuggestion(null);
       return;
     }
-    const query = value.slice(hashStart + 1, caret);
-    if (/\s/.test(query)) {
-      setSuggestion(null);
-      return;
-    }
+    const { hashStart, query } = token;
     const lowered = query.toLowerCase();
     const exact = lowered.length > 0 && knownTags.some((tag) => tag.toLowerCase() === lowered);
     // Tags that begin with the run lead the list, then any that contain it;
@@ -398,7 +655,7 @@ export function Editor({
    */
   function landValue(next: string, selStart: number, selEnd = selStart, suggest = true) {
     const area = areaRef.current;
-    if (!area) return;
+    if (!area || sendQueuedRef.current) return;
     const prev = area.value;
     area.focus({ preventScroll: true });
     let landed = prev === next;
@@ -424,6 +681,7 @@ export function Editor({
     if (!suggest) setSuggestion(null);
     const settle = () => {
       area.setSelectionRange(selStart, selEnd);
+      quietSelectRef.current = { start: selStart, end: selEnd };
       if (suggest) refreshSuggestion(next, selStart);
       autoGrow();
     };
@@ -431,14 +689,58 @@ export function Editor({
     else requestAnimationFrame(settle);
   }
 
+  /**
+   * Swap the whole `#token` under the caret for the picked tag — through its
+   * end, not just up to the caret, so `#wo|rk` becomes `#work`, never
+   * `#work rk`. A space follows unless the text already goes on with one
+   * (or with punctuation or a line break); the caret lands after it.
+   */
   function applySuggestion(tag: string) {
     if (busy || submittingRef.current) return;
     const area = areaRef.current;
     if (!area || !suggestion) return;
-    const caret = area.selectionStart;
-    const next = `${content.slice(0, suggestion.tokenStart)}#${tag} ${content.slice(caret)}`;
-    const position = suggestion.tokenStart + tag.length + 2;
-    landValue(next, position, position, false);
+    const value = area.value;
+    let end = Math.max(area.selectionEnd, suggestion.tokenStart + 1);
+    while (end < value.length && TAG_CHAR.test(value[end])) end += 1;
+    const after = value[end];
+    const spacer = after === undefined || after === "#" ? " " : "";
+    const position = suggestion.tokenStart + 1 + tag.length + spacer.length + (after === " " ? 1 : 0);
+    landValue(`${value.slice(0, suggestion.tokenStart)}#${tag}${spacer}${value.slice(end)}`, position, position, false);
+  }
+
+  /**
+   * The caret moved without the text changing — arrow keys, Home/End,
+   * ⌘←/→, a click: the tag list follows the token now under the caret, or
+   * closes. (It used to refresh only on typing and clicks, so Enter could
+   * apply a list left over from another spot.) A selection this editor just
+   * set itself is skipped, so a completion's list stays shut.
+   */
+  function onCaretMove() {
+    const area = areaRef.current;
+    if (!area || composingRef.current) return;
+    const quiet = quietSelectRef.current;
+    quietSelectRef.current = null;
+    if (quiet && quiet.start === area.selectionStart && quiet.end === area.selectionEnd) return;
+    if (area.selectionStart !== area.selectionEnd) setSuggestion(null);
+    else refreshSuggestion(area.value, area.selectionStart);
+  }
+
+  /**
+   * One suggestion row: the parent path gives way (ellipsized) before the
+   * leaf, so a deep tag still shows its own name; the run that matched is
+   * set a step heavier.
+   */
+  function suggestionRow(tag: string, query: string): ReactNode {
+    const split = tag.lastIndexOf("/") + 1;
+    const hit = query ? tag.toLowerCase().indexOf(query.toLowerCase()) : -1;
+    const from = hit < 0 ? 0 : hit;
+    const to = hit < 0 ? 0 : hit + query.length;
+    return (
+      <>
+        <span className="tag-suggest-path">{withHit(`#${tag.slice(0, split)}`, from + 1, to + 1)}</span>
+        <span className="tag-suggest-leaf">{withHit(tag.slice(split), from - split, to - split)}</span>
+      </>
+    );
   }
 
   /** Insert text at the caret (textareas keep their selection while blurred). */
@@ -481,7 +783,7 @@ export function Editor({
     if (busy || submittingRef.current) return;
     const url = linkValue.trim();
     if (!/^https?:\/\/\S+$/i.test(url)) {
-      setError(tr("Enter an image URL beginning with http(s)://", "请输入以 http(s):// 开头的图片链接"));
+      fail(tr("Enter an image URL beginning with http(s)://", "请输入以 http(s):// 开头的图片链接"), "link");
       return;
     }
     setError(null);
@@ -493,12 +795,15 @@ export function Editor({
   }
 
   async function addFiles(files: File[]) {
-    if (busy || submittingRef.current) return;
+    if (busy || submittingRef.current || sendQueuedRef.current) return;
     const images = files.filter((file) => file.type.startsWith("image/"));
-    if (images.length === 0) return;
+    if (images.length === 0) {
+      if (files.length > 0) fail(tr("Only images can be added", "只能添加图片"));
+      return;
+    }
     const acceptedCount = imageSlots.reserve(images.length);
     if (acceptedCount <= 0) {
-      setError(tr(`You can add up to ${MAX_IMAGES} images`, `最多 ${MAX_IMAGES} 张图片`));
+      fail(tr(`You can add up to ${MAX_IMAGES} images`, `最多 ${MAX_IMAGES} 张图片`), "limit");
       return;
     }
     setError(null);
@@ -521,13 +826,19 @@ export function Editor({
         reservationOpen = false;
         if (!accepted) {
           URL.revokeObjectURL(payload.previewUrl);
-          setError(tr(`You can add up to ${MAX_IMAGES} images`, `最多 ${MAX_IMAGES} 张图片`));
+          fail(tr(`You can add up to ${MAX_IMAGES} images`, `最多 ${MAX_IMAGES} 张图片`), "limit");
+          // The draft is not what Send was pressed on any more: hold it back.
+          setSendQueued(false);
           continue;
         }
         setNewImages((value) => [...value, payload]);
       } catch (cause) {
         if (reservationOpen) imageSlots.settle(false);
-        if (mountedRef.current) setError(errorMessage(cause, "Couldn’t process the image", "图片处理失败"));
+        if (mountedRef.current) {
+          fail(errorMessage(cause, "Couldn’t process the image", "图片处理失败"));
+          // A queued send would go out without the image it was waiting for.
+          setSendQueued(false);
+        }
       } finally {
         if (mountedRef.current) setCompressing((value) => value - 1);
       }
@@ -577,38 +888,50 @@ export function Editor({
     landValue(`${content.slice(0, start)}${markdown}${content.slice(end)}`, start + markdown.length);
   }
 
-  function hasFiles(event: DragEvent) {
-    return [...(event.dataTransfer?.types ?? [])].some((type) => type === "Files" || type === "text/uri-list");
+  /** Whether a file drop of this kind would add anything right now. */
+  function acceptsDrop(kind: FileDragKind) {
+    return !locked && kind === "images" && totalImages + compressing < MAX_IMAGES;
   }
+  addFilesRef.current = (files) => void addFiles(files);
+  acceptsRef.current = acceptsDrop;
 
+  // Files light the veil and are claimed here. Links and plain text are
+  // left to the field: the browser drops them at the drop caret (and a
+  // selection dragged within the field moves), and onChange keeps state in
+  // step. Only an image link is taken over — it becomes ![](url).
   function onDragEnter(event: DragEvent<HTMLDivElement>) {
-    if (!hasFiles(event)) return;
+    if (!isFileDrag(event)) return;
     event.preventDefault();
-    if (busy || submittingRef.current) return;
-    setDragKind([...(event.dataTransfer?.types ?? [])].includes("Files") ? "files" : "link");
+    if (locked) return;
+    setDragKind(fileDragKind(event.dataTransfer));
     setDragDepth((value) => value + 1);
   }
 
   function onDragOver(event: DragEvent<HTMLDivElement>) {
-    if (!hasFiles(event)) return;
-    event.preventDefault();
-    if (busy || submittingRef.current) return;
+    if (isFileDrag(event)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = acceptsDrop(fileDragKind(event.dataTransfer)) ? "copy" : "none";
+      return;
+    }
+    // Beside the field (toolbar, attachments) a link has no drop caret of
+    // its own: accept it there, and it lands at the field's caret.
+    if (!locked && event.target !== areaRef.current && [...(event.dataTransfer?.types ?? [])].includes("text/uri-list")) event.preventDefault();
   }
 
   function onDragLeave(event: DragEvent<HTMLDivElement>) {
-    if (!hasFiles(event)) return;
+    if (!isFileDrag(event)) return;
     setDragDepth((value) => Math.max(0, value - 1));
   }
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
-    event.preventDefault();
-    if (busy || submittingRef.current) return;
     setDragDepth(0);
-    const files = [...(event.dataTransfer?.files ?? [])].filter((file) => file.type.startsWith("image/"));
-    if (files.length > 0) {
-      void addFiles(files);
+    if (isFileDrag(event)) {
+      // Never the browser's: it would open the file in the tab.
+      event.preventDefault();
+      if (!locked) void addFiles([...(event.dataTransfer?.files ?? [])]);
       return;
     }
+    if (locked) return;
     // A dragged image from another page stays an external image reference
     // (never uploaded); any other link lands as a plain link. The image is
     // known by the <img> in the drag's HTML (unless the drag is the link
@@ -628,8 +951,25 @@ export function Editor({
     }
     if (!image && uri && isImageUrl(uri)) image = uri;
     const encode = (url: string) => url.replace(/\(/g, "%28").replace(/\)/g, "%29");
-    if (image) insertAtCaret(`![](${encode(image)})`, true);
-    else if (uri && /^https?:\/\/\S+$/i.test(uri)) insertAtCaret(uri, true);
+    const link = [...(data?.types ?? [])].includes("text/uri-list");
+    if (!image && link && uri && /^(blob|data|file):/i.test(uri)) {
+      // A card's own picture (an object URL) or a local path: nothing a
+      // memo can keep, so nothing lands — the field must not take it either.
+      event.preventDefault();
+      return;
+    }
+    if (image) {
+      event.preventDefault();
+      insertAtCaret(`![](${encode(image)})`, true);
+    } else if (event.target !== areaRef.current && link && uri && /^https?:\/\/\S+$/i.test(uri)) {
+      event.preventDefault();
+      insertAtCaret(uri, true);
+    }
+  }
+
+  function closeLink() {
+    setLinkOpen(false);
+    clearError("link");
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -639,14 +979,35 @@ export function Editor({
     // keydown but retain the conventional 229 keyCode, so honor both signals
     // before tag suggestions or markdown shortcuts see the event.
     if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-    if (suggestion) {
+    if (sendQueued) {
+      // Held for a compressing image: Esc takes the press back; nothing
+      // else may change the draft before it goes.
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSendQueued(false);
+      }
+      return;
+    }
+    const area = event.currentTarget;
+    // The list belongs to the token under the caret. One left behind by a
+    // caret move would splice its tag over the wrong span: drop it and let
+    // the key do what it would have done.
+    let active = suggestion;
+    if (active) {
+      const token = area.selectionStart === area.selectionEnd ? tagTokenAt(area.value, area.selectionStart) : null;
+      if (!token || token.hashStart !== active.tokenStart) {
+        setSuggestion(null);
+        active = null;
+      }
+    }
+    if (active) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const delta = event.key === "ArrowDown" ? 1 : -1;
-        setSuggestion({ ...suggestion, index: (suggestion.index + delta + suggestion.items.length) % suggestion.items.length });
+        setSuggestion({ ...active, index: (active.index + delta + active.items.length) % active.items.length });
         return;
       }
-      if (event.key === "Enter" && suggestion.exact) {
+      if (event.key === "Enter" && active.exact) {
         // The run is already a tag: Enter keeps its ordinary meaning (a new
         // line, a continued list) and only puts the list away. It used to
         // take the first child instead — `#life` became `#life/cooking` and
@@ -654,10 +1015,11 @@ export function Editor({
         setSuggestion(null);
       } else if (event.key === "Enter" || event.key === "Tab") {
         event.preventDefault();
-        applySuggestion(suggestion.items[suggestion.index]);
+        applySuggestion(active.items[active.index]);
         return;
       }
       if (event.key === "Escape") {
+        event.preventDefault();
         setSuggestion(null);
         return;
       }
@@ -666,7 +1028,6 @@ export function Editor({
     // item exits instead); Shift+Enter stays a plain newline escape hatch,
     // and Enter while the IME is composing must never be intercepted.
     if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey && !event.nativeEvent.isComposing) {
-      const area = event.currentTarget;
       if (area.selectionStart === area.selectionEnd) {
         const patch = continueListOnEnter(content, area.selectionStart);
         if (patch) {
@@ -676,13 +1037,21 @@ export function Editor({
         }
       }
     }
-    // Tab hops table cells and indents list lines; anywhere else it keeps
-    // moving focus.
+    // Backspace right after an empty item's marker takes the whole marker
+    // (or one level of indent), not one character of it.
+    if (event.key === "Backspace" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      const patch = backspaceListMarker(content, area.selectionStart, area.selectionEnd);
+      if (patch) {
+        event.preventDefault();
+        applyPatch(patch);
+        return;
+      }
+    }
+    // Tab hops table cells and indents list lines (every selected one);
+    // anywhere else it keeps moving focus.
     if (event.key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) {
       const dir = event.shiftKey ? -1 : 1;
-      const patch =
-        tableTabStop(content, event.currentTarget.selectionStart, dir) ??
-        shiftListIndent(content, event.currentTarget.selectionStart, dir);
+      const patch = tableTabStop(content, area.selectionStart, dir) ?? shiftListIndent(content, area.selectionStart, dir, area.selectionEnd);
       if (patch) {
         event.preventDefault();
         applyPatch(patch);
@@ -695,7 +1064,6 @@ export function Editor({
         key === "b" ? "**" : key === "i" ? "*" : key === "e" ? "`" : key === "s" && event.shiftKey ? "~~" : key === "h" && event.shiftKey ? "==" : null;
       if (marker) {
         event.preventDefault();
-        const area = event.currentTarget;
         applyPatch(toggleWrap(content, area.selectionStart, area.selectionEnd, marker));
         return;
       }
@@ -706,8 +1074,19 @@ export function Editor({
     }
     // Paste-and-match-style: the paste handler below skips the HTML path.
     plainPasteRef.current = (event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "v";
-    if (event.key === "Escape" && mode === "edit" && onCancel) {
-      cancel();
+    // Esc peels one layer per press: the tag list (above), the image-link
+    // row, then the editor itself — an edit is discarded (with Undo on its
+    // toast), the composer just lets go of focus.
+    if (event.key === "Escape") {
+      if (linkOpen) {
+        event.preventDefault();
+        closeLink();
+      } else if (mode === "edit" && onCancel) {
+        cancel();
+      } else if (mode === "create") {
+        event.preventDefault();
+        area.blur();
+      }
     }
   }
 
@@ -721,56 +1100,90 @@ export function Editor({
   function cancel() {
     if (!onCancel || locked) return;
     const area = areaRef.current;
-    const keptNew = newImages.filter((image) => !removingKeys.has(image.previewUrl));
-    const removed = [...removedIds, ...existingImages.filter((image) => removingKeys.has(image.id)).map((image) => image.id)];
-    const dirty = content.trim() !== openedOn.trim() || keptNew.length > 0 || removed.length > 0;
     if (!dirty) {
       onCancel(null);
       return;
     }
-    const handedOff = new Set(keptNew.map((image) => image.previewUrl));
+    const handedOff = new Set(keptNewImages.map((image) => image.previewUrl));
     previewUrls.current = previewUrls.current.filter((url) => !handedOff.has(url));
     onCancel({
       content,
-      newImages: keptNew,
-      removedIds: removed,
+      newImages: keptNewImages,
+      removedIds: removedImageIds,
       selectionStart: area?.selectionStart ?? content.length,
       selectionEnd: area?.selectionEnd ?? content.length
     });
   }
 
-  async function submit() {
-    if (!canSubmit || submittingRef.current) return;
+  /**
+   * Send / Save. Pressed while an image is still compressing, the press is
+   * held (`sendQueued`) and the save goes out by itself once the last image
+   * lands; `fromQueue` is that deferred run. ⌘↩ on an untouched edit has
+   * nothing to save and closes it quietly, like Esc.
+   */
+  async function submit(fromQueue = false) {
+    if (submittingRef.current) return;
+    if (!fromQueue) {
+      if (mode === "edit" && !dirty && !locked) {
+        cancel();
+        return;
+      }
+      if (canQueue) {
+        setSendQueued(true);
+        setError(null);
+        announce(tr("Preparing image…", "正在处理图片…"));
+        return;
+      }
+      if (!canSubmit) return;
+    }
     submittingRef.current = true;
     setSubmitting(true);
     setError(null);
+    // Set once the composer is cleared — by the owner through onCommitted,
+    // inside the update that lands the memo, or else right after.
+    let cleared = false;
+    const clearComposer = (animated: boolean) => {
+      if (cleared || !mountedRef.current) return;
+      cleared = true;
+      draftIdRef.current = crypto.randomUUID();
+      imageSlots.syncCommitted(existingImages.length);
+      for (const image of newImages) URL.revokeObjectURL(image.previewUrl);
+      setContent("");
+      setNewImages([]);
+      previewUrls.current = [];
+      setSuggestion(null);
+      setLinkOpen(false);
+      setLinkValue("");
+      // A view transition morphs the composer shut itself; without one the
+      // field eases down on its own height transition.
+      clearGrowRef.current = animated ? "instant" : "smooth";
+      setClears((value) => value + 1);
+    };
     try {
-      // Attachments mid-exit-animation count as removed already.
-      const uploading = newImages.filter((image) => !removingKeys.has(image.previewUrl));
+      const uploading = keptNewImages;
       if (uploading.length > 0) setUploadPercent(0);
       const ok = await onSubmit({
         clientId: draftIdRef.current,
         content: content.trim(),
         newImages: uploading,
-        removeImageIds: [...removedIds, ...existingImages.filter((image) => removingKeys.has(image.id)).map((image) => image.id)],
+        removeImageIds: removedImageIds,
         onUploadProgress:
           uploading.length > 0
             ? (fraction) => {
                 if (mountedRef.current) setUploadPercent(Math.min(99, Math.round(fraction * 100)));
               }
-            : undefined
+            : undefined,
+        onCommitted: mode === "create" ? clearComposer : undefined
       });
       if (ok && mode === "create") {
-        draftIdRef.current = crypto.randomUUID();
-        imageSlots.syncCommitted(existingImages.length);
-        for (const image of newImages) URL.revokeObjectURL(image.previewUrl);
-        setContent("");
-        setNewImages([]);
-        previewUrls.current = [];
-        setSuggestion(null);
-        setLinkOpen(false);
-        setLinkValue("");
-        requestAnimationFrame(autoGrow);
+        clearComposer(false);
+        // Keep writing: Send leaves focus on a button that is now disabled
+        // (or on <body> in Safari). Not on touch, where focusing would raise
+        // the keyboard, and not if the reader has moved on meanwhile.
+        const area = areaRef.current;
+        const active = document.activeElement;
+        const stayed = !active || active === document.body || rootRef.current?.contains(active);
+        if (area && stayed && window.matchMedia?.("(pointer: fine)").matches) area.focus({ preventScroll: true });
       }
     } catch (cause) {
       const rotateCreateId =
@@ -779,7 +1192,7 @@ export function Editor({
         // Keep the draft, but rotate the stable create id so another save can
         // neither resurrects a purge nor overwrites an edited existing memo.
         draftIdRef.current = crypto.randomUUID();
-        setError(
+        fail(
           tr(
             "The existing memo was kept. Your draft is safe; save again to create it as a new memo.",
             "现有笔记已保留。草稿仍然安全；再次保存会另建一条笔记。"
@@ -787,7 +1200,7 @@ export function Editor({
         );
         return;
       }
-      setError(errorMessage(cause, "Couldn’t save the memo", "保存失败"));
+      fail(errorMessage(cause, "Couldn’t save the memo", "保存失败"));
     } finally {
       submittingRef.current = false;
       if (mountedRef.current) {
@@ -797,9 +1210,34 @@ export function Editor({
     }
   }
 
+  // The drop veil: lit while a file drag is over this editor, or anywhere in
+  // the window when this is the editor a stray drop would land in. It says
+  // what letting go would do — or why it would do nothing. The last words
+  // stay put while it fades out.
+  const dropKind = locked ? null : dragDepth > 0 ? dragKind : windowDrag;
+  if (dropKind !== null) {
+    const full = totalImages + compressing >= MAX_IMAGES;
+    veilRef.current = {
+      refused: full || dropKind === "other",
+      label: full
+        ? tr(`You can add up to ${MAX_IMAGES} images`, `最多 ${MAX_IMAGES} 张图片`)
+        : dropKind === "other"
+          ? tr("Only images can be added", "只能添加图片")
+          : dragDepth > 0
+            ? tr("Release to add images", "松开以添加图片")
+            : tr("Drop here to add images", "拖到这里添加图片")
+    };
+  }
+  const veil = veilRef.current;
+  const showCounter = effectiveContentLength >= COUNTER_FROM;
+  // The ⌘↩ keycap: once there is text to send, and never beside the counter
+  // or the preparing note (the bar has no room for all three).
+  const showKeyHint = submittedContent.length > 0 && !showCounter && !sendQueued;
+
   return (
     <div
-      className={`editor ${mode === "create" ? "editor-create" : "editor-edit"}${dragDepth > 0 ? " is-dropping" : ""}`}
+      ref={rootRef}
+      className={`editor ${mode === "create" ? "editor-create" : "editor-edit"}${dropKind !== null ? " is-dropping" : ""}`}
       aria-busy={locked}
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
@@ -836,14 +1274,26 @@ export function Editor({
           onChange={(event) => {
             if (busy || submittingRef.current) return;
             setContent(event.target.value);
-            refreshSuggestion(event.target.value, event.target.selectionStart);
+            // Mid-composition the text is the IME's (pinyin, kana): no tag
+            // list until compositionend hands over the result.
+            if (composingRef.current || (event.nativeEvent as InputEvent).isComposing) setSuggestion(null);
+            else refreshSuggestion(event.target.value, event.target.selectionStart);
             autoGrow();
+          }}
+          onCompositionStart={() => {
+            composingRef.current = true;
+            setSuggestion(null);
+          }}
+          onCompositionEnd={(event) => {
+            composingRef.current = false;
+            refreshSuggestion(event.currentTarget.value, event.currentTarget.selectionStart);
           }}
           onScroll={() => {
             syncOverflowScroll();
             placeSuggest();
           }}
-          onClick={(event) => refreshSuggestion(content, event.currentTarget.selectionStart)}
+          onSelect={onCaretMove}
+          onClick={onCaretMove}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
           onBlur={() => window.setTimeout(() => setSuggestion(null), 120)}
@@ -871,9 +1321,16 @@ export function Editor({
                 event.preventDefault();
                 applySuggestion(tag);
               }}
+              onMouseMove={(event) => {
+                // The pointer picks the row the keyboard would act on, so
+                // only one row is ever lit. A list redrawn under a resting
+                // pointer (movement 0) leaves the keyboard's row alone.
+                if (event.movementX === 0 && event.movementY === 0) return;
+                if (index !== suggestion.index) setSuggestion({ ...suggestion, index });
+              }}
               disabled={locked}
             >
-              #{tag}
+              {suggestionRow(tag, suggestion.query)}
             </button>
           ))}
         </div>
@@ -963,7 +1420,8 @@ export function Editor({
                 confirmLink();
               }
               if (event.key === "Escape") {
-                setLinkOpen(false);
+                event.preventDefault();
+                closeLink();
                 areaRef.current?.focus();
               }
             }}
@@ -980,7 +1438,7 @@ export function Editor({
         </p>
       ) : error ? (
         <p className="editor-error" role="alert">
-          {error}
+          {error.text}
         </p>
       ) : null}
       {conflictMessage ? (
@@ -1092,24 +1550,42 @@ export function Editor({
           />
         </div>
         <div className="editor-actions">
-        {effectiveContentLength >= COUNTER_FROM ? (
-          <span
-            className={`editor-count${overLimit ? " is-over" : ""}`}
-            title={overLimit ? tr("Over the memo length limit", "已超出单条笔记字数上限") : undefined}
-          >
-              {formatNumber(effectiveContentLength)} / {formatNumber(MAX_CONTENT_CHARS)}
-          </span>
-        ) : null}
+          {sendQueued ? <span className="editor-status">{tr("Preparing image…", "正在处理图片…")}</span> : null}
+          {showCounter ? (
+            overLimit ? (
+              // Over the cap the count says so in words; the bubble names the cap.
+              <span
+                className="editor-count is-over"
+                {...tip.bind({ text: tr(`A memo holds up to ${formatNumber(MAX_CONTENT_CHARS)} characters`, `单条笔记最多 ${formatNumber(MAX_CONTENT_CHARS)} 字`) })}
+              >
+                {tr(`${formatNumber(effectiveContentLength - MAX_CONTENT_CHARS)} over`, `超出 ${formatNumber(effectiveContentLength - MAX_CONTENT_CHARS)} 字`)}
+                <span className="sr-only">
+                  {tr(` — a memo holds up to ${formatNumber(MAX_CONTENT_CHARS)} characters`, `，单条笔记最多 ${formatNumber(MAX_CONTENT_CHARS)} 字`)}
+                </span>
+              </span>
+            ) : (
+              <span className="editor-count">
+                {formatNumber(effectiveContentLength)} / {formatNumber(MAX_CONTENT_CHARS)}
+              </span>
+            )
+          ) : null}
           {mode === "edit" && onCancel ? (
             <button type="button" className="ghost-button" onClick={cancel} disabled={locked}>
               {tr("Cancel", "取消")}
             </button>
           ) : null}
+          {/* The shortcut, said where the eye already is; the button's own
+              aria-keyshortcuts carries it for assistive tech. */}
+          {showKeyHint ? (
+            <kbd className="send-hint" aria-hidden="true">
+              {SEND_KEYS}
+            </kbd>
+          ) : null}
           <button
             type="button"
-            className={`send-button${uploadPercent !== null ? " is-uploading" : ""}`}
+            className={`send-button${uploadPercent !== null ? " is-uploading" : ""}${sending ? " is-sending" : ""}`}
             onClick={() => void submit()}
-            disabled={!canSubmit}
+            disabled={!canSubmit && !canQueue}
             aria-label={mode === "create" ? tr("Send", "发送") : tr("Save", "保存")}
             aria-keyshortcuts="Meta+Enter Control+Enter"
             {...tip.bind({
@@ -1123,7 +1599,13 @@ export function Editor({
               // screen readers can reach sits beside the button.
               <span className="send-progress" aria-hidden="true" style={{ transform: `scaleX(${uploadPercent / 100})` }} />
             ) : null}
-            {locked ? <Loader2 size={17} className="spin" aria-hidden="true" /> : <Send size={17} aria-hidden="true" />}
+            {sending && spinnerShown ? (
+              <span className="send-spinner" aria-hidden="true">
+                <Loader2 size={17} className="spin" aria-hidden="true" />
+              </span>
+            ) : (
+              <Send size={17} aria-hidden="true" />
+            )}
             {/* Label and percentage share one grid cell with hidden sizers for
                 both, so the chip is the same width idle, at 0% and at 99%
                 (tabular digits) and never jumps when an upload starts. */}
@@ -1148,9 +1630,9 @@ export function Editor({
         </div>
       </div>
 
-      <div className="editor-drop" aria-hidden="true">
-        {dragKind === "files" ? <ImagePlus size={22} aria-hidden="true" /> : <Link2 size={22} aria-hidden="true" />}
-        <span>{dragKind === "files" ? tr("Release to add images", "松开以添加图片") : tr("Release to insert the link", "松开以插入链接")}</span>
+      <div className={`editor-drop${veil.refused ? " is-refusing" : ""}`} aria-hidden="true">
+        {veil.refused ? <ImageOff size={22} aria-hidden="true" /> : <ImagePlus size={22} aria-hidden="true" />}
+        <span>{veil.label}</span>
       </div>
     </div>
   );

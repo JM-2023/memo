@@ -421,6 +421,8 @@ a:hover { text-decoration: underline; }
 @keyframes tick-in { from { opacity: 0; transform: translateY(-50%) scaleY(0.2); } to { opacity: 1; transform: translateY(-50%) scaleY(1); } }
 /* Content entrance: rises with a long damped settle. Pair with --ease-out. */
 @keyframes rise-in { from { opacity: 0; transform: translateY(18px) scale(0.995); } to { opacity: 1; transform: none; } }
+/* A just-sent memo: settles down out of the composer above it, a short way. */
+@keyframes drop-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 /* Dialogs: a damped swell — no overshoot, the long tail does the settling. */
 @keyframes modal-in { from { opacity: 0; transform: scale(0.96) translateY(14px); } to { opacity: 1; transform: none; } }
 @keyframes modal-out { to { opacity: 0; transform: scale(0.977) translateY(6px); } }
@@ -2282,7 +2284,11 @@ button.crumb:active { background: var(--wash-strong); }
   white-space: pre-wrap;
   overflow-wrap: break-word;
   outline: none;
-  /* autoGrow sets height per input; easing it keeps typing from snapping. */
+  /* The accent marks where typing goes; it reads on both themes' fields
+     (sage on white, pale sage on the dark field). */
+  caret-color: var(--primary);
+  /* autoGrow sets height per input (via its current height, so this really
+     eases): a new line opens smoothly, a sent draft closes the same way. */
   transition: height 0.12s var(--ease);
 }
 /* Pinned (not UA default) so the over-limit mirror reproduces the exact
@@ -2347,7 +2353,17 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 500;
   animation: fade-up 0.2s var(--ease) both;
 }
-.editor-count.is-over { color: var(--danger); }
+/* Over the cap the count turns into words ("1204 over") and steps up a
+   weight; colour only seconds it. */
+.editor-count.is-over { color: var(--danger); font-weight: 600; }
+/* "Preparing image…" while a pressed Send waits for compression. */
+.editor-status {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  white-space: nowrap;
+  animation: fade-up 0.2s var(--ease) both;
+}
 
 .tag-suggest {
   position: absolute;
@@ -2366,18 +2382,26 @@ button.crumb:active { background: var(--wash-strong); }
   animation: menu-morph 0.15s var(--ease-spring) both;
 }
 .tag-suggest button {
+  display: flex;
+  min-width: 0;
   padding: 7px 10px;
   color: var(--ink-soft);
   font-size: var(--fs-sm);
   font-weight: 500;
   text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   border-radius: var(--r-sm);
   transition: background 0.14s ease, color 0.14s ease;
 }
-.tag-suggest button.is-active, .tag-suggest button:hover { background: var(--wash-strong); color: var(--primary-dark); }
+/* One lit row: the pointer moves the active index (Editor, mousemove), so
+   no separate :hover look can light a second row under a resting pointer. */
+.tag-suggest button.is-active { background: var(--wash-strong); color: var(--primary-dark); }
+/* A deep tag gives way from its parent path, never its leaf: the path
+   ellipsizes, the leaf keeps its name (and ellipsizes only past the row). */
+.tag-suggest-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tag-suggest-leaf { flex: 0 0 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* The run typed so far, a step up the weight ladder. */
+.tag-suggest-hit { font-weight: 600; }
 
 .editor-attachments { display: flex; flex-wrap: wrap; gap: 8px; }
 .attachment {
@@ -2463,6 +2487,14 @@ button.crumb:active { background: var(--wash-strong); }
 }
 .editor.is-dropping .editor-drop { opacity: 1; visibility: visible; transform: none; }
 .editor.is-dropping { border-color: color-mix(in srgb, var(--primary) 50%, var(--line)); }
+/* A drop that would add nothing (not an image, or already 9) says why, in
+   neutral ink: the words carry it, not a warning colour. */
+.editor-drop.is-refusing {
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--surface-2) 92%, transparent);
+  border-color: var(--line-strong);
+}
+.editor.is-dropping:has(> .editor-drop.is-refusing) { border-color: var(--line-strong); }
 
 /* Image-link row: glides open under the attachments (grid-rows 0fr → 1fr). */
 .link-pop {
@@ -2499,9 +2531,33 @@ button.crumb:active { background: var(--wash-strong); }
 
 .icon-button.is-active-tool { background: var(--primary-tint); color: var(--primary-dark); }
 
-.editor-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+/* A size container, so the ⌘↩ keycap can leave a bar too narrow for it. */
+.editor-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; container: editor-bar / inline-size; }
 .editor-tools { display: flex; align-items: center; gap: 2px; }
 .editor-actions { display: flex; align-items: center; gap: 8px; }
+/* The send shortcut as a faint keycap beside Send, once there is text. Only
+   for a mouse and keyboard, and only where the bar has room for it beside
+   the six tools, Cancel and Save (480px clears both at the 901px layout). */
+.send-hint {
+  display: none;
+  padding: 1px 5px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  animation: fade-in var(--t) var(--ease) both;
+}
+@media (pointer: fine) {
+  @container editor-bar (min-width: 480px) { .send-hint { display: inline-block; } }
+}
+/* The preparing note leaves first where it would push Send off the bar
+   (the chip's sending state and a spoken status still say it). */
+@container editor-bar (max-width: 459px) { .editor-status { display: none; } }
+@container editor-bar (max-width: 559px) { .editor-edit .editor-status { display: none; } }
 
 /* Tier A — the one primary action, ported from project-manager's Liquid
    Glass "download button". The hover swell is physical: padding and radius
@@ -2589,6 +2645,11 @@ button.crumb:active { background: var(--wash-strong); }
    leave the browser, and the label becomes the percentage. The chip keeps full
    opacity while it counts — it is reporting work, not refusing a click. */
 .send-button.is-uploading { opacity: 1; }
+/* Sending (or holding a press for a compressing image) is work, not the
+   empty composer's rest: the chip stays lifted at full opacity, and the
+   spinner fades in only if the send outlasts SPINNER_DELAY_MS. */
+.send-button.is-sending { opacity: 1; box-shadow: var(--dl-shadow); }
+.send-spinner { display: inline-grid; animation: fade-in var(--t) var(--ease) both; }
 .send-progress {
   position: absolute;
   inset: 0;
@@ -4658,6 +4719,10 @@ button.stats-tag-row:active { scale: 0.992; }
    banners and feed-empty keep the calm fade; browsers without class support
    fall back to it too. */
 ::view-transition-new(.memo-card):only-child { animation: rise-in 0.24s var(--ease-out) 0.03s both; }
+/* …except the memo just sent (App's landCreated marks that transition): it
+   comes from the composer above, so it drops in a few pixels while the cards
+   below glide down to make room. */
+:root[data-vt-create]::view-transition-new(.memo-card):only-child { animation: drop-in 0.24s var(--ease-out) 0.03s both; }
 /* The composer enters in its own snapshot above the stable page background. */
 ::view-transition-new(composer):only-child { animation: rise-in 0.28s var(--ease-out) both; }
 ::view-transition-group(composer),

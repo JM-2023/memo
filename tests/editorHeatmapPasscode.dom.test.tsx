@@ -120,8 +120,13 @@ describe("Editor accessibility and composition", () => {
 
     fireEvent.change(editor, { target: { value: "x".repeat(39_995), selectionStart: 39_995 } });
     expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
-    // Counts are set without group separators, so the digits keep their column.
-    expect(screen.getByText("40001 / 40000").className).toContain("is-over");
+    // Over the cap the count says so in words (no group separators, so the
+    // digits keep their column); the cap itself is in the tip and for
+    // screen readers, not a native title.
+    const over = screen.getByText("1 over");
+    expect(over.className).toContain("is-over");
+    expect(over.getAttribute("title")).toBeNull();
+    expect(over.textContent).toBe("1 over — a memo holds up to 40000 characters");
   });
 });
 
