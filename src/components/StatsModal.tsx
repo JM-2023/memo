@@ -1,8 +1,8 @@
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
-import { useReducedMotion } from "../hooks/useReducedMotion";
+import { useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import { dateFormat, dateKey, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { buildHeatMonth, computeStreaks, countsByDay, localMaxima, totalStats, wordCountOf, type HeatMonth } from "../lib/stats";
@@ -334,49 +334,32 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
   }, [memos, maxYear]);
 
   const [year, setYear] = useState(maxYear);
-  const [closing, setClosing] = useState(false);
-  const reducedMotion = useReducedMotion();
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const closeTimer = useRef(0);
   const closeRef = useRef(onClose);
   const drilldownRef = useRef(onDrilldown);
   closeRef.current = onClose;
   drilldownRef.current = onDrilldown;
 
+  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
+  const exit = useOverlayExit(overlayRef);
+  const closing = exit.closing;
+  const backdrop = useBackdropDismiss(requestClose);
+  // Back closes the panel with its own exit (see Lightbox's closeSignal).
+  useCloseSignal(closeSignal, requestClose);
+
   function leave(callback: () => void) {
-    if (closing) return;
+    if (exit.closingRef.current) return;
     tip.hide();
-    if (reducedMotion) {
-      callback();
-      return;
-    }
-    setClosing(true);
-    closeTimer.current = window.setTimeout(callback, 170);
+    exit.leave(callback);
   }
 
   function requestClose() {
     leave(() => closeRef.current());
   }
 
-  // Back closes the panel with its own exit (see Lightbox's closeSignal).
-  const closeSignalRef = useRef(closeSignal);
-  useEffect(() => {
-    if (closeSignal === closeSignalRef.current) return;
-    closeSignalRef.current = closeSignal;
-    requestClose();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [closeSignal]);
-
   function requestDrilldown(filter: StatsDrilldown) {
     leave(() => drilldownRef.current(filter));
   }
-
-  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
-  const backdrop = useBackdropDismiss(requestClose);
-
-  useEffect(() => {
-    return () => window.clearTimeout(closeTimer.current);
-  }, []);
 
   const byDay = useMemo(() => countsByDay(memos), [memos]);
   const yearData = useMemo(() => buildYearData(memos, byDay, year, now), [memos, byDay, year, now]);

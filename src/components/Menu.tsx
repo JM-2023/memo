@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { afterExit, continueFrom, paintedFrameOf, type PaintedFrame } from "../hooks/useOverlayExit";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 
 /** ARIA wiring for the trigger button — spread it onto the button. */
@@ -66,6 +67,8 @@ interface PortalPos {
 
 /** Type-ahead keeps its letters this long between presses. */
 const TYPEAHEAD_RESET_MS = 500;
+/** The exit's length where the engine can't report it (menu-out runs 0.12s). */
+const MENU_EXIT_MS = 130;
 
 function itemLabel(item: HTMLElement): string {
   return (item.textContent || item.getAttribute("aria-label") || "").trim().toLocaleLowerCase();
@@ -105,6 +108,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   const focusEdgeRef = useRef<"first" | "last">("first");
   const restoreTriggerRef = useRef(false);
   const typeaheadRef = useRef({ text: "", timer: 0 });
+  const framePendingRef = useRef<PaintedFrame | null>(null);
   const open = phase === "open";
 
   function triggerElement() {
@@ -134,6 +138,9 @@ export function Menu({ trigger, children, align = "right", className, panelClass
 
   function requestClose(restoreTrigger = false) {
     restoreTriggerRef.current = restoreTrigger;
+    // Closed mid-entrance (a quick second click): the exit leaves from the
+    // frame on screen, not from the fully open panel.
+    if (phase === "open") framePendingRef.current = paintedFrameOf(panelRef.current);
     setPhase((value) => (value === "open" ? "closing" : value));
   }
 
@@ -156,6 +163,9 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     focusEdgeRef.current = edge;
     focusTargetRef.current = focusSelector;
     restoreTriggerRef.current = false;
+    // Re-opened mid-exit: remember the frame on screen, so the entrance
+    // carries on from it instead of restarting from transparent.
+    framePendingRef.current = paintedFrameOf(panelRef.current);
     setPhase("open");
   }
 
@@ -187,14 +197,21 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     return true;
   }
 
+  // The class flip (open ↔ closing) swaps the panel's CSS animation; carry
+  // the new one on from the frame that was painted. Before paint, so the
+  // swapped-in animation's own first frame never shows.
+  useLayoutEffect(() => {
+    const from = framePendingRef.current;
+    framePendingRef.current = null;
+    if (phase !== "closed") continueFrom(panelRef.current, from, reducedMotion);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per phase change
+  }, [phase]);
+
+  // The exit ends when the panel's own exit animation does (a dissolve
+  // under reduced motion); a re-open in the meantime cancels the hand-over.
   useEffect(() => {
     if (phase !== "closing") return;
-    if (reducedMotion) {
-      setPhase("closed");
-      return;
-    }
-    const timer = window.setTimeout(() => setPhase("closed"), 130);
-    return () => window.clearTimeout(timer);
+    return afterExit([panelRef.current], reducedMotion ? 0 : MENU_EXIT_MS, () => setPhase("closed"));
   }, [phase, reducedMotion]);
 
   useLayoutEffect(() => {
@@ -224,18 +241,23 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   // so the next Tab does not close the menu before confirmation is reachable.
   // A branch confirming something irreversible marks its Cancel with
   // data-menu-autofocus: a reflexive second Enter then backs out instead of
-  // destroying.
+  // destroying. Panels get the same floor: a saved filter deleted from its
+  // own row, or a control that turns disabled under focus, would otherwise
+  // strand focus on <body> with the panel still open (its first usable
+  // control takes it instead).
   useEffect(() => {
-    if (!open || kind !== "menu") return;
+    if (!open) return;
     const panel = panelRef.current;
     if (!panel) return;
     const observer = new MutationObserver(() => {
       const active = document.activeElement;
-      if (active instanceof HTMLElement && active !== document.body && active.isConnected) return;
+      const stranded = !(active instanceof HTMLElement) || active === document.body || !active.isConnected || (panel.contains(active) && active.matches(":disabled"));
+      if (!stranded) return;
       const preferred = panel.querySelector<HTMLElement>("[data-menu-autofocus]");
-      (preferred ?? menuItems()[0])?.focus({ preventScroll: true });
+      const fallback = kind === "menu" ? menuItems()[0] : panel.querySelector<HTMLElement>(PAGE_FOCUSABLE);
+      (preferred ?? fallback)?.focus({ preventScroll: true });
     });
-    observer.observe(panel, { childList: true, subtree: true });
+    observer.observe(panel, { childList: true, subtree: true, attributes: true, attributeFilter: ["disabled"] });
     return () => observer.disconnect();
   }, [open, kind]);
 

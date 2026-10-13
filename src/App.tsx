@@ -42,7 +42,7 @@ import { SwapText } from "./components/SwapText";
 import { SyncNotice } from "./components/SyncNotice";
 import { useTip } from "./components/Tip";
 import { bindAnchored, isTruncated } from "./components/truncationTip";
-import { useModalA11y } from "./hooks/useModalA11y";
+import { MODAL_EXEMPT_ATTR, useModalA11y } from "./hooks/useModalA11y";
 import { useDrawerSwipe } from "./hooks/useDrawerSwipe";
 import { useSearchHighlight } from "./hooks/useSearchHighlight";
 import { useTopbarTuck } from "./hooks/useTopbarTuck";
@@ -257,7 +257,9 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onR
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== "F6" || event.altKey || event.ctrlKey || event.metaKey || event.defaultPrevented) return;
       const stack = stackRef.current;
-      // Under an open dialog the stack is inert; F6 stays the browser's.
+      // The stack stays live over an open dialog (MODAL_EXEMPT_ATTR), so F6
+      // reaches a toast's Undo from inside one; only a stack made inert by
+      // something else leaves F6 to the browser.
       if (!stack || stack.inert || stack.closest("[inert]")) return;
       event.preventDefault();
       if (stack.contains(document.activeElement)) {
@@ -284,6 +286,10 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onR
     <div
       ref={stackRef}
       className="toast-stack"
+      // Not isolated by an open dialog: its Undo, its dismiss button and the
+      // hover that holds its clock work over the dialog, and a click on a
+      // toast never falls through to the scrim.
+      {...{ [MODAL_EXEMPT_ATTR]: "" }}
       role="region"
       aria-label={regionLabel}
       onPointerEnter={onPause}
@@ -2679,6 +2685,21 @@ export default function App() {
     document.title = phase === "ready" && lensTitle ? `${lensTitle} · MEMO` : "MEMO";
   }, [phase, lensTitle]);
 
+  // Back over an open dialog (none of them keeps a history entry) closes the
+  // dialog through its own exit and leaves the lens alone; see popNav.
+  const [dialogCloseSignal, setDialogCloseSignal] = useState(0);
+  const dialogUp =
+    shareMemo !== null ||
+    bulkTagOpen ||
+    tagMemo !== null ||
+    reviewSettingsOpen ||
+    modelSettingsOpen ||
+    importTarget !== null ||
+    renameTagTarget !== null ||
+    savingFilter ||
+    changingPasscode ||
+    confirmLogout;
+
   const popNavRef = useRef<(state: unknown, browserAnimated: boolean) => void>(() => undefined);
   popNavRef.current = (state, browserAnimated) => {
     // Our own step off a layer's entry, after the layer closed from the UI.
@@ -2689,6 +2710,18 @@ export default function App() {
     const store = navStoreRef.current;
     if (!store) return;
     const id = navIdOf(state);
+    // Back under an open dialog closes the dialog and nothing else. The
+    // browser has already stepped off the entry on screen, so it goes back
+    // on top (with the layer's entry, when the dialog sits over a layer) and
+    // the dialog leaves as its Cancel would: through its exit, and not while
+    // it is busy. Forward onto a stale layer entry is stepped over below.
+    if (dialogUp && !(isLayerState(state) && !layerEntryRef.current)) {
+      const layered = layerEntryRef.current;
+      if (!(layered && id !== null && id === currentNavIdRef.current)) currentNavIdRef.current = store.push(navLensRef.current);
+      if (layered && currentNavIdRef.current) store.pushLayer(currentNavIdRef.current);
+      setDialogCloseSignal((count) => count + 1);
+      return;
+    }
     if (layerEntryRef.current) {
       layerEntryRef.current = false;
       // Back off the layer's entry onto the lens it covered: the layer
@@ -5108,7 +5141,7 @@ export default function App() {
       {lightbox ? <Lightbox items={lightbox.items} index={lightbox.index} onClose={() => setLightbox(null)} closeSignal={layerCloseSignal} /> : null}
       {shareMemo ? (
         <LazyDialog onFail={lazyDialogFailed}>
-          <ShareDialog memo={shareMemo} onToast={showToast} onClose={() => setShareMemo(null)} />
+          <ShareDialog memo={shareMemo} onToast={showToast} onClose={() => setShareMemo(null)} closeSignal={dialogCloseSignal} />
         </LazyDialog>
       ) : null}
       {statsOpen ? (
@@ -5133,6 +5166,7 @@ export default function App() {
             setBulkTagOpen(false);
           }}
           onApplied={finishTagApply}
+          closeSignal={dialogCloseSignal}
         />
       ) : null}
       {tagMemo ? (
@@ -5147,6 +5181,7 @@ export default function App() {
             setTagMemoId(null);
           }}
           onApplied={finishTagApply}
+          closeSignal={dialogCloseSignal}
         />
       ) : null}
       {reviewSettingsOpen ? (
@@ -5157,6 +5192,7 @@ export default function App() {
             knownTags={knownTags}
             onSave={handleSaveReviewSettings}
             onClose={() => setReviewSettingsOpen(false)}
+            closeSignal={dialogCloseSignal}
           />
         </LazyDialog>
       ) : null}
@@ -5186,6 +5222,7 @@ export default function App() {
             semanticRebuilding={semantic.rebuilding}
             semanticQuery={view === "memos" ? feedQuery : ""}
             attend={modelSettingsAttend}
+            closeSignal={dialogCloseSignal}
           />
         </LazyDialog>
       ) : null}
@@ -5230,6 +5267,7 @@ export default function App() {
           }}
           onConfirm={handleImportConfirmed}
           onDone={() => setImportTarget(null)}
+          closeSignal={dialogCloseSignal}
         />
       ) : null}
       {renameTagTarget ? (
@@ -5276,6 +5314,7 @@ export default function App() {
           }}
           onConfirm={handleRenameTagConfirmed}
           onDone={() => setRenameTagTarget(null)}
+          closeSignal={dialogCloseSignal}
         />
       ) : null}
       {savingFilter ? (
@@ -5303,12 +5342,14 @@ export default function App() {
           onCancel={() => setSavingFilter(false)}
           onConfirm={handleSaveFilterConfirmed}
           onDone={() => setSavingFilter(false)}
+          closeSignal={dialogCloseSignal}
         />
       ) : null}
       {changingPasscode ? (
         <ChangePasscode
           onClose={() => setChangingPasscode(false)}
           onAuthLost={dropToLogin}
+          closeSignal={dialogCloseSignal}
           onDone={() => {
             setChangingPasscode(false);
             showToast(tr("Updated your passcode. Other devices will ask for the new one.", "已更新密码，其他设备需要输入新密码"));
@@ -5330,6 +5371,7 @@ export default function App() {
           }}
           onConfirm={handleLogout}
           onDone={finishLogout}
+          closeSignal={dialogCloseSignal}
         />
       ) : null}
     </div>

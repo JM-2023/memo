@@ -430,7 +430,9 @@ describe("semantic search settings", () => {
     // In flight, there is nothing to resume: the CTA row is folded.
     expect(screen.queryByRole("button", { name: "Resume download" })).toBeNull();
     expect(document.querySelector(".model-action-collapse")?.className).not.toContain("is-open");
-    expect(screen.getAllByRole("status")).toHaveLength(1);
+    // One status speaks; the folded note rows stand by, silent, so a note
+    // that arrives later is heard.
+    expect(screen.getAllByRole("status").filter((status) => status.closest(".model-note-collapse:not(.is-open)") === null)).toHaveLength(1);
 
     // Close mid-download: the panel goes, the run does not.
     unmount();

@@ -15,6 +15,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyn
 import { flushSync } from "react-dom";
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
+import { useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { displayUrl, externalImagesOf, tokenizeLine } from "../lib/content";
 import { dateKey } from "../lib/dates";
@@ -145,6 +146,8 @@ interface ShareDialogProps {
   memo: Memo;
   onToast: (text: string, tone?: "info" | "error") => void;
   onClose: () => void;
+  /** Bumped by Back: leave as the ✕ would (held while an image is made). */
+  closeSignal?: number;
 }
 
 /**
@@ -309,9 +312,8 @@ type SetupCell = "portrait" | "landscape" | "paper" | "gray" | "hand" | "date" |
  * and motion live in app.css and never reach the PNG). Save downloads the
  * PNG, Copy places it on the clipboard; both close the dialog on success.
  */
-export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
+export function ShareDialog({ memo, onToast, onClose, closeSignal }: ShareDialogProps) {
   const { language, locale, tr } = useI18n();
-  const [closing, setClosing] = useState(false);
   const [busy, setBusy] = useState<"save" | "copy" | null>(null);
   const [layout, setLayout] = useState<CardLayout>(loadLayout);
   const [tone, setTone] = useState<CardTone>(loadTone);
@@ -352,8 +354,6 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   // either gesture short.
   const head = useInkPhase(reducedMotion);
   const marks = useInkPhase(reducedMotion);
-  const closeTimer = useRef(0);
-  const closingRef = useRef(false);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const busyRef = useRef(busy);
@@ -363,34 +363,23 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
   const copyRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
+  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, escapeDisabled: busy !== null, initialFocusRef: saveRef });
+  const { closing, leave } = useOverlayExit(overlayRef);
+  const backdrop = useBackdropDismiss(requestClose);
+  useCloseSignal(closeSignal, requestClose);
+
   /** Unconditional close — the success path after save/copy. */
   function beginClose() {
-    if (closingRef.current) return;
-    closingRef.current = true;
-    if (reducedMotion) {
-      closeRef.current();
-      return;
-    }
-    setClosing(true);
-    closeTimer.current = window.setTimeout(() => closeRef.current(), 170);
+    leave(() => closeRef.current());
   }
 
-  /** User-initiated close (Escape, backdrop, ×) — held while exporting. */
+  /** User-initiated close (Escape, backdrop, ×, Back) — held while exporting. */
   function requestClose() {
     if (busyRef.current) return;
     beginClose();
   }
 
-  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, escapeDisabled: busy !== null, initialFocusRef: saveRef });
-  const backdrop = useBackdropDismiss(requestClose);
-
-  useEffect(
-    () => () => {
-      window.clearTimeout(closeTimer.current);
-      window.clearTimeout(sealExitTimer.current);
-    },
-    []
-  );
+  useEffect(() => () => window.clearTimeout(sealExitTimer.current), []);
 
   // The artifact keeps its true layout width; narrow dialogs show it through
   // a wrapper scale, and height rides along so the stage scrolls the visual
@@ -589,8 +578,9 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
     try {
       const blob = await renderPng();
       downloadBlob(blob, `memo-${dateKey(new Date(memo.createdAt))}.png`);
-      setBusy(null);
       onToast(tr("Saved the image", "已保存图片"));
+      // The busy look holds through the exit, as every dialog's does: the
+      // idle label flashing back over the last frames reads as "not done".
       beginClose();
     } catch (error) {
       setBusy(null);
@@ -613,7 +603,6 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
       });
     try {
       await copyPngToClipboard(render);
-      setBusy(null);
       onToast(tr("Copied the image", "已复制图片"));
       beginClose();
     } catch {
@@ -938,15 +927,43 @@ export function ShareDialog({ memo, onToast, onClose }: ShareDialogProps) {
               {tooLongNote}
             </p>
           ) : null}
+          {/* Busy wears the one look every dialog's action does: the icon's
+              cell turns into the spinner and the label says what is under
+              way, both a held-back beat late (app.css, "busy-swap"), in a
+              cell sized for either label so the row never shifts. */}
           {supportsImageClipboard() ? (
-            <button ref={copyRef} type="button" className="ghost-button" onClick={handleCopy} disabled={busy !== null || tooLong}>
-              {busy === "copy" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
-              {tr("Copy image", "复制图片")}
+            <button
+              ref={copyRef}
+              type="button"
+              className={`ghost-button${busy === "copy" ? " is-busy" : ""}`}
+              onClick={handleCopy}
+              disabled={busy !== null || tooLong}
+            >
+              <span className="busy-icon" data-busy={busy === "copy" || undefined} aria-hidden="true">
+                <Copy size={15} />
+                <Loader2 size={15} className="spin" />
+              </span>
+              <span className="busy-swap">
+                <span aria-hidden={busy === "copy" || undefined}>{tr("Copy image", "复制图片")}</span>
+                <span aria-hidden={busy !== "copy" || undefined}>{tr("Copying…", "复制中…")}</span>
+              </span>
             </button>
           ) : null}
-          <button ref={saveRef} type="button" className="accent-button" onClick={handleSave} disabled={busy !== null || tooLong}>
-            {busy === "save" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
-            {tr("Save image", "保存图片")}
+          <button
+            ref={saveRef}
+            type="button"
+            className={`accent-button${busy === "save" ? " is-busy" : ""}`}
+            onClick={handleSave}
+            disabled={busy !== null || tooLong}
+          >
+            <span className="busy-icon" data-busy={busy === "save" || undefined} aria-hidden="true">
+              <Download size={15} />
+              <Loader2 size={15} className="spin" />
+            </span>
+            <span className="busy-swap">
+              <span aria-hidden={busy === "save" || undefined}>{tr("Save image", "保存图片")}</span>
+              <span aria-hidden={busy !== "save" || undefined}>{tr("Saving…", "保存中…")}</span>
+            </span>
           </button>
         </footer>
       </div>

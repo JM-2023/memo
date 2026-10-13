@@ -2,7 +2,7 @@ import { ChevronDown, Download, FileDown, HardDrive, RefreshCw, Trash2, Upload, 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
-import { useReducedMotion } from "../hooks/useReducedMotion";
+import { useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import {
   useSemanticProgress,
   type SemanticProgressSource,
@@ -55,6 +55,8 @@ interface ModelSettingsModalProps {
    * the progress block plays its attention wash and is scrolled into view.
    */
   attend?: number;
+  /** Bumped by Back: leave as the ✕ would (a download keeps running). */
+  closeSignal?: number;
 }
 
 /** What only this panel instance knows: it is still reading the device, or
@@ -170,10 +172,10 @@ export function ModelSettingsModal({
   semanticIndexedMemos = 0,
   semanticRebuilding = false,
   semanticQuery = "",
-  attend = 0
+  attend = 0,
+  closeSignal
 }: ModelSettingsModalProps) {
   const { tr, formatNumber } = useI18n();
-  const reducedMotion = useReducedMotion();
   const runtimeProgress = useSyncExternalStore(
     subscribeModelRuntimeProgress,
     getModelRuntimeProgress,
@@ -188,9 +190,13 @@ export function ModelSettingsModal({
   const [present, setPresent] = useState<ReadonlySet<string>>(() => new Set());
   const [importNote, setImportNote] = useState<string | null>(null);
   const [clearNote, setClearNote] = useState<string | null>(null);
+  // A note folding shut keeps its words until it is gone.
+  const lastImportNoteRef = useRef<string | null>(null);
+  const lastClearNoteRef = useRef<string | null>(null);
+  if (importNote) lastImportNoteRef.current = importNote;
+  if (clearNote) lastClearNoteRef.current = clearNote;
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [confirmingRebuild, setConfirmingRebuild] = useState(false);
-  const [closing, setClosing] = useState(false);
   const [stagesOpen, setStagesOpen] = useState(false);
   const [advOpen, setAdvOpen] = useState(false);
 
@@ -203,8 +209,13 @@ export function ModelSettingsModal({
   const actionButtonRef = useRef<HTMLButtonElement>(null);
   const rebuildRegionRef = useRef<HTMLDivElement>(null);
   const rebuildConfirmRef = useRef<HTMLButtonElement>(null);
+  const rebuildButtonRef = useRef<HTMLButtonElement>(null);
   const advRegionRef = useRef<HTMLDivElement>(null);
-  const dismissTimer = useRef(0);
+  const clearRegionRef = useRef<HTMLDivElement>(null);
+  const clearButtonRef = useRef<HTMLButtonElement>(null);
+  // An inline confirm that folds away under keyboard focus hands it back
+  // to the button that asked (see the effects beside the inert ones).
+  const returnFocusRef = useRef<"clear" | "rebuild" | null>(null);
   const disposedRef = useRef(false);
   const readyReportedRef = useRef(false);
   const cancelledHereRef = useRef(false);
@@ -239,7 +250,6 @@ export function ModelSettingsModal({
     })();
     return () => {
       disposedRef.current = true;
-      window.clearTimeout(dismissTimer.current);
     };
   }, [refreshPresence]);
 
@@ -258,18 +268,14 @@ export function ModelSettingsModal({
     modelReadyRef.current?.();
   }, [downloadPhase]);
 
-  const requestClose = useCallback(() => {
-    if (closing) return;
-    if (reducedMotion) {
-      closeRef.current();
-      return;
-    }
-    setClosing(true);
-    dismissTimer.current = window.setTimeout(() => closeRef.current(), 170);
-  }, [closing, reducedMotion]);
+  function requestClose() {
+    leave(() => closeRef.current());
+  }
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
+  const { closing, leave } = useOverlayExit(overlayRef);
   const backdrop = useBackdropDismiss(requestClose);
+  useCloseSignal(closeSignal, requestClose);
 
   async function handleImport(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
@@ -799,6 +805,23 @@ export function ModelSettingsModal({
   useEffect(() => {
     if (advRegionRef.current) advRegionRef.current.inert = !advOpen;
   }, [advOpen]);
+  useEffect(() => {
+    if (clearRegionRef.current) clearRegionRef.current.inert = !confirmingClear;
+  }, [confirmingClear]);
+
+  /* Cancel on either inline confirm folds it away under the focus it holds;
+     the button that asked takes focus back rather than <body> (or the
+     dialog's own floor). Run after the inert effects above. */
+  useEffect(() => {
+    if (confirmingClear || returnFocusRef.current !== "clear") return;
+    returnFocusRef.current = null;
+    clearButtonRef.current?.focus({ preventScroll: true });
+  }, [confirmingClear]);
+  useEffect(() => {
+    if (confirmingRebuild || returnFocusRef.current !== "rebuild") return;
+    returnFocusRef.current = null;
+    rebuildButtonRef.current?.focus({ preventScroll: true });
+  }, [confirmingRebuild]);
 
   /* Cancel folds away with the progress block it sat in; keyboard focus
      carries over to the Resume it made room for. (After the inert effects,
@@ -999,7 +1022,10 @@ export function ModelSettingsModal({
                           ref={rebuildConfirmRef}
                           type="button"
                           className="ghost-button model-rebuild-cancel"
-                          onClick={() => setConfirmingRebuild(false)}
+                          onClick={() => {
+                            returnFocusRef.current = "rebuild";
+                            setConfirmingRebuild(false);
+                          }}
                         >
                           {tr("Cancel", "取消")}
                         </button>
@@ -1018,6 +1044,7 @@ export function ModelSettingsModal({
                   ) : (
                     <div key="rebuild-rest" className="model-rebuild-row">
                       <button
+                        ref={rebuildButtonRef}
                         type="button"
                         className="model-wash-button model-rebuild-button"
                         onClick={() => setConfirmingRebuild(true)}
@@ -1118,6 +1145,7 @@ export function ModelSettingsModal({
                     {tr("Import files", "导入文件")}
                   </button>
                   <button
+                    ref={clearButtonRef}
                     type="button"
                     className="model-wash-button is-danger"
                     disabled={present.size === 0 || busy}
@@ -1127,40 +1155,63 @@ export function ModelSettingsModal({
                     {tr("Clear model", "清除模型")}
                   </button>
                 </div>
-                {importNote ? (
-                  <p className="model-note" role="status">
-                    {importNote}
-                  </p>
-                ) : null}
-                {clearNote ? (
-                  <p className="model-note model-clear-note" role="status">
-                    {clearNote}
-                  </p>
-                ) : null}
-                {confirmingClear ? (
-                  <div className="model-clear-confirm" role="group" aria-label={tr("Confirm clearing the model", "确认清除模型")}>
-                    <span className="model-clear-confirm-icon" aria-hidden="true">
-                      <HardDrive size={17} />
-                    </span>
-                    <span className="model-clear-confirm-copy">
-                      <strong>{tr("Clear model from this device?", "从此设备清除模型？")}</strong>
-                      <span>
-                        {tr(
-                          "This removes the model files and encrypted semantic index. You can download them again later.",
-                          "这会删除模型文件和加密语义索引，之后仍可重新下载。"
-                        )}
-                      </span>
-                    </span>
-                    <span className="model-clear-confirm-actions">
-                      <button type="button" className="ghost-button" onClick={() => setConfirmingClear(false)}>
-                        {tr("Cancel", "取消")}
-                      </button>
-                      <button type="button" className="danger-button" onClick={() => void clearModel()}>
-                        {tr("Clear model", "清除模型")}
-                      </button>
-                    </span>
+                {/* Notes and the inline confirm fold open and shut on the
+                    grid-rows track like every other block here, both ways:
+                    mounted outright they grew the ledger ~90px in a frame and
+                    vanished the same way. Each keeps its words while it folds
+                    shut, and the status lines stand in the page from the start
+                    so a screen reader hears them arrive. */}
+                <div className={`model-collapse model-note-collapse${importNote ? " is-open" : ""}`}>
+                  <div>
+                    <p className="model-note" role="status">
+                      <span aria-hidden={!importNote || undefined}>{importNote ?? lastImportNoteRef.current}</span>
+                    </p>
                   </div>
-                ) : null}
+                </div>
+                <div className={`model-collapse model-note-collapse${clearNote ? " is-open" : ""}`}>
+                  <div>
+                    <p className="model-note model-clear-note" role="status">
+                      <span aria-hidden={!clearNote || undefined}>{clearNote ?? lastClearNoteRef.current}</span>
+                    </p>
+                  </div>
+                </div>
+                <div
+                  ref={clearRegionRef}
+                  className={`model-collapse model-clear-collapse${confirmingClear ? " is-open" : ""}`}
+                  aria-hidden={!confirmingClear || undefined}
+                >
+                  <div>
+                    <div className="model-clear-confirm" role="group" aria-label={tr("Confirm clearing the model", "确认清除模型")}>
+                      <span className="model-clear-confirm-icon" aria-hidden="true">
+                        <HardDrive size={17} />
+                      </span>
+                      <span className="model-clear-confirm-copy">
+                        <strong>{tr("Clear model from this device?", "从此设备清除模型？")}</strong>
+                        <span>
+                          {tr(
+                            "This removes the model files and encrypted semantic index. You can download them again later.",
+                            "这会删除模型文件和加密语义索引，之后仍可重新下载。"
+                          )}
+                        </span>
+                      </span>
+                      <span className="model-clear-confirm-actions">
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => {
+                            returnFocusRef.current = "clear";
+                            setConfirmingClear(false);
+                          }}
+                        >
+                          {tr("Cancel", "取消")}
+                        </button>
+                        <button type="button" className="danger-button" onClick={() => void clearModel()}>
+                          {tr("Clear model", "清除模型")}
+                        </button>
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

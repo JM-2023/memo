@@ -10,6 +10,25 @@ const FOCUSABLE = [
   "[tabindex]:not([tabindex='-1'])"
 ].join(",");
 
+/**
+ * Marks a branch that stays live above any modal: the toast stack. A dialog
+ * that stays open on a failure (a rename refused, a share that couldn't
+ * copy) says why in a toast, and that toast — its Undo, its ✕, the hover
+ * that holds its clock — has to work over the dialog. Inert, it let the
+ * click fall through to the scrim and dismiss the dialog instead.
+ */
+export const MODAL_EXEMPT_ATTR = "data-modal-exempt";
+const EXEMPT_SELECTOR = `[${MODAL_EXEMPT_ATTR}]`;
+
+function inExempt(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(EXEMPT_SELECTOR) !== null;
+}
+
+/** Still able to hold focus — not disabled, not folded into an inert region, still in the page. */
+function canHoldFocus(element: HTMLElement): boolean {
+  return element.isConnected && !element.matches(":disabled") && element.closest("[inert]") === null;
+}
+
 interface IsolationState {
   count: number;
   inert: boolean;
@@ -92,8 +111,9 @@ function isolateOutside(container: HTMLElement, exemptSelector?: string): HTMLEl
     for (const sibling of parent.children) {
       if (sibling === branch || !(sibling instanceof HTMLElement)) continue;
       if (exemptSelector && sibling.matches(exemptSelector)) continue;
-      // The app's live regions must keep speaking while a modal is up.
-      if (sibling.hasAttribute(LIVE_REGION_ATTR)) continue;
+      // The app's live regions must keep speaking while a modal is up, and
+      // its toasts must stay usable (MODAL_EXEMPT_ATTR).
+      if (sibling.hasAttribute(LIVE_REGION_ATTR) || sibling.hasAttribute(MODAL_EXEMPT_ATTR)) continue;
       isolate(sibling);
       changed.push(sibling);
     }
@@ -171,6 +191,10 @@ export function useModalA11y<T extends HTMLElement>({
     const first = focusableWithin(modal)[0];
     (initial ?? first ?? modal).focus({ preventScroll: true });
     const changed = isolateOutside(modal, isolateExemptSelectorRef.current);
+    // The control inside that last held focus, and one that lost it by
+    // turning unusable (see the focus floor below).
+    let lastInside: HTMLElement | null = document.activeElement instanceof HTMLElement && document.activeElement !== modal ? document.activeElement : null;
+    let parked: HTMLElement | null = null;
 
     function onKeyDown(event: KeyboardEvent) {
       if (modalStack.at(-1) !== token || event.isComposing) return;
@@ -182,6 +206,9 @@ export function useModalA11y<T extends HTMLElement>({
       ) {
         return;
       }
+      // Escape inside the toast stack is the stack's own (it hands focus
+      // back into the dialog); Tab from there falls into the trap below.
+      if (event.key === "Escape" && inExempt(eventTarget)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -198,10 +225,13 @@ export function useModalA11y<T extends HTMLElement>({
       const active = document.activeElement;
       const firstItem = focusable[0];
       const lastItem = focusable.at(-1)!;
-      if (event.shiftKey && (active === firstItem || !modal.contains(active))) {
+      // Focus parked on the dialog itself counts as outside its controls:
+      // Shift+Tab from there must not walk out of the page.
+      const outside = !modal.contains(active) || active === modal;
+      if (event.shiftKey && (active === firstItem || outside)) {
         event.preventDefault();
         lastItem.focus();
-      } else if (!event.shiftKey && (active === lastItem || !modal.contains(active))) {
+      } else if (!event.shiftKey && (active === lastItem || outside)) {
         event.preventDefault();
         firstItem.focus();
       }
@@ -210,7 +240,16 @@ export function useModalA11y<T extends HTMLElement>({
     function onFocusIn(event: FocusEvent) {
       if (modalStack.at(-1) !== token) return;
       const target = event.target;
-      if (!(target instanceof HTMLElement) || modal.contains(target)) return;
+      if (!(target instanceof HTMLElement)) return;
+      if (modal.contains(target)) {
+        if (target !== modal) {
+          lastInside = target;
+          parked = null;
+        }
+        return;
+      }
+      // F6 or a click reaches a toast's Undo or ✕ over the dialog.
+      if (inExempt(target)) return;
       if (allowOutsideSelectorRef.current && target.closest(allowOutsideSelectorRef.current)) return;
       // A closing menu can return focus to its trigger after this modal has
       // mounted. Remember that useful destination, then keep focus trapped.
@@ -219,9 +258,40 @@ export function useModalA11y<T extends HTMLElement>({
       (focusableWithin(modal)[0] ?? modal).focus({ preventScroll: true });
     }
 
+    // The focus floor. A busy dialog disables the very control that was
+    // pressed (Rename, Import, Save image), and an inline confirm folds its
+    // Cancel away; either way focus drops to <body> — outside the trap, with
+    // nothing to bring it back when the request fails and the dialog stays.
+    // Focus parks on the dialog itself, and when the control it left comes
+    // back while focus is still parked, it is handed back there.
+    const floor =
+      typeof MutationObserver === "undefined"
+        ? null
+        : new MutationObserver(() => {
+            if (modalStack.at(-1) !== token) return;
+            const active = document.activeElement;
+            const lost =
+              !(active instanceof HTMLElement) ||
+              active === document.body ||
+              !active.isConnected ||
+              (active !== modal && modal.contains(active) && !canHoldFocus(active));
+            if (lost) {
+              parked = lastInside && lastInside !== modal && modal.contains(lastInside) ? lastInside : null;
+              modal.focus({ preventScroll: true });
+              return;
+            }
+            if (active === modal && parked && canHoldFocus(parked) && modal.contains(parked)) {
+              const control = parked;
+              parked = null;
+              control.focus({ preventScroll: true });
+            }
+          });
+    floor?.observe(modal, { subtree: true, childList: true, attributes: true, attributeFilter: ["disabled", "inert", "hidden"] });
+
     window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("focusin", onFocusIn, true);
     return () => {
+      floor?.disconnect();
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("focusin", onFocusIn, true);
       const index = modalStack.lastIndexOf(token);

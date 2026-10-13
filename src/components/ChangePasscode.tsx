@@ -1,7 +1,7 @@
 import { KeyRound } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useModalA11y } from "../hooks/useModalA11y";
-import { useReducedMotion } from "../hooks/useReducedMotion";
+import { useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import { AuthRequiredError, changePassword, verifyPasscode } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { PasscodePad } from "./PasscodePad";
@@ -10,6 +10,8 @@ interface ChangePasscodeProps {
   onClose: () => void;
   onDone: () => void;
   onAuthLost: () => void;
+  /** Bumped by Back: leave as Cancel would (held while a passcode is checked). */
+  closeSignal?: number;
 }
 
 type Step = "current" | "next" | "confirm";
@@ -21,9 +23,8 @@ const STEP_ORDER: Record<Step, number> = { current: 0, next: 1, confirm: 2 };
  * current passcode is checked as soon as it is entered, so a typo is caught
  * before the new one has been typed twice.
  */
-export function ChangePasscode({ onClose, onDone, onAuthLost }: ChangePasscodeProps) {
+export function ChangePasscode({ onClose, onDone, onAuthLost, closeSignal }: ChangePasscodeProps) {
   const { errorMessage, tr } = useI18n();
-  const reducedMotion = useReducedMotion();
   const [step, setStep] = useState<Step>("current");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -31,28 +32,11 @@ export function ChangePasscode({ onClose, onDone, onAuthLost }: ChangePasscodePr
   const [entryKey, setEntryKey] = useState(0);
   const [currentPin, setCurrentPin] = useState("");
   const [nextPin, setNextPin] = useState("");
-  const [closing, setClosing] = useState(false);
   const padRef = useRef<HTMLElement>(null);
-  const closingRef = useRef(false);
-  const closeTimer = useRef(0);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const doneRef = useRef(onDone);
   doneRef.current = onDone;
-
-  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
-
-  /** Fades the overlay and drops the pad out, then hands over. */
-  function leave(callback: () => void) {
-    if (closingRef.current) return;
-    closingRef.current = true;
-    if (reducedMotion) {
-      callback();
-      return;
-    }
-    setClosing(true);
-    closeTimer.current = window.setTimeout(callback, 170);
-  }
 
   function requestClose() {
     if (busy) return;
@@ -137,6 +121,9 @@ export function ChangePasscode({ onClose, onDone, onAuthLost }: ChangePasscodePr
   // Initial focus goes to the pad itself rather than its first focusable
   // control, the passcode field, which would raise the touch keyboard.
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, escapeDisabled: busy, initialFocusRef: padRef });
+  // Fades the overlay and drops the pad (its first child) out, then hands over.
+  const { closing, leave } = useOverlayExit(overlayRef);
+  useCloseSignal(closeSignal, requestClose);
 
   return (
     <div

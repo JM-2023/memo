@@ -1,7 +1,9 @@
+import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { useModalA11y } from "../hooks/useModalA11y";
+import { nudgeRefusal, useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
 import type { ConfirmOutcome } from "./ConfirmDialog";
@@ -37,6 +39,8 @@ interface PromptDialogProps {
   onConfirm: (value: string) => ConfirmOutcome;
   /** After the exit that follows a confirm answered `true`; defaults to onCancel. */
   onDone?: () => void;
+  /** Bumped by Back: leave as Cancel would (a busy dialog holds). */
+  closeSignal?: number;
 }
 
 /** How long typing must pause before a new error or hint is said. */
@@ -61,7 +65,8 @@ export function PromptDialog({
   hint,
   onCancel,
   onConfirm,
-  onDone
+  onDone,
+  closeSignal
 }: PromptDialogProps) {
   const { tr } = useI18n();
   const [value, setValue] = useState(initialValue);
@@ -69,13 +74,10 @@ export function PromptDialog({
   // so a half-typed `work/` doesn't flash a format error (or flip the button
   // between Rename and Merge) on every keystroke.
   const [settledValue, setSettledValue] = useState(initialValue);
-  const [closing, setClosing] = useState(false);
   const [pending, setPending] = useState(false);
   const [settled, setSettled] = useState(false);
   const reducedMotion = useReducedMotion();
   const inputRef = useRef<HTMLInputElement>(null);
-  const closeTimer = useRef(0);
-  const closingRef = useRef(false);
   const mountedRef = useRef(true);
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
@@ -103,6 +105,17 @@ export function PromptDialog({
   const liveNote = shownStillTrue ? shown : { error: null, notice: null };
   const held = pending || settled;
   const busyLook = Boolean(busy) || held;
+
+  const overlayRef = useModalA11y<HTMLDivElement>({
+    onEscape: requestClose,
+    escapeDisabled: busyLook,
+    initialFocusRef: inputRef
+  });
+  const { closing, closingRef, leave } = useOverlayExit(overlayRef);
+  useKeyboardInset(overlayRef);
+  const backdrop = useBackdropDismiss(requestClose);
+  useCloseSignal(closeSignal, requestClose);
+
   const canConfirm = trimmed.length > 0 && !validate(trimmed) && !busyLook && !closing;
 
   // From the confirm on, the note and the action it named stay as they were:
@@ -129,17 +142,6 @@ export function PromptDialog({
     return () => window.clearTimeout(timer);
   }, [value, settledValue]);
 
-  function leave(callback: () => void) {
-    if (closingRef.current) return;
-    closingRef.current = true;
-    if (reducedMotion) {
-      callback();
-      return;
-    }
-    setClosing(true);
-    closeTimer.current = window.setTimeout(callback, 170);
-  }
-
   function requestClose() {
     if (busyLook || closingRef.current) return;
     leave(() => cancelRef.current());
@@ -163,7 +165,11 @@ export function PromptDialog({
   }
 
   function submit() {
-    if (flushNote() || !canConfirm) return;
+    if (flushNote()) return;
+    if (!canConfirm) {
+      refuse();
+      return;
+    }
     const outcome = onConfirm(trimmed);
     if (outcome === true) finish();
     else if (outcome && typeof outcome === "object") {
@@ -178,20 +184,22 @@ export function PromptDialog({
     }
   }
 
-  const overlayRef = useModalA11y<HTMLDivElement>({
-    onEscape: requestClose,
-    escapeDisabled: busyLook,
-    initialFocusRef: inputRef
-  });
-  useKeyboardInset(overlayRef);
-  const backdrop = useBackdropDismiss(requestClose);
+  /**
+   * A press that can't go through (an empty field, an unchanged name, an
+   * error already on show) used to do nothing at all. It answers the way a
+   * refused passcode does, at a smaller size: the field nudges. Not while
+   * busy or leaving — that press was heard.
+   */
+  function refuse() {
+    if (busyLook || closingRef.current) return;
+    nudgeRefusal(inputRef.current, reducedMotion);
+  }
 
   useEffect(() => {
     mountedRef.current = true;
     inputRef.current?.select();
     return () => {
       mountedRef.current = false;
-      window.clearTimeout(closeTimer.current);
     };
   }, []);
 
@@ -230,8 +238,11 @@ export function PromptDialog({
             onChange={(event) => setValue(event.target.value)}
             onKeyDown={(event) => {
               // Enter's implicit submission skips a disabled button, so the
-              // pending note is flushed here rather than in submit().
-              if (event.key === "Enter" && !event.nativeEvent.isComposing && flushNote()) event.preventDefault();
+              // pending note is flushed — and a refusal answered — here
+              // rather than in submit().
+              if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+              if (flushNote()) event.preventDefault();
+              else if (!canConfirm) refuse();
             }}
           />
           {/* The row is always there, so a note arriving or leaving never
@@ -249,13 +260,23 @@ export function PromptDialog({
             <button type="button" className="ghost-button" onClick={requestClose} disabled={busyLook}>
               {tr("Cancel", "取消")}
             </button>
-            <button type="submit" className="accent-button" disabled={!canConfirm}>
+            <button type="submit" className={`accent-button${busyLook ? " is-busy" : ""}`} disabled={!canConfirm}>
+              {/* The busy label wears the spinner every busy action does; the
+                  reserve carries one too, so the widest figure fits. */}
               <span className="busy-swap">
                 <span aria-hidden={busyLook || undefined}>{idleLabel}</span>
                 {busyLabel !== undefined || notice?.busyLabel !== undefined || busyLook ? (
-                  <span aria-hidden={!busyLook || undefined}>{shownBusyText}</span>
+                  <span aria-hidden={!busyLook || undefined}>
+                    <Loader2 size={14} className="spin busy-spinner" aria-hidden="true" />
+                    {shownBusyText}
+                  </span>
                 ) : null}
-                {reserve ? <span aria-hidden="true">{reserve}</span> : null}
+                {reserve ? (
+                  <span aria-hidden="true">
+                    <Loader2 size={14} className="busy-spinner" aria-hidden="true" />
+                    {reserve}
+                  </span>
+                ) : null}
               </span>
             </button>
           </div>

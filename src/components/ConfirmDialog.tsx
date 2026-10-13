@@ -1,7 +1,8 @@
+import { Loader2 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
-import { useReducedMotion } from "../hooks/useReducedMotion";
+import { useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import { useI18n } from "../lib/i18n";
 
 /**
@@ -28,6 +29,8 @@ interface ConfirmDialogProps {
   onConfirm: () => ConfirmOutcome;
   /** After the exit that follows a confirm answered `true`; defaults to onCancel. */
   onDone?: () => void;
+  /** Bumped by Back: leave as Cancel would (a busy dialog holds). */
+  closeSignal?: number;
 }
 
 interface BusyView {
@@ -50,18 +53,15 @@ export function ConfirmDialog({
   stopping,
   onCancel,
   onConfirm,
-  onDone
+  onDone,
+  closeSignal
 }: ConfirmDialogProps) {
   const { tr } = useI18n();
-  const [closing, setClosing] = useState(false);
   // Waiting on the confirm's answer, then leaving after it went through:
   // the busy look holds from the click through the exit, so the label,
   // progress and Stop never flash back to the idle form in between.
   const [pending, setPending] = useState(false);
   const [settled, setSettled] = useState(false);
-  const reducedMotion = useReducedMotion();
-  const closeTimer = useRef(0);
-  const closingRef = useRef(false);
   const mountedRef = useRef(true);
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
@@ -77,17 +77,17 @@ export function ConfirmDialog({
   const busyLook = Boolean(busy) || held;
   const view = !busy && held && lastBusyRef.current ? lastBusyRef.current : liveBusy;
   const shownProgress = busy || held ? view.progress : progress;
+  // The progress block folds open on the 0fr→1fr track rather than mounting
+  // into the card (which grew the card at once, and on a phone threw the
+  // sheet's top edge up); folding shut, it keeps its last figures.
+  const lastProgressRef = useRef(shownProgress);
+  if (shownProgress) lastProgressRef.current = shownProgress;
+  const foldProgress = shownProgress ?? lastProgressRef.current;
 
-  function leave(callback: () => void) {
-    if (closingRef.current) return;
-    closingRef.current = true;
-    if (reducedMotion) {
-      callback();
-      return;
-    }
-    setClosing(true);
-    closeTimer.current = window.setTimeout(callback, 170);
-  }
+  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, escapeDisabled: busyLook });
+  const { closing, closingRef, leave } = useOverlayExit(overlayRef);
+  const backdrop = useBackdropDismiss(requestClose);
+  useCloseSignal(closeSignal, requestClose);
 
   function requestClose() {
     if (busyLook || closingRef.current) return;
@@ -115,14 +115,10 @@ export function ConfirmDialog({
     }
   }
 
-  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, escapeDisabled: busyLook });
-  const backdrop = useBackdropDismiss(requestClose);
-
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      window.clearTimeout(closeTimer.current);
     };
   }, []);
 
@@ -141,25 +137,32 @@ export function ConfirmDialog({
       <div className="confirm-card" onClick={(event) => event.stopPropagation()}>
         <h2 id={titleId}>{title}</h2>
         <p id={bodyId}>{body}</p>
-        {shownProgress ? (
-          <div className="confirm-progress">
-            <span className="confirm-progress-text">{shownProgress.text}</span>
-            <div
-              className="model-progress-track"
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={shownProgress.max}
-              aria-valuenow={Math.min(shownProgress.value, shownProgress.max)}
-              aria-valuetext={shownProgress.text}
-              aria-label={title}
-            >
-              <span
-                className="model-progress-fill"
-                style={{ width: `${shownProgress.max > 0 ? Math.min(100, (shownProgress.value / shownProgress.max) * 100).toFixed(2) : 0}%` }}
-              />
-            </div>
+        {/* Always in the card, folded shut it costs nothing (not even the
+            card's row gap), so the first figures open it rather than mount it. */}
+        <div className={`confirm-progress-fold${shownProgress ? " is-open" : ""}`}>
+          <div>
+            {foldProgress ? (
+              // Folded shut it says nothing: no stale bar for a screen reader.
+              <div className="confirm-progress" aria-hidden={!shownProgress || undefined}>
+                <span className="confirm-progress-text">{foldProgress.text}</span>
+                <div
+                  className="model-progress-track"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={foldProgress.max}
+                  aria-valuenow={Math.min(foldProgress.value, foldProgress.max)}
+                  aria-valuetext={foldProgress.text}
+                  aria-label={title}
+                >
+                  <span
+                    className="model-progress-fill"
+                    style={{ width: `${foldProgress.max > 0 ? Math.min(100, (foldProgress.value / foldProgress.max) * 100).toFixed(2) : 0}%` }}
+                  />
+                </div>
+              </div>
+            ) : null}
           </div>
-        ) : null}
+        </div>
         <div className="confirm-actions">
           {busyLook && view.stop ? (
             <button type="button" className="ghost-button" onClick={onStop} disabled={view.stopping || settled}>
@@ -170,12 +173,23 @@ export function ConfirmDialog({
               {tr("Cancel", "取消")}
             </button>
           )}
-          <button type="button" className={tone === "accent" ? "accent-button" : "danger-button"} onClick={confirm} disabled={busyLook}>
+          <button
+            type="button"
+            className={`${tone === "accent" ? "accent-button" : "danger-button"}${busyLook ? " is-busy" : ""}`}
+            onClick={confirm}
+            disabled={busyLook}
+          >
             {/* Both labels share one cell, so turning busy never changes the
-                button's width and slides Cancel along. */}
+                button's width and slides Cancel along. The busy one wears
+                the spinner every busy action does (app.css, "busy-swap"). */}
             <span className="busy-swap">
               <span aria-hidden={busyLook || undefined}>{confirmLabel}</span>
-              {busyLabel !== undefined || busyLook ? <span aria-hidden={!busyLook || undefined}>{view.label}</span> : null}
+              {busyLabel !== undefined || busyLook ? (
+                <span aria-hidden={!busyLook || undefined}>
+                  <Loader2 size={14} className="spin busy-spinner" aria-hidden="true" />
+                  {view.label}
+                </span>
+              ) : null}
             </span>
           </button>
         </div>

@@ -214,6 +214,8 @@ describe("the session-expired toast", () => {
     act(() => mocks.syncOptions!.onAuthLost(false));
     const toast = await screen.findByText("Your session has expired. Enter your passcode again.", { selector: ".toast *" });
     const stack = toast.closest(".toast-stack");
+    // Never isolated by a dialog: a toast over one stays usable.
+    expect(stack?.hasAttribute("data-modal-exempt")).toBe(true);
 
     await screen.findByRole("button", { name: "Confirm" });
     await user.keyboard("2468{Enter}");
@@ -271,6 +273,26 @@ describe("dialogs leave on success too", () => {
   it("holds the busy look through the exit, then calls onDone", async () => {
     reducedMotion = false;
     stubMatchMedia();
+    // jsdom runs no CSS: the closing overlay reports a running exit, and the
+    // test says when it ends. The hand-over waits on the animation itself.
+    let endExit!: () => void;
+    const exitFinished = new Promise<void>((resolve) => {
+      endExit = resolve;
+    });
+    const exitAnimation = {
+      animationName: "fade-out",
+      playState: "running",
+      currentTime: 0,
+      playbackRate: 1,
+      effect: { getComputedTiming: () => ({ endTime: 160, duration: 160 }) },
+      finished: exitFinished
+    };
+    Object.defineProperty(Element.prototype, "getAnimations", {
+      configurable: true,
+      value: vi.fn(function (this: Element) {
+        return this.classList.contains("is-closing") ? [exitAnimation] : [];
+      })
+    });
     let finish!: (ok: boolean) => void;
     const onDone = vi.fn();
     const onCancel = vi.fn();
@@ -311,6 +333,10 @@ describe("dialogs leave on success too", () => {
     expect(overlay.className).toContain("is-closing");
     expect((screen.getByRole("button", { name: "Logging out…" }) as HTMLButtonElement).disabled).toBe(true);
     expect(onDone).not.toHaveBeenCalled();
+    await act(async () => {
+      endExit();
+      await exitFinished;
+    });
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
     expect(onCancel).not.toHaveBeenCalled();
   });

@@ -2,7 +2,7 @@ import { Minus, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
-import { useReducedMotion } from "../hooks/useReducedMotion";
+import { useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import { useI18n } from "../lib/i18n";
 import {
   REVIEW_COUNT_MAX,
@@ -24,6 +24,8 @@ interface ReviewSettingsModalProps {
   knownTags: string[];
   onSave: (settings: ReviewSettings) => void;
   onClose: () => void;
+  /** Bumped by Back: leave as the ✕ would. */
+  closeSignal?: number;
 }
 
 const SCOPE_OPTIONS: { scope: ReviewScope; en: string; zh: string }[] = [
@@ -57,18 +59,15 @@ function rovingTarget(key: string, index: number, length: number): number | null
  * blurred backdrop, damped swell in, staggered section rise, reverse morph
  * out — including on save, before the feed regenerates.
  */
-export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClose }: ReviewSettingsModalProps) {
+export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClose, closeSignal }: ReviewSettingsModalProps) {
   const { language, locale, tr } = useI18n();
-  const reducedMotion = useReducedMotion();
 
   const [scope, setScope] = useState<ReviewScope>(settings.scope);
   const [selectedTags, setSelectedTags] = useState<ReadonlySet<string>>(() => new Set(settings.tags));
   const [range, setRange] = useState<ReviewRange>(settings.range);
   const [countValue, setCountValue] = useState(settings.count);
-  const [closing, setClosing] = useState(false);
 
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const dismissTimer = useRef(0);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const saveRef = useRef(onSave);
@@ -101,32 +100,19 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
     return false;
   };
 
-  const requestDismiss = useCallback(
-    (action: () => void) => {
-      if (closing) return;
-      if (reducedMotion) {
-        action();
-        return;
-      }
-      setClosing(true);
-      dismissTimer.current = window.setTimeout(action, 170);
-    },
-    [closing, reducedMotion]
-  );
-
-  const requestClose = useCallback(() => requestDismiss(() => closeRef.current()), [requestDismiss]);
+  function requestClose() {
+    leave(() => closeRef.current());
+  }
 
   function requestSave() {
     if (tagsMissing) return;
-    requestDismiss(() => saveRef.current(draftRef.current));
+    leave(() => saveRef.current(draftRef.current));
   }
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
+  const { closing, leave } = useOverlayExit(overlayRef);
   const backdrop = useBackdropDismiss(requestClose);
-
-  useEffect(() => {
-    return () => window.clearTimeout(dismissTimer.current);
-  }, []);
+  useCloseSignal(closeSignal, requestClose);
 
   function toggleTag(tag: string) {
     setSelectedTags((current) => {

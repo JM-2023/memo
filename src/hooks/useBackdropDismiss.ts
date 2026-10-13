@@ -12,6 +12,9 @@ const DRAG_SLOP = 6;
 const DISMISS_FRACTION = 0.25;
 const DISMISS_VELOCITY = 0.5; // px/ms, downward
 const SPRING_MS = 280;
+/** A flung sheet leaves at the finger's pace, within these bounds (ms). */
+const EXIT_MIN_MS = 100;
+const EXIT_MAX_MS = 220;
 
 export interface BackdropDismissProps {
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -27,9 +30,18 @@ function rubberBand(distance: number): number {
   return 48 * (1 - 1 / (1 + distance / 120));
 }
 
-function clearDrag(card: HTMLElement) {
+function clearDrag(card: HTMLElement, overlay: HTMLElement) {
   card.style.removeProperty("translate");
   card.style.removeProperty("transition");
+  overlay.style.removeProperty("--sheet-pull");
+  overlay.style.removeProperty("--sheet-exit");
+  overlay.style.removeProperty("transition");
+}
+
+/** The share of the sheet pulled off screen, which the scrim gives up with it (app.css). */
+function setPull(overlay: HTMLElement, offset: number, height: number) {
+  const pull = height > 0 ? Math.min(1, Math.max(0, offset / height)) : 0;
+  overlay.style.setProperty("--sheet-pull", pull.toFixed(3));
 }
 
 /**
@@ -41,8 +53,10 @@ function clearDrag(card: HTMLElement) {
  * On a phone, where the dialog is a bottom sheet, a touch drag from the
  * sheet's header or grabber pulls it down: past a quarter of its height (or
  * flicked) it leaves through the regular closing exit, which continues from
- * where the finger let go (the drag rides `translate`, the exit `transform`);
- * otherwise it springs back. Never while the dialog is busy (aria-busy), and
+ * where the finger let go (the drag rides `translate`, the exit `transform`)
+ * at the pace of the flick (`--sheet-exit`); otherwise it springs back. The
+ * scrim thins as the sheet comes down (`--sheet-pull`), so the page behind
+ * is already coming back when the sheet goes. Never while the dialog is busy (aria-busy), and
  * never from inside a scrolling body — only the header rows start a drag.
  */
 export function useBackdropDismiss(onDismiss: () => void): BackdropDismissProps {
@@ -72,6 +86,7 @@ export function useBackdropDismiss(onDismiss: () => void): BackdropDismissProps 
       const startY = event.clientY;
       let dragging = false;
       let offset = 0;
+      let height = 0;
       let springTimer = 0;
       const samples: Array<{ y: number; t: number }> = [{ y: startY, t: event.timeStamp }];
 
@@ -84,8 +99,11 @@ export function useBackdropDismiss(onDismiss: () => void): BackdropDismissProps 
       const springBack = () => {
         card.style.transition = `translate ${SPRING_MS}ms var(--ease-out)`;
         card.style.translate = "0 0";
+        overlay.style.transition = `--sheet-pull ${SPRING_MS}ms var(--ease-out)`;
+        overlay.style.setProperty("--sheet-pull", "0");
+        overlay.style.removeProperty("--sheet-exit");
         window.clearTimeout(springTimer);
-        springTimer = window.setTimeout(() => clearDrag(card), SPRING_MS + 40);
+        springTimer = window.setTimeout(() => clearDrag(card, overlay), SPRING_MS + 40);
       };
       function onMove(move: PointerEvent) {
         if (move.pointerId !== pointerId) return;
@@ -99,9 +117,12 @@ export function useBackdropDismiss(onDismiss: () => void): BackdropDismissProps 
           }
           dragging = true;
           card.style.transition = "none";
+          overlay.style.transition = "none";
+          height = card.offsetHeight || card.getBoundingClientRect().height;
         }
         offset = dy >= 0 ? dy : -rubberBand(-dy);
         card.style.translate = `0 ${offset.toFixed(1)}px`;
+        setPull(overlay, offset, height);
         samples.push({ y: move.clientY, t: move.timeStamp });
         if (samples.length > 6) samples.shift();
       }
@@ -112,8 +133,11 @@ export function useBackdropDismiss(onDismiss: () => void): BackdropDismissProps 
         const first = samples.find((sample) => up.timeStamp - sample.t <= 100) ?? samples[0];
         const elapsed = Math.max(1, up.timeStamp - first.t);
         const velocity = (up.clientY - first.y) / elapsed;
-        const height = card.offsetHeight || card.getBoundingClientRect().height;
         if (offset > height * DISMISS_FRACTION || (offset > 0 && velocity > DISMISS_VELOCITY)) {
+          // The rest of the way down at the speed the finger let go with:
+          // a flick leaves fast, a slow pull past the line glides out.
+          const exitMs = Math.min(EXIT_MAX_MS, Math.max(EXIT_MIN_MS, (height - offset) / Math.max(velocity, DISMISS_VELOCITY)));
+          overlay.style.setProperty("--sheet-exit", `${Math.round(exitMs)}ms`);
           dismissRef.current();
           // A dialog that declines to close (or closes without an exit)
           // must not stay pulled down.

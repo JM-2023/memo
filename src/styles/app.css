@@ -298,8 +298,11 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
     inset 0 -1px 1px rgba(0, 0, 0, 0.3);
 
-  --menu-fill: var(--surface);
-  --menu-highlight: inset 0 -1px 1px rgba(0, 0, 0, 0.3);
+  /* Floating surfaces sit one step up the ladder from the cards they float
+     over, lit along their top edge: on the card fill, a dark menu, toast or
+     dialog had no edge but its hairline. */
+  --menu-fill: var(--surface-2);
+  --menu-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07), inset 0 -1px 1px rgba(0, 0, 0, 0.3);
 
   --chip-fill: var(--surface-2);
   --chip-hover-fill: var(--surface-3);
@@ -630,7 +633,7 @@ a:hover { text-decoration: underline; }
   font-size: var(--fs-sm);
   font-weight: 600;
   border-radius: var(--r-sm);
-  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), opacity var(--t) var(--ease);
 }
 @media (hover: hover) { .ghost-button:hover:not(:disabled) { background: var(--wash); color: var(--ink); } }
 .ghost-button:active:not(:disabled) { transform: scale(0.96); }
@@ -643,7 +646,7 @@ a:hover { text-decoration: underline; }
   background: var(--danger);
   border-radius: var(--r-sm);
   box-shadow: var(--shadow-sm);
-  transition: filter var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
+  transition: filter var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), opacity var(--t) var(--ease);
 }
 @media (hover: hover) { .danger-button:hover:not(:disabled) { filter: brightness(1.08); box-shadow: var(--shadow); } }
 .danger-button:active:not(:disabled) { transform: scale(0.96); }
@@ -3551,6 +3554,10 @@ button.memo-tag:active {
 }
 /* A leaving dialog is already gone as far as the hand is concerned. */
 .overlay.is-closing { animation: fade-out 0.16s var(--ease) both; pointer-events: none; }
+/* Focus parks on the dialog itself while a control it left is disabled
+   (useModalA11y's focus floor); the whole screen never wears the ring. */
+.overlay:focus-visible,
+.passcode-overlay:focus-visible { outline: none; }
 
 .confirm-card {
   display: grid;
@@ -3572,10 +3579,41 @@ button.memo-tag:active {
    the active one shows. Figures are tabular app-wide, so a count ticking
    up never shifts the label either. */
 .busy-swap { display: inline-grid; justify-items: center; }
-.busy-swap > * { grid-area: 1 / 1; }
+.busy-swap > * { grid-area: 1 / 1; transition: visibility 0s; }
 .busy-swap > [aria-hidden="true"] { visibility: hidden; }
+/* Busy wears one look in every dialog: the pressed action keeps full
+   strength and says what is under way beside a spinner (in its icon's cell,
+   or ahead of a label that has no icon) while the rest of the dialog dims.
+   All of it a held-back beat late, 150ms, as the pin pad holds its keys: a
+   request that answers at once never flashes the busy form. Coming back is
+   immediate. */
+.busy-spinner { margin-inline-end: 6px; vertical-align: -2px; }
+.busy-icon { display: inline-grid; flex: none; }
+.busy-icon > * { grid-area: 1 / 1; transition: visibility 0s; }
+.busy-icon > :last-child,
+.busy-icon[data-busy] > :first-child { visibility: hidden; }
+.busy-icon[data-busy] > :last-child { visibility: visible; }
+button.is-busy:disabled { opacity: 1; }
+:is(.overlay, .passcode-overlay)[aria-busy="true"] :is(.busy-swap, .busy-icon) > *,
+:is(.overlay, .passcode-overlay)[aria-busy="true"] :is(.ghost-button, .accent-button, .danger-button, .icon-button):disabled { transition-delay: 0.15s; }
 /* A long-running confirm (backup import) counts up above its actions on the
-   model panel's track. */
+   model panel's track. It folds open on the grid-rows track rather than
+   mounting into the card, and folds shut the same way; shut, it gives back
+   the card's row gap too. */
+.confirm-progress-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-top: -6px;
+  opacity: 0;
+  transition: grid-template-rows var(--t) var(--ease), margin-top var(--t) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.confirm-progress-fold.is-open {
+  grid-template-rows: 1fr;
+  margin-top: 0;
+  opacity: 1;
+  transition: grid-template-rows var(--t-slow) var(--ease-out), margin-top var(--t-slow) var(--ease-out), opacity var(--t) var(--ease);
+}
+.confirm-progress-fold > div { min-height: 0; overflow: hidden; }
 .confirm-progress { display: grid; gap: 8px; margin: 0 0 12px; }
 .confirm-progress-text { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; font-variant-numeric: tabular-nums; }
 .confirm-progress .model-progress-track { margin-top: 0; }
@@ -3594,6 +3632,18 @@ button.memo-tag:active {
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
 .prompt-input:focus { border-color: var(--line-focus); }
+/* An error on show warms the hairline, focused or not, as the tag field's does. */
+.prompt-input[aria-invalid="true"] { border-color: color-mix(in srgb, var(--danger) 58%, var(--line)); }
+/* A refused submit (Enter on an empty, unchanged or invalid entry) nudges the
+   field: the pin pad's shake at a fraction of the size. Never under reduced
+   motion (nudgeRefusal adds no class there). */
+@keyframes nudge {
+  0%, 100% { translate: 0; }
+  25% { translate: -4px 0; }
+  50% { translate: 3px 0; }
+  75% { translate: -1.5px 0; }
+}
+.is-refused { animation: nudge 0.28s var(--ease); }
 /* The note row is always there — sized for the larger, strong line — so a
    note arriving or leaving never changes the card's (or sheet's) height. */
 .prompt-note { min-height: calc(var(--fs-md) * 1.35); margin: -2px 0 0; font-size: var(--fs-xs); font-weight: 500; line-height: 1.35; color: var(--muted); }
@@ -3610,7 +3660,7 @@ button.memo-tag:active {
   background: var(--primary);
   border-radius: var(--r-sm);
   box-shadow: var(--shadow-sm);
-  transition: filter var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
+  transition: filter var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), opacity var(--t) var(--ease);
 }
 @media (hover: hover) { .accent-button:hover:not(:disabled) { filter: brightness(1.06); box-shadow: var(--shadow); } }
 .accent-button:active:not(:disabled) { transform: scale(0.96); }
@@ -3726,6 +3776,7 @@ button.memo-tag:active {
   animation: tag-row-in 0.18s var(--ease-out) both;
   transition: color var(--t) var(--ease), background var(--t) var(--ease), scale var(--t-fast) var(--ease);
 }
+:root[data-theme="dark"] .bulk-tag-suggestions button { background: var(--surface-3); }
 @media (hover: hover) {
   .bulk-tag-suggestions button:hover:not(:disabled) { color: var(--primary-dark); background: var(--primary-tint); }
 }
@@ -5451,6 +5502,28 @@ button.stats-tag-row:active { scale: 0.992; }
   /* The sheen loop rides .pin-pad's animation list (see glass material). */
   .pin-pad,
   .pin-pad.shake { animation: none !important; }
+  /* Surfaces dissolve instead of moving: a dialog, the passcode screen, a
+     menu, a toast fade in (150ms) and out (100ms) in place, and nothing they
+     carry travels or scales. Their scripts wait on these same animations
+     (useOverlayExit, Menu), so the hand-over lines up with the last frame. */
+  .overlay:not(.lightbox),
+  .passcode-overlay { animation: fade-in var(--t) var(--ease) both !important; }
+  .overlay:not(.lightbox).is-closing,
+  .passcode-overlay.is-closing { animation: fade-out var(--t-fast) var(--ease) both !important; }
+  .overlay:not(.lightbox) > * { animation: none !important; }
+  .action-menu { animation: fade-in var(--t) var(--ease) both !important; }
+  .action-menu.is-closing { animation: fade-out var(--t-fast) var(--ease) both !important; }
+  .toast { animation: fade-in var(--t) var(--ease) both !important; }
+  .toast.is-leaving { animation: fade-out var(--t-fast) var(--ease) both !important; }
+  /* A leaving toast keeps its slot while it fades, then the stack closes up
+     at once rather than sliding. */
+  .toast-slot { transition: grid-template-rows var(--t-fast) step-end, padding-bottom var(--t-fast) step-end !important; }
+  /* A tip fades where it is needed instead of gliding between anchors. */
+  .tip { transition: opacity 0.12s var(--ease) !important; }
+  /* The busy hold is timing, not motion: it stays. */
+  :is(.overlay, .passcode-overlay)[aria-busy="true"] :is(.busy-swap, .busy-icon) > *,
+  :is(.overlay, .passcode-overlay)[aria-busy="true"] :is(.ghost-button, .accent-button, .danger-button, .icon-button):disabled { transition-delay: 0.15s !important; }
+  .pin-pad[aria-busy="true"] .keypad button:disabled { transition-delay: 0s, 0s, 0s, 0.15s !important; }
   /* Belt and braces: the JS helper already skips startViewTransition. */
   ::view-transition-group(*),
   ::view-transition-old(*),
@@ -5882,7 +5955,6 @@ button.stats-tag-row:active { scale: 0.992; }
   background: color-mix(in srgb, var(--danger-tint) 72%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--danger) 24%, var(--line));
   border-radius: var(--r-md);
-  animation: rise-in 0.2s var(--ease-out) both;
 }
 .model-clear-confirm-icon {
   display: grid;
@@ -5964,13 +6036,22 @@ button.stats-tag-row:active { scale: 0.992; }
    ========================================================================= */
 @keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
 @keyframes sheet-down { to { transform: translateY(100%); } }
+/* The share of a sheet dragged off screen (useBackdropDismiss); registered so
+   the scrim can spring back with the sheet. */
+@property --sheet-pull { syntax: "<number>"; inherits: false; initial-value: 0; }
 @media (max-width: 560px) {
-  /* The lightbox is an .overlay too, but a full-bleed image viewer, not a card. */
+  /* The lightbox is an .overlay too, but a full-bleed image viewer, not a card.
+     The scrim gives way as the sheet is pulled down, so the page is already
+     coming back when it goes; --sheet-exit is the pace a flick left with. */
   .overlay:not(.lightbox) {
     --sheet-safe-bottom: max(0px, env(safe-area-inset-bottom) - var(--kb-inset, 0px));
     place-items: end stretch;
     padding: max(16px, env(safe-area-inset-top)) 0 var(--kb-inset, 0px);
+    background: color-mix(in srgb, var(--scrim) calc(100% - var(--sheet-pull, 0) * 100%), transparent);
+    -webkit-backdrop-filter: blur(calc(var(--scrim-blur) * (1 - var(--sheet-pull, 0))));
+    backdrop-filter: blur(calc(var(--scrim-blur) * (1 - var(--sheet-pull, 0))));
   }
+  .overlay:not(.lightbox).is-closing { animation-duration: var(--sheet-exit, 0.16s); }
   .overlay > :is(.confirm-card, .stats-modal, .review-modal, .model-panel, .share-modal) {
     width: 100%;
     max-height: 100%;
@@ -5982,7 +6063,7 @@ button.stats-tag-row:active { scale: 0.992; }
   .overlay > .confirm-card { padding-bottom: calc(16px + var(--sheet-safe-bottom)); }
   .overlay > .confirm-card.bulk-tag-card { padding-bottom: var(--sheet-safe-bottom); }
   .overlay.is-closing > :is(.confirm-card, .stats-modal, .review-modal, .model-panel, .share-modal) {
-    animation: sheet-down 0.16s var(--ease) both;
+    animation: sheet-down var(--sheet-exit, 0.16s) var(--ease) both;
   }
   /* The grabber says the sheet can be pulled down; the header row under it
      is where the pull starts (useBackdropDismiss). Those rows keep the

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { useModalA11y } from "../hooks/useModalA11y";
+import { nudgeRefusal, useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { MEMO_TAG_BATCH_CHUNK } from "../lib/api";
 import { useI18n } from "../lib/i18n";
@@ -24,6 +25,8 @@ interface BulkTagDialogProps {
   onApplied: () => void;
   /** Settled/total while a large selection spans several requests. */
   progress?: { done: number; total: number } | null;
+  /** Bumped by Back: leave as Cancel would (held while the tag is going on). */
+  closeSignal?: number;
 }
 
 const NO_OWNED_TAGS: string[] = [];
@@ -46,16 +49,16 @@ export function BulkTagDialog({
   onApply,
   onDismiss,
   onApplied,
-  progress = null
+  progress = null,
+  closeSignal
 }: BulkTagDialogProps) {
   const { count, formatNumber, tr } = useI18n();
   const [value, setValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [closing, setClosing] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   const reducedMotion = useReducedMotion();
   const inputRef = useRef<HTMLInputElement>(null);
-  const closeTimer = useRef(0);
+  const fieldRef = useRef<HTMLLabelElement>(null);
   const dismissRef = useRef(onDismiss);
   const appliedRef = useRef(onApplied);
   dismissRef.current = onDismiss;
@@ -72,6 +75,16 @@ export function BulkTagDialog({
     const query = normalizeTag(value).toLocaleLowerCase();
     return knownTags.filter((item) => !owned.has(item) && (!query || item.toLocaleLowerCase().includes(query))).slice(0, 8);
   }, [knownTags, owned, value]);
+  const overlayRef = useModalA11y<HTMLDivElement>({
+    onEscape: requestDismiss,
+    escapeDisabled: submitting,
+    initialFocusRef: inputRef
+  });
+  const { closing, closingRef, leave } = useOverlayExit(overlayRef);
+  useKeyboardInset(overlayRef);
+  const backdrop = useBackdropDismiss(requestDismiss);
+  useCloseSignal(closeSignal, requestDismiss);
+
   const canSubmit = selectedCount > 0 && Boolean(tag) && !error && !alreadyOwned && !submitting && !closing;
   // Only a selection spanning several requests counts its progress.
   const reserveTotal = progress ? progress.total : scope === "selection" && selectedCount > MEMO_TAG_BATCH_CHUNK ? selectedCount : 0;
@@ -83,36 +96,26 @@ export function BulkTagDialog({
         ? `${alreadyOwned ? "owned" : exact ? "existing" : "new"}:${tag}`
         : "empty";
 
-  function leave(callback: () => void) {
-    if (closing) return;
-    if (reducedMotion) {
-      callback();
-      return;
-    }
-    setClosing(true);
-    closeTimer.current = window.setTimeout(callback, 170);
-  }
-
   function requestDismiss() {
-    if (submitting || closing) return;
+    if (submitting || closingRef.current) return;
     leave(() => dismissRef.current());
   }
 
-  const overlayRef = useModalA11y<HTMLDivElement>({
-    onEscape: requestDismiss,
-    escapeDisabled: submitting,
-    initialFocusRef: inputRef
-  });
-  useKeyboardInset(overlayRef);
-  const backdrop = useBackdropDismiss(requestDismiss);
-
   useEffect(() => {
     inputRef.current?.focus();
-    return () => window.clearTimeout(closeTimer.current);
   }, []);
 
+  /** A refused Enter (nothing to add, or a tag it can't take) nudges the field — see PromptDialog. */
+  function refuse() {
+    if (submitting || closingRef.current) return;
+    nudgeRefusal(fieldRef.current, reducedMotion);
+  }
+
   async function submit() {
-    if (!canSubmit) return;
+    if (!canSubmit) {
+      refuse();
+      return;
+    }
     setApplyError(null);
     setSubmitting(true);
     let exitsBusy = false;
@@ -167,7 +170,7 @@ export function BulkTagDialog({
             void submit();
           }}
         >
-          <label className={`bulk-tag-field${error || applyError ? " is-error" : ""}`}>
+          <label ref={fieldRef} className={`bulk-tag-field${error || applyError ? " is-error" : ""}`}>
             <Hash size={16} aria-hidden="true" />
             <input
               ref={inputRef}
@@ -181,6 +184,11 @@ export function BulkTagDialog({
               onChange={(event) => {
                 setValue(event.target.value);
                 setApplyError(null);
+              }}
+              onKeyDown={(event) => {
+                // A disabled Add tag skips Enter's implicit submission, so
+                // the refusal is answered here.
+                if (event.key === "Enter" && !event.nativeEvent.isComposing && !canSubmit) refuse();
               }}
             />
           </label>
@@ -232,8 +240,13 @@ export function BulkTagDialog({
             <button type="button" className="ghost-button" onClick={requestDismiss} disabled={submitting}>
               {tr("Cancel", "取消")}
             </button>
-            <button type="submit" className="accent-button bulk-tag-submit" disabled={!canSubmit}>
-              {submitting ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Tags size={15} aria-hidden="true" />}
+            <button type="submit" className={`accent-button bulk-tag-submit${submitting ? " is-busy" : ""}`} disabled={!canSubmit}>
+              {/* The icon's cell turns into the spinner — on the same held-back
+                  beat as the label (app.css, "busy-swap"). */}
+              <span className="busy-icon" data-busy={submitting || undefined} aria-hidden="true">
+                <Tags size={15} />
+                <Loader2 size={15} className="spin" />
+              </span>
               {/* Idle and busy labels share one cell, and a selection that
                   will count its chunks reserves the widest count up front,
                   so the button never grows mid-run and slides Cancel. */}
