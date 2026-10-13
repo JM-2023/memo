@@ -2970,11 +2970,14 @@ button.crumb:active { background: var(--wash-strong); }
 .memo-feed.is-small .memo-slot { content-visibility: visible; contain-intrinsic-size: none; }
 
 .memo-card {
+  /* The card's ground, named so a morph's opaque outgoing layer matches it
+     (a selected card's is tinted). */
+  --card-fill: var(--surface);
   position: relative;
   display: grid;
   gap: 8px;
   padding: 13px 15px 14px;
-  background: var(--surface);
+  background: var(--card-fill);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-xs);
@@ -3003,7 +3006,7 @@ button.crumb:active { background: var(--wash-strong); }
   inset-inline: 0;
   top: 0;
   z-index: 4;
-  background: var(--surface);
+  background: var(--card-fill, var(--surface));
   pointer-events: none;
 }
 /* Ghost: pixel-identical inert render of the previous content. Hidden, it is
@@ -3017,6 +3020,18 @@ button.crumb:active { background: var(--wash-strong); }
   pointer-events: none;
 }
 .stage-ghost.is-out { visibility: visible; }
+/* The ghost's header carries inert stand-ins for the ⋯ and the select ring
+   (MemoCard's renderGhost). The ⋯ copies the live trigger's open or
+   keyboard-focused look — hover and touch it already shares through the
+   card rules — and the ring sits in place instead of popping in again. */
+.memo-card:has(.memo-menu-trigger:is(.is-open, :focus-visible)) .stage-ghost .memo-menu-trigger { opacity: 1; }
+.memo-card:has(.memo-menu-trigger.is-open) .stage-ghost .memo-menu-trigger { background: var(--wash); color: var(--ink); }
+.memo-card.is-selecting .stage-ghost .memo-select-box { animation: none; }
+/* A remote update rewrites the body only (MemoStage marks it .keeps-head):
+   the live header rides above the fading ghost, perfectly still, and the
+   ghost's copy steps aside so the two never drift apart as it lifts. */
+.card-stage.keeps-head .stage-hold .memo-head { position: relative; z-index: 5; }
+.card-stage.keeps-head .stage-ghost .memo-head { visibility: hidden; }
 /* While clones replay the diff, the real content holds its layout but not
    its pixels (visibility keeps geometry). */
 /* (Descendant, not child: the body sits inside .memo-view-surface and,
@@ -3047,8 +3062,8 @@ button.crumb:active { background: var(--wash-strong); }
 /* ---- Multi-select ---- */
 @media (hover: hover) { .memo-card.is-selecting:hover { border-color: color-mix(in srgb, var(--primary) 30%, var(--line)); } }
 .memo-card.is-selected {
+  --card-fill: color-mix(in srgb, var(--primary) 3.5%, var(--surface));
   border-color: color-mix(in srgb, var(--primary) 52%, var(--line));
-  background: color-mix(in srgb, var(--primary) 3.5%, var(--surface));
 }
 /* The ring rides the slot, not the card. The slot's content-visibility paint
    containment clips its descendants to the slot's own box, so a ring drawn on
@@ -3060,15 +3075,22 @@ button.crumb:active { background: var(--wash-strong); }
    deselected while the ring is still fading out — a radius that left with it
    showed the ring square-cornered for its last frames. */
 .memo-slot:has(.memo-card.is-selected) { box-shadow: 0 0 0 3px var(--ring); }
-/* One transparent surface above everything in the card: any tap toggles. */
+/* One transparent surface above everything in the card: any tap toggles.
+   It reaches out over the card's padding (13/15/14px, see .memo-card) —
+   its own box is the stage inside it, so a tap on the card's edge used to
+   toggle nothing — and rounds with the card's inner edge. The platform's
+   tap flash is off; a press answers in the card's own wash instead, on at
+   once and easing off, so a tap is acknowledged before the finger lifts. */
 .memo-select-overlay {
   position: absolute;
-  inset: 0;
+  inset: -13px -15px -14px;
   z-index: 3;
-  border-radius: inherit;
+  border-radius: calc(var(--r-lg) - 1px);
   animation: fade-in 0.2s var(--ease) both;
   -webkit-tap-highlight-color: transparent;
+  transition: background var(--t) var(--ease);
 }
+.memo-select-overlay:active { background: var(--wash); transition-duration: 0s; }
 .memo-select-overlay:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 78%, transparent); outline-offset: -2px; }
 /* The ⋯ trigger and the check ring live stacked in one 26px cell — swapping
    them never shifts layout. */
@@ -3086,7 +3108,7 @@ button.crumb:active { background: var(--wash-strong); }
   transform: scale(0.4);
   pointer-events: none;
   transition:
-    opacity 0.15s var(--ease), transform 0.15s var(--ease),
+    opacity var(--t) var(--ease), transform var(--t) var(--ease),
     background var(--t) var(--ease), border-color var(--t) var(--ease);
 }
 /* Enter: pop on the overshoot curve (delayed per row, see stagger below);
@@ -3106,7 +3128,7 @@ button.crumb:active { background: var(--wash-strong); }
   opacity: 0 !important;
   transform: scale(0.5);
   visibility: hidden;
-  transition: opacity 0.15s var(--ease), transform 0.15s var(--ease), visibility 0s 0.15s;
+  transition: opacity var(--t) var(--ease), transform var(--t) var(--ease), visibility 0s var(--t);
 }
 /* Checkbox entrance ripples down the first screenful of cards. */
 .memo-feed.is-select .memo-slot:nth-child(2) { --sbd: 0.015s; }
@@ -3120,7 +3142,10 @@ button.crumb:active { background: var(--wash-strong); }
 .memo-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; }
 .memo-time { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
 .memo-head-right { display: flex; align-items: center; gap: 4px; }
-.memo-pin-mark { color: var(--primary); animation: pop-in 0.18s var(--ease-pop) both; }
+/* The mark pops only when the memo is pinned in front of the reader
+   (MemoCard adds .is-new for that one mount), not each time it mounts. */
+.memo-pin-mark { color: var(--primary); }
+.memo-pin-mark.is-new { animation: pop-in 0.18s var(--ease-pop) both; }
 .memo-menu-trigger { width: 26px; height: 26px; opacity: 0; }
 .memo-menu-trigger.is-open { opacity: 1; background: var(--wash); color: var(--ink); }
 .memo-card:hover .memo-menu-trigger, .memo-menu-trigger:focus-visible { opacity: 1; }
@@ -3139,7 +3164,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 500;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), opacity 0.15s var(--ease);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), opacity var(--t) var(--ease);
 }
 .memo-restore svg { flex: none; color: var(--muted); stroke-width: 1.9; }
 @media (hover: hover) {
@@ -3148,7 +3173,7 @@ button.crumb:active { background: var(--wash-strong); }
 }
 .memo-restore:active:not(:disabled) { transform: scale(0.96); }
 .memo-restore:disabled { opacity: 0.55; }
-.memo-card.is-selecting .memo-restore { opacity: 0; visibility: hidden; transition: opacity 0.15s var(--ease), visibility 0s 0.15s; }
+.memo-card.is-selecting .memo-restore { opacity: 0; visibility: hidden; transition: opacity var(--t) var(--ease), visibility 0s var(--t); }
 /* Tags stay buttons while selecting (the surface is inert); they dim like
    the static pills they used to be re-rendered as. */
 .memo-card.is-selecting .memo-tag { opacity: 0.8; }
@@ -3181,8 +3206,10 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: var(--fs-sm);
   font-weight: 500;
   border-radius: var(--r-xs);
-  transition: color var(--t) var(--ease);
+  transition: color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
+/* Presses in like its sibling text actions (Restore). */
+.memo-fold-toggle:active { transform: scale(0.96); }
 .memo-fold-toggle svg { transition: transform var(--t) var(--ease); }
 .memo-fold.is-expanded + .memo-fold-toggle svg { transform: rotate(180deg); }
 .memo-fold:not([data-overflow]) + .memo-fold-toggle { display: none; }
@@ -3201,7 +3228,10 @@ button.crumb:active { background: var(--wash-strong); }
 .memo-content p { margin: 0; }
 .memo-blank { min-height: 0.6em; }
 .memo-content a { text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--primary) 40%, transparent); text-underline-offset: 2px; }
-.memo-content a:hover { text-decoration-color: var(--primary); }
+/* The underline takes the accent under a hovering pointer, and under a
+   finger for as long as it presses — a tap's sticky hover left it lit. */
+@media (hover: hover) { .memo-content a:hover { text-decoration-color: var(--primary); } }
+.memo-content a:active { text-decoration-color: var(--primary); }
 
 /* ---- Markdown ---------------------------------------------------------
    Per-line grammar: every construct fits one visual line, so rows keep
@@ -3244,7 +3274,7 @@ button.crumb:active { background: var(--wash-strong); }
   border-radius: var(--r-xs);
   border: 1.5px solid var(--line-strong);
   background: transparent;
-  transition: border-color 0.16s var(--ease), background-color 0.16s var(--ease), transform 0.12s var(--ease);
+  transition: border-color var(--t) var(--ease), background-color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 .md-task-box::before { content: ""; position: absolute; inset: -6px; }
 /* The tick is a mask over the fill's ink rather than a white glyph: dark's
@@ -3261,7 +3291,7 @@ button.crumb:active { background: var(--wash-strong); }
     center / 9px 9px no-repeat;
   opacity: 0;
   transform: scale(0.4);
-  transition: opacity 0.16s var(--ease), transform 0.16s var(--ease);
+  transition: opacity var(--t) var(--ease), transform var(--t) var(--ease);
 }
 .md-task.is-done .md-task-box { border-color: var(--primary); background-color: var(--primary); }
 /* Checking pops the tick on the overshoot curve, like the select ring's
@@ -3269,7 +3299,7 @@ button.crumb:active { background: var(--wash-strong); }
 .md-task.is-done .md-task-box::after {
   opacity: 1;
   transform: scale(1);
-  transition: opacity 0.16s var(--ease), transform 0.2s var(--ease-pop);
+  transition: opacity var(--t) var(--ease), transform 0.2s var(--ease-pop);
 }
 button.md-task-box { cursor: pointer; }
 /* Hover only where there is one: a tap's sticky hover left a sage edge on
@@ -3287,7 +3317,7 @@ button.md-task-box:active { transform: scale(0.88); }
 .md-task > .md-body {
   text-decoration-line: none;
   text-decoration-color: transparent;
-  transition: color 0.16s var(--ease), text-decoration-color 0.16s var(--ease), text-decoration-line 0s linear 0.16s;
+  transition: color var(--t) var(--ease), text-decoration-color var(--t) var(--ease), text-decoration-line 0s linear var(--t);
   transition-behavior: allow-discrete;
 }
 .md-task.is-done > .md-body {
@@ -3390,7 +3420,14 @@ button.memo-tag:active {
   margin-top: 2px;
 }
 .memo-images.cols-2 { grid-template-columns: repeat(2, minmax(0, var(--cell-max))); }
+/* Registered so the box can ease between shapes: a lone link is drawn
+   square until its picture loads and the browser knows its real shape
+   (MemoCard adds .is-reshaping for just that change; any other ratio change
+   — an edit swapping the picture — lands at once, where MemoStage measures
+   it). */
+@property --media-ratio { syntax: "<number>"; inherits: true; initial-value: 1; }
 .memo-images.count-1 { grid-template-columns: minmax(0, calc(var(--single-box) * min(1, var(--media-ratio, 1)))); }
+.memo-images.count-1.is-reshaping { transition: --media-ratio var(--t-slow) var(--ease-out); }
 .memo-images.count-1 > .memo-image { aspect-ratio: var(--media-ratio, 1); }
 .memo-image {
   position: relative;
@@ -3398,17 +3435,17 @@ button.memo-tag:active {
   border-radius: var(--r-sm);
   overflow: hidden;
   border: 1px solid var(--line);
-  transition: background-color 0.16s var(--ease);
+  transition: background-color var(--t) var(--ease);
 }
 /* A tile opens the viewer; a failed one retries instead (pointer). */
 .memo-image:not(.is-failed) { cursor: zoom-in; }
-/* A neutral ground while a stored image loads; it retires once the picture
-   paints so transparent images keep the card behind them — crossfading with
-   the picture's own arrival below. */
+/* A neutral ground while a stored or linked image loads; it retires once
+   the picture paints so transparent images keep the card behind them —
+   crossfading with the picture's own arrival below. */
 .memo-image.is-loading { background: var(--surface-2); }
 /* A picture that had to be waited for fades in; one already in memory at
    mount draws at once, so ghost and replay copies stay pixel-identical. */
-.memo-image.is-arriving img { animation: fade-in 0.16s var(--ease) both; }
+.memo-image.is-arriving img { animation: fade-in var(--t) var(--ease) both; }
 .memo-image.is-failed { border-style: dashed; border-color: var(--line-strong); }
 .memo-image-failed {
   position: absolute;
@@ -3428,7 +3465,7 @@ button.memo-tag:active {
 @media (hover: hover) { .memo-image.is-failed:hover .memo-image-failed { color: var(--ink-soft); } }
 /* One hover cue: the photo itself brightens a touch (the hairline border
    already separates it from the card). Press dims it back down. */
-.memo-image img { width: 100%; height: 100%; object-fit: cover; display: block; transition: filter 0.18s var(--ease); }
+.memo-image img { width: 100%; height: 100%; object-fit: cover; display: block; transition: filter var(--t) var(--ease); }
 @media (hover: hover) {
   .memo-image:hover img { filter: brightness(1.06); }
 }
@@ -3726,6 +3763,10 @@ button.memo-tag:active {
   touch-action: pinch-zoom;
   /* A click on the backdrop closes; one on the picture does nothing. */
   cursor: zoom-out;
+  /* Its own snapshot group in any view transition — the photo morph below,
+     or a feed swap that lands while it is open — lifted over the card,
+     composer and topbar groups as it sits over them live. */
+  view-transition-name: lightbox;
 }
 .lightbox.is-zoomed { touch-action: auto; }
 .lightbox::before {
@@ -3757,6 +3798,12 @@ button.memo-tag:active {
   animation: lightbox-zoom 0.22s var(--ease-out) both;
   cursor: default;
 }
+/* The picture on screen (never the one leaving) shares its snapshot name
+   with the feed tile it came from or goes back to — Lightbox.tsx names the
+   tile for just the capture it is in. Arriving by that morph, it skips its
+   own zoom: the transition already grew it out of the tile. */
+.lightbox-image:not(.is-leaving) { view-transition-name: lightbox-photo; }
+.lightbox-image.is-morphed { animation: none; }
 /* The zoom is the opening; later pages slide in from the side they came. */
 .lightbox-image.dir-fwd { animation: swap-in-fwd 0.22s var(--ease-out) both; }
 .lightbox-image.dir-back { animation: swap-in-back 0.22s var(--ease-out) both; }
@@ -3862,6 +3909,44 @@ button.memo-tag:active {
 }
 @media (hover: hover) { .lightbox-source:hover { background: rgba(12, 14, 19, 0.78); text-decoration: none; } }
 .lightbox-source:active { transform: scale(0.96); }
+
+/* ---- Tile ↔ viewer morph (view transition, see Lightbox.tsx) ----
+   Stacking: the viewer's group sits with the toast's (4) above every feed
+   and topbar group; the photo rides above the viewer. The photo's box is
+   clipped to the viewer image's corners and its two snapshots are laid so
+   they coincide at every frame: the whole picture covers the box (at the
+   tile's shape that is exactly the tile's centre crop), while the tile's
+   snapshot — already that crop — is contained, scaled with the picture.
+   The crop then opens up as the box takes the picture's shape (closes in on
+   the way home), only the parts the tile never showed fading, instead of
+   two differently cropped stills ghosting across each other. Opening, the
+   tile is the old snapshot; closing (data-vt-lightbox), the new one. */
+::view-transition-group(lightbox) { z-index: 4; }
+::view-transition-group(lightbox-photo) { z-index: 5; overflow: clip; border-radius: var(--r-md); }
+::view-transition-old(lightbox-photo),
+::view-transition-new(lightbox-photo) { block-size: 100%; object-fit: cover; }
+::view-transition-old(lightbox-photo),
+:root[data-vt-lightbox="close"]::view-transition-new(lightbox-photo) { object-fit: contain; }
+:root[data-vt-lightbox="close"]::view-transition-old(lightbox-photo) { object-fit: cover; }
+/* Opening, the viewer's own fade-in plays live inside its snapshot — a
+   snapshot fade on top would only dim it twice. Closing, the frozen viewer
+   fades on the exit beat while the photo shrinks home on the same beat. */
+::view-transition-new(lightbox):only-child { animation: none; }
+::view-transition-old(lightbox):only-child { animation: fade-out 0.16s var(--ease) both; }
+:root[data-vt-lightbox="close"]::view-transition-group(lightbox-photo) { animation-duration: 0.16s; }
+
+/* Reduced motion: dissolve, don't move. The viewer fades in and out where it
+   stands and pages cross-fade; nothing zooms, slides or flies home (the
+   morph never starts). More specific than the blanket reset at the end of
+   the sheet, which would otherwise cut every one of these fades. */
+@media (prefers-reduced-motion: reduce) {
+  .lightbox { animation-duration: var(--t) !important; }
+  .lightbox.is-closing { animation-duration: var(--t-fast) !important; }
+  .lightbox-image:not(.is-pending, .is-leaving) { animation-name: fade-in !important; animation-duration: var(--t) !important; }
+  .lightbox-image.is-leaving:is(.out-fwd, .out-back) { animation-name: fade-out !important; animation-duration: var(--t-fast) !important; }
+  /* Closing, the picture goes with the overlay's fade — not a fade-in again. */
+  .lightbox.is-closing .lightbox-image:not(.is-leaving) { animation-name: none !important; }
+}
 
 /* =========================================================================
    Stats modal — a year at a glance
@@ -4685,7 +4770,6 @@ button.stats-tag-row:active { scale: 0.992; }
    away pushes it up against that line at every scroll position instead.
    ========================================================================= */
 .scroll-top-slot {
-  --slot-ease: cubic-bezier(0.4, 0, 0.2, 1);
   /* 88px = the 72px topbar band + the same 16px breath the topbar keeps
      above the cards. */
   --scroll-top-anchor: 88px;
@@ -4717,11 +4801,17 @@ button.stats-tag-row:active { scale: 0.992; }
   scale: none;
   pointer-events: auto;
 }
+/* Hiding shrinks away on the exit beat; showing waits that same beat, then
+   drops and swells in on the entrance curve. Only the three properties that
+   move are transitioned — pointer-events flips at once either way. */
 @media (prefers-reduced-motion: no-preference) {
-  .scroll-top-slot { transition: all 80ms var(--slot-ease); }
+  .scroll-top-slot {
+    transition: opacity var(--t) var(--ease), translate var(--t) var(--ease), scale var(--t) var(--ease);
+  }
   .scroll-top-slot.is-shown {
-    transition-duration: 180ms;
-    transition-delay: 80ms;
+    transition-duration: var(--t-slow);
+    transition-delay: var(--t-fast);
+    transition-timing-function: var(--ease-out);
   }
 }
 /* The demo disc verbatim: 1px hairline outside 32px, 65% surface over a
@@ -5290,7 +5380,10 @@ button.stats-tag-row:active { scale: 0.992; }
   .range-cal-nav::before,
   .saved-delete::before,
   .filter-mini-clear::before,
-  .period-seg button::before { content: ""; position: absolute; }
+  .period-seg button::before,
+  .scroll-top-btn::before,
+  .lightbox-close::before,
+  .lightbox-nav::before { content: ""; position: absolute; }
   /* 32 → 44; the 26px card ⋯ sits in 13–15px of card padding: 26 → 44. */
   .icon-button::before { inset: -6px; }
   .memo-menu-trigger::before { inset: -9px; }
@@ -5328,6 +5421,14 @@ button.stats-tag-row:active { scale: 0.992; }
   /* 26 → 44: the track's neighbours (stat cells, the figures) are 12px and
      8px away; the 9px reach stays clear of both. */
   .period-seg button::before { inset: -9px 0; }
+  /* Back-to-top: 34 → 46 around its 32px face. The disc clips its own
+     paint (the demo's overflow: hidden), which would clip the extender too;
+     nothing inside it overflows, so a finger's version lets go of the clip. */
+  .scroll-top-btn { overflow: visible; }
+  .scroll-top-btn::before { inset: -6px; }
+  /* The viewer's ✕ (38) and arrows (40) float alone on the scrim: 44 each. */
+  .lightbox-close::before { inset: -3px; }
+  .lightbox-nav::before { inset: -2px; }
 }
 
 /* =========================================================================

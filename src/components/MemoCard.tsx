@@ -1,18 +1,19 @@
-import { Check, Copy, ImageOff, Link2, ListChecks, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Share, Tags, Trash2, X } from "lucide-react";
+import { Check, Copy, ImageOff, ListChecks, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Share, Tags, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { externalImagesOf } from "../lib/content";
 import { formatTime } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
-import { mediaGridProps } from "../lib/imageLayout";
+import { externalImageSize, mediaGridProps } from "../lib/imageLayout";
 import { visualLinesOf } from "../lib/lineDiff";
 import { wordCountOf } from "../lib/stats";
 import type { LightboxItem, Memo, MemoImage, NewImagePayload } from "../lib/types";
 import { Editor, type EditDraft } from "./Editor";
+import { openLightboxFrom } from "./Lightbox";
 import { MemoFold, mightFold } from "./MemoFold";
 import { MemoLine } from "./memoLines";
 import { MemoStage } from "./MemoStage";
 import { Menu } from "./Menu";
-import { StoredImageButton, StoredImageFrame } from "./StoredImage";
+import { ExternalImageButton, ExternalImageFrame, StoredImageButton, StoredImageFrame } from "./StoredImage";
 
 interface MemoCardProps {
   memo: Memo;
@@ -265,14 +266,43 @@ function MemoMenuBody({ memo, close, inTrash, pinned, busy, onTogglePin, onStart
   );
 }
 
+/**
+ * Bring a card that a save carried off screen back into view, its top just
+ * under the sticky topbar. Measured by layout (offsets), not by the painted
+ * box: a card the feed is still easing to its new place with a transform
+ * would read as where it left from. A far trip jumps most of the way first
+ * and glides the last screen and a half — a native smooth scroll across
+ * hundreds of content-visibility cards gets cut short by scroll anchoring
+ * (see ScrollTopButton).
+ */
+function revealCard(card: HTMLElement) {
+  let top = 0;
+  for (let node: HTMLElement | null = card; node; node = node.offsetParent instanceof HTMLElement ? node.offsetParent : null) top += node.offsetTop;
+  const bottom = top + card.offsetHeight;
+  const band = Math.max(0, document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0);
+  const viewTop = window.scrollY + band;
+  const viewBottom = window.scrollY + window.innerHeight;
+  if (bottom > viewTop && top < viewBottom) return;
+  const target = Math.max(0, top - band - 16);
+  const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const span = window.innerHeight * 1.5;
+  const distance = target - window.scrollY;
+  if (!reduced && Math.abs(distance) > span) window.scrollTo({ top: target - Math.sign(distance) * span, behavior: "instant" });
+  window.scrollTo({ top: target, behavior: reduced ? "instant" : "smooth" });
+}
+
 export function MemoCard(props: MemoCardProps) {
   const { locale, tr } = useI18n();
   const { memo, variant, editing, selecting, selected } = props;
   // External links that failed to load render as a compact fallback chip.
   const [brokenUrls, setBrokenUrls] = useState<Set<string>>(new Set());
+  const articleRef = useRef<HTMLElement>(null);
   const viewSurfaceRef = useRef<HTMLDivElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const previousEditingRef = useRef(editing);
+  // How the open edit was last driven — a keyboard reader's focus must never
+  // be left somewhere off screen when the edit closes (see below).
+  const editInputRef = useRef<"keyboard" | "pointer">("pointer");
   // Where a double-click asked the editor to put its caret; null = the end.
   const editCaretRef = useRef<{ offset: number; viewportY: number } | null>(null);
   // Long bodies fold to a fixed height; this card's reader can unfold it.
@@ -292,18 +322,74 @@ export function MemoCard(props: MemoCardProps) {
     if (viewSurfaceRef.current) viewSurfaceRef.current.inert = selecting;
   }, [selecting]);
 
+  useEffect(() => {
+    const card = articleRef.current;
+    if (!editing || !card) return;
+    editInputRef.current = "pointer";
+    const onKey = () => {
+      editInputRef.current = "keyboard";
+    };
+    const onPointer = () => {
+      editInputRef.current = "pointer";
+    };
+    card.addEventListener("keydown", onKey, true);
+    card.addEventListener("pointerdown", onPointer, true);
+    return () => {
+      card.removeEventListener("keydown", onKey, true);
+      card.removeEventListener("pointerdown", onPointer, true);
+    };
+  }, [editing]);
+
   // Cancel/save unmounts the focused editor. Once the steady card surface has
   // committed, return focus to its action trigger instead of letting it fall
-  // back to <body> and restart the page's tab order.
+  // back to <body> and restart the page's tab order. A save can carry the
+  // card off screen (a re-sort under "Edited" order lifts it to the top):
+  // focus still goes with the memo, but the page only follows it for a
+  // keyboard reader, whose focus ring would otherwise be nowhere to be seen.
+  // A pointer reader keeps their place; the feed's motion shows where the
+  // card went.
   useEffect(() => {
     const wasEditing = previousEditingRef.current;
     previousEditingRef.current = editing;
     if (!wasEditing || editing) return;
+    const viaKeyboard = editInputRef.current === "keyboard";
     // MemoStage deliberately keeps the outgoing editor connected during its
     // exit morph, so connectivity cannot be used as a focus-restoration guard.
-    const frame = window.requestAnimationFrame(() => menuTriggerRef.current?.focus({ preventScroll: true }));
+    const frame = window.requestAnimationFrame(() => {
+      const trigger = menuTriggerRef.current;
+      if (!trigger) return;
+      trigger.focus({ preventScroll: true });
+      const card = articleRef.current;
+      if (viaKeyboard && card?.isConnected) revealCard(card);
+    });
     return () => window.cancelAnimationFrame(frame);
   }, [editing]);
+
+  // The pin mark pops when this card sees its memo become pinned — not on
+  // every mount of the mark (first load, a lens bringing the card in, the
+  // view scene coming back when an edit closes).
+  const pinned = Boolean(memo.pinnedAt);
+  const [pinSeen, setPinSeen] = useState(pinned);
+  const [pinPop, setPinPop] = useState(false);
+  if (pinSeen !== pinned) {
+    setPinSeen(pinned);
+    setPinPop(pinned);
+  }
+
+  // A lone linked picture is drawn square until the browser knows its
+  // shape; learning it re-renders the card, and a shape learned from a load
+  // (not one known at mount) eases the box to it (.is-reshaping).
+  const [, setShapesKnown] = useState(0);
+  const [reshaping, setReshaping] = useState(false);
+  const onExternalSize = useCallback((loaded: boolean) => {
+    setShapesKnown((value) => value + 1);
+    if (loaded) setReshaping(true);
+  }, []);
+  useEffect(() => {
+    if (!reshaping) return;
+    const timer = window.setTimeout(() => setReshaping(false), 400);
+    return () => window.clearTimeout(timer);
+  }, [reshaping]);
 
   const externalUrls = useMemo(() => externalImagesOf(memo.content), [memo.content]);
   const lightboxItems = useMemo<LightboxItem[]>(
@@ -317,12 +403,14 @@ export function MemoCard(props: MemoCardProps) {
 
   const lines = useMemo(() => visualLinesOf(memo.content), [memo.content]);
   const foldable = useMemo(() => mightFold(memo.content), [memo.content]);
-  const pinned = Boolean(memo.pinnedAt);
   const inTrash = variant === "trash";
   const busy = Boolean(props.busy);
   const mediaCount = memo.images.length + externalUrls.length;
   // Media-set fingerprint for the stage's change detection.
   const mediaKey = useMemo(() => [...memo.images.map((image) => image.id), ...externalUrls].join("|"), [memo.images, externalUrls]);
+  // A lone linked picture's shape, once known, sizes the grid as a stored
+  // one's dimensions do (read fresh each render: see onExternalSize).
+  const mediaGrid = mediaGridProps(mediaCount, memo.images[0] ?? (externalUrls.length > 0 ? externalImageSize(externalUrls[0]) : undefined));
 
   function startEditFromDoubleClick(target: EventTarget, clientY: number) {
     if (editing || selecting || inTrash) return;
@@ -448,7 +536,7 @@ export function MemoCard(props: MemoCardProps) {
     const count = images.length + urls.length;
     if (count === 0) return null;
     return (
-      <div {...mediaGridProps(count, images[0])}>
+      <div {...mediaGridProps(count, images[0] ?? (urls.length > 0 ? externalImageSize(urls[0]) : undefined))}>
         {images.map((image) => (
           <StoredImageFrame key={image.id} image={image} sizing={count === 1 ? "auto" : "thumb"} />
         ))}
@@ -459,30 +547,38 @@ export function MemoCard(props: MemoCardProps) {
               <span>{tr("Image link is unavailable", "图片链接已失效")}</span>
             </div>
           ) : (
-            <div key={url} className="memo-image is-external">
-              <img src={url} alt="" decoding="async" referrerPolicy="no-referrer" />
-              <span className="ext-badge" aria-hidden="true">
-                <Link2 size={11} />
-              </span>
-            </div>
+            <ExternalImageFrame key={url} url={url} />
           )
         )}
       </div>
     );
   };
 
+  // The ghost's header is the live one's twin, pin and ⋯ included: during a
+  // remote update the ghost is the opaque top layer, and a header missing
+  // them made the pin (and the touch-visible ⋯) blink out and fade back.
+  // The ⋯ and the select ring are inert stand-ins; CSS mirrors the live
+  // trigger's open/focus state onto them.
   const renderGhost = (content: string, images: MemoImage[]) => (
     <>
       <header className="memo-head">
         <time className="memo-time">{timeLabel}</time>
         <div className="memo-head-right">
+          {pinned && !inTrash ? <Pin size={13} className="memo-pin-mark" aria-hidden="true" /> : null}
           {inTrash ? (
             <span className="memo-restore">
               <RotateCcw size={13} aria-hidden="true" />
               {tr("Restore", "恢复")}
             </span>
           ) : null}
-          <div className="memo-tool-slot" />
+          <div className="memo-tool-slot">
+            <span className="icon-button memo-menu-trigger">
+              <MoreHorizontal size={17} aria-hidden="true" />
+            </span>
+            <span className="memo-select-box">
+              <Check size={13} strokeWidth={3.2} />
+            </span>
+          </div>
         </div>
       </header>
       {renderBody(content, visualLinesOf(content), false)}
@@ -498,7 +594,14 @@ export function MemoCard(props: MemoCardProps) {
             {timeLabel}
           </time>
           <div className="memo-head-right">
-            {pinned && !inTrash ? <Pin size={13} className="memo-pin-mark" aria-label={tr("Pinned", "已置顶")} /> : null}
+            {pinned && !inTrash ? (
+              <Pin
+                size={13}
+                className={`memo-pin-mark${pinPop ? " is-new" : ""}`}
+                aria-label={tr("Pinned", "已置顶")}
+                onAnimationEnd={() => setPinPop(false)}
+              />
+            ) : null}
             {/* Restore is the one thing a trashed memo is for: it sits on the
                 card, always visible, instead of behind a hover-only ⋯. */}
             {inTrash ? (
@@ -566,7 +669,10 @@ export function MemoCard(props: MemoCardProps) {
         {renderBody(memo.content, lines, true)}
 
         {mediaCount > 0 ? (
-          <div {...mediaGridProps(mediaCount, memo.images[0])}>
+          <div
+            {...mediaGrid}
+            className={`${mediaGrid.className}${reshaping ? " is-reshaping" : ""}`}
+          >
             {memo.images.map((image, index) => (
               <StoredImageButton
                 key={image.id}
@@ -574,7 +680,7 @@ export function MemoCard(props: MemoCardProps) {
                 sizing={mediaCount === 1 ? "auto" : "thumb"}
                 tabIndex={selecting ? -1 : undefined}
                 lightboxIndex={index}
-                onOpen={() => props.onOpenImage(lightboxItems, index)}
+                onOpen={(tile) => openLightboxFrom(tile, () => props.onOpenImage(lightboxItems, index))}
                 label={mediaCount > 1 ? tr(`View image ${index + 1} of ${mediaCount}`, `查看图片 ${index + 1}/${mediaCount}`) : tr("View image", "查看图片")}
               />
             ))}
@@ -593,14 +699,17 @@ export function MemoCard(props: MemoCardProps) {
                   <span>{tr("Image link is unavailable", "图片链接已失效")}</span>
                 </a>
               ) : (
-                <button
+                <ExternalImageButton
                   key={url}
-                  type="button"
-                  className="memo-image is-external"
+                  url={url}
                   tabIndex={selecting ? -1 : undefined}
-                  data-lightbox-index={lightboxItems.findIndex((item) => item.src === url)}
-                  onClick={() => props.onOpenImage(lightboxItems, Math.max(0, lightboxItems.findIndex((item) => item.src === url)))}
-                  aria-label={
+                  lightboxIndex={lightboxItems.findIndex((item) => item.src === url)}
+                  onOpen={(tile) =>
+                    openLightboxFrom(tile, () => props.onOpenImage(lightboxItems, Math.max(0, lightboxItems.findIndex((item) => item.src === url))))
+                  }
+                  onBroken={() => markBroken(url)}
+                  onShape={mediaCount === 1 ? onExternalSize : undefined}
+                  label={
                     mediaCount > 1
                       ? tr(
                           `View external image ${memo.images.length + urlIndex + 1} of ${mediaCount}`,
@@ -608,12 +717,7 @@ export function MemoCard(props: MemoCardProps) {
                         )
                       : tr("View external image", "查看外链图片")
                   }
-                >
-                  <img src={url} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => markBroken(url)} />
-                  <span className="ext-badge" aria-hidden="true">
-                    <Link2 size={11} />
-                  </span>
-                </button>
+                />
               )
             )}
           </div>
@@ -637,6 +741,7 @@ export function MemoCard(props: MemoCardProps) {
 
   return (
     <article
+      ref={articleRef}
       className={`memo-card${pinned && !inTrash ? " is-pinned" : ""}${inTrash ? " is-trash" : ""}${selecting ? " is-selecting" : ""}${
         selected ? " is-selected" : ""
       }`}

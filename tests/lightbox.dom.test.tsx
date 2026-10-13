@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Lightbox } from "../src/components/Lightbox";
+import { Lightbox, openLightboxFrom } from "../src/components/Lightbox";
 import { LanguageProvider } from "../src/lib/i18n";
 import { clearImageCache, peekImage, primeImage } from "../src/lib/imageCache";
 
@@ -75,7 +75,8 @@ describe("Lightbox gestures", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("closes at once on a downward swipe under reduced motion", () => {
+  it("fades out where it stands on a downward swipe under reduced motion", () => {
+    vi.useFakeTimers();
     const matchMedia = window.matchMedia;
     window.matchMedia = ((query: string) => ({
       matches: query.includes("prefers-reduced-motion"),
@@ -87,8 +88,11 @@ describe("Lightbox gestures", () => {
       const onClose = vi.fn();
       renderLocalized(<Lightbox items={ITEMS} index={1} onClose={onClose} />);
       swipe(screen.getByRole("img"), [400, 300], [410, 600]);
+      // The stylesheet's dissolve (no zoom, no flight home), then the unmount.
+      expect(overlay().classList.contains("is-closing")).toBe(true);
+      expect(onClose).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(200);
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(overlay().classList.contains("is-closing")).toBe(false);
     } finally {
       window.matchMedia = matchMedia;
     }
@@ -382,5 +386,152 @@ describe("Lightbox closing and failure", () => {
     expect(again).not.toBe(first);
     expect(again.classList.contains("is-pending")).toBe(true);
     expect(document.activeElement).toBe(overlay());
+  });
+});
+
+describe("Lightbox morph with its feed tile", () => {
+  const PHOTO = "lightbox-photo";
+  let captures: Array<{ tileNames: string[]; vtLightbox: string | undefined }>;
+  let tileRect: Partial<DOMRect>;
+
+  /** A feed grid whose tiles open the viewer, as MemoCard wires them. */
+  function Gallery({ onClose = vi.fn() }: { onClose?: () => void }) {
+    const [open, setOpen] = useState<number | null>(null);
+    return (
+      <>
+        <div className="memo-images">
+          {ITEMS.map((item, index) => (
+            <button
+              key={item.src}
+              type="button"
+              data-lightbox-index={index}
+              aria-label={`tile ${index + 1}`}
+              onClick={(event) => openLightboxFrom(event.currentTarget, () => setOpen(index))}
+            >
+              <img src={item.src} alt="" />
+            </button>
+          ))}
+        </div>
+        {open !== null ? (
+          <Lightbox
+            items={ITEMS}
+            index={open}
+            onClose={() => {
+              setOpen(null);
+              onClose();
+            }}
+          />
+        ) : null}
+      </>
+    );
+  }
+
+  // By selector: the open viewer hides the feed from the accessibility tree.
+  function tilePicture(index: number): HTMLImageElement {
+    return document.querySelectorAll<HTMLImageElement>(".memo-images img")[index];
+  }
+
+  function stubMotion(reduced: boolean) {
+    window.matchMedia = ((query: string) => ({
+      matches: reduced && query.includes("prefers-reduced-motion"),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  beforeEach(() => {
+    captures = [];
+    tileRect = { top: 120, bottom: 220, left: 40, right: 140, width: 100, height: 100 };
+    stubMotion(false);
+    // Painted pictures, laid out on screen.
+    vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+    vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(800);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(() => tileRect as DOMRect);
+    // A transition that records the old capture's names, then runs the update.
+    document.startViewTransition = ((update: () => void) => {
+      captures.push({
+        tileNames: [0, 1, 2].map((index) => tilePicture(index).style.viewTransitionName),
+        vtLightbox: document.documentElement.dataset.vtLightbox
+      });
+      update();
+      const done = Promise.resolve();
+      return { ready: done, finished: done, updateCallbackDone: done, skipTransition: vi.fn() };
+    }) as unknown as typeof document.startViewTransition;
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(document, "startViewTransition");
+    Reflect.deleteProperty(window, "matchMedia");
+    delete document.documentElement.dataset.vtLightbox;
+    vi.restoreAllMocks();
+  });
+
+  it("grows the photo out of its tile: the tile holds the shared name for the old capture only", () => {
+    renderLocalized(<Gallery />);
+    fireEvent.click(screen.getByRole("button", { name: "tile 1" }));
+
+    expect(captures).toHaveLength(1);
+    expect(captures[0].tileNames).toEqual([PHOTO, "", ""]);
+    // The viewer's picture takes the name over; the tile lets go of it.
+    expect(tilePicture(0).style.viewTransitionName).toBe("");
+    expect(screen.getByRole("img", { name: "Image 1 of 3" }).classList.contains("is-morphed")).toBe(true);
+  });
+
+  it("shrinks back into the tile of the picture shown last, then lets go of the name", async () => {
+    const onClose = vi.fn();
+    renderLocalized(<Gallery onClose={onClose} />);
+    fireEvent.click(screen.getByRole("button", { name: "tile 1" }));
+    fireEvent.load(screen.getByRole("img", { name: "Image 1 of 3" }));
+    fireEvent.keyDown(window, { key: "End" });
+    fireEvent.load(screen.getByRole("img", { name: "Image 3 of 3" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    // The viewer is the old capture; the tile, named in the update, the new one.
+    expect(captures).toHaveLength(2);
+    expect(captures[1]).toEqual({ tileNames: ["", "", ""], vtLightbox: "close" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(tilePicture(2).style.viewTransitionName).toBe(PHOTO);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "tile 3" }));
+
+    await waitFor(() => expect(tilePicture(2).style.viewTransitionName).toBe(""), { timeout: 1500 });
+    expect(document.documentElement.dataset.vtLightbox).toBeUndefined();
+  });
+
+  it("opens and closes the plain way when the tile is out of sight", () => {
+    vi.useFakeTimers();
+    // Below the fold: the photo would fly in from nowhere the reader can see.
+    tileRect = { top: 2000, bottom: 2100, left: 40, right: 140, width: 100, height: 100 };
+    const onClose = vi.fn();
+    renderLocalized(<Gallery onClose={onClose} />);
+    fireEvent.click(screen.getByRole("button", { name: "tile 2" }));
+    expect(captures).toHaveLength(0);
+    const picture = screen.getByRole("img", { name: "Image 2 of 3" });
+    expect(picture.classList.contains("is-morphed")).toBe(false);
+
+    fireEvent.load(picture);
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(captures).toHaveLength(0);
+    expect(overlay().classList.contains("is-closing")).toBe(true);
+    vi.advanceTimersByTime(200);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("never morphs under reduced motion", () => {
+    vi.useFakeTimers();
+    stubMotion(true);
+    const onClose = vi.fn();
+    renderLocalized(<Gallery onClose={onClose} />);
+    fireEvent.click(screen.getByRole("button", { name: "tile 1" }));
+    const picture = screen.getByRole("img", { name: "Image 1 of 3" });
+    expect(picture.classList.contains("is-morphed")).toBe(false);
+
+    fireEvent.load(picture);
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(captures).toHaveLength(0);
+    expect(overlay().classList.contains("is-closing")).toBe(true);
+    vi.advanceTimersByTime(200);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

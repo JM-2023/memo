@@ -1,10 +1,12 @@
 import { ChevronLeft, ChevronRight, ExternalLink, ImageOff, Loader2, RotateCw, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { flushSync } from "react-dom";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
 import { acquireImage, discardImage, peekImage, releaseImage, retainImage, type ImageVariant } from "../lib/imageCache";
 import type { LightboxItem } from "../lib/types";
+import { withViewTransition } from "../lib/viewTransition";
 
 interface LightboxProps {
   items: LightboxItem[];
@@ -44,6 +46,105 @@ interface Leaving {
   src: string;
   external: boolean;
   dir: Dir;
+}
+
+/* ---- Shared-element morph between a feed tile and the viewer ----
+   Opening, the tile's picture and the viewer's image carry one
+   view-transition-name across the swap (app.css, lightbox section), so the
+   photo grows out of its tile; closing, it shrinks back into the tile of the
+   picture shown last. Only one element may hold the name in each captured
+   state: the viewer's current image wears it through CSS for as long as it is
+   mounted, and a tile gets it inline just for the capture it is in. */
+const PHOTO_NAME = "lightbox-photo";
+
+/** The tile a viewer is being opened from — handed to that one mount. */
+let arrival: { tile: HTMLElement; morph: boolean } | null = null;
+/** A tile still named for a close morph that may not have finished. */
+let namedTile: HTMLImageElement | null = null;
+
+function releaseNamedTile() {
+  if (namedTile) namedTile.style.viewTransitionName = "";
+  namedTile = null;
+}
+
+function morphsAllowed(): boolean {
+  if (typeof document.startViewTransition !== "function") return false;
+  return typeof window.matchMedia !== "function" || !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/**
+ * A tile's picture, when it can stand in for one end of the morph: painted
+ * and on screen. A tile scrolled away, tucked under the sticky topbar or
+ * gone from the feed would send the photo somewhere nobody can follow it —
+ * the viewer then leaves the plain way.
+ */
+function morphablePicture(tile: HTMLElement | null): HTMLImageElement | null {
+  const picture = tile?.isConnected ? tile.querySelector("img") : null;
+  if (!picture || !picture.complete || picture.naturalWidth === 0) return null;
+  const rect = picture.getBoundingClientRect();
+  const topbar = document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0;
+  const visible = rect.width > 0 && rect.bottom > Math.max(0, topbar) + 8 && rect.top < window.innerHeight - 8 && rect.right > 0 && rect.left < window.innerWidth;
+  return visible ? picture : null;
+}
+
+/**
+ * Runs `done` once the running view transition has let go of the page: read
+ * off its own pseudo-element animations (withViewTransition keeps the
+ * transition object to itself), with a ceiling in case they never report.
+ */
+function afterTransition(done: () => void) {
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    window.clearTimeout(ceiling);
+    done();
+  };
+  const ceiling = window.setTimeout(finish, 1000);
+  let frames = 0;
+  const look = () => {
+    const running =
+      typeof document.getAnimations === "function"
+        ? document.getAnimations().filter((animation) => (animation.effect as KeyframeEffect | null)?.pseudoElement?.startsWith("::view-transition"))
+        : [];
+    // The pseudo-elements appear a frame or two after the update ran.
+    if (running.length === 0 && frames++ < 3) {
+      window.requestAnimationFrame(look);
+      return;
+    }
+    void Promise.allSettled(running.map((animation) => animation.finished)).then(finish);
+  };
+  window.requestAnimationFrame(look);
+}
+
+/**
+ * Opens the viewer from a feed tile: the tile's picture grows into the
+ * viewer's image when it is painted and motion is welcome, else the viewer
+ * opens with its own zoom. `open` must mount the Lightbox (the owner's
+ * setState); it runs inside flushSync so the mount can read which tile it
+ * came from. A tile that is not given (or not found) still opens plainly.
+ */
+export function openLightboxFrom(tile: HTMLElement | null, open: () => void): void {
+  const mount = (morph: boolean) => {
+    arrival = tile ? { tile, morph } : null;
+    try {
+      flushSync(open);
+    } finally {
+      arrival = null;
+    }
+  };
+  const picture = morphsAllowed() ? morphablePicture(tile) : null;
+  if (!picture) {
+    mount(false);
+    return;
+  }
+  releaseNamedTile();
+  picture.style.viewTransitionName = PHOTO_NAME;
+  withViewTransition((animated) => {
+    // The viewer's image takes the name over in the new state.
+    picture.style.viewTransitionName = "";
+    mount(animated);
+  });
 }
 
 /** One identity per picture, whichever copy of it is on screen. */
@@ -126,8 +227,10 @@ function useLightboxSource(item: LightboxItem, attempt: number) {
 }
 
 /**
- * Full-screen image viewer: backdrop fade, image zoom-in on open, then a
- * directional slide per page. Paging by ←/→ (Home/End for the ends), the
+ * Full-screen image viewer: backdrop fade, the photo growing out of its feed
+ * tile on open (or a zoom-in when it can't — see openLightboxFrom), then a
+ * directional slide per page; closing shrinks the photo back into the tile
+ * of the picture shown last. Paging by ←/→ (Home/End for the ends), the
  * arrow buttons, or a horizontal swipe; a downward swipe dismisses. Only
  * single-finger touch is claimed (`touch-action: pinch-zoom`), so the
  * platform's own pinch zoom keeps working, and once the page is zoomed the
@@ -138,10 +241,18 @@ function useLightboxSource(item: LightboxItem, attempt: number) {
  */
 export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxProps) {
   const { tr } = useI18n();
-  // `dir` picks the entrance: null is the first open (zoom), then the
-  // direction of travel for each page change.
+  // Read once, during the mount openLightboxFrom wrapped.
+  const [origin] = useState(() => arrival);
+  // The first picture arrives by the morph from its tile, so its own zoom
+  // stands down — unless it has no pixels yet to morph into (see below).
+  const [morphIn, setMorphIn] = useState(() => origin?.morph === true);
+  // `dir` picks the entrance: null is the first open (zoom, or the morph
+  // from the tile), then the direction of travel for each page change.
   const [view, setView] = useState<{ current: number; dir: Dir | null }>({ current: index, dir: null });
   const [closing, setClosing] = useState(false);
+  // Set by every close path, including the morph, which never sets
+  // `closing`: its exit is the transition's, not the stylesheet's.
+  const closingRef = useRef(false);
   // A swipe that dismissed leaves the image where the finger let go.
   const [flung, setFlung] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -161,10 +272,12 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
   closeRef.current = onClose;
   const dragRef = useRef<Drag | null>(null);
   const suppressClickUntil = useRef(0);
-  // The tile that opened the viewer — read before the modal hook moves focus.
+  // The tile that opened the viewer: the one openLightboxFrom handed over (a
+  // click does not focus a button in Safari), else whatever had focus — read
+  // before the modal hook moves focus.
   const openerRef = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
-    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    openerRef.current = origin?.tile ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
   }, []);
 
   const current = Math.min(view.current, items.length - 1);
@@ -175,15 +288,52 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
   const status: "loading" | "ready" | "failed" =
     failed.has(key) || (source.failed && !source.src) ? "failed" : loaded.has(key) && source.src ? "ready" : "loading";
 
-  function requestClose(swiped = false) {
-    if (closing) return;
-    if (reducedMotion) {
-      closeRef.current();
-      return;
-    }
+  /** The stylesheet's exit: the scrim fades (under reduced motion that is
+      all that happens), the picture recedes with it or, flung, stays where
+      the finger let it go. */
+  function leavePlainly(swiped: boolean) {
     setClosing(true);
     setFlung(swiped);
     closeTimer.current = window.setTimeout(() => closeRef.current(), 170);
+  }
+
+  function requestClose(swiped = false) {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    if (!morphHome(swiped)) leavePlainly(swiped);
+  }
+
+  /**
+   * Close by shrinking the photo back into the tile of the picture on screen
+   * — from wherever it is painted, so a swipe-down hands the photo straight
+   * from the finger to its tile. False when that can't be seen through (no
+   * tile in view, a pinch-zoomed page, a picture still loading, reduced
+   * motion): the caller leaves plainly instead.
+   */
+  function morphHome(swiped: boolean): boolean {
+    if (reducedMotion || zoomed || status !== "ready" || !imageRef.current || !morphsAllowed()) return false;
+    const target = morphablePicture(currentTile());
+    if (!target) return false;
+    releaseNamedTile();
+    const root = document.documentElement;
+    root.dataset.vtLightbox = "close";
+    withViewTransition((animated) => {
+      if (!animated) {
+        // No snapshots after all: the viewer is still up, so it leaves the
+        // way it always has.
+        delete root.dataset.vtLightbox;
+        flushSync(() => leavePlainly(swiped));
+        return;
+      }
+      flushSync(() => closeRef.current());
+      target.style.viewTransitionName = PHOTO_NAME;
+      namedTile = target;
+      afterTransition(() => {
+        if (namedTile === target) releaseNamedTile();
+        if (root.dataset.vtLightbox === "close") delete root.dataset.vtLightbox;
+      });
+    });
+    return true;
   }
 
   // Back closes the viewer with its own exit, not an unmount. Only a change
@@ -215,17 +365,23 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: () => requestClose(), initialFocusRef: closeButtonRef });
 
+  // The feed tile of the picture on screen, if it is still in the feed.
+  const currentRef = useRef(current);
+  currentRef.current = current;
+  function currentTile(): HTMLElement | null {
+    const grid = openerRef.current?.closest(".memo-images");
+    return grid?.querySelector<HTMLElement>(`[data-lightbox-index="${currentRef.current}"]`) ?? null;
+  }
+
   // Runs after the modal hook's own restore (cleanups run in order): the
   // reader may have paged away from the tile that opened the viewer, so
   // focus lands on the tile of the picture they were looking at.
-  const currentRef = useRef(current);
-  currentRef.current = current;
   useLayoutEffect(
     () => () => {
-      const grid = openerRef.current?.closest(".memo-images");
-      const tile = grid?.querySelector<HTMLElement>(`[data-lightbox-index="${currentRef.current}"]`);
+      const tile = currentTile();
       if (tile?.isConnected && tile !== document.activeElement) tile.focus({ preventScroll: true });
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
 
@@ -234,7 +390,7 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
   // closing viewer is already done.
   const keyRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   keyRef.current = (event) => {
-    if (closing || items.length < 2 || event.defaultPrevented || event.isComposing) return;
+    if (closingRef.current || items.length < 2 || event.defaultPrevented || event.isComposing) return;
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key === "ArrowLeft") page(-1);
     else if (event.key === "ArrowRight") page(1);
@@ -275,6 +431,15 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
     if (image && source.src && image.complete && image.naturalWidth > 0) markLoaded(key);
   }, [key, source.src, attempt]);
 
+  // The new state is captured right after this mount: a picture with no
+  // pixels yet leaves the morph nothing to land on, so its zoom plays once
+  // it arrives instead of it popping in.
+  useLayoutEffect(() => {
+    const image = imageRef.current;
+    if (morphIn && !(image && image.complete && image.naturalWidth > 0)) setMorphIn(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Once the current picture is up, fetch its neighbours' originals through
   // the cache so the next page is already there. Raw URLs are left alone.
   const ready = status === "ready";
@@ -309,6 +474,7 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
       return next;
     });
     setAttempt((value) => value + 1);
+    setMorphIn(false);
     // The Retry button leaves with the failed state; keep focus in the viewer.
     overlayRef.current?.focus({ preventScroll: true });
   }
@@ -338,7 +504,7 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
     // A fresh touch is a new gesture: only the click that trails a swipe's
     // own release is swallowed, never a deliberate tap that follows it.
     suppressClickUntil.current = 0;
-    if (event.pointerType === "mouse" || zoomed || closing) return;
+    if (event.pointerType === "mouse" || zoomed || closingRef.current) return;
     if (event.target instanceof Element && event.target.closest("button, a")) return;
     dragRef.current = {
       id: event.pointerId,
@@ -500,7 +666,7 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
         <img
           key={imageKey}
           ref={imageRef}
-          className={`lightbox-image${status === "ready" ? "" : " is-pending"}${view.dir ? ` dir-${view.dir}` : ""}`}
+          className={`lightbox-image${status === "ready" ? "" : " is-pending"}${view.dir ? ` dir-${view.dir}` : morphIn ? " is-morphed" : ""}`}
           src={source.src}
           alt={tr(`Image ${current + 1} of ${items.length}`, `第 ${current + 1} 张图片，共 ${items.length} 张`)}
           referrerPolicy={item.external ? "no-referrer" : undefined}

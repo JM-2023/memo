@@ -1,5 +1,5 @@
-import { RotateCw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { Link2, RotateCw } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject, type SyntheticEvent } from "react";
 import { useI18n } from "../lib/i18n";
 import {
   acquireImage,
@@ -11,7 +11,7 @@ import {
   retainImage,
   type ImageVariant
 } from "../lib/imageCache";
-import { previewCovers } from "../lib/imageLayout";
+import { noteExternalImageSize, previewCovers } from "../lib/imageLayout";
 import type { MemoImage } from "../lib/types";
 
 /** "auto" picks the preview unless the tile is drawn larger than it covers. */
@@ -231,9 +231,10 @@ interface StoredImageButtonProps {
   label: string;
   tabIndex?: number;
   /** This tile's place in the lightbox's items, so closing the viewer can
-      return focus to the tile of the picture last shown. */
+      return focus to (and morph into) the tile of the picture last shown. */
   lightboxIndex?: number;
-  onOpen: () => void;
+  /** Gets the tile itself, for the viewer's morph out of it. */
+  onOpen: (tile: HTMLElement) => void;
 }
 
 /** A feed tile: opens the lightbox, or retries in place after a failed load. */
@@ -249,7 +250,7 @@ export function StoredImageButton({ image, sizing, label, tabIndex, lightboxInde
       className={tileClass(status, arriving)}
       tabIndex={tabIndex}
       data-lightbox-index={lightboxIndex}
-      onClick={failed ? retry : onOpen}
+      onClick={failed ? retry : (event) => onOpen(event.currentTarget)}
       aria-label={failed ? (retrying ? tr("Retrying image…", "正在重试加载图片…") : tr("Couldn’t load image. Retry", "图片加载失败，点按重试")) : label}
       aria-busy={status === "loading" || retrying || undefined}
     >
@@ -269,6 +270,80 @@ export function StoredImageFrame({ image, sizing }: { image: MemoImage; sizing: 
     <div ref={ref} className={tileClass(status)} aria-hidden="true">
       {src ? <img src={src} alt="" decoding="async" width={image.width || undefined} height={image.height || undefined} /> : null}
       {status === "error" ? <FailedLabel /> : null}
+    </div>
+  );
+}
+
+/**
+ * Load state of a linked (external) picture, read off its own <img>: one the
+ * browser already holds (decoded for another card, a ghost of this one) is
+ * ready at first paint, like a cached stored tile; one that has to be waited
+ * for shows the tile's neutral ground and fades in on arrival. Its natural
+ * size goes to imageLayout so a lone link can take its real shape; `onShape`
+ * hears that it is known — `loaded` false when it already was at mount.
+ */
+function useExternalImage(url: string, onShape?: (loaded: boolean) => void) {
+  const ref = useRef<HTMLImageElement>(null);
+  const [state, setState] = useState<{ status: Status; arriving: boolean }>({ status: "loading", arriving: false });
+  const learn = (image: HTMLImageElement, loaded: boolean) => {
+    noteExternalImageSize(url, image.naturalWidth, image.naturalHeight);
+    onShape?.(loaded);
+  };
+  useLayoutEffect(() => {
+    const image = ref.current;
+    if (!image || !image.complete || image.naturalWidth === 0) return;
+    learn(image, false);
+    setState({ status: "ready", arriving: false });
+    // The URL is the tile's key: one mount, one URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const onLoad = (event: SyntheticEvent<HTMLImageElement>) => {
+    learn(event.currentTarget, true);
+    setState((current) => (current.status === "ready" ? current : { status: "ready", arriving: true }));
+  };
+  return { ref, status: state.status, arriving: state.arriving, onLoad };
+}
+
+interface ExternalImageButtonProps {
+  url: string;
+  label: string;
+  tabIndex?: number;
+  lightboxIndex?: number;
+  onOpen: (tile: HTMLElement) => void;
+  /** The link does not load: the card swaps in its broken-link chip. */
+  onBroken: () => void;
+  onShape?: (loaded: boolean) => void;
+}
+
+/** A feed tile for a linked picture, in the stored tiles' load states; a corner badge says it is a link. */
+export function ExternalImageButton({ url, label, tabIndex, lightboxIndex, onOpen, onBroken, onShape }: ExternalImageButtonProps) {
+  const { ref, status, arriving, onLoad } = useExternalImage(url, onShape);
+  return (
+    <button
+      type="button"
+      className={`${tileClass(status, arriving)} is-external`}
+      tabIndex={tabIndex}
+      data-lightbox-index={lightboxIndex}
+      onClick={(event) => onOpen(event.currentTarget)}
+      aria-label={label}
+    >
+      <img ref={ref} src={url} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={onLoad} onError={onBroken} />
+      <span className="ext-badge" aria-hidden="true">
+        <Link2 size={11} />
+      </span>
+    </button>
+  );
+}
+
+/** The inert twin of ExternalImageButton for MemoStage's ghost layers. */
+export function ExternalImageFrame({ url }: { url: string }) {
+  const { ref, status, onLoad } = useExternalImage(url);
+  return (
+    <div className={`${tileClass(status)} is-external`} aria-hidden="true">
+      <img ref={ref} src={url} alt="" decoding="async" referrerPolicy="no-referrer" onLoad={onLoad} />
+      <span className="ext-badge">
+        <Link2 size={11} />
+      </span>
     </div>
   );
 }

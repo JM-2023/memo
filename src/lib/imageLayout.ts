@@ -12,14 +12,37 @@ export function singleImageRatio(image: Pick<MemoImage, "width" | "height"> | un
   return Math.min(SINGLE_MAX_RATIO, Math.max(SINGLE_MIN_RATIO, image.width / image.height));
 }
 
+type Size = Pick<MemoImage, "width" | "height">;
+
+/* Natural sizes of linked (external) pictures, learned from their first load
+   in this page. A stored image brings its dimensions along; a link only has
+   them once the browser has decoded it, so they are kept here — by URL, for
+   every card and ghost layer drawing the same link to lay it out alike. */
+const externalSizes = new Map<string, Size>();
+
+/** A linked picture's natural size, if it has loaded in this page. */
+export function externalImageSize(url: string): Size | undefined {
+  return externalSizes.get(url);
+}
+
+/** Record a linked picture's natural size; true when it was not known yet. */
+export function noteExternalImageSize(url: string, width: number, height: number): boolean {
+  if (!(width > 0) || !(height > 0)) return false;
+  const known = externalSizes.get(url);
+  if (known && known.width === width && known.height === height) return false;
+  externalSizes.set(url, { width, height });
+  return true;
+}
+
 /**
  * Grid geometry shared by the live card and MemoStage's ghost layers, so both
  * lay out identically. Two or four images form a 2-wide grid (a pair, a 2×2),
  * every other count three columns; cells share one size cap in CSS, so more
  * images never mean bigger cells. A lone stored image reserves its own aspect
- * ratio from the stored dimensions before any byte arrives.
+ * ratio from the stored dimensions before any byte arrives; a lone link,
+ * from its natural size once that is known (square until then).
  */
-export function mediaGridProps(count: number, first: MemoImage | undefined): { className: string; style?: CSSProperties } {
+export function mediaGridProps(count: number, first: Size | undefined): { className: string; style?: CSSProperties } {
   if (count <= 1) {
     const ratio = singleImageRatio(first);
     return {

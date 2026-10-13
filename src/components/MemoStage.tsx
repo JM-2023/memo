@@ -376,9 +376,13 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
 
   const replay = morph?.kind === "replay" ? morph : null;
   const mediaKept = replay !== null && replay.prev.mediaKey === snap.mediaKey && snap.mediaKey !== "";
+  // A view→view replay (a remote update) only rewrites the body: the header
+  // is the same in both states, so the live one stays on top and still while
+  // the ghost fades and lifts away under it (see .keeps-head).
+  const keepsHead = replay !== null && !replay.prev.editing;
 
   return (
-    <div className={`card-stage${morph ? " is-morphing" : ""}`} ref={stageRef}>
+    <div className={`card-stage${morph ? " is-morphing" : ""}${keepsHead ? " keeps-head" : ""}`} ref={stageRef}>
       {viewMounted ? (
         <div key="view" className={viewClass} ref={viewRef}>
           {view}

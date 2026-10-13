@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -289,6 +289,57 @@ describe("stored image tiles", () => {
     expect(ghost.querySelector(".memo-image-failed")?.textContent).toBe("Couldn’t load image");
     // Inert: it mirrors the live tile instead of retrying on its own.
     expect(fetchMock.mock.calls.length).toBe(requests);
+  });
+
+  describe("linked pictures", () => {
+    const linked = (url: string): Memo => ({ ...memoWith([]), content: `look\n![](${url})` });
+
+    function natural(image: HTMLImageElement, width: number, height: number) {
+      Object.defineProperty(image, "naturalWidth", { configurable: true, value: width });
+      Object.defineProperty(image, "naturalHeight", { configurable: true, value: height });
+    }
+
+    it("hold the tiles' neutral ground, then fade in and ease a lone link to its shape", () => {
+      renderCard(linked("https://example.com/wide.png"));
+      const tile = screen.getByRole("button", { name: "View external image" });
+      const grid = tile.parentElement as HTMLElement;
+      expect(tile.className).toBe("memo-image is-loading is-external");
+      // No ratio yet: the stylesheet reserves a square box, not a collapsed one.
+      expect(grid.style.getPropertyValue("--media-ratio")).toBe("");
+
+      const picture = tile.querySelector("img")!;
+      natural(picture, 1600, 900);
+      fireEvent.load(picture);
+      expect(tile.className).toBe("memo-image is-arriving is-external");
+      expect(grid.style.getPropertyValue("--media-ratio")).toBe("1.7778");
+      expect(grid.classList.contains("is-reshaping")).toBe(true);
+    });
+
+    it("draw one the browser already holds at its shape, with no fade or easing", () => {
+      vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+      vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(1200);
+      vi.spyOn(HTMLImageElement.prototype, "naturalHeight", "get").mockReturnValue(1600);
+      try {
+        renderCard(linked("https://example.com/tall.png"));
+        const tile = screen.getByRole("button", { name: "View external image" });
+        const grid = tile.parentElement as HTMLElement;
+        expect(tile.className).toBe("memo-image is-external");
+        expect(grid.style.getPropertyValue("--media-ratio")).toBe("0.7500");
+        expect(grid.classList.contains("is-reshaping")).toBe(false);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("keep their place in a shared grid without reshaping it", () => {
+      renderCard({ ...memoWith([image("stored")]), content: "mixed\n![](https://example.com/side.png)" });
+      const tile = screen.getByRole("button", { name: "View external image 2 of 2" });
+      const picture = tile.querySelector("img")!;
+      natural(picture, 1600, 900);
+      fireEvent.load(picture);
+      expect(tile.className).toBe("memo-image is-arriving is-external");
+      expect((tile.parentElement as HTMLElement).className).toBe("memo-images cols-2");
+    });
   });
 
   it("reserves a lone image's aspect ratio on the grid", () => {

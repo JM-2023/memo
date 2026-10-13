@@ -321,6 +321,29 @@ describe("memo card menu", () => {
   });
 });
 
+describe("pin mark", () => {
+  const PINNED_AT = "2026-07-16T09:00:00.000Z";
+  const mark = (container: HTMLElement) => container.querySelector(".memo-head .memo-pin-mark");
+
+  it("stays still when a pinned card mounts, and pops only when the memo becomes pinned", () => {
+    const { container, rerenderCard } = renderCard({ memo: { ...baseMemo, pinnedAt: PINNED_AT } });
+    expect(mark(container)?.classList.contains("is-new")).toBe(false);
+
+    rerenderCard({ memo: { ...baseMemo, pinnedAt: null } });
+    expect(mark(container)).toBeNull();
+    rerenderCard({ memo: { ...baseMemo, pinnedAt: PINNED_AT } });
+    expect(mark(container)?.classList.contains("is-new")).toBe(true);
+
+    // Once played, a later render (an edit closing, say) does not replay it.
+    act(() => {
+      for (const type of ["animationend", "webkitAnimationEnd"]) mark(container)!.dispatchEvent(new Event(type, { bubbles: true }));
+    });
+    expect(mark(container)?.classList.contains("is-new")).toBe(false);
+    rerenderCard({ memo: { ...baseMemo, pinnedAt: PINNED_AT, content: "hello again" } });
+    expect(mark(container)?.classList.contains("is-new")).toBe(false);
+  });
+});
+
 describe("trash card", () => {
   const trashed: Memo = { ...baseMemo, deletedAt: "2026-07-17T09:30:00.000Z" };
 
@@ -435,6 +458,29 @@ describe("off-screen replay", () => {
     const { container, rerenderCard } = renderCard({ memo: { ...baseMemo, content: "first" } });
     rerenderCard({ memo: { ...baseMemo, content: "first\nsecond", seq: 2 } });
     expect(container.querySelector(".stage-overlay")).not.toBeNull();
+  });
+
+  it("gives the replay's ghost the live header, pin and ⋯ included, and keeps the live header on top", () => {
+    setupMotion();
+    const pinnedMemo = { ...baseMemo, content: "first", pinnedAt: "2026-07-16T09:00:00.000Z" };
+    const { container, rerenderCard } = renderCard({ memo: pinnedMemo });
+    rerenderCard({ memo: { ...pinnedMemo, content: "first\nsecond", seq: 2 } });
+
+    const ghost = container.querySelector(".stage-ghost");
+    if (!ghost) throw new Error("No replay ghost");
+    const shape = (head: Element) =>
+      [...head.querySelectorAll(".memo-head-right > *, .memo-tool-slot > *")].map((node) =>
+        (node.getAttribute("class") ?? "").split(" ").filter((name) => name.startsWith("memo-") && name !== "memo-tool-slot")
+      );
+    const liveHead = container.querySelector(".memo-view-surface .memo-head")!;
+    const ghostHead = ghost.querySelector(".memo-head")!;
+    expect(ghostHead.querySelector(".memo-pin-mark")).not.toBeNull();
+    expect(ghostHead.querySelector(".memo-menu-trigger")).not.toBeNull();
+    expect(ghostHead.querySelector(".memo-select-box")).not.toBeNull();
+    expect(ghostHead.querySelector("button")).toBeNull();
+    expect(ghostHead.textContent).toBe(liveHead.textContent);
+    expect(shape(ghostHead).flat()).toEqual(expect.arrayContaining(shape(liveHead).flat()));
+    expect(container.querySelector(".card-stage")?.classList.contains("keeps-head")).toBe(true);
   });
 
   it("lands a remote edit far off-screen with no ghost or overlay", () => {

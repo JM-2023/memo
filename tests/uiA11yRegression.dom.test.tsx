@@ -202,6 +202,49 @@ describe("focus recovery", () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger));
     expect(outgoingEditor.isConnected).toBe(true);
   });
+
+  describe("when the closing edit leaves the card off screen", () => {
+    beforeEach(() => {
+      // Laid out three screens down the feed (jsdom has no layout).
+      vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockImplementation(function (this: HTMLElement) {
+        return this.tagName === "ARTICLE" ? 3000 : 0;
+      });
+    });
+
+    it("brings the card back into view for a keyboard reader", async () => {
+      const user = userEvent.setup();
+      render(
+        <Providers>
+          <MemoFixture />
+        </Providers>
+      );
+      await user.click(screen.getByRole("button", { name: /^Memo actions/ }));
+      await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+      screen.getByRole("button", { name: "Cancel" }).focus();
+      await user.keyboard("{Enter}");
+
+      const trigger = await screen.findByRole("button", { name: /^Memo actions/ });
+      await waitFor(() => expect(document.activeElement).toBe(trigger));
+      // Its top just under the (absent) topbar, at once under reduced motion.
+      await waitFor(() => expect(window.scrollTo).toHaveBeenCalledWith({ top: 2984, behavior: "instant" }));
+    });
+
+    it("leaves a pointer reader's place alone", async () => {
+      const user = userEvent.setup();
+      render(
+        <Providers>
+          <MemoFixture />
+        </Providers>
+      );
+      await user.click(screen.getByRole("button", { name: /^Memo actions/ }));
+      await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+      const trigger = await screen.findByRole("button", { name: /^Memo actions/ });
+      await waitFor(() => expect(document.activeElement).toBe(trigger));
+      expect(window.scrollTo).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("selection and scroll affordances", () => {
