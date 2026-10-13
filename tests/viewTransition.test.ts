@@ -112,3 +112,64 @@ it("refreshes both captures for mutation callers without their own feed tuning",
     window.matchMedia = originalMatch;
   }
 });
+
+describe("withViewTransition under each verb and motion setting", () => {
+  function startWith(onUpdate: () => void = () => undefined) {
+    let finish: () => void = () => undefined;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    document.startViewTransition = ((update: () => void) => {
+      update();
+      onUpdate();
+      return { ready: Promise.resolve(), finished, skipTransition: () => undefined };
+    }) as typeof document.startViewTransition;
+    return () => finish();
+  }
+
+  const originalStart = document.startViewTransition;
+  const originalMatch = window.matchMedia;
+  afterEach(() => {
+    document.startViewTransition = originalStart;
+    window.matchMedia = originalMatch;
+    delete document.documentElement.dataset.vtExit;
+  });
+
+  it("names no card under reduced motion, so the feed dissolves in place", () => {
+    const slots = feed(10, 0);
+    window.matchMedia = vi.fn(() => ({ matches: true }) as MediaQueryList);
+    let namedDuringUpdate: number[] = [];
+    startWith(() => {
+      namedDuringUpdate = named(slots);
+    });
+
+    withViewTransition(() => undefined);
+
+    expect(named(slots)).toEqual([]);
+    expect(namedDuringUpdate).toEqual([]);
+  });
+
+  it("marks the root with the verb's exit for exactly as long as the transition runs", async () => {
+    feed(3, 0);
+    window.matchMedia = vi.fn(() => ({ matches: false }) as MediaQueryList);
+    const finish = startWith();
+
+    withViewTransition(() => undefined, { exit: "lift" });
+    expect(document.documentElement.dataset.vtExit).toBe("lift");
+
+    finish();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.documentElement.dataset.vtExit).toBeUndefined();
+  });
+
+  it("leaves the default sink unmarked, clearing an earlier verb", () => {
+    feed(3, 0);
+    window.matchMedia = vi.fn(() => ({ matches: false }) as MediaQueryList);
+    startWith();
+
+    withViewTransition(() => undefined, { exit: "fade" });
+    expect(document.documentElement.dataset.vtExit).toBe("fade");
+    withViewTransition(() => undefined);
+    expect(document.documentElement.dataset.vtExit).toBeUndefined();
+  });
+});

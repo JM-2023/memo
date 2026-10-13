@@ -3058,6 +3058,23 @@ button.crumb:active { background: var(--wash-strong); }
    the page's height is then exact, not an estimate — a tag holding a few
    memos must not offer more scroll than it has content. */
 .memo-feed.is-small .memo-slot { content-visibility: visible; contain-intrinsic-size: none; }
+/* The card a toast's Show just brought to the middle of the screen lights
+   its selection ring once (App's reveal effect sets data-reveal for a
+   moment; the slot's own box-shadow transition fades it in and out). */
+.memo-slot[data-reveal] { box-shadow: 0 0 0 3px var(--ring); }
+/* Exit ghosts (lib/feedMotion.ts). A card that has just left the list —
+   trashed, restored, deleted, or moved far off-screen — plays its exit in
+   this layer, outside React's tree, pinned where the reader last saw it
+   while its neighbours glide into the gap — over it (they are raised for
+   the glide), as the snapshot of a departing card sat under its neighbours,
+   so the closing list covers the exit instead of the fading text doubling
+   over the card arriving in its place. The layer has no box of its own; it
+   only gives the ghosts an origin. Nothing inside replays: a node put back
+   into the page would otherwise restart every CSS entrance it holds. */
+.feed-ghosts { position: absolute; top: 0; left: 0; width: 0; height: 0; pointer-events: none; }
+.feed-ghost { position: absolute; margin: 0; border-radius: var(--r-lg); pointer-events: none; }
+.feed-ghost,
+.feed-ghost * { animation: none !important; transition: none !important; }
 
 .memo-card {
   /* The card's ground, named so a morph's opaque outgoing layer matches it
@@ -5140,8 +5157,43 @@ button.stats-tag-row:active { scale: 0.992; }
 ::view-transition-new(.memo-card):only-child { animation: rise-in 0.24s var(--ease-out) 0.03s both; }
 /* …except the memo just sent (App's landCreated marks that transition): it
    comes from the composer above, so it drops in a few pixels while the cards
-   below glide down to make room. */
+   below glide down to make room. (That is the fallback; normally the
+   composer's text travels into the card — see "Sending" below.) */
 :root[data-vt-create]::view-transition-new(.memo-card):only-child { animation: drop-in 0.24s var(--ease-out) 0.03s both; }
+/* Departing cards follow the verb that sent them (withViewTransition's
+   `exit`, held on the root while that transition runs): a restore lifts out
+   of Trash — rise-in played upward — and a permanent delete fades where it
+   stood. Everything else keeps the sink above. In-place changes outside a
+   transition speak the same verbs through lib/feedMotion.ts. */
+@keyframes card-lift { to { opacity: 0; transform: translateY(-18px) scale(0.995); } }
+:root[data-vt-exit="lift"]::view-transition-old(.memo-card):only-child { animation: card-lift 0.16s var(--ease) both; }
+:root[data-vt-exit="fade"]::view-transition-old(.memo-card):only-child { animation: fade-out 0.16s var(--ease) both; }
+/* Sending (App's landCreated). The typed text is the new card: for the
+   outgoing capture the composer's field carries the card's name, so the
+   text travels down and becomes the card instead of fading out above it —
+   which is why the composer gives up its raised layer here: the text passes
+   over it. What remains of the composer is its frame closing from the typed
+   height to the empty one. Both of its snapshots are clipped to that
+   shrinking frame and pinned to its bottom edge, so one toolbar rides up
+   with the edge — rather than the tall old snapshot hanging below the
+   group, its toolbar fading over the new card, while the short new one
+   fades in above it. */
+:root[data-vt-create]::view-transition-group(composer) { z-index: auto; overflow: clip; }
+:root[data-vt-create]::view-transition-old(composer),
+:root[data-vt-create]::view-transition-new(composer) { block-size: 100%; object-fit: none; object-position: 50% 100%; }
+/* The text's own pair. Both snapshots keep their size — the field already
+   wraps at the card's text width, so neither is stretched — and they slide
+   against the group by the distance between the field's first line and the
+   card's (App sets --sent-dx/--sent-dy): the old one toward the card's text,
+   the new one from the field's. The two texts stay on top of each other the
+   whole way, so the cross-fade reads as one text while the card's frame and
+   date gather around it. */
+@keyframes sent-seat { to { translate: var(--sent-dx, 0px) var(--sent-dy, 0px); } }
+@keyframes sent-gather { from { translate: calc(-1 * var(--sent-dx, 0px)) calc(-1 * var(--sent-dy, 0px)); } }
+:root[data-vt-create]::view-transition-old(.sent),
+:root[data-vt-create]::view-transition-new(.sent) { inline-size: auto; block-size: auto; }
+:root[data-vt-create]::view-transition-old(.sent) { animation: fade-out 0.24s var(--ease-out) both, sent-seat 0.24s var(--ease-out) both; }
+:root[data-vt-create]::view-transition-new(.sent) { animation: fade-in 0.24s var(--ease-out) both, sent-gather 0.24s var(--ease-out) both; }
 /* The composer enters in its own snapshot above the stable page background. */
 ::view-transition-new(composer):only-child { animation: rise-in 0.28s var(--ease-out) both; }
 ::view-transition-group(composer),
@@ -5661,10 +5713,17 @@ button.stats-tag-row:active { scale: 0.992; }
   :is(.overlay, .passcode-overlay)[aria-busy="true"] :is(.busy-swap, .busy-icon) > *,
   :is(.overlay, .passcode-overlay)[aria-busy="true"] :is(.ghost-button, .accent-button, .danger-button, .icon-button):disabled { transition-delay: 0.15s !important; }
   .pin-pad[aria-busy="true"] .keypad button:disabled { transition-delay: 0s, 0s, 0s, 0.15s !important; }
-  /* Belt and braces: the JS helper already skips startViewTransition. */
-  ::view-transition-group(*),
-  ::view-transition-old(*),
-  ::view-transition-new(*) { animation: none !important; }
+  /* Feed swaps dissolve instead of moving: every group sits at its final box
+     (nothing glides or resizes) while the two states cross-fade in 150ms.
+     The cards carry no names under reduce (viewTransition.ts), so they
+     dissolve inside the page's own snapshot — shown here, for once, and
+     summed with plus-lighter so whatever did not change holds steady. */
+  ::view-transition-group(*) { animation: none !important; }
+  ::view-transition-old(*) { animation: fade-out 0.15s var(--ease) both !important; }
+  ::view-transition-new(*) { animation: fade-in 0.15s var(--ease) both !important; }
+  ::view-transition-old(*):not(:only-child),
+  ::view-transition-new(*):not(:only-child) { mix-blend-mode: plus-lighter !important; }
+  ::view-transition-old(root) { display: block !important; }
 }
 
 /* ---- Semantic Search panel ----------------------------------------------

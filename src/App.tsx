@@ -138,6 +138,7 @@ import { startToastSwipe } from "./lib/toastSwipe";
 import { applyTheme, loadTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
+import { createFeedMotion, type InPlaceIntent } from "./lib/feedMotion";
 import { withViewTransition } from "./lib/viewTransition";
 
 type Phase = "checking" | "error" | "login" | "ready";
@@ -1187,6 +1188,40 @@ export default function App() {
   }, []);
 
   /**
+   * The feed's motion layer for in-place changes (lib/feedMotion.ts). Every
+   * action that changes the list without changing the lens names its verb
+   * here: the layer measures the painted feed, the change commits at once,
+   * and the cards move from where the reader saw them — glides for the cards
+   * that shift, the verb's own exit for the one that leaves. Lens swaps and
+   * sends stay whole-scene view transitions (swapFeed, landCreated).
+   */
+  const feedGhostsRef = useRef<HTMLDivElement | null>(null);
+  const [feedMotion] = useState(() =>
+    createFeedMotion({ feed: () => feedGhostsRef.current?.parentElement ?? null, ghosts: () => feedGhostsRef.current })
+  );
+  useEffect(() => feedMotion.attach(), [feedMotion]);
+  const moveFeed = useCallback(
+    (intent: InPlaceIntent, ids: Iterable<string>, apply: () => void) => feedMotion.run(intent, ids, () => flushSync(apply)),
+    [feedMotion]
+  );
+
+  /**
+   * Another tab's or device's changes. Until now they landed as a cut: a memo
+   * sent from the phone rose in while every card below it jumped, one
+   * trashed elsewhere vanished and its gap snapped shut. They ride the same
+   * layer — and above the screen they keep the reader's place instead.
+   * Sync calls this from its own async work, never mid-render, so the
+   * synchronous commit is safe.
+   */
+  const applyRemoteChanges = useCallback(
+    (changed: readonly Memo[], purged: readonly PurgedMemo[], tags: readonly TagMeta[], cursor?: number) => {
+      const ids = [...changed.map((memo) => memo.id), ...purged.map((memo) => memo.id)];
+      moveFeed("remote", ids, () => applySyncChanges(changed, purged, tags, cursor));
+    },
+    [applySyncChanges, moveFeed]
+  );
+
+  /**
    * The session ended under the owner. Plain expiry behaves like a cold start
    * behind a gate: only the snapshot key is forgotten, so the sealed snapshot,
    * semantic index, model and preferences wait for the next sign-in. Only a
@@ -1264,7 +1299,7 @@ export default function App() {
     // Logout aborts them too: a sync answered after the logout response could
     // otherwise carry a renewed session cookie back into this browser.
     enabled: phase === "ready" && !changingPasscode && !loggingOut,
-    applyChanges: applySyncChanges,
+    applyChanges: applyRemoteChanges,
     onAuthLost: dropToLogin,
     onPeerLogout: handlePeerLogout,
     onServerReset: handleServerReset
@@ -2446,11 +2481,17 @@ export default function App() {
     const id = revealIdRef.current;
     if (!id || !renderedFeedMemos.some((memo) => memo.id === id)) return;
     revealIdRef.current = null;
-    // A frame later: the swap's own rewind to the top lands first.
+    // A frame later: the swap's own rewind to the top lands first. The card
+    // comes to the middle of the screen — "nearest" parked it against the
+    // bottom edge in an oldest-first feed — and its ring lights once, so the
+    // eye lands on it rather than hunting for it.
     const frame = window.requestAnimationFrame(() => {
       const slot = Array.from(document.querySelectorAll<HTMLElement>(".memo-slot[data-vt]")).find((node) => node.dataset.vt === `memo-${id}`);
+      if (!slot) return;
       const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      slot?.scrollIntoView?.({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
+      slot.scrollIntoView?.({ block: "center", behavior: reduced ? "auto" : "smooth" });
+      slot.dataset.reveal = "";
+      window.setTimeout(() => delete slot.dataset.reveal, 1200);
     });
     return () => window.cancelAnimationFrame(frame);
   }, [renderedFeedMemos]);
@@ -2468,7 +2509,7 @@ export default function App() {
     if (index < 0) return;
     createdPlacementRef.current = null;
     if (!renderedFeedMemos.some((memo) => memo.id === id)) {
-      showToast(tr("Saved the memo — it's further down this list", "已保存这条笔记，它在列表靠后的位置"));
+      showToast(tr("Saved the memo — it’s further down this list", "已保存这条笔记，它在列表靠后的位置"));
     }
   }, [feedMemos, renderedFeedMemos, showToast, tr]);
 
@@ -3179,32 +3220,83 @@ export default function App() {
 
   /**
    * Land a confirmed create in one view transition: the cards below glide
-   * down to make room, the new card drops in from just under the composer
-   * (fade + 8px, app.css `data-vt-create`) rather than rising from below,
-   * and the composer — cleared inside this same update through
-   * onCommitted — morphs shut instead of snapping a frame later. The slot
-   * skips its own entrance while the snapshot plays it. Resolves once the
-   * DOM holds the new state; reduced motion lands it directly.
+   * down to make room, the typed text travels out of the composer and
+   * becomes the new card, and the composer — cleared inside this same update
+   * through onCommitted — morphs shut instead of snapping a frame later
+   * (app.css `data-vt-create`). The slot skips its own entrance while the
+   * snapshot plays it. Resolves once the DOM holds the new state; under
+   * reduced motion the same transition is a dissolve.
+   *
+   * The text's journey is a shared name: for the outgoing capture the
+   * composer's field carries the new card's `memo-<id>`, and the update takes
+   * it off again before the card mounts with it, so the name stays unique.
+   * A memo whose card is already in the feed (an idempotent retry that sync
+   * delivered first) keeps the plain drop-in.
    */
   function landCreated(saved: Memo, data: EditorSubmission): Promise<void> {
     return new Promise((resolve) => {
-      withViewTransition((animated) => {
-        const root = document.documentElement;
-        if (animated) {
-          root.dataset.vtCreate = "";
-          window.setTimeout(() => delete root.dataset.vtCreate, 600);
-        }
+      const root = document.documentElement;
+      const name = `memo-${saved.id}`;
+      const field = document.querySelector<HTMLElement>(".composer .editor-field");
+      const shared =
+        field !== null &&
+        !window.matchMedia("(prefers-reduced-motion: reduce)").matches &&
+        !Array.from(document.querySelectorAll<HTMLElement>(".memo-slot[data-vt]")).some((slot) => slot.dataset.vt === name);
+      // Where a box's first line of text starts, from its border box.
+      const firstLine = (frame: HTMLElement, text: HTMLElement | null) => {
+        if (!text) return null;
+        const outer = frame.getBoundingClientRect();
+        const inner = text.getBoundingClientRect();
+        const style = getComputedStyle(text);
+        const px = (value: string) => Number.parseFloat(value) || 0;
+        const leading = (px(style.lineHeight) - px(style.fontSize)) / 2;
+        return {
+          x: inner.left - outer.left + px(style.borderLeftWidth) + px(style.paddingLeft),
+          y: inner.top - outer.top + px(style.borderTopWidth) + px(style.paddingTop) + Math.max(0, leading) - text.scrollTop
+        };
+      };
+      const typed = shared ? firstLine(field, field.querySelector<HTMLElement>("textarea")) : null;
+      if (shared) field.style.viewTransitionName = name;
+      let landed: HTMLElement | null = null;
+      const transition = withViewTransition((animated) => {
+        if (shared) field.style.viewTransitionName = "";
+        if (animated) root.dataset.vtCreate = saved.id;
         enterSuppressRef.current = animated;
         try {
           flushSync(() => {
             commitMutation({ memos: [saved] });
             data.onCommitted?.(animated);
           });
+          // The arriving half of the pair: classed so app.css can seat the
+          // composer's text on the card's own text as the two cross-fade,
+          // by the distance between the two first lines.
+          landed = shared ? document.querySelector<HTMLElement>(`.memo-slot[data-vt="${name}"]`) : null;
+          if (landed) {
+            landed.style.setProperty("view-transition-class", "memo-card sent");
+            const card = firstLine(landed, landed.querySelector<HTMLElement>(".memo-content"));
+            if (typed && card) {
+              root.style.setProperty("--sent-dx", `${card.x - typed.x}px`);
+              root.style.setProperty("--sent-dy", `${card.y - typed.y}px`);
+            }
+          }
         } finally {
           enterSuppressRef.current = false;
           resolve();
         }
       });
+      if (!transition) {
+        if (shared) field.style.viewTransitionName = "";
+        return;
+      }
+      // The marks last exactly as long as the transition that reads them.
+      const clear = () => {
+        landed?.style.removeProperty("view-transition-class");
+        if (root.dataset.vtCreate !== saved.id) return;
+        delete root.dataset.vtCreate;
+        root.style.removeProperty("--sent-dx");
+        root.style.removeProperty("--sent-dy");
+      };
+      void transition.finished.then(clear, clear);
     });
   }
 
@@ -3360,23 +3452,48 @@ export default function App() {
       );
       if (!result?.memo) return false;
       const saved = result.memo;
-      // The lenses may have moved on while the memo was open (they are free
-      // to now): a memo the current view no longer shows recedes in the
-      // feed's own removal choreography rather than vanishing under the
-      // reader when the editor closes.
-      const leavesView =
-        view === "memos" && !(memoMatchesSearchScope(saved, { activeTag, activeDay, statsDrilldown, filters }) && memoMatchesQuery(saved, parsedQuery));
       const land = () => {
         applySyncChanges([saved], [], []);
         setEditingId(null);
         setEditConflictId(null);
         editingBaseSeqRef.current = null;
       };
-      if (leavesView) withViewTransition(() => flushSync(land));
-      else land();
+      // A save can move the card. Under an Edited sort it re-sorts (to the
+      // top, newest first) and glides there — or, when its new place is far
+      // off-screen, lifts out of its old one while the cards below close the
+      // gap, so the reader is never left facing a hole. And the lenses may
+      // have moved on while the memo was open (they are free to): a memo the
+      // view no longer shows recedes in the removal choreography rather than
+      // vanishing as the editor closes.
+      const slot = Array.from(document.querySelectorAll<HTMLElement>(".memo-feed > .memo-slot")).find((node) => node.dataset.vt === `memo-${memo.id}`);
+      const focused = slot?.contains(document.activeElement) === true;
+      const sibling = (node: Element | null | undefined, step: "nextElementSibling" | "previousElementSibling") => {
+        for (let next = node?.[step]; next; next = next[step]) if (next.classList.contains("memo-slot")) return next;
+        return null;
+      };
+      const successor = sibling(slot, "nextElementSibling") ?? sibling(slot, "previousElementSibling");
+      const went = moveFeed("edit-save", [memo.id], land).departed.get(memo.id);
+      // Focus that left with the card would be off-screen (Tab would then
+      // scroll the reader away to it): it stays at the reader's place, on
+      // the card that took the edited one's, as it does when a card is
+      // removed. The card returns focus to its own ⋯ a frame after its
+      // editor closes; the second pass follows that frame.
+      const trigger = focused && went ? successor?.querySelector<HTMLElement>(".memo-menu-trigger:not([tabindex='-1'])") : null;
+      if (trigger?.isConnected) {
+        trigger.focus({ preventScroll: true });
+        window.requestAnimationFrame(() => {
+          if (slot?.contains(document.activeElement)) trigger.focus({ preventScroll: true });
+        });
+      }
       void runSync();
       notifyPeers();
-      showToast(tr("Saved your edits", "已保存这次修改"));
+      showToast(
+        went === "up"
+          ? tr("Saved your edits — the memo moved to the top", "已保存这次修改，这条笔记移到了顶部")
+          : went === "down"
+            ? tr("Saved your edits — the memo moved further down this list", "已保存这次修改，这条笔记移到了列表靠后")
+            : tr("Saved your edits", "已保存这次修改")
+      );
       return true;
     } catch (cause) {
       if (reconcileVersionConflict(cause, true)) return false;
@@ -3387,41 +3504,35 @@ export default function App() {
   }
 
   /**
-   * One optimistic pin / trash / restore. The guess lands at the click, in
-   * the view transition that moves the card (to the top, out of the feed,
-   * into Trash); the server's answer then replaces it in place — same
-   * outcome, nothing moves. A failure peels the guess off in a transition
-   * of its own, so the card glides back, and rethrows for the caller's
-   * toast. Resolves to null when the memo already has an action in flight
-   * (or the session went away) — nothing to report then.
+   * One optimistic pin / trash / restore. The guess lands at the click and
+   * the card moves in its verb's language (lifted to the top, sunk out of
+   * the feed, lifted out of Trash); the server's answer then replaces it in
+   * place — same outcome, nothing moves. A failure peels the guess off with
+   * the opposite verb, so the card goes back where it was, and rethrows for
+   * the caller's toast. Resolves to null when the memo already has an action
+   * in flight (or the session went away) — nothing to report then.
    */
   async function runOptimisticMemoAction(memo: Memo, patch: OptimisticPatch, request: () => Promise<Memo | null>): Promise<Memo | null> {
     const tokens = memoActionTokensRef.current;
     if (tokens.has(memo.id)) return null;
     const token = {};
     tokens.set(memo.id, token);
+    const intent = "deletedAt" in patch ? (patch.deletedAt ? "trash" : "restore") : patch.pinnedAt ? "pin" : "unpin";
+    const undone = { pin: "unpin", unpin: "pin", trash: "restore", restore: "trash" } as const;
     // A card the guess removes (trash, restore) must not drop keyboard focus
     // to <body>: hand it on to a neighbour, as applyRemoval does.
     const refocus = holdFeedFocus();
-    withViewTransition(() => {
-      flushSync(() => {
-        // The transition's update can run after a very fast response has
-        // already settled this action; a stale guess must not land then.
-        if (tokens.get(memo.id) === token) setOptimisticMemos((current) => withPatch(current, memo.id, patch));
-      });
-      refocus();
-    });
+    moveFeed(intent, [memo.id], () => setOptimisticMemos((current) => withPatch(current, memo.id, patch)));
+    refocus();
     let settled: Memo | null = null;
     try {
       settled = await request();
     } finally {
       tokens.delete(memo.id);
-      const land = () => {
+      moveFeed(settled ? intent : undone[intent], [memo.id], () => {
         if (settled) applySyncChanges([settled], [], []);
         setOptimisticMemos((current) => withoutPatch(current, memo.id));
-      };
-      if (settled) land();
-      else withViewTransition(() => flushSync(land));
+      });
     }
     if (settled) {
       void runSync();
@@ -3519,25 +3630,18 @@ export default function App() {
   }
 
   /**
-   * Land one toggle batch. The feed glides (view transition) when the edit
-   * moves the card — Edited sorts reorder on the updatedAt bump, and ticking
-   * a memo's last open task drops it out of the open-task filter — and lands
-   * in place otherwise, leaving the motion to the checkbox's own transition.
+   * Land one toggle batch. The card moves when the edit moves it — Edited
+   * sorts reorder on the updatedAt bump, and ticking a memo's last open
+   * task drops it out of the open-task filter — and otherwise nothing does,
+   * leaving the motion to the checkbox's own transition.
    */
   function commitTaskBatch(nextMemo: Memo) {
-    const { view: liveView, filters: liveFilters, statsDrilldown: liveStatsDrilldown, sortKey: liveSortKey, parsedQuery: liveQuery } = feedContextRef.current;
+    const { view: liveView, filters: liveFilters } = feedContextRef.current;
     const leavesTaskFilter = liveFilters.hasOpenTask && !facetsOf(nextMemo).hasOpenTask;
-    const stillMatches =
-      memoMatchesFilters(nextMemo, liveFilters) &&
-      memoMatchesQuery(nextMemo, liveQuery) &&
-      (!liveStatsDrilldown || memoMatchesStatsDrilldown(nextMemo, liveStatsDrilldown));
-    const animate = liveView === "memos" && (liveSortKey.startsWith("updated") || !stillMatches);
-    const apply = () => {
+    moveFeed("task", [nextMemo.id], () => {
       applySyncChanges([nextMemo], [], []);
       settleTaskFlips(nextMemo.id, nextMemo.content);
-    };
-    if (animate) withViewTransition(() => flushSync(apply));
-    else apply();
+    });
     void runSync();
     notifyPeers();
     if (liveView === "memos" && leavesTaskFilter) {
@@ -3555,22 +3659,21 @@ export default function App() {
   }
 
   /**
-   * Removals ride the same view-transition system as filter swaps and
-   * pinning: the departing card cross-fades away while the surviving cards
-   * (and the feed gap) glide to their final positions on the compositor.
-   * No height-collapse hand-off, so there is nothing to snap at the end.
+   * A permanent delete from Trash: the card fades where it stood — no
+   * recede, nothing is going anywhere — while the cards below glide up into
+   * its place on the compositor. No height-collapse hand-off, so there is
+   * nothing to snap at the end.
    */
   const applyRemoval = useCallback(
     (changed: Memo[], purged: PurgedMemo[]) => {
       const refocus = holdFeedFocus();
-      withViewTransition(() => {
-        flushSync(() => applySyncChanges(changed, purged, []));
-        refocus();
-      });
+      const ids = [...changed.map((memo) => memo.id), ...purged.map((memo) => memo.id)];
+      moveFeed("purge", ids, () => applySyncChanges(changed, purged, []));
+      refocus();
       void runSync();
       notifyPeers();
     },
-    [applySyncChanges, runSync, notifyPeers]
+    [applySyncChanges, moveFeed, runSync, notifyPeers]
   );
 
   async function handleTrash(memo: Memo) {
@@ -3598,7 +3701,11 @@ export default function App() {
         async () => (await guard(() => restoreMemo(memo.id, memo.seq)))?.memo ?? null
       );
       if (!restored) return;
-      showToast(tr("Restored", "已恢复"));
+      // Reversible like the trip to Trash, so it carries the way back — the
+      // restored memo's own seq, as batch restore does.
+      showToast(tr("Restored the memo", "已恢复这条笔记"), "info", {
+        action: { label: tr("Undo", "撤销"), run: () => void handleTrash(restored) }
+      });
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
       showToast(errorMessage(cause, "Couldn’t restore the memo.", "恢复笔记失败"), "error");
@@ -3680,21 +3787,25 @@ export default function App() {
       });
       const failedIds = result.failed.map((failure) => failure.id);
       if (changed.length > 0) {
-        withViewTransition(() =>
-          flushSync(() => {
-            applySyncChanges(changed, [], []);
-            if (!fromSelection) return;
-            if (failedIds.length === 0) {
-              // Job done — leave select mode in the same breath.
-              restoreLocationFocusRef.current = true;
-              setSelectMode(false);
-              setSelected(new Set());
-            } else {
-              // Keep only the failures selected so a retry is one tap away.
-              setSelected(new Set(failedIds));
-            }
-          })
-        );
+        const apply = () => {
+          applySyncChanges(changed, [], []);
+          if (!fromSelection) return;
+          if (failedIds.length === 0) {
+            // Job done — leave select mode in the same breath.
+            restoreLocationFocusRef.current = true;
+            setSelectMode(false);
+            setSelected(new Set());
+          } else {
+            // Keep only the failures selected so a retry is one tap away.
+            setSelected(new Set(failedIds));
+          }
+        };
+        // From select mode the scene changes with the list — the selection
+        // toolbar folds back into the breadcrumb — so it stays one view
+        // transition, its departing cards in the verb's exit (a restore
+        // lifts out of Trash). A toast's Undo changes only the list: in place.
+        if (fromSelection) withViewTransition(() => flushSync(apply), { exit: op === "restore" ? "lift" : "sink" });
+        else moveFeed(op, changed.map((memo) => memo.id), apply);
         notifyPeers();
       }
       // Refusals (a version changed elsewhere) pull the server truth too.
@@ -3766,16 +3877,20 @@ export default function App() {
       const purged = result.purged;
       const failedIds = result.failed.map((failure) => failure.id);
       if (purged.length > 0) {
-        withViewTransition(() =>
-          flushSync(() => {
-            applySyncChanges([], purged, []);
-            if (failedIds.length === 0) {
-              setSelectMode(false);
-              setSelected(new Set());
-            } else {
-              setSelected(new Set(failedIds));
-            }
-          })
+        // Select mode ends with it, so the whole scene moves (one view
+        // transition); the cards fade where they stood — gone for good.
+        withViewTransition(
+          () =>
+            flushSync(() => {
+              applySyncChanges([], purged, []);
+              if (failedIds.length === 0) {
+                setSelectMode(false);
+                setSelected(new Set());
+              } else {
+                setSelected(new Set(failedIds));
+              }
+            }),
+          { exit: "fade" }
         );
         notifyPeers();
       }
@@ -5448,6 +5563,9 @@ export default function App() {
             ))
           )}
           {hasMoreFeed ? <div ref={feedSentinelRef} className="feed-sentinel" aria-hidden="true" /> : null}
+          {/* Exit ghosts (lib/feedMotion.ts): cards that just left the list
+              play their exit here, outside React's tree. Always empty to React. */}
+          <div ref={feedGhostsRef} className="feed-ghosts" aria-hidden="true" />
         </section>
 
         <ScrollTopButton />

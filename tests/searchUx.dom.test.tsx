@@ -470,7 +470,7 @@ describe("creating under a lens", () => {
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(80));
     await user.type(screen.getByRole("combobox", { name: "Memo content" }), "The newest note");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    expect(await screen.findByText("Saved the memo — it's further down this list", { selector: ".toast *" })).toBeTruthy();
+    expect(await screen.findByText("Saved the memo — it’s further down this list", { selector: ".toast *" })).toBeTruthy();
     expect(screen.queryByText("The newest note")).toBeNull();
     expect(screen.queryByRole("button", { name: "Show" })).toBeNull();
   });
