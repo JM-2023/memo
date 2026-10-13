@@ -3,7 +3,6 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Keybo
 import { addDays, dateFormat, dateKey, formatDayLabel, startOfWeek, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { buildHeatWeeks, type HeatCell, type PeriodKind } from "../lib/stats";
-import { RollingCount } from "./RollingText";
 import { SwapText } from "./SwapText";
 import { DATA_TIP_DELAY, useTip, withFocus } from "./Tip";
 import { EASE_OUT } from "../lib/motion";
@@ -16,6 +15,16 @@ interface HeatmapProps {
   /** The sidebar's This week / This month / This year selection. */
   period: PeriodKind;
   onPickDay: (key: string | null) => void;
+  /** Told the page on screen — on mount and whenever it turns — so the
+      sidebar's figures can count the same days. */
+  onPageChange?: (page: HeatmapPage) => void;
+}
+
+/** A heatmap page: its first and last local day keys, and its title. */
+export interface HeatmapPage {
+  start: string;
+  end: string;
+  label: string;
 }
 
 const PREV_LABEL: Record<PeriodKind, readonly [en: string, zh: string]> = {
@@ -122,7 +131,7 @@ function weekRangeLabel(start: Date, end: Date, locale: string): string {
  * Clicking a day toggles the feed's day filter. Day details ride the shared
  * portal tooltip so neighbouring cells can never cover them.
  */
-function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: HeatmapProps) {
+function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay, onPageChange }: HeatmapProps) {
   const { count, locale, tr } = useI18n();
   const tip = useTip();
   const now = useLocalToday();
@@ -166,12 +175,6 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
     navigableCells[0]?.key ??
     null;
 
-  const rangeTotal = useMemo(() => {
-    let sum = 0;
-    for (const week of weeks) for (const cell of week) if (cell.inRange) sum += cell.count;
-    return sum;
-  }, [weeks]);
-
   const canForward = offset < 0;
   const canBack = minDay !== null && dateKey(addDays(start, -1)) >= minDay;
 
@@ -180,6 +183,13 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
     if (period === "month") return dateFormat(locale, { year: "numeric", month: "long" }).format(start);
     return dateFormat(locale, { year: "numeric" }).format(start);
   }, [locale, period, offset, todayStamp]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Before paint, so the figures above turn with the page, not a frame after.
+  const startKey = dateKey(start);
+  const endKey = dateKey(end);
+  useLayoutEffect(() => {
+    onPageChange?.({ start: startKey, end: endKey, label: title });
+  }, [startKey, endKey, title, onPageChange]);
 
   const weekdayLabels = useMemo(() => {
     const formatter = dateFormat(locale, { weekday: "narrow" });
@@ -426,18 +436,10 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
           onClick={goHome}
           {...tip.bind(() => (offset !== 0 ? { text: tr(homeEn, homeZh) } : null))}
         >
+          {/* The page's counts are the period figures right above, which
+              follow every turn; the title only names the page. */}
           <SwapText id={gridKey} dir={swapDir} tweenWidth={false} className="heatmap-title-swap">
             {title}
-            {/* The page's own count, once paged away: on the current page
-                the period figures right above already say it, and the title
-                only repeated them. A memo added on the page rolls it; a new
-                page swaps it with the title, so it arrives and leaves with
-                the page it counts. */}
-            {offset !== 0 ? (
-              <span className="heatmap-total">
-                <RollingCount value={rangeTotal} unit="memo" />
-              </span>
-            ) : null}
           </SwapText>
         </button>
         <button

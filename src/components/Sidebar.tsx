@@ -1,11 +1,11 @@
 import { ChevronDown, Cpu, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sparkles, Sun, SunMoon, Trash2, Upload, type LucideIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { useI18n } from "../lib/i18n";
-import { dayKeyOf, periodStats, totalStats, type PeriodKind } from "../lib/stats";
+import { dayKeyOf, rangeStats, totalStats, type PeriodKind } from "../lib/stats";
 import type { TagNode } from "../lib/tags";
 import type { Memo } from "../lib/types";
 import type { ThemeChoice } from "../lib/theme";
-import { Heatmap } from "./Heatmap";
+import { Heatmap, type HeatmapPage } from "./Heatmap";
 import { Menu } from "./Menu";
 import { CompactNumber } from "./CompactNumber";
 import { RollingText } from "./RollingText";
@@ -186,7 +186,12 @@ function SidebarView(props: SidebarProps) {
   }, [props.drawerOpen, props.onCloseDrawer]);
 
   const totals = useMemo(() => totalStats(memos), [memos]);
-  const stats = useMemo(() => periodStats(memos, period), [memos, period]);
+  // The heatmap's page, as it reports it on mount and on every turn (‹ ›,
+  // a key walking off the page, a day picked elsewhere): the figures count
+  // the days on screen. Until the first report — before the first paint —
+  // they don't render, so their drums never roll in from a placeholder.
+  const [page, setPage] = useState<HeatmapPage | null>(null);
+  const stats = useMemo(() => (page ? rangeStats(memos, page.start, page.end) : null), [memos, page]);
   // Local-day key of the earliest memo (dayKeyOf, not an ISO slice — the
   // stored strings are UTC and would drift near month edges).
   const minDay = useMemo(() => {
@@ -199,10 +204,9 @@ function SidebarView(props: SidebarProps) {
   }, [memos]);
 
   const periodIndex = PERIODS.findIndex((option) => option.kind === period);
-  const periodTip = {
-    strong: `${count(stats.memoCount, "memo")} · ${count(stats.wordSum, "character")}`,
-    text: tr(PERIODS[periodIndex].en, PERIODS[periodIndex].zh)
-  };
+  // The bubble names the page the figures count ("Oct 12 – 18", "2025").
+  const periodTip =
+    page && stats ? { strong: `${count(stats.memoCount, "memo")} · ${count(stats.wordSum, "character")}`, text: page.label } : null;
 
   function onPeriodKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
     let next = index;
@@ -452,42 +456,51 @@ function SidebarView(props: SidebarProps) {
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            className="period-figures"
-            // A tap shows the figures' bubble on purpose (touch has no hover).
-            onClick={(event) => tip.show(event.currentTarget, periodTip, { delay: 0 })}
-            {...tip.bind(periodTip)}
-          >
-            <span>
-              <strong>
-                <CompactNumber value={stats.memoCount} />
-              </strong>{" "}
-              {/* Keyed by language: a locale switch swaps instantly like the
-                  rest of the UI; only plural changes roll. */}
-              <RollingText
-                key={language}
-                value={stats.memoCount}
-                text={tr(stats.memoCount === 1 ? "memo" : "memos", "条笔记")}
-                align="left"
-              />
-            </span>
-            <span className="period-sep" aria-hidden="true" />
-            <span>
-              <strong>
-                <CompactNumber value={stats.wordSum} />
-              </strong>{" "}
-              <RollingText
-                key={language}
-                value={stats.wordSum}
-                text={tr(stats.wordSum === 1 ? "character" : "characters", "字")}
-                align="left"
-              />
-            </span>
-          </button>
+          {stats && periodTip ? (
+            <button
+              type="button"
+              className="period-figures"
+              // A tap shows the figures' bubble on purpose (touch has no hover).
+              onClick={(event) => tip.show(event.currentTarget, periodTip, { delay: 0 })}
+              {...tip.bind(periodTip)}
+            >
+              <span>
+                <strong>
+                  <CompactNumber value={stats.memoCount} />
+                </strong>{" "}
+                {/* Keyed by language: a locale switch swaps instantly like the
+                    rest of the UI; only plural changes roll. */}
+                <RollingText
+                  key={language}
+                  value={stats.memoCount}
+                  text={tr(stats.memoCount === 1 ? "memo" : "memos", "条笔记")}
+                  align="left"
+                />
+              </span>
+              <span className="period-sep" aria-hidden="true" />
+              <span>
+                <strong>
+                  <CompactNumber value={stats.wordSum} />
+                </strong>{" "}
+                <RollingText
+                  key={language}
+                  value={stats.wordSum}
+                  text={tr(stats.wordSum === 1 ? "character" : "characters", "字")}
+                  align="left"
+                />
+              </span>
+            </button>
+          ) : null}
         </div>
 
-        <Heatmap countsByDay={countsByDay} minDay={minDay} activeDay={activeDay} period={period} onPickDay={props.onPickDay} />
+        <Heatmap
+          countsByDay={countsByDay}
+          minDay={minDay}
+          activeDay={activeDay}
+          period={period}
+          onPickDay={props.onPickDay}
+          onPageChange={setPage}
+        />
       </section>
 
       <nav className="sidebar-nav">

@@ -182,15 +182,20 @@ describe("sidebar heatmap", () => {
     expect(title().hasAttribute("aria-disabled")).toBe(false);
   });
 
-  it("counts a paged-away period in its title, and rolls the count when a memo lands there", () => {
-    const earlier = dateKey(addDays(monthStart(-1), 4));
-    const view = renderHeatmap(null, new Map([[earlier, 2]]));
-    // The current period's figures sit right above the heatmap already.
+  it("reports the page it shows, so the figures above count the same days", async () => {
+    const user = userEvent.setup();
+    const onPageChange = vi.fn();
+    render(
+      <Providers>
+        <Heatmap countsByDay={new Map()} minDay="2000-01-01" activeDay={null} period="month" onPickDay={vi.fn()} onPageChange={onPageChange} />
+      </Providers>
+    );
+    const lastOf = (first: Date) => dateKey(new Date(first.getFullYear(), first.getMonth() + 1, 0));
+    expect(onPageChange).toHaveBeenLastCalledWith({ start: dateKey(monthStart(0)), end: lastOf(monthStart(0)), label: monthName(today) });
+    await user.click(screen.getByRole("button", { name: "Previous month" }));
+    expect(onPageChange).toHaveBeenLastCalledWith({ start: dateKey(monthStart(-1)), end: lastOf(monthStart(-1)), label: monthName(monthStart(-1)) });
+    // The title only names the page; the figures carry its counts.
     expect(document.querySelector(".heatmap-total")).toBeNull();
-    view.rerenderWith(earlier, new Map([[earlier, 2]]));
-    expect(document.querySelector(".heatmap-total .roll")).toBeTruthy();
-    view.rerenderWith(earlier, new Map([[earlier, 3]]));
-    expect(document.querySelector(".heatmap-total")?.querySelector(".roll-char-in")).toBeTruthy();
   });
 
   it("keeps a spent arrow as a focus stop, and leaves days without memos unpicked", async () => {

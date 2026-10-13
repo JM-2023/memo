@@ -206,6 +206,69 @@ describe("theme control", () => {
   });
 });
 
+describe("period figures", () => {
+  it("count the heatmap page on screen, turning with it", async () => {
+    const user = userEvent.setup();
+    const now = new Date();
+    const memo = (id: string, content: string, created: Date): Memo => ({
+      id,
+      content,
+      createdAt: created.toISOString(),
+      updatedAt: created.toISOString(),
+      pinnedAt: null,
+      deletedAt: null,
+      seq: 1,
+      images: []
+    });
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 5, 12);
+    const memos = [memo("a", "hello", now), memo("b", "ab", lastMonth), memo("c", "cde", lastMonth)];
+    const counts = new Map<string, number>([
+      [dateKey(now), 1],
+      [dateKey(lastMonth), 2]
+    ]);
+    render(
+      <Providers>
+        <Sidebar
+          memos={memos}
+          tagTree={[] as TagNode[]}
+          uniqueTagCount={0}
+          countsByDay={counts}
+          activeTag={null}
+          activeDay={null}
+          filtersActive={false}
+          view="memos"
+          trashCount={0}
+          theme="system"
+          pinnedTags={new Map<string, string>()}
+          onPickTag={vi.fn()}
+          onPinTag={vi.fn()}
+          onRenameTag={vi.fn()}
+          onRemoveTag={vi.fn()}
+          onPickDay={vi.fn()}
+          onShowAll={vi.fn()}
+          onOpenTrash={vi.fn()}
+          onOpenReview={vi.fn()}
+          onOpenReviewSettings={vi.fn()}
+          onOpenModelSettings={vi.fn()}
+          onOpenStats={vi.fn()}
+          onSetTheme={vi.fn()}
+          onChangePasscode={vi.fn()}
+          onExportData={vi.fn()}
+          onImportData={vi.fn()}
+          onLogout={vi.fn()}
+        />
+      </Providers>
+    );
+    const figures = () => [...document.querySelectorAll(".period-figures .compact-number > .sr-only")].map((node) => node.textContent);
+    await user.click(screen.getByRole("button", { name: "Month" }));
+    expect(figures()).toEqual(["1", "5"]);
+    await user.click(screen.getByRole("button", { name: "Previous month" }));
+    expect(figures()).toEqual(["2", "5"]);
+    await user.click(screen.getByRole("button", { name: "Next month" }));
+    expect(figures()).toEqual(["1", "5"]);
+  });
+});
+
 describe("filter panel", () => {
   it("idles No tags inside a tag and lands a quick range whole", async () => {
     const user = userEvent.setup();

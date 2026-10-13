@@ -41,21 +41,16 @@ export interface PeriodStats {
 
 export type PeriodKind = "week" | "month" | "year";
 
-export function periodStats(memos: Memo[], kind: PeriodKind, now = new Date()): PeriodStats {
-  let start: Date;
-  if (kind === "week") {
-    start = startOfWeek(now);
-  } else if (kind === "month") {
-    start = new Date(now.getFullYear(), now.getMonth(), 1);
-  } else {
-    start = new Date(now.getFullYear(), 0, 1);
-  }
-  const startMs = start.getTime();
+/**
+ * Memos written on the local days `start`..`end` (day keys, both inclusive)
+ * and their characters — the same days the heatmap's cells count.
+ */
+export function rangeStats(memos: Memo[], start: string, end: string): PeriodStats {
   let memoCount = 0;
   let wordSum = 0;
   for (const memo of memos) {
-    const created = new Date(memo.createdAt).getTime();
-    if (created >= startMs) {
+    const key = dayKeyOf(memo);
+    if (key >= start && key <= end) {
       memoCount += 1;
       wordSum += wordCountOf(memo);
     }

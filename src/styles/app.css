@@ -1316,11 +1316,8 @@ a:hover { text-decoration: underline; }
 @media (hover: hover) { .heatmap-nav[aria-disabled="true"]:hover { background: none; color: var(--muted); } }
 .heatmap-nav[aria-disabled="true"]:active { transform: none; }
 /* min-width: 0 lets the button shrink to the row's remaining width when the
-   label outgrows it — an English week range plus its count needs ~170px, and
-   the row has ~157px at the sidebar's 302px floor. The swap below then folds
-   the count under the range instead of the swap layer clipping both ends of
-   the line. 8px side padding is the crumb pill's; it also fits a two-digit
-   week count on one line at 1280px. */
+   label outgrows it, rather than pushing the arrows out. 8px side padding is
+   the crumb pill's. The page's counts are the period figures above. */
 .heatmap-title {
   display: inline-flex;
   align-items: baseline;
@@ -1337,12 +1334,7 @@ a:hover { text-decoration: underline; }
 .heatmap-title:active:not([aria-disabled="true"]) { transform: scale(0.96); }
 /* On the current page the title has nowhere to return to: no hover, no press. */
 .heatmap-title[aria-disabled="true"] { cursor: default; }
-.heatmap-total { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
-/* Title swaps as one block (label + count) in step with the grid slide. When
-   the row is too narrow for both, the count wraps under the range (the text
-   itself never breaks: .swap is nowrap, so only the count span moves down);
-   SwapText tweens the block's height along with its width, so the grid below
-   glides when paging crosses that threshold instead of jumping a line. */
+/* The title swaps in step with the grid slide. */
 .heatmap-title-swap { min-width: 0; max-width: 100%; }
 .heatmap-title-swap .swap-cur,
 .heatmap-title-swap .swap-old {
