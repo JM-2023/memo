@@ -59,7 +59,6 @@ export interface EditDraft {
 const APPLE_KEYS = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 const MOD = APPLE_KEYS ? "⌘" : "Ctrl+";
 const SHIFT = APPLE_KEYS ? "⇧" : "Shift+";
-const ENTER = APPLE_KEYS ? "↩" : "Enter";
 /** A fast send never shows the spinner: the Send glyph holds this long first. */
 const SPINNER_DELAY_MS = 150;
 
@@ -1896,9 +1895,6 @@ export function Editor({
             disabled={!canSubmit && !canQueue}
             aria-label={mode === "create" ? tr("Send", "发送") : tr("Save", "保存")}
             aria-keyshortcuts="Meta+Enter Control+Enter"
-            {...tip.bind({
-              text: mode === "create" ? tr(`Send (${MOD}${ENTER})`, `发送（${MOD}${ENTER}）`) : tr(`Save (${MOD}${ENTER})`, `保存（${MOD}${ENTER}）`)
-            })}
           >
             {uploadPercent !== null ? (
               // Images can take a while on a slow uplink: the fill and the
