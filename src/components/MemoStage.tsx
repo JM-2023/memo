@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { diffLines, isTaskMarkFlipOnly, visualLinesOf, type DiffOp } from "../lib/lineDiff";
 import type { MemoImage } from "../lib/types";
+import { EASE, EASE_OUT } from "../lib/motion";
 
 /**
  * Scene-morph stage for a memo card. The card swaps between two scenes —
@@ -25,8 +26,6 @@ import type { MemoImage } from "../lib/types";
  * height, and drives everything through WAAPI before first paint.
  */
 
-const EASE = "cubic-bezier(0.22, 0.61, 0.36, 1)";
-const EASE_OUT = "cubic-bezier(0.16, 1, 0.3, 1)";
 const SWAP_HEIGHT_MS = 220;
 const REPLAY_HEIGHT_MS = 260;
 /** Above this many combined visual lines the replay downgrades to a plain

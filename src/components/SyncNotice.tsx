@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
 import { announce } from "../lib/liveAnnouncer";
+import { EXIT_MS } from "../lib/motion";
 
 export interface SyncNoticeContent {
   /** What the line is about; a new kind starts its retry state afresh. */
@@ -26,7 +27,7 @@ type Shown = SyncNoticeContent | { kind: "restored"; text: string; line?: undefi
 const RETRY_MIN_MS = 600;
 /** How long "Back online" stays before the line folds away. */
 const RESTORED_MS = 1_400;
-const LEAVE_MS = 170;
+const LEAVE_MS = EXIT_MS;
 
 function wait(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));

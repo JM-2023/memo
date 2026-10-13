@@ -12,6 +12,7 @@ import { RollingText } from "./RollingText";
 import { SwapText } from "./SwapText";
 import { TagTree } from "./TagTree";
 import { useTip } from "./Tip";
+import { EASE_OUT } from "../lib/motion";
 
 interface SidebarProps {
   memos: Memo[];
@@ -60,8 +61,7 @@ const THEME_OPTIONS: { choice: ThemeChoice; icon: LucideIcon; en: string; zh: st
   { choice: "dark", icon: Moon, en: "Dark", zh: "深色" }
 ];
 
-/** The --ease-out token (app.css): Web Animations can't read the variable. */
-const GLIDE_EASING = "cubic-bezier(0.16, 1, 0.3, 1)";
+const GLIDE_EASING = EASE_OUT;
 
 /**
  * One selection mark for the whole sidebar. The current place — a nav row

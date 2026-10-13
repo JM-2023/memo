@@ -52,6 +52,8 @@ interface MemoCardProps {
   resumeContent?: string;
   /** The open editor's text after each change (held in memory only). */
   onEditDraftChange?: (content: string) => void;
+  /** A toast the open editor raises on its own (an image removed, with Undo). */
+  onEditNotice?: (text: string, action?: { label: string; run: () => void }) => void;
   /** A pin / trash / restore for this memo is in flight (already shown
       optimistically): those actions hold until it settles. */
   busy?: boolean;
@@ -344,10 +346,11 @@ export function MemoCard(props: MemoCardProps) {
   // committed, return focus to its action trigger instead of letting it fall
   // back to <body> and restart the page's tab order. A save can carry the
   // card off screen (a re-sort under "Edited" order lifts it to the top):
-  // focus still goes with the memo, but the page only follows it for a
-  // keyboard reader, whose focus ring would otherwise be nowhere to be seen.
-  // A pointer reader keeps their place; the feed's motion shows where the
-  // card went.
+  // the feed then hands focus to the card that took this one's place, at
+  // the reader's place (handleSaveEdit), and that choice stands — focus
+  // already parked outside this card is left alone. Otherwise focus goes
+  // with the memo, and the page only follows it for a keyboard reader,
+  // whose focus ring would otherwise be nowhere to be seen.
   useEffect(() => {
     const wasEditing = previousEditingRef.current;
     previousEditingRef.current = editing;
@@ -357,9 +360,10 @@ export function MemoCard(props: MemoCardProps) {
     // exit morph, so connectivity cannot be used as a focus-restoration guard.
     const frame = window.requestAnimationFrame(() => {
       const trigger = menuTriggerRef.current;
-      if (!trigger) return;
-      trigger.focus({ preventScroll: true });
       const card = articleRef.current;
+      const active = document.activeElement;
+      if (!trigger || (active && active !== document.body && !card?.contains(active))) return;
+      trigger.focus({ preventScroll: true });
       if (viaKeyboard && card?.isConnected) revealCard(card);
     });
     return () => window.cancelAnimationFrame(frame);
@@ -759,6 +763,7 @@ export function MemoCard(props: MemoCardProps) {
               mode="edit"
               initialContent={memo.content}
               onDraftChange={props.onEditDraftChange}
+              onNotice={props.onEditNotice}
               existingImages={memo.images}
               knownTags={props.knownTags}
               busy={props.savingEdit}

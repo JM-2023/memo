@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
+import { EASE, EASE_OUT } from "../lib/motion";
 
 /** Movement before a touch counts as a gesture at all (a tap stays a tap). */
 const SLOP = 10;
@@ -11,8 +12,6 @@ const VELOCITY_WINDOW = 100;
 /** The drawer's own exit (.sidebar.is-closing) and the spring back. */
 const CLOSE_MS = 160;
 const SPRING_MS = 280;
-const EASE = "cubic-bezier(0.22, 0.61, 0.36, 1)";
-const EASE_OUT = "cubic-bezier(0.16, 1, 0.3, 1)";
 /** Controls that own a horizontal drag themselves. */
 const OWN_DRAG = "input, textarea, select, [contenteditable='true']";
 /** Past the open edge the drawer gives, never more than this, and springs back. */

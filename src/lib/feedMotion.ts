@@ -1,4 +1,5 @@
 import { onTransitionUpdate, paintedTransitionOffsets, skipLiveTransition, transitionUpdating, type PaintedOffset } from "./viewTransition";
+import { EASE, EASE_OUT } from "./motion";
 
 /**
  * Why the feed is about to change. Two kinds of change exist, and they move
@@ -93,8 +94,8 @@ const ARRIVE_MS = 240;
     past the 220ms height tween a card plays when it leaves its editor. */
 const HOLD_MS = 400;
 const FALLBACK_EASE: Record<string, string> = {
-  "--ease": "cubic-bezier(0.22, 0.61, 0.36, 1)",
-  "--ease-out": "cubic-bezier(0.16, 1, 0.3, 1)"
+  "--ease": EASE,
+  "--ease-out": EASE_OUT
 };
 
 const EXITS: Record<Exit, (opacity: number) => Keyframe[]> = {

@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode
 import { flushSync } from "react-dom";
 import { useI18n } from "../lib/i18n";
 import { SwapText } from "./SwapText";
+import { EASE_OUT } from "../lib/motion";
 
 /** Visible body height of a folded memo — keep in step with .memo-fold's max-height. */
 export const FOLD_HEIGHT = 320;
@@ -33,7 +34,6 @@ interface MemoFoldProps {
   children: ReactNode;
 }
 
-const EASE_OUT = "cubic-bezier(0.16, 1, 0.3, 1)";
 /** Depth of the fade at the folded edge — keep in step with --fold-fade's initial value. */
 const FOLD_FADE = "56px";
 

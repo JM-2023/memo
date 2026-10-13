@@ -5,6 +5,7 @@ import type { TagNode } from "../lib/tags";
 import { Menu } from "./Menu";
 import { RollingText } from "./RollingText";
 import { bindTruncationTip, useOptionalTip } from "./truncationTip";
+import { EASE_OUT } from "../lib/motion";
 
 /** Every path under `node`, depth-first — what a removal takes with it. */
 function descendantPaths(node: TagNode): string[] {
@@ -295,8 +296,7 @@ function TagRow(props: TagRowProps) {
   );
 }
 
-/** The --ease-out token (app.css): Web Animations can't read the variable. */
-const TRACK_EASING = "cubic-bezier(0.16, 1, 0.3, 1)";
+const TRACK_EASING = EASE_OUT;
 
 function TagTreeView({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenameTag, onRemoveTag }: TagTreeProps) {
   const { tr } = useI18n();

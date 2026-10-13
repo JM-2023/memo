@@ -1,0 +1,17 @@
+/**
+ * The app.css motion tokens, for the places CSS can't reach: Web Animations
+ * and the timers that unmount a surface once its exit has played. app.css
+ * (:root, "Motion") is the source; these are literal copies only because
+ * WAAPI can't read a custom property — change the two together.
+ */
+
+/** --ease: the default settle. */
+export const EASE = "cubic-bezier(0.22, 0.61, 0.36, 1)";
+/** --ease-out: entrances and glides — a long damped settle. */
+export const EASE_OUT = "cubic-bezier(0.16, 1, 0.3, 1)";
+
+/**
+ * How long a script waits before unmounting a surface whose exit it can't
+ * watch: the shared exit (--t-exit, 0.16s) plus a frame's slack.
+ */
+export const EXIT_MS = 170;

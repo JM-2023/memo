@@ -126,11 +126,16 @@
   --r-lg: 12px;
   --r-xl: 16px;
 
-  /* Motion */
-  --motion-profile: accelerated;
+  /* Motion. Steps for small state changes — hover, press, colour, a
+     control's own swap. */
   --t-fast: 0.1s;
   --t: 0.15s;
   --t-slow: 0.22s;
+  /* Roles for surfaces and content: a thing arriving takes --t-enter, the
+     same thing leaving --t-exit, about two thirds of it. Scripts that wait
+     out an exit use EXIT_MS (src/lib/motion.ts). */
+  --t-enter: 0.24s;
+  --t-exit: 0.16s;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.3, 0.5, 1);
@@ -142,7 +147,9 @@
   /* Micro overshoot for small pops — the curve provides the bounce, so the
      motion stays continuous (no keyframed mid-flight jumps). */
   --ease-pop: cubic-bezier(0.3, 1.42, 0.52, 1);
-  /* Split-flap wheel step: ~4% overshoot reads as the flap's damped click. */
+  /* Split-flap wheel step: the same deceleration as --ease-out, no overshoot
+     (the counters were tuned without one), named so the drum can be retuned
+     on its own. */
   --ease-drum: cubic-bezier(0.22, 1, 0.36, 1);
 
   /* ----- Liquid glass material ----- */
@@ -386,8 +393,8 @@
 }
 /* Sheen joins (never replaces) the pad's own entrance/shake: a name kept
    across a list swap keeps running, so shake↔calm swaps leave it seamless. */
-:root[data-theme="dark"] .pin-pad { animation: scale-in 0.24s var(--ease-out) both, glass-sheen-drift 22s ease-in-out infinite; }
-:root[data-theme="dark"] .pin-pad.shake { animation: scale-in 0.24s var(--ease-out) both, shake 0.28s var(--ease), glass-sheen-drift 22s ease-in-out infinite; }
+:root[data-theme="dark"] .pin-pad { animation: scale-in var(--t-enter) var(--ease-out) both, glass-sheen-drift 22s ease-in-out infinite; }
+:root[data-theme="dark"] .pin-pad.shake { animation: scale-in var(--t-enter) var(--ease-out) both, shake 0.28s var(--ease), glass-sheen-drift 22s ease-in-out infinite; }
 
 /* =========================================================================
    Base
@@ -826,7 +833,7 @@ a:hover { text-decoration: underline; }
   border-radius: calc(var(--r-md) - 2px);
   box-shadow: var(--shadow-xs);
   transform: translateX(0);
-  transition: transform 0.22s var(--ease-spring);
+  transition: transform var(--t-slow) var(--ease-spring);
 }
 .lang-seg[data-lang="zh-CN"] .lang-seg-thumb { transform: translateX(100%); }
 .lang-seg button {
@@ -878,7 +885,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--primary-rim);
   border-radius: var(--r-lg);
   box-shadow: var(--primary-shadow);
-  animation: pop-in 0.24s var(--ease-pop) both;
+  animation: pop-in var(--t-enter) var(--ease-pop) both;
 }
 /* Only a start that takes a while shows it: a warm start is over before the
    spinner fades in. (Reduced motion keeps the slowed .spin, at once.) */
@@ -900,12 +907,12 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--glass-rim);
   border-radius: var(--r-xl);
   box-shadow: var(--glass-highlight), var(--shadow-lg);
-  animation: scale-in 0.24s var(--ease-out) both;
+  animation: scale-in var(--t-enter) var(--ease-out) both;
 }
 /* The shake joins the entrance rather than replacing it: a name kept across
    the list swap keeps running, so when the shake comes off, scale-in does
    not restart (the first key after a wrong code no longer replays it). */
-.pin-pad.shake { animation: scale-in 0.24s var(--ease-out) both, shake 0.28s var(--ease); }
+.pin-pad.shake { animation: scale-in var(--t-enter) var(--ease-out) both, shake 0.28s var(--ease); }
 .pin-brand { display: grid; justify-items: center; gap: 5px; text-align: center; }
 .pin-logo {
   display: grid;
@@ -918,15 +925,15 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--primary-rim);
   border-radius: var(--r-lg);
   box-shadow: var(--primary-shadow);
-  animation: pop-in 0.24s var(--ease-pop) both;
+  animation: pop-in var(--t-enter) var(--ease-pop) both;
 }
 .pin-brand h1 { margin: 0; font-size: var(--fs-xl); font-weight: 800; letter-spacing: -0.02em; }
 .pin-brand p { margin: 0; color: var(--muted); font-size: var(--fs-sm); font-weight: 400; transition: color var(--t) var(--ease); }
 .pin-pad.shake .pin-brand p { color: var(--danger); }
 /* current → new → confirm: each step's words slide in the way the flow goes. */
 .pin-step { display: inline-block; }
-.pin-step.dir-fwd { animation: swap-in-fwd 0.22s var(--ease-out) both; }
-.pin-step.dir-back { animation: swap-in-back 0.22s var(--ease-out) both; }
+.pin-step.dir-fwd { animation: swap-in-fwd var(--t-slow) var(--ease-out) both; }
+.pin-step.dir-back { animation: swap-in-back var(--t-slow) var(--ease-out) both; }
 /* One dot per typed digit — no fixed slots, so the row never betrays how long
    the passcode is. Long entries compress the dots instead of wrapping. */
 /* min-width: 0 defeats the grid item's auto minimum, which would otherwise
@@ -1022,9 +1029,9 @@ a:hover { text-decoration: underline; }
   overscroll-behavior: contain;
   animation: fade-in var(--t-slow) var(--ease) both;
 }
-.passcode-overlay.is-closing { animation: fade-out 0.16s var(--ease) both; pointer-events: none; }
+.passcode-overlay.is-closing { animation: fade-out var(--t-exit) var(--ease) both; pointer-events: none; }
 .passcode-overlay.is-closing .pin-pad,
-.passcode-overlay.is-closing .pin-pad.shake { animation: modal-out 0.16s var(--ease) both; }
+.passcode-overlay.is-closing .pin-pad.shake { animation: modal-out var(--t-exit) var(--ease) both; }
 
 /* =========================================================================
    App shell — sidebar + main column
@@ -1258,7 +1265,7 @@ a:hover { text-decoration: underline; }
   overflow: clip;
 }
 .swap-cur { grid-area: 1 / 1; min-width: 0; }
-.swap-cur.swap-anim { animation: swap-in-fade 0.22s var(--ease-out) both; }
+.swap-cur.swap-anim { animation: swap-in-fade var(--t-slow) var(--ease-out) both; }
 .swap-cur.swap-anim.dir-fwd { animation-name: swap-in-fwd; }
 .swap-cur.swap-anim.dir-back { animation-name: swap-in-back; }
 .swap-old {
@@ -1359,11 +1366,11 @@ a:hover { text-decoration: underline; }
 .heat-viewport { position: relative; min-width: 0; max-width: 100%; overflow: clip; overflow-clip-margin: 8px; }
 .heat-current { min-width: 0; max-width: 100%; }
 .heat-leaving { position: absolute; inset: 0 0 auto 0; pointer-events: none; }
-.heat-leaving.leave-left { animation: heat-leave-left 0.16s var(--ease) both; }
-.heat-leaving.leave-right { animation: heat-leave-right 0.16s var(--ease) both; }
+.heat-leaving.leave-left { animation: heat-leave-left var(--t-exit) var(--ease) both; }
+.heat-leaving.leave-right { animation: heat-leave-right var(--t-exit) var(--ease) both; }
 .heat-leaving.leave-fade { animation: heat-leave-fade 0.14s var(--ease) both; }
-.heatmap .slide-left { animation: heat-slide-left 0.22s var(--ease-out) both; }
-.heatmap .slide-right { animation: heat-slide-right 0.22s var(--ease-out) both; }
+.heatmap .slide-left { animation: heat-slide-left var(--t-slow) var(--ease-out) both; }
+.heatmap .slide-right { animation: heat-slide-right var(--t-slow) var(--ease-out) both; }
 .heat-current.heat-arrive { animation: heat-arrive 0.2s var(--ease-out) both; }
 .heat-colhead {
   display: grid;
@@ -1887,7 +1894,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 500;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  animation: crumb-in 0.22s var(--ease-out) backwards;
+  animation: crumb-in var(--t-slow) var(--ease-out) backwards;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 @media (hover: hover) { .select-pill:hover:not(:disabled) { background: var(--wash); color: var(--ink); } }
@@ -1917,7 +1924,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 500;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  animation: crumb-in 0.22s var(--ease-out) backwards;
+  animation: crumb-in var(--t-slow) var(--ease-out) backwards;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
   view-transition-name: select-delete;
 }
@@ -1942,7 +1949,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
-  animation: crumb-in 0.22s var(--ease-out) backwards;
+  animation: crumb-in var(--t-slow) var(--ease-out) backwards;
 }
 
 /* Filter chips — the trail's refinement clause. The breadcrumb says WHERE
@@ -1971,7 +1978,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: var(--fs-sm);
   font-weight: 500;
   white-space: nowrap;
-  animation: crumb-in 0.22s var(--ease-out) backwards;
+  animation: crumb-in var(--t-slow) var(--ease-out) backwards;
   transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 /* Lens icon at the panel rows' quiet weight; it sharpens with hover ink. */
@@ -2203,8 +2210,8 @@ button.crumb:active { background: var(--wash-strong); }
 /* Six week rows, always (RangeCalendar), paged as one sheet with the
    heatmap's slide; the grid clips the 20px it travels. */
 .range-cal-days { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; }
-.range-cal-days.slide-left { animation: heat-slide-left 0.22s var(--ease-out) both; }
-.range-cal-days.slide-right { animation: heat-slide-right 0.22s var(--ease-out) both; }
+.range-cal-days.slide-left { animation: heat-slide-left var(--t-slow) var(--ease-out) both; }
+.range-cal-days.slide-right { animation: heat-slide-right var(--t-slow) var(--ease-out) both; }
 .range-cal-weekday { padding: 2px 0 4px; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; text-align: center; }
 .range-cal-day {
   position: relative;
@@ -2331,7 +2338,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 500;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  animation: crumb-in 0.22s var(--ease-out) backwards;
+  animation: crumb-in var(--t-slow) var(--ease-out) backwards;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
   /* Leaves with the trail (see .view-trail) — it sits in the pill's path too. */
   view-transition-name: trash-select;
@@ -2584,7 +2591,7 @@ button.crumb:active { background: var(--wash-strong); }
   overflow: hidden;
   border: 1px solid var(--line);
   box-shadow: var(--shadow-xs);
-  animation: pop-in 0.22s var(--ease-pop) both;
+  animation: pop-in var(--t-slow) var(--ease-pop) both;
 }
 /* Tiles the editor opened with are already on screen in the card: no pop
    on top of the card stage's cross-fade. */
@@ -2804,20 +2811,21 @@ button.crumb:active { background: var(--wash-strong); }
   box-shadow: var(--dl-shadow);
   overflow: hidden;
   transition:
-    box-shadow 0.22s ease,
-    opacity 0.22s ease,
+    box-shadow var(--t-slow) ease,
+    opacity var(--t-slow) ease,
     background 0.18s ease,
     color 0.18s ease,
-    margin-right 0.22s var(--spring),
-    padding 0.22s var(--spring),
-    border-radius 0.22s var(--spring);
+    margin-right var(--t-slow) var(--spring),
+    padding var(--t-slow) var(--spring),
+    border-radius var(--t-slow) var(--spring);
 }
 .send-button svg {
   width: 1.25rem;
   height: 1.25rem;
   stroke-width: 2.2;
-  color: var(--primary-dark);
-  transition: transform 0.22s var(--spring);
+  /* The glyph is ink, like the label beside it: the chip is one object. */
+  color: var(--ink);
+  transition: transform var(--t-slow) var(--spring);
 }
 @media (hover: hover) {
   .send-button:hover:not(:disabled) {
@@ -2971,7 +2979,7 @@ button.crumb:active { background: var(--wash-strong); }
   color: var(--muted);
   font-size: var(--fs-sm);
   font-weight: 500;
-  animation: rise-in 0.24s var(--ease-out) both;
+  animation: rise-in var(--t-enter) var(--ease-out) both;
   view-transition-name: review-banner;
 }
 .review-banner svg { flex: none; color: var(--leaf); }
@@ -3032,7 +3040,7 @@ button.crumb:active { background: var(--wash-strong); }
      the measured median text card (~115px; p90 128px) — the old 240px was
      double that, so every fresh below-fold slot inflated the page 2×. */
   contain-intrinsic-size: auto 120px;
-  animation: rise-in 0.24s var(--ease-out) both;
+  animation: rise-in var(--t-enter) var(--ease-out) both;
   /* Carries the selection ring (see the multi-select section). The radius
      is the card's, and it lives here at rest rather than with the ring: it
      shapes the ring and the containment clip alike, and it has to outlast
@@ -3657,7 +3665,7 @@ button.memo-tag:active {
   animation: fade-in 0.18s var(--ease) both;
 }
 /* A leaving dialog is already gone as far as the hand is concerned. */
-.overlay.is-closing { animation: fade-out 0.16s var(--ease) both; pointer-events: none; }
+.overlay.is-closing { animation: fade-out var(--t-exit) var(--ease) both; pointer-events: none; }
 /* Focus parks on the dialog itself while a control it left is disabled
    (useModalA11y's focus floor); the whole screen never wears the ring. */
 .overlay:focus-visible,
@@ -3672,9 +3680,9 @@ button.memo-tag:active {
   border: 1px solid var(--glass-rim-strong);
   border-radius: var(--r-lg);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
-  animation: modal-in 0.24s var(--ease-out) both;
+  animation: modal-in var(--t-enter) var(--ease-out) both;
 }
-.overlay.is-closing .confirm-card { animation: modal-out 0.16s var(--ease) both; }
+.overlay.is-closing .confirm-card { animation: modal-out var(--t-exit) var(--ease) both; }
 .confirm-card h2 { margin: 0; font-size: var(--fs-lg); font-weight: 700; overflow-wrap: anywhere; }
 .confirm-card p { margin: 0 0 10px; color: var(--muted); font-size: var(--fs-md); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
@@ -3950,7 +3958,7 @@ button.is-busy:disabled { opacity: 1; }
   translate: var(--lb-dx, 0px) var(--lb-dy, 0px);
   scale: calc(1 - 0.15 * var(--lb-fade, 0));
   transition: translate 0.26s var(--ease-out), scale 0.26s var(--ease-out);
-  animation: lightbox-zoom 0.22s var(--ease-out) both;
+  animation: lightbox-zoom var(--t-slow) var(--ease-out) both;
   cursor: default;
 }
 /* The picture on screen (never the one leaving) shares its snapshot name
@@ -3960,19 +3968,19 @@ button.is-busy:disabled { opacity: 1; }
 .lightbox-image:not(.is-leaving) { view-transition-name: lightbox-photo; }
 .lightbox-image.is-morphed { animation: none; }
 /* The zoom is the opening; later pages slide in from the side they came. */
-.lightbox-image.dir-fwd { animation: swap-in-fwd 0.22s var(--ease-out) both; }
-.lightbox-image.dir-back { animation: swap-in-back 0.22s var(--ease-out) both; }
+.lightbox-image.dir-fwd { animation: swap-in-fwd var(--t-slow) var(--ease-out) both; }
+.lightbox-image.dir-back { animation: swap-in-back var(--t-slow) var(--ease-out) both; }
 /* Until it has pixels the image holds still and invisible; the entrance
    plays once it can be seen. */
 .lightbox-image.is-pending { opacity: 0; animation: none; }
 /* The page it replaces holds, still, until then — no black gap — and leaves
    toward the side it was sent while the new one slides in. */
 .lightbox-image.is-leaving { animation: none; pointer-events: none; }
-.lightbox-image.is-leaving.out-fwd { animation: swap-out-fwd 0.16s var(--ease) both; }
-.lightbox-image.is-leaving.out-back { animation: swap-out-back 0.16s var(--ease) both; }
+.lightbox-image.is-leaving.out-fwd { animation: swap-out-fwd var(--t-exit) var(--ease) both; }
+.lightbox-image.is-leaving.out-back { animation: swap-out-back var(--t-exit) var(--ease) both; }
 /* Closing, the picture recedes with the scrim — unless a swipe already
    carried it off, where it stays where the finger let it go. */
-.lightbox.is-closing:not(.is-flung) .lightbox-image { animation: card-depart 0.16s var(--ease) both; }
+.lightbox.is-closing:not(.is-flung) .lightbox-image { animation: card-depart var(--t-exit) var(--ease) both; }
 .lightbox.is-dragging .lightbox-image,
 .lightbox.is-dragging::before { transition: none; }
 .lightbox-status {
@@ -4087,7 +4095,7 @@ button.is-busy:disabled { opacity: 1; }
    snapshot fade on top would only dim it twice. Closing, the frozen viewer
    fades on the exit beat while the photo shrinks home on the same beat. */
 ::view-transition-new(lightbox):only-child { animation: none; }
-::view-transition-old(lightbox):only-child { animation: fade-out 0.16s var(--ease) both; }
+::view-transition-old(lightbox):only-child { animation: fade-out var(--t-exit) var(--ease) both; }
 :root[data-vt-lightbox="close"]::view-transition-group(lightbox-photo) { animation-duration: 0.16s; }
 
 /* Reduced motion: dissolve, don't move. The viewer fades in and out where it
@@ -4116,10 +4124,10 @@ button.is-busy:disabled { opacity: 1; }
   border-radius: var(--r-xl);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
   overflow: hidden;
-  animation: modal-in 0.24s var(--ease-out) both;
+  animation: modal-in var(--t-enter) var(--ease-out) both;
 }
 .stats-overlay.is-closing { pointer-events: none; }
-.overlay.is-closing .stats-modal { animation: modal-out 0.16s var(--ease) both; }
+.overlay.is-closing .stats-modal { animation: modal-out var(--t-exit) var(--ease) both; }
 .stats-head {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -4240,7 +4248,7 @@ button.is-busy:disabled { opacity: 1; }
   outline-offset: 1px;
   /* Background and opacity included so switching years crossfades the whole
      grid — cells melting into or out of a month's edge fade, never pop. */
-  transition: outline-color var(--t) var(--ease), filter var(--t) var(--ease), background 0.22s var(--ease), box-shadow 0.22s var(--ease), opacity 0.22s var(--ease);
+  transition: outline-color var(--t) var(--ease), filter var(--t) var(--ease), background var(--t-slow) var(--ease), box-shadow var(--t-slow) var(--ease), opacity var(--t-slow) var(--ease);
 }
 @media (hover: hover) {
   button.mini-cell:hover { outline-color: color-mix(in srgb, var(--heat-3) 42%, transparent); filter: saturate(1.16) brightness(1.06); }
@@ -4301,7 +4309,7 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
   animation: bar-rise 0.24s var(--ease-out) both;
   /* Height and fill included so switching years glides the bars to their new
      size in a left-to-right ripple (--bar-d, set inline per column). */
-  transition: height 0.22s var(--ease-out) var(--bar-d, 0s), background 0.2s var(--ease) var(--bar-d, 0s);
+  transition: height var(--t-slow) var(--ease-out) var(--bar-d, 0s), background 0.2s var(--ease) var(--bar-d, 0s);
 }
 /* Hover = the tag rows' neutral column wash + the accent's own emphasis step.
    Bars are baseline-anchored, so nothing lifts, scales or moves: the pointer
@@ -4371,12 +4379,12 @@ button.stats-tag-row:active { scale: 0.992; }
   left: 0;
   right: 0;
   pointer-events: none;
-  animation: tag-row-out 0.15s var(--ease) both;
+  animation: tag-row-out var(--t) var(--ease) both;
 }
 .stats-tag-name-box { flex: none; width: min(170px, 36%); min-width: 0; }
 .stats-tag-name { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 500; }
 .stats-tag-track { flex: 1; height: 4px; background: var(--surface-3); border-radius: 2px; }
-.stats-tag-fill { display: block; height: 100%; max-width: 100%; background: var(--primary); border-radius: inherit; transition: width 0.22s var(--ease-out); }
+.stats-tag-fill { display: block; height: 100%; max-width: 100%; background: var(--primary); border-radius: inherit; transition: width var(--t-slow) var(--ease-out); }
 .stats-tag-count { flex: none; min-width: 2em; color: var(--muted); font-size: var(--fs-xs); font-weight: 500; text-align: right; }
 .stats-tags-empty { margin: 0; padding: 5px 2px; color: var(--muted); font-size: var(--fs-sm); font-weight: 500; animation: fade-up 0.2s var(--ease-out) both; }
 
@@ -4404,9 +4412,9 @@ button.stats-tag-row:active { scale: 0.992; }
   border-radius: var(--r-xl);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
   overflow: hidden;
-  animation: modal-in 0.24s var(--ease-out) both;
+  animation: modal-in var(--t-enter) var(--ease-out) both;
 }
-.overlay.is-closing .review-modal { animation: modal-out 0.16s var(--ease) both; }
+.overlay.is-closing .review-modal { animation: modal-out var(--t-exit) var(--ease) both; }
 
 .review-head {
   display: flex;
@@ -4475,7 +4483,7 @@ button.stats-tag-row:active { scale: 0.992; }
   display: grid;
   grid-template-rows: 0fr;
   opacity: 0;
-  transition: grid-template-rows 0.22s var(--ease), opacity 0.16s var(--ease);
+  transition: grid-template-rows var(--t-slow) var(--ease), opacity 0.16s var(--ease);
 }
 .review-tagbox.is-open { grid-template-rows: 1fr; opacity: 1; }
 .review-tagbox > div { overflow: hidden; min-height: 0; }
@@ -4592,13 +4600,13 @@ button.stats-tag-row:active { scale: 0.992; }
   border-radius: var(--r-xl);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
   overflow: hidden;
-  animation: modal-in 0.24s var(--ease-out) both;
+  animation: modal-in var(--t-enter) var(--ease-out) both;
   transition: width 0.3s var(--ease-out);
 }
 /* Landscape: the dialog itself breathes wider around the wider sheet.
    Width numbers mirror MODAL_WIDTHS in ShareDialog. */
 .share-modal.is-wide { width: min(690px, 100%); }
-.overlay.is-closing .share-modal { animation: modal-out 0.16s var(--ease) both; }
+.overlay.is-closing .share-modal { animation: modal-out var(--t-exit) var(--ease) both; }
 .share-head {
   display: flex;
   align-items: center;
@@ -4637,7 +4645,7 @@ button.stats-tag-row:active { scale: 0.992; }
    transform transition lets the fit scale follow window resizes softly. */
 .share-stage .share-card {
   box-shadow: var(--shadow);
-  animation: sheet-in 0.22s var(--ease-out) both;
+  animation: sheet-in var(--t-slow) var(--ease-out) both;
   transition: transform 0.3s var(--ease-out), background-color 0.24s var(--ease), border-color 0.24s var(--ease), color 0.24s var(--ease);
 }
 /* A stock swap keeps the same sheet in place (no remount), so the whole page
@@ -4673,7 +4681,7 @@ button.stats-tag-row:active { scale: 0.992; }
    from a line it has almost finished with, and early enough on the way in
    that the pen never writes into a shut slot (DATE_OPEN_MS leads the glyphs
    by exactly the opening). */
-.share-stage .sc-date.is-drinking { overflow: hidden; animation: date-close 0.22s ease-in 0.5s both; }
+.share-stage .sc-date.is-drinking { overflow: hidden; animation: date-close var(--t-slow) ease-in 0.5s both; }
 .share-stage .sc-date.is-writing { overflow: hidden; animation: date-open 0.18s var(--ease-out) both; }
 /* A face swap re-mounts the entry (keyed by the swap count in ShareDialog),
    so this plays once per swap and never on the sheet's own arrival. */
@@ -4715,7 +4723,7 @@ button.stats-tag-row:active { scale: 0.992; }
   justify-content: center;
   gap: 8px;
   padding: 12px 14px 0;
-  animation: fade-up 0.24s var(--ease-out) 0.1s both;
+  animation: fade-up var(--t-enter) var(--ease-out) 0.1s both;
 }
 .share-seg {
   display: flex;
@@ -4751,7 +4759,7 @@ button.stats-tag-row:active { scale: 0.992; }
   border-radius: calc(var(--r-md) - 2px);
   box-shadow: var(--shadow-xs);
   transform: translateX(0);
-  transition: transform 0.22s var(--ease-spring);
+  transition: transform var(--t-slow) var(--ease-spring);
 }
 .share-seg-group[data-layout="landscape"] .share-seg-thumb,
 .share-seg-group[data-tone="gray"] .share-seg-thumb { transform: translateX(100%); }
@@ -4899,7 +4907,7 @@ button.stats-tag-row:active { scale: 0.992; }
   justify-content: flex-end;
   gap: 8px;
   padding: 10px 14px 12px;
-  animation: fade-up 0.24s var(--ease-out) 0.14s both;
+  animation: fade-up var(--t-enter) var(--ease-out) 0.14s both;
 }
 .share-actions > button { display: inline-flex; align-items: center; gap: 7px; }
 /* Why the exits are off, when they are: said in weight, not red. */
@@ -5063,7 +5071,7 @@ button.stats-tag-row:active { scale: 0.992; }
   pointer-events: auto;
   /* Vertical drags are the toast's own (swipe up to dismiss, App.tsx). */
   touch-action: pan-x;
-  animation: toast-in 0.22s var(--ease-pop) both;
+  animation: toast-in var(--t-slow) var(--ease-pop) both;
 }
 .toast-stack { gap: 0; }
 .toast-slot {
@@ -5081,7 +5089,7 @@ button.stats-tag-row:active { scale: 0.992; }
 .toast-slot.is-leaving .toast-clip { overflow: hidden; }
 /* A flicked toast carries on from where it was let go, above its slot. */
 .toast-slot.is-leaving.is-swiped .toast-clip { overflow: visible; }
-.toast.is-leaving { animation: toast-out 0.16s var(--ease) both; pointer-events: none; }
+.toast.is-leaving { animation: toast-out var(--t-exit) var(--ease) both; pointer-events: none; }
 .toast-text { min-width: 0; }
 .toast-text:only-child { text-align: center; }
 /* A counting toast's figures (export progress) must not shift as they change. */
@@ -5148,18 +5156,18 @@ button.stats-tag-row:active { scale: 0.992; }
 ::view-transition-new(root) { animation: none; opacity: 1; mix-blend-mode: normal; }
 /* Departing cards (deletion, filtered out) sink slightly as they fade, so a
    removal reads as the card receding while its neighbours glide up. */
-::view-transition-old(*):only-child { animation: card-depart 0.16s var(--ease) both; }
+::view-transition-old(*):only-child { animation: card-depart var(--t-exit) var(--ease) both; }
 ::view-transition-new(*):only-child { animation: fade-in 0.2s var(--ease) 0.03s both; }
 /* Card arrivals rise in the feed's own entrance language. Scoped via
    view-transition-class so chips,
    banners and feed-empty keep the calm fade; browsers without class support
    fall back to it too. */
-::view-transition-new(.memo-card):only-child { animation: rise-in 0.24s var(--ease-out) 0.03s both; }
+::view-transition-new(.memo-card):only-child { animation: rise-in var(--t-enter) var(--ease-out) 0.03s both; }
 /* …except the memo just sent (App's landCreated marks that transition): it
    comes from the composer above, so it drops in a few pixels while the cards
    below glide down to make room. (That is the fallback; normally the
    composer's text travels into the card — see "Sending" below.) */
-:root[data-vt-create]::view-transition-new(.memo-card):only-child { animation: drop-in 0.24s var(--ease-out) 0.03s both; }
+:root[data-vt-create]::view-transition-new(.memo-card):only-child { animation: drop-in var(--t-enter) var(--ease-out) 0.03s both; }
 /* Departing cards follow the verb that sent them (withViewTransition's
    `exit`, held on the root while that transition runs): a restore lifts out
    of Trash — rise-in played upward — and a permanent delete fades where it
@@ -5167,7 +5175,7 @@ button.stats-tag-row:active { scale: 0.992; }
    transition speak the same verbs through lib/feedMotion.ts. */
 @keyframes card-lift { to { opacity: 0; transform: translateY(-18px) scale(0.995); } }
 :root[data-vt-exit="lift"]::view-transition-old(.memo-card):only-child { animation: card-lift 0.16s var(--ease) both; }
-:root[data-vt-exit="fade"]::view-transition-old(.memo-card):only-child { animation: fade-out 0.16s var(--ease) both; }
+:root[data-vt-exit="fade"]::view-transition-old(.memo-card):only-child { animation: fade-out var(--t-exit) var(--ease) both; }
 /* Sending (App's landCreated). The typed text is the new card: for the
    outgoing capture the composer's field carries the card's name, so the
    text travels down and becomes the card instead of fading out above it —
@@ -5193,7 +5201,7 @@ button.stats-tag-row:active { scale: 0.992; }
 :root[data-vt-create]::view-transition-old(.sent),
 :root[data-vt-create]::view-transition-new(.sent) { inline-size: auto; block-size: auto; }
 :root[data-vt-create]::view-transition-old(.sent) { animation: fade-out 0.24s var(--ease-out) both, sent-seat 0.24s var(--ease-out) both; }
-:root[data-vt-create]::view-transition-new(.sent) { animation: fade-in 0.24s var(--ease-out) both, sent-gather 0.24s var(--ease-out) both; }
+:root[data-vt-create]::view-transition-new(.sent) { animation: fade-in var(--t-enter) var(--ease-out) both, sent-gather 0.24s var(--ease-out) both; }
 /* The composer enters in its own snapshot above the stable page background. */
 ::view-transition-new(composer):only-child { animation: rise-in 0.28s var(--ease-out) both; }
 ::view-transition-group(composer),
@@ -5274,7 +5282,9 @@ button.stats-tag-row:active { scale: 0.992; }
 ::view-transition-group(loc-sep),
 ::view-transition-group(view-trail),
 ::view-transition-group(trash-select) { z-index: 3; }
-::view-transition-group(toast) { z-index: 4; }
+/* Toasts stay above everything, the lightbox's photo morph (5) included —
+   the stack paints over the viewer outside a transition too. */
+::view-transition-group(toast) { z-index: 6; }
 ::view-transition-old(toast),
 ::view-transition-new(toast) { inline-size: auto; block-size: 100%; }
 
@@ -5291,7 +5301,7 @@ button.stats-tag-row:active { scale: 0.992; }
     transform: translateX(-102%);
     visibility: hidden;
   }
-  .sidebar.is-open { transform: none; visibility: visible; animation: drawer-in 0.22s var(--ease-out) both; }
+  .sidebar.is-open { transform: none; visibility: visible; animation: drawer-in var(--t-slow) var(--ease-out) both; }
   /* The drawer is fixed to the visible viewport, so its scroller takes that
      height rather than a viewport unit: on iOS Safari 100vh overhangs the
      toolbars, and with the page locked behind the drawer the last tags could
@@ -5332,7 +5342,7 @@ button.stats-tag-row:active { scale: 0.992; }
     backdrop-filter: blur(var(--scrim-blur));
     animation: fade-in 0.18s var(--ease) both;
   }
-  .drawer-backdrop.is-closing { animation: fade-out 0.16s var(--ease) both; }
+  .drawer-backdrop.is-closing { animation: fade-out var(--t-exit) var(--ease) both; }
   .drawer-toggle { display: inline-grid; }
 }
 
@@ -5522,11 +5532,11 @@ button.stats-tag-row:active { scale: 0.992; }
 @media (max-width: 440px) and (prefers-reduced-motion: no-preference) {
   .topbar[data-tuck="in"] { animation: topbar-tuck 0.2s var(--ease) both; }
   .topbar[data-tuck="in"] .search-tools { transition: opacity 0.14s var(--ease), visibility 0s linear 0.2s; }
-  .topbar[data-tuck="out"] { animation: topbar-untuck 0.22s var(--ease-out) both; }
+  .topbar[data-tuck="out"] { animation: topbar-untuck var(--t-slow) var(--ease-out) both; }
   .topbar[data-tuck="out"] .search-tools { transition: opacity 0.18s var(--ease) 0.04s; }
   /* In step with the clip's tuck and untuck. */
   .topbar[data-tuck="in"]::after { transition: opacity var(--t) var(--ease), translate 0.2s var(--ease); }
-  .topbar[data-tuck="out"]::after { transition: opacity var(--t) var(--ease), translate 0.22s var(--ease-out); }
+  .topbar[data-tuck="out"]::after { transition: opacity var(--t) var(--ease), translate var(--t-slow) var(--ease-out); }
 }
 @keyframes topbar-tuck {
   from { clip-path: inset(0 0 0 0); }
@@ -5700,8 +5710,10 @@ button.stats-tag-row:active { scale: 0.992; }
   .overlay:not(.lightbox).is-closing,
   .passcode-overlay.is-closing { animation: fade-out var(--t-fast) var(--ease) both !important; }
   .overlay:not(.lightbox) > * { animation: none !important; }
-  .action-menu { animation: fade-in var(--t) var(--ease) both !important; }
-  .action-menu.is-closing { animation: fade-out var(--t-fast) var(--ease) both !important; }
+  .action-menu,
+  .tag-suggest { animation: fade-in var(--t) var(--ease) both !important; }
+  .action-menu.is-closing,
+  .tag-suggest.is-closing { animation: fade-out var(--t-fast) var(--ease) both !important; }
   .toast { animation: fade-in var(--t) var(--ease) both !important; }
   .toast.is-leaving { animation: fade-out var(--t-fast) var(--ease) both !important; }
   /* A leaving toast keeps its slot while it fades, then the stack closes up
@@ -5713,14 +5725,17 @@ button.stats-tag-row:active { scale: 0.992; }
   :is(.overlay, .passcode-overlay)[aria-busy="true"] :is(.busy-swap, .busy-icon) > *,
   :is(.overlay, .passcode-overlay)[aria-busy="true"] :is(.ghost-button, .accent-button, .danger-button, .icon-button):disabled { transition-delay: 0.15s !important; }
   .pin-pad[aria-busy="true"] .keypad button:disabled { transition-delay: 0s, 0s, 0s, 0.15s !important; }
+  .editor[aria-busy="true"] .icon-button:disabled,
+  .editor[aria-busy="true"] .ghost-button:disabled { transition-delay: 0s, 0s, 0s, 0.15s !important; }
+  .editor[aria-busy="true"] .attachment-remove:disabled { transition-delay: 0.15s, 0s, 0s !important; }
   /* Feed swaps dissolve instead of moving: every group sits at its final box
      (nothing glides or resizes) while the two states cross-fade in 150ms.
      The cards carry no names under reduce (viewTransition.ts), so they
      dissolve inside the page's own snapshot — shown here, for once, and
      summed with plus-lighter so whatever did not change holds steady. */
   ::view-transition-group(*) { animation: none !important; }
-  ::view-transition-old(*) { animation: fade-out 0.15s var(--ease) both !important; }
-  ::view-transition-new(*) { animation: fade-in 0.15s var(--ease) both !important; }
+  ::view-transition-old(*) { animation: fade-out var(--t) var(--ease) both !important; }
+  ::view-transition-new(*) { animation: fade-in var(--t) var(--ease) both !important; }
   ::view-transition-old(*):not(:only-child),
   ::view-transition-new(*):not(:only-child) { mix-blend-mode: plus-lighter !important; }
   ::view-transition-old(root) { display: block !important; }
@@ -5759,7 +5774,7 @@ button.stats-tag-row:active { scale: 0.992; }
   border-radius: var(--r-xl);
   box-shadow: var(--panel-pop);
   overflow: hidden;
-  animation: modal-in 0.24s var(--ease-out) both;
+  animation: modal-in var(--t-enter) var(--ease-out) both;
 }
 :root[data-theme="dark"] .model-panel {
   --hairline: rgba(255, 255, 255, 0.1);
@@ -5771,7 +5786,7 @@ button.stats-tag-row:active { scale: 0.992; }
     0 14px 30px -10px rgba(0, 0, 0, 0.62);
   --chip-pop: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
-.overlay.is-closing .model-panel { animation: modal-out 0.16s var(--ease) both; }
+.overlay.is-closing .model-panel { animation: modal-out var(--t-exit) var(--ease) both; }
 
 @keyframes model-swap-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes model-swap-out { to { opacity: 0; transform: translateY(-6px); } }
@@ -5839,7 +5854,7 @@ button.stats-tag-row:active { scale: 0.992; }
   line-height: 1.2;
   text-align: center;
   white-space: nowrap;
-  animation: model-swap-out 0.16s var(--ease) both;
+  animation: model-swap-out var(--t-exit) var(--ease) both;
 }
 .model-subline {
   margin: 0;

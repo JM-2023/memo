@@ -78,6 +78,7 @@ import { startBoot, type BootStart } from "./lib/boot";
 import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, saveSnapshot } from "./lib/cache";
 import { dateKey, formatDayLabel } from "./lib/dates";
 import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow } from "./lib/feedSafety";
+import { EXIT_MS } from "./lib/motion";
 import { useI18n } from "./lib/i18n";
 import { pruneImageCache } from "./lib/imageCache";
 import { announce, mountLiveRegions } from "./lib/liveAnnouncer";
@@ -198,7 +199,7 @@ interface ToastOptions {
 const TOAST_LIMIT = 3;
 /** A progress toast stays until its work ends (the longest setTimeout delay). */
 const STICKY_TOAST_MS = 2_147_483_647;
-const TOAST_LEAVE_MS = 170;
+const TOAST_LEAVE_MS = EXIT_MS;
 
 /**
  * How long a toast stays: a reading pace for its length, with floors for an
@@ -556,6 +557,8 @@ interface FeedHandlers {
   toggleTask: (memo: Memo, lineKey: number, checked: boolean) => void;
   /** The open edit's text after each change, held in memory for a re-login. */
   editDraftChange: (memoId: string, content: string) => void;
+  /** A toast the inline editor raises on its own (an image removed, with Undo). */
+  notice: (text: string, action?: ToastAction) => void;
 }
 
 interface FeedItemProps {
@@ -608,6 +611,7 @@ const FeedItem = reactMemo(
           pendingTaskFlips={taskFlips}
           resumeContent={resumeContent}
           onEditDraftChange={editing ? (content) => handlers.editDraftChange(memo.id, content) : undefined}
+          onEditNotice={handlers.notice}
           busy={busy}
           onToggleSelect={() => handlers.toggleSelect(memo)}
           onSelect={canSelect ? () => handlers.selectFrom(memo) : undefined}
@@ -2119,7 +2123,7 @@ export default function App() {
     if (drawerClosing) return;
     setDrawerClosing(true);
     window.clearTimeout(drawerCloseTimerRef.current);
-    const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 170;
+    const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : EXIT_MS;
     drawerCloseTimerRef.current = window.setTimeout(finishDrawerClose, delay);
   }
 
@@ -4073,7 +4077,8 @@ export default function App() {
     },
     pickTag,
     toggleSelect,
-    selectFrom: (memo: Memo) => enterSelectMode(memo.id)
+    selectFrom: (memo: Memo) => enterSelectMode(memo.id),
+    notice: (text: string, action?: ToastAction) => showToast(text, "info", action ? { action } : {})
   });
   feedActionsRef.current = {
     startEdit: (id: string) => {
@@ -4105,7 +4110,8 @@ export default function App() {
     },
     pickTag,
     toggleSelect,
-    selectFrom: (memo: Memo) => enterSelectMode(memo.id)
+    selectFrom: (memo: Memo) => enterSelectMode(memo.id),
+    notice: (text: string, action?: ToastAction) => showToast(text, "info", action ? { action } : {})
   };
   const getEntering = useCallback(() => !enterSuppressRef.current, []);
   const feedHandlers = useMemo<FeedHandlers>(
@@ -4128,7 +4134,8 @@ export default function App() {
       toggleTask: (memo, lineKey, checked) => feedActionsRef.current.toggleTask(memo, lineKey, checked),
       editDraftChange: (memoId, content) => {
         editDraftRef.current = { memoId, content };
-      }
+      },
+      notice: (text, action) => feedActionsRef.current.notice(text, action)
     }),
     []
   );
@@ -5427,6 +5434,7 @@ export default function App() {
             contextTag={activeTag}
             busy={creating}
             onSubmit={handleCreate}
+            onNotice={feedHandlers.notice}
           />
         </div>
 

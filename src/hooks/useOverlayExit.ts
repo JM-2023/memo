@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { useReducedMotion } from "./useReducedMotion";
+import { EXIT_MS } from "../lib/motion";
 
 /**
  * The standard overlay exit, for an engine that can't report its own (no
@@ -7,7 +8,7 @@ import { useReducedMotion } from "./useReducedMotion";
  * when the surface's own animations do, so a fling's shorter exit or a
  * reduced-motion dissolve never waits on a copy of the number kept here.
  */
-export const OVERLAY_EXIT_MS = 170;
+export const OVERLAY_EXIT_MS = EXIT_MS;
 
 /** What an element shows mid-animation: read before a class flip swaps its animation. */
 export interface PaintedFrame {

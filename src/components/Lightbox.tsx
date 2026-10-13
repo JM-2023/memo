@@ -7,6 +7,7 @@ import { useI18n } from "../lib/i18n";
 import { acquireImage, discardImage, peekImage, releaseImage, retainImage, type ImageVariant } from "../lib/imageCache";
 import type { LightboxItem } from "../lib/types";
 import { withViewTransition } from "../lib/viewTransition";
+import { EXIT_MS } from "../lib/motion";
 
 interface LightboxProps {
   items: LightboxItem[];
@@ -85,36 +86,6 @@ function morphablePicture(tile: HTMLElement | null): HTMLImageElement | null {
   const topbar = document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0;
   const visible = rect.width > 0 && rect.bottom > Math.max(0, topbar) + 8 && rect.top < window.innerHeight - 8 && rect.right > 0 && rect.left < window.innerWidth;
   return visible ? picture : null;
-}
-
-/**
- * Runs `done` once the running view transition has let go of the page: read
- * off its own pseudo-element animations (withViewTransition keeps the
- * transition object to itself), with a ceiling in case they never report.
- */
-function afterTransition(done: () => void) {
-  let settled = false;
-  const finish = () => {
-    if (settled) return;
-    settled = true;
-    window.clearTimeout(ceiling);
-    done();
-  };
-  const ceiling = window.setTimeout(finish, 1000);
-  let frames = 0;
-  const look = () => {
-    const running =
-      typeof document.getAnimations === "function"
-        ? document.getAnimations().filter((animation) => (animation.effect as KeyframeEffect | null)?.pseudoElement?.startsWith("::view-transition"))
-        : [];
-    // The pseudo-elements appear a frame or two after the update ran.
-    if (running.length === 0 && frames++ < 3) {
-      window.requestAnimationFrame(look);
-      return;
-    }
-    void Promise.allSettled(running.map((animation) => animation.finished)).then(finish);
-  };
-  window.requestAnimationFrame(look);
 }
 
 /**
@@ -294,7 +265,7 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
   function leavePlainly(swiped: boolean) {
     setClosing(true);
     setFlung(swiped);
-    closeTimer.current = window.setTimeout(() => closeRef.current(), 170);
+    closeTimer.current = window.setTimeout(() => closeRef.current(), EXIT_MS);
   }
 
   function requestClose(swiped = false) {
@@ -317,7 +288,7 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
     releaseNamedTile();
     const root = document.documentElement;
     root.dataset.vtLightbox = "close";
-    withViewTransition((animated) => {
+    const transition = withViewTransition((animated) => {
       if (!animated) {
         // No snapshots after all: the viewer is still up, so it leaves the
         // way it always has.
@@ -328,11 +299,13 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
       flushSync(() => closeRef.current());
       target.style.viewTransitionName = PHOTO_NAME;
       namedTile = target;
-      afterTransition(() => {
-        if (namedTile === target) releaseNamedTile();
-        if (root.dataset.vtLightbox === "close") delete root.dataset.vtLightbox;
-      });
     });
+    // The tile gives the name back once the snapshots have let go of it.
+    const release = () => {
+      if (namedTile === target) releaseNamedTile();
+      if (root.dataset.vtLightbox === "close") delete root.dataset.vtLightbox;
+    };
+    if (transition) void Promise.resolve(transition.finished).then(release, release);
     return true;
   }
 

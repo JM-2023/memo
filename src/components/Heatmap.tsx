@@ -6,6 +6,7 @@ import { buildHeatWeeks, type HeatCell, type PeriodKind } from "../lib/stats";
 import { RollingCount } from "./RollingText";
 import { SwapText } from "./SwapText";
 import { DATA_TIP_DELAY, useTip, withFocus } from "./Tip";
+import { EASE_OUT } from "../lib/motion";
 
 interface HeatmapProps {
   countsByDay: Map<string, number>;
@@ -388,7 +389,7 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
     if (Math.abs(to - from) < 1) return;
     const animation = el.animate([{ height: `${from}px` }, { height: `${to}px` }], {
       duration: 220,
-      easing: "cubic-bezier(0.16, 1, 0.3, 1)"
+      easing: EASE_OUT
     });
     // Render captures the current painted height before this cleanup runs.
     // Cancel before the next effect measures the new grid's natural height.

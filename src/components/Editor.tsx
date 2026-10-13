@@ -1,4 +1,4 @@
-import { Bold, Hash, Image as ImageIcon, ImageOff, ImagePlus, Link2, List, Loader2, Send, Table, X } from "lucide-react";
+import { Bold, Hash, Image as ImageIcon, ImageOff, ImagePlus, Link2, List, Loader2, Table, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { ApiError } from "../lib/api";
 import { isImageUrl } from "../lib/content";
@@ -217,6 +217,20 @@ function registerDropTarget(target: DropTarget): () => void {
     releaseDropGuard?.();
     releaseDropGuard = null;
   };
+}
+
+/**
+ * The Send/Save glyph: a solid paper dart, level with the label so the two
+ * read as one direction. Drawn here rather than taken from lucide — the
+ * outline plane sat at 45° in the accent green and read as a second, lighter
+ * object beside the 600-weight label. The stroke only rounds the corners.
+ */
+function SendGlyph() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="currentColor" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" d="M3.6 3.7 20.9 12 3.6 20.3 6.7 13.25 13.4 12 6.7 10.75Z" />
+    </svg>
+  );
 }
 
 /** `text` with [from, to) set in weight 600, the matched run of a suggestion. */
@@ -1898,7 +1912,7 @@ export function Editor({
                 <Loader2 size={17} className="spin" aria-hidden="true" />
               </span>
             ) : (
-              <Send size={17} aria-hidden="true" />
+              <SendGlyph />
             )}
             {/* Label and percentage share one grid cell with hidden sizers for
                 both, so the chip is the same width idle, at 0% and at 99%
