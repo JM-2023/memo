@@ -1684,7 +1684,7 @@ button.heat-cell[aria-disabled="true"]:active { filter: none; }
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   /* Own snapshot group during view transitions. Every memo carries its own
      view-transition-name, so each card is lifted into a group that paints
-     ABOVE the root snapshot. When the feed is scrolled, the cards tucked
+     ABOVE the rest of the page. When the feed is scrolled, the cards tucked
      under this sticky frosted bar would then paint over it mid-transition —
      deleting a memo made the whole header (frosted band + searchbox) blink
      out while the "全部笔记" pill floated on, then return once the transition
@@ -5040,8 +5040,8 @@ button.stats-tag-row:active { scale: 0.992; }
   max-width: min(640px, calc(100vw - 32px));
   transform: translateX(-50%);
   pointer-events: none;
-  /* Own snapshot group (lifted in the view-transition section): flattened
-     into the root snapshot, the toast slid UNDER the topbar-action pill
+  /* Own snapshot group (lifted in the view-transition section): left in the
+     page beneath the snapshot tree, the toast slid UNDER the topbar-action pill
      whenever a view switch ran while it was up. */
   view-transition-name: toast;
 }
@@ -5149,13 +5149,15 @@ button.stats-tag-row:active { scale: 0.992; }
    overlay instead of the button. The live DOM already sits in its final
    layout underneath, so let clicks fall through. */
 ::view-transition { pointer-events: none; }
+/* That only holds while the page itself isn't captured: with the root in
+   the snapshot tree, every hit during a transition resolves to <html>,
+   pointer-events or not, so a tag picked within ~300ms of the last one did
+   nothing. The page needs no snapshot of its own. Only named parts move;
+   the rest (background, sidebar, cards past the morph budget) holds still,
+   which the live page already does, and live it takes clicks. Reduced
+   motion captures it again for its dissolve (see the reduce block). */
+:root { view-transition-name: none; }
 ::view-transition-group(*) { animation-duration: 0.24s; animation-timing-function: var(--ease-out); }
-/* Keep the page background and sidebar on one opaque snapshot. Cross-fading
-   the entire viewport with plus-lighter makes a feed swap affect even these
-   stationary surfaces. Named cards, composer and controls keep their motion. */
-::view-transition-group(root) { animation: none; }
-::view-transition-old(root) { display: none; }
-::view-transition-new(root) { animation: none; opacity: 1; mix-blend-mode: normal; }
 /* Departing cards (deletion, filtered out) sink slightly as they fade, so a
    removal reads as the card receding while its neighbours glide up. */
 ::view-transition-old(*):only-child { animation: card-depart var(--t-exit) var(--ease) both; }
@@ -5733,14 +5735,16 @@ button.stats-tag-row:active { scale: 0.992; }
   /* Feed swaps dissolve instead of moving: every group sits at its final box
      (nothing glides or resizes) while the two states cross-fade in 150ms.
      The cards carry no names under reduce (viewTransition.ts), so they
-     dissolve inside the page's own snapshot — shown here, for once, and
-     summed with plus-lighter so whatever did not change holds steady. */
+     dissolve inside the page's own snapshot — captured here, for once, and
+     summed with plus-lighter so whatever did not change holds steady. While
+     it is captured, a click lands on <html> (see :root above): the price of
+     the dissolve, for its 150ms. */
+  :root { view-transition-name: root; }
   ::view-transition-group(*) { animation: none !important; }
   ::view-transition-old(*) { animation: fade-out var(--t) var(--ease) both !important; }
   ::view-transition-new(*) { animation: fade-in var(--t) var(--ease) both !important; }
   ::view-transition-old(*):not(:only-child),
   ::view-transition-new(*):not(:only-child) { mix-blend-mode: plus-lighter !important; }
-  ::view-transition-old(root) { display: block !important; }
 }
 
 /* ---- Semantic Search panel ----------------------------------------------
