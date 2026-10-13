@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Editor, type EditorSubmission } from "../src/components/Editor";
 import { TipProvider } from "../src/components/Tip";
 import { LanguageProvider } from "../src/lib/i18n";
+import { LIVE_REGION_ATTR, mountLiveRegions } from "../src/lib/liveAnnouncer";
 import type { MemoImage, NewImagePayload } from "../src/lib/types";
 
 const mocks = vi.hoisted(() => ({ compressImage: vi.fn() }));
@@ -476,7 +477,7 @@ describe("Editor edit state", () => {
 
     fireEvent.drop(document.querySelector(".editor")!, fileDrag([new File(["a"], "a.png", { type: "image/png" })]));
     expect((await screen.findByRole("alert")).textContent).toBe("You can add up to 9 images");
-    const [first] = screen.getAllByRole("button", { name: "Remove image" });
+    const [first] = screen.getAllByRole("button", { name: /^Remove image/ });
     await user.click(first);
     // jsdom has no AnimationEvent, so React listens under the prefixed name.
     const exited = new Event("webkitAnimationEnd", { bubbles: true });
@@ -484,7 +485,7 @@ describe("Editor edit state", () => {
     act(() => {
       first.closest(".attachment")!.dispatchEvent(exited);
     });
-    expect(screen.getAllByRole("button", { name: "Remove image" })).toHaveLength(8);
+    expect(screen.getAllByRole("button", { name: /^Remove image/ })).toHaveLength(8);
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -541,5 +542,265 @@ describe("Editor autogrow", () => {
     await user.type(area, "b");
     // Same height: no detour back through a start value.
     expect(writes).toEqual(["auto", "104px"]);
+  });
+
+  it("stops short of an open on-screen keyboard, counted from where the field starts", async () => {
+    const user = userEvent.setup();
+    const { area } = renderCreate();
+    vi.stubGlobal("innerHeight", 844);
+    vi.stubGlobal("visualViewport", { height: 380, offsetTop: 0, scale: 1, addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    Object.defineProperty(area, "scrollHeight", { configurable: true, get: () => 900 });
+    area.getBoundingClientRect = () => ({ top: 100, bottom: 168 }) as DOMRect;
+    // The bar and padding take 56px under the field.
+    (area.closest(".editor") as HTMLElement).getBoundingClientRect = () => ({ top: 86, bottom: 224 }) as DOMRect;
+    await user.type(area, "a");
+    // 380 − 100 − 56 − 8 keeps Send above the keys; 70% of 380 (266) would not.
+    expect(area.style.height).toBe("216px");
+  });
+});
+
+/** Finish a CSS animation jsdom never runs (React listens under the prefixed name). */
+function finishAnimation(element: Element, animationName: string) {
+  const ended = new Event("webkitAnimationEnd", { bubbles: true });
+  Object.defineProperty(ended, "animationName", { value: animationName });
+  act(() => {
+    element.dispatchEvent(ended);
+  });
+}
+
+describe("Editor tag list motion", () => {
+  it("steps aside while an IME composes and comes back as the same list, without a second entrance", () => {
+    const { area } = renderCreate(["读书笔记", "读书"]);
+    fireEvent.change(area, { target: { value: "#读", selectionStart: 2 } });
+    const list = screen.getByRole("listbox", { name: "Tag suggestions" });
+    fireEvent.compositionStart(area);
+    fireEvent.change(area, { target: { value: "#读shu", selectionStart: 5 } });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(list.isConnected).toBe(true);
+    expect(list.classList.contains("is-paused")).toBe(true);
+    expect(area.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.change(area, { target: { value: "#读书", selectionStart: 3 } });
+    fireEvent.compositionEnd(area);
+    expect(screen.getByRole("listbox")).toBe(list);
+    expect(list.className).toBe("tag-suggest");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["#读书笔记"]);
+  });
+
+  it("plays the menus' exit before it leaves", async () => {
+    const user = userEvent.setup();
+    const { area } = renderCreate(["life"]);
+    await user.type(area, "#li");
+    const list = screen.getByRole("listbox");
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(list.classList.contains("is-closing")).toBe(true);
+    finishAnimation(list, "menu-out");
+    expect(list.isConnected).toBe(false);
+  });
+});
+
+describe("Editor paste with a picture beside the words", () => {
+  function clip(data: Record<string, string>, files: File[]) {
+    return {
+      clipboardData: {
+        items: files.map((file) => ({ kind: "file", type: file.type, getAsFile: () => file })),
+        types: [...Object.keys(data), ...(files.length > 0 ? ["Files"] : [])],
+        getData: (type: string) => data[type] ?? ""
+      }
+    };
+  }
+  const picture = (name = "image.png") => new File(["png"], name, { type: "image/png" });
+
+  it("pastes copied cells as a table, not the picture Excel puts beside them", async () => {
+    installExecCommand();
+    const { area } = renderCreate();
+    area.focus();
+    const cells = clip(
+      { "text/plain": "Q1\t12\nQ2\t15", "text/html": "<table><tr><td>Q1</td><td>12</td></tr><tr><td>Q2</td><td>15</td></tr></table>" },
+      [picture()]
+    );
+    expect(fireEvent.paste(area, cells)).toBe(false);
+    await waitFor(() => expect(area.value).toBe("| Q1 | 12 |\n| --- | --- |\n| Q2 | 15 |"));
+    expect(mocks.compressImage).not.toHaveBeenCalled();
+  });
+
+  it("still adds a picture pasted alone, from a browser's Copy image, or as a copied file", async () => {
+    let n = 0;
+    mocks.compressImage.mockImplementation(async () => pending(`pic-${++n}`));
+    const { area } = renderCreate();
+    fireEvent.paste(area, clip({}, [picture()]));
+    fireEvent.paste(area, clip({ "text/html": '<meta charset="utf-8"><img src="https://e.com/a.png">' }, [picture()]));
+    fireEvent.paste(area, clip({ "text/plain": "Screenshot 2026-10-13.png" }, [picture("Screenshot 2026-10-13.png")]));
+    await waitFor(() => expect(mocks.compressImage).toHaveBeenCalledTimes(3));
+    expect(area.value).toBe("");
+  });
+});
+
+describe("Editor notes", () => {
+  it("lets a refused file's complaint go once the text moves on, folding on its last words", async () => {
+    const user = userEvent.setup();
+    const { area } = renderCreate();
+    fireEvent.drop(area.closest(".editor")!, fileDrag([new File(["%PDF"], "a.pdf", { type: "application/pdf" })]));
+    expect(screen.getByRole("alert").textContent).toBe("Only images can be added");
+    await user.type(area, "x");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(document.querySelector(".editor-note:not(.is-open) .editor-error")?.textContent).toBe("Only images can be added");
+  });
+
+  it("keeps the caret in the field through a failed send, and says a second failure again", async () => {
+    setPointer(true);
+    const user = userEvent.setup();
+    const onSubmit = vi.fn(async (_data: EditorSubmission): Promise<boolean> => {
+      throw new Error("Server hiccup");
+    });
+    const { area } = renderCreate([], onSubmit);
+    await user.type(area, "note");
+    const sendButton = screen.getByRole("button", { name: "Send" });
+    // A mouse press on Send leaves the caret where it was.
+    expect(fireEvent.mouseDown(sendButton)).toBe(false);
+    await user.click(sendButton);
+    const first = await screen.findByRole("alert");
+    expect(first.textContent).toBe("Server hiccup");
+    expect(document.activeElement).toBe(area);
+    await user.click(sendButton);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("alert")).not.toBe(first));
+  });
+
+  it("lets a tap on Send take focus, so a phone's keyboard can go", () => {
+    renderCreate();
+    expect(fireEvent.mouseDown(screen.getByRole("button", { name: "Send" }))).toBe(true);
+  });
+
+  it("names the wrap shortcuts that have no button of their own", () => {
+    const { area } = renderCreate();
+    const keys = area.getAttribute("aria-keyshortcuts") ?? "";
+    for (const key of ["Meta+I", "Control+E", "Meta+Shift+S", "Control+Shift+H"]) expect(keys).toContain(key);
+  });
+});
+
+describe("Editor attachment tiles", () => {
+  const previews = () => [...document.querySelectorAll(".attachment:not(.is-removing) img")].map((img) => img.getAttribute("src"));
+
+  function addFiles(count: number) {
+    const files = Array.from({ length: count }, (_, index) => new File(["a"], `${index}.png`, { type: "image/png" }));
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files } });
+  }
+
+  it("keeps one tile per image from compressing to ready, and says when it lands", async () => {
+    const unmountRegions = mountLiveRegions();
+    const image = deferred<NewImagePayload>();
+    mocks.compressImage.mockImplementation(() => image.promise);
+    renderCreate();
+    addFiles(1);
+    const tile = await screen.findByRole("img", { name: "Compressing image" });
+    await act(async () => image.resolve(pending("ready")));
+    expect(screen.getByRole("button", { name: "Remove image" }).closest(".attachment")).toBe(tile);
+    expect(tile.classList.contains("is-busy")).toBe(false);
+    expect(document.querySelector(`[${LIVE_REGION_ATTR}]`)?.textContent).toContain("Added the image");
+    unmountRegions();
+  });
+
+  it("numbers the × like the card's images and hands focus on when one goes", async () => {
+    const user = userEvent.setup();
+    render(
+      <Providers>
+        <Editor
+          mode="edit"
+          initialContent="memo"
+          existingImages={[stored(1), stored(2), stored(3)]}
+          knownTags={[]}
+          busy={false}
+          onSubmit={vi.fn(async () => true)}
+          onCancel={vi.fn()}
+        />
+      </Providers>
+    );
+    const buttons = screen.getAllByRole("button", { name: /^Remove image/ });
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual(["Remove image 1 of 3", "Remove image 2 of 3", "Remove image 3 of 3"]);
+    // The memo's own images are on screen already: they do not pop in again.
+    expect([...document.querySelectorAll(".attachment")].every((tile) => tile.classList.contains("is-settled"))).toBe(true);
+    buttons[1].focus();
+    await user.keyboard("{Enter}");
+    expect(document.activeElement).toBe(buttons[2]);
+    expect(screen.getAllByRole("button", { name: /^Remove image/ }).map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Remove image 1 of 2",
+      "Remove image 2 of 2"
+    ]);
+  });
+
+  it("offers Undo for a removed image and puts it back in the slot it left", async () => {
+    const user = userEvent.setup();
+    const onNotice = vi.fn();
+    let n = 0;
+    mocks.compressImage.mockImplementation(async () => pending(`p${++n}`));
+    render(
+      <Providers>
+        <Editor mode="create" knownTags={[]} busy={false} onSubmit={vi.fn(async () => true)} onNotice={onNotice} />
+      </Providers>
+    );
+    addFiles(3);
+    await waitFor(() => expect(previews()).toEqual(["blob:p1", "blob:p2", "blob:p3"]));
+    const second = screen.getByRole("button", { name: "Remove image 2 of 3" });
+    await user.click(second);
+    finishAnimation(second.closest(".attachment")!, "attach-out");
+    expect(previews()).toEqual(["blob:p1", "blob:p3"]);
+    expect(onNotice).toHaveBeenCalledWith("Removed the image", expect.objectContaining({ label: "Undo" }));
+    // Held for the Undo, not released yet.
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith("blob:p2");
+    act(() => onNotice.mock.calls[0][1].run());
+    expect(previews()).toEqual(["blob:p1", "blob:p2", "blob:p3"]);
+  });
+
+  it("spends no Undo on the next memo once the draft is sent", async () => {
+    const user = userEvent.setup();
+    const onNotice = vi.fn();
+    mocks.compressImage.mockImplementation(async () => pending("gone"));
+    const { area } = (() => {
+      render(
+        <Providers>
+          <Editor mode="create" knownTags={[]} busy={false} onSubmit={vi.fn(async () => true)} onNotice={onNotice} />
+        </Providers>
+      );
+      return { area: field() };
+    })();
+    addFiles(1);
+    const remove = await screen.findByRole("button", { name: "Remove image" });
+    await user.click(remove);
+    finishAnimation(remove.closest(".attachment")!, "attach-out");
+    await user.type(area, "words");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(area.value).toBe(""));
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:gone");
+    act(() => onNotice.mock.calls[0][1].run());
+    expect(previews()).toEqual([]);
+  });
+
+  it("brings a removed image of the memo itself back through Undo", async () => {
+    const user = userEvent.setup();
+    const onNotice = vi.fn();
+    const onSubmit = vi.fn(async (_data: EditorSubmission) => true);
+    render(
+      <Providers>
+        <Editor
+          mode="edit"
+          initialContent="memo"
+          existingImages={[stored(1), stored(2)]}
+          knownTags={[]}
+          busy={false}
+          onSubmit={onSubmit}
+          onCancel={vi.fn()}
+          onNotice={onNotice}
+        />
+      </Providers>
+    );
+    const first = screen.getByRole("button", { name: "Remove image 1 of 2" });
+    await user.click(first);
+    finishAnimation(first.closest(".attachment")!, "attach-out");
+    expect(screen.getAllByRole("button", { name: /^Remove image/ })).toHaveLength(1);
+    act(() => onNotice.mock.calls[0][1].run());
+    expect(screen.getAllByRole("button", { name: /^Remove image/ })).toHaveLength(2);
+    // Back to how it opened: nothing to save.
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

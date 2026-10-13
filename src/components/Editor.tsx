@@ -2,7 +2,7 @@ import { Bold, Hash, Image as ImageIcon, ImageOff, ImagePlus, Link2, List, Loade
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { ApiError } from "../lib/api";
 import { isImageUrl } from "../lib/content";
-import { htmlToMarkdown } from "../lib/htmlToMarkdown";
+import { htmlCarriesText, htmlToMarkdown } from "../lib/htmlToMarkdown";
 import { ImageSlotLedger } from "../lib/imageSlots";
 import { compressImage } from "../lib/images";
 import { useI18n } from "../lib/i18n";
@@ -33,9 +33,13 @@ const HARD_INPUT_CAP = 100_000;
 const COUNTER_FROM = MAX_CONTENT_CHARS - 2_000;
 /** The field grows with its text up to this share of the visible viewport
  * (the visual viewport, so an open on-screen keyboard shrinks it and Save
- * stays reachable), then scrolls inside. */
+ * stays reachable), then scrolls inside. With a keyboard up, it also stops
+ * where the bar below it would go under the keys (see autoGrow). */
 const GROW_SHARE = 0.7;
 const GROW_FLOOR = 200;
+/** Removed attachments held for their toast's Undo — as many as the toast
+ * stack shows at once (TOAST_LIMIT in App); an older one's Undo is gone. */
+const UNDO_HOLD = 3;
 
 /**
  * An edit discarded by Esc / Cancel, held in memory only (drafts are never
@@ -54,6 +58,7 @@ export interface EditDraft {
 /** Shortcuts accept ⌘ or Ctrl everywhere; tips name the platform's own key. */
 const APPLE_KEYS = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 const MOD = APPLE_KEYS ? "⌘" : "Ctrl+";
+const SHIFT = APPLE_KEYS ? "⇧" : "Shift+";
 const ENTER = APPLE_KEYS ? "↩" : "Enter";
 /** A fast send never shows the spinner: the Send glyph holds this long first. */
 const SPINNER_DELAY_MS = 150;
@@ -83,6 +88,35 @@ function isFileDrag(event: { dataTransfer: DataTransfer | null }): boolean {
 function fileDragKind(data: DataTransfer | null): FileDragKind {
   const files = [...(data?.items ?? [])].filter((item) => item.kind === "file");
   return files.length > 0 && files.every((item) => item.type && !item.type.startsWith("image/")) ? "other" : "images";
+}
+
+/**
+ * Whether a paste that carries image files adds them as attachments. Office
+ * apps (Excel, PowerPoint, Word) put a rendered picture of the selection
+ * beside its HTML and plain text: the words are what was copied, so they
+ * win, and the HTML converter turns copied cells into a table. The picture
+ * wins when the HTML is only that picture (a browser's "Copy image"), when
+ * there is no text at all (a screenshot), or when the only text is the
+ * files' own names (a file copied in Finder or Explorer).
+ */
+function pasteTakesImages(data: DataTransfer, files: File[]): boolean {
+  const html = data.getData("text/html");
+  if (html.trim()) return !htmlCarriesText(html);
+  const names = new Set(files.map((file) => file.name));
+  return data
+    .getData("text/plain")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .every((line) => !line || names.has(line.split(/[\\/]/).pop() ?? line));
+}
+
+/** A preview URL for a file still compressing (null where none can be made). */
+function previewOf(file: File): string | null {
+  try {
+    return typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -221,6 +255,23 @@ interface EditorProps {
   onAcceptRemoteBase?: () => void;
   /** Reports the text after every change, so the owner can hold an unsent draft in memory. */
   onDraftChange?: (content: string) => void;
+  /** Raises a toast for something the editor did on its own (an image
+   * removed), with an optional action such as Undo. Without it a removal
+   * is final and its preview is released at once. */
+  onNotice?: (text: string, action?: { label: string; run: () => void }) => void;
+}
+
+/** One attachment tile: an image on the memo, one ready to upload, or one
+ * still being compressed (shown from the original file meanwhile). */
+type AttachmentTile =
+  | { kind: "stored"; key: string; image: MemoImage }
+  | { kind: "pending"; key: string; image: NewImagePayload }
+  | { kind: "preparing"; key: string; url: string | null };
+
+/** An image being compressed: its tile's key and a preview of the original. */
+interface PreparingImage {
+  key: string;
+  url: string | null;
 }
 
 export interface EditorSubmission {
@@ -272,7 +323,8 @@ export function Editor({
   autoFocus,
   conflictMessage,
   onAcceptRemoteBase,
-  onDraftChange
+  onDraftChange,
+  onNotice
 }: EditorProps) {
   const { errorMessage, formatNumber, tr } = useI18n();
   const tip = useTip();
@@ -287,16 +339,44 @@ export function Editor({
   const [openedOn] = useState(initialContent);
   const [newImages, setNewImages] = useState<NewImagePayload[]>(() => initialDraft?.newImages ?? []);
   const [removedIds, setRemovedIds] = useState<string[]>(() => initialDraft?.removedIds ?? []);
-  const [compressing, setCompressing] = useState(0);
+  // Images still compressing, in the order they were added. Each already
+  // has the tile it keeps once it lands (tileKeysRef carries the key over).
+  const [preparing, setPreparing] = useState<PreparingImage[]>([]);
+  const compressing = preparing.length;
+  const tileKeysRef = useRef(new Map<string, string>());
+  const preparingUrlsRef = useRef(new Set<string>());
+  // Tiles the editor opened with (the memo's images, a reopened draft's):
+  // they are already on screen in the card, so they do not pop in again.
+  const [settledTiles] = useState(
+    () => new Set([...existingImages.map((image) => image.id), ...(initialDraft?.newImages ?? []).map((image) => image.id)])
+  );
   const [submitting, setSubmitting] = useState(false);
   // Whole percent of the image upload sent so far; null while none is running.
   // Held at 99 until the server answers: the last bytes leaving the browser
   // is not the memo being saved.
   const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
+  // The list as it was when it closed, held while it plays its exit (the
+  // same element: it leaves from where it stood).
+  const [leavingSuggestion, setLeavingSuggestion] = useState<Suggestion | null>(null);
+  const [lastSuggestion, setLastSuggestion] = useState<Suggestion | null>(null);
+  if (suggestion !== lastSuggestion) {
+    setLastSuggestion(suggestion);
+    setLeavingSuggestion(suggestion ? null : lastSuggestion);
+  }
+  // An IME is composing: the open list steps aside (the text is pinyin or
+  // kana until it commits) and comes back for the committed word without
+  // replaying its entrance, so a tag typed in two compositions never blinks.
+  const [composing, setComposing] = useState(false);
   // `cause` lets an error leave once what raised it is gone: the link
-  // complaint with the link row, the image cap once an image is removed.
-  const [error, setError] = useState<{ text: string; cause: "link" | "limit" | "other" } | null>(null);
+  // complaint with the link row, the image cap once an image is removed,
+  // anything else (a refused file, a failed send) once the text is edited.
+  // `seq` gives each complaint its own alert element, so the same words a
+  // second time (a retry that fails again) are still announced.
+  const [error, setError] = useState<{ text: string; cause: "link" | "limit" | "other"; seq: number } | null>(null);
+  const errorSeqRef = useRef(0);
+  const lastErrorRef = useRef("");
+  const lastConflictRef = useRef("");
   // Counter, not boolean: dragenter/leave fire per child element.
   const [dragDepth, setDragDepth] = useState(0);
   // What a file drag over this editor carries.
@@ -315,8 +395,17 @@ export function Editor({
   const [clears, setClears] = useState(0);
   const clearGrowRef = useRef<"instant" | "smooth" | null>(null);
   // Attachments play their exit animation before the state actually drops
-  // them — keys are image ids (existing) or preview URLs (pending).
+  // them — keyed by image id, stored or pending.
   const [removingKeys, setRemovingKeys] = useState<ReadonlySet<string>>(new Set());
+  const onNoticeRef = useRef(onNotice);
+  onNoticeRef.current = onNotice;
+  // Pending images removed with an Undo on offer: their previews stay alive
+  // until the Undo is spent or out of reach (UNDO_HOLD), the draft is sent,
+  // or the editor closes. A send bumps the epoch, so an Undo raised before
+  // it cannot put an image into the next memo.
+  const heldRemovalsRef = useRef<NewImagePayload[]>([]);
+  const undoEpochRef = useRef(0);
+  const addImageRef = useRef<HTMLButtonElement>(null);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
@@ -343,9 +432,29 @@ export function Editor({
 
   const keptExisting = useMemo(() => existingImages.filter((image) => !removedIds.includes(image.id)), [existingImages, removedIds]);
 
-  function beginRemove(key: string) {
+  /**
+   * Start an attachment's exit. Focus on its × would fall to <body> once the
+   * tile unmounts, so it moves on first: to the next tile's ×, else the one
+   * before, else Add image (or, for a keyboard reader, the field).
+   */
+  function beginRemove(id: string, button: HTMLButtonElement) {
     if (busy || submittingRef.current || sendQueuedRef.current) return;
-    setRemovingKeys((value) => new Set(value).add(key));
+    if (document.activeElement === button) {
+      const others = [...(rootRef.current?.querySelectorAll<HTMLButtonElement>(".attachment:not(.is-removing) .attachment-remove") ?? [])];
+      const at = others.indexOf(button);
+      let keyboard = false;
+      try {
+        keyboard = button.matches(":focus-visible");
+      } catch {
+        keyboard = false;
+      }
+      const add = addImageRef.current;
+      const target = others[at + 1] ?? others[at - 1] ?? (add && !add.disabled ? add : keyboard ? areaRef.current : null);
+      target?.focus({ preventScroll: true });
+    }
+    // A tile coming back through Undo pops in like any new one.
+    settledTiles.delete(id);
+    setRemovingKeys((value) => new Set(value).add(id));
   }
   function settleRemove(key: string, drop: () => void) {
     setRemovingKeys((value) => {
@@ -357,10 +466,43 @@ export function Editor({
     drop();
     clearError("limit");
   }
-  function fail(text: string, cause: "link" | "limit" | "other" = "other") {
-    setError({ text, cause });
+  /** Raise the "Removed the image" toast; its Undo runs `restore` if it still can. */
+  function offerUndo(restore: () => void) {
+    const notice = onNoticeRef.current;
+    if (!notice) return;
+    const epoch = undoEpochRef.current;
+    notice(tr("Removed the image", "已移除图片"), {
+      label: tr("Undo", "撤销"),
+      run: () => {
+        if (!mountedRef.current || epoch !== undoEpochRef.current || submittingRef.current || sendQueuedRef.current) return;
+        restore();
+      }
+    });
   }
-  function clearError(cause: "link" | "limit") {
+  /** Claim a slot for an image coming back; false (and says so) when full. */
+  function reclaimSlot(): boolean {
+    if (imageSlots.reserve(1) < 1) {
+      fail(tr(`You can add up to ${MAX_IMAGES} images`, `最多 ${MAX_IMAGES} 张图片`), "limit");
+      return false;
+    }
+    imageSlots.settle(true);
+    return true;
+  }
+  /** Hold a removed pending image for its Undo; the oldest beyond UNDO_HOLD is released. */
+  function holdRemoval(image: NewImagePayload) {
+    const held = [...heldRemovalsRef.current, image];
+    for (const stale of held.splice(0, Math.max(0, held.length - UNDO_HOLD))) URL.revokeObjectURL(stale.previewUrl);
+    heldRemovalsRef.current = held;
+  }
+  function releaseHeldRemovals() {
+    for (const image of heldRemovalsRef.current) URL.revokeObjectURL(image.previewUrl);
+    heldRemovalsRef.current = [];
+  }
+  function fail(text: string, cause: "link" | "limit" | "other" = "other") {
+    errorSeqRef.current += 1;
+    setError({ text, cause, seq: errorSeqRef.current });
+  }
+  function clearError(cause: "link" | "limit" | "other") {
     setError((current) => (current?.cause === cause ? null : current));
   }
   const totalImages = keptExisting.length + newImages.length;
@@ -372,7 +514,7 @@ export function Editor({
   const effectiveContentLength = effectiveContent.length;
   const overLimit = effectiveContentLength > MAX_CONTENT_CHARS;
   // Attachments mid-exit-animation count as removed already.
-  const keptNewImages = newImages.filter((image) => !removingKeys.has(image.previewUrl));
+  const keptNewImages = newImages.filter((image) => !removingKeys.has(image.id));
   const removedImageIds = [...removedIds, ...existingImages.filter((image) => removingKeys.has(image.id)).map((image) => image.id)];
   // An edit is clean until its text or images differ from what it opened on
   // (an image still compressing counts as a change). Save rests until then,
@@ -457,7 +599,11 @@ export function Editor({
    * The tag list opens at the "#" being typed, not pinned under the field:
    * just below that line (above it when the viewport has no room below),
    * with its first "#" over the typed one. Anchored to the token start, so
-   * it holds still while the query grows. Placed before paint.
+   * it holds still while the query grows. Placed before paint. The room is
+   * the visual viewport's — with a keyboard up on a phone that strip may be
+   * scrolled down the page (offsetTop), and the list must fit inside it.
+   * Above the line it rises from the line, like a menu opened upward
+   * (data-side picks the mirrored keyframes in app.css).
    */
   function placeSuggest() {
     const pop = suggestRef.current;
@@ -471,13 +617,16 @@ export function Editor({
     const lineTop = Math.min(Math.max(areaRect.top + caret.top - area.scrollTop, areaRect.top), areaRect.bottom - caret.height);
     const below = lineTop + caret.height + 4;
     const above = lineTop - 4 - pop.offsetHeight;
-    const viewport = window.visualViewport?.height ?? window.innerHeight;
-    const flip = below + pop.offsetHeight > viewport && above >= 0;
+    const viewport = window.visualViewport;
+    const visibleTop = viewport?.offsetTop ?? 0;
+    const visibleBottom = visibleTop + (viewport?.height ?? window.innerHeight);
+    const flip = below + pop.offsetHeight > visibleBottom && above >= visibleTop;
     // 16 = list padding + option padding: option text starts over the "#".
     const left = areaRect.left + caret.left - area.scrollLeft - 16 - hostRect.left - host.clientLeft;
     pop.style.top = `${(flip ? above : below) - hostRect.top - host.clientTop}px`;
     pop.style.left = `${Math.max(0, Math.min(left, host.clientWidth - pop.offsetWidth))}px`;
     pop.style.transformOrigin = flip ? "bottom left" : "top left";
+    pop.dataset.side = flip ? "up" : "down";
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(placeSuggest, [suggestion, content]);
@@ -550,18 +699,44 @@ export function Editor({
   }, [existingImages]);
 
   // Object URLs for pending attachments leak unless revoked; only revoke on
-  // unmount (successful submit unmounts or clears the list).
+  // unmount (successful submit unmounts or clears the list). Previews of
+  // images still compressing and of removals held for Undo go too.
   const previewUrls = useRef<string[]>([]);
   useEffect(() => {
     previewUrls.current = newImages.map((image) => image.previewUrl);
   }, [newImages]);
   useEffect(() => {
     mountedRef.current = true;
+    const preparingUrls = preparingUrlsRef.current;
     return () => {
       mountedRef.current = false;
       for (const url of previewUrls.current) URL.revokeObjectURL(url);
+      for (const url of preparingUrls) URL.revokeObjectURL(url);
+      releaseHeldRemovals();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * How tall the field may grow: GROW_SHARE of the visible viewport. With an
+   * on-screen keyboard up (the visual viewport shorter than the layout one,
+   * and not from a pinch) the share alone is not enough — a field that
+   * starts a hundred pixels down would push the bar, and Send, under the
+   * keys — so it also stops where everything below it in the editor still
+   * fits above the keyboard, counted from where the field starts in the
+   * visible strip (useKeyboardInset reads the strip the same way).
+   */
+  function growCap(area: HTMLTextAreaElement): number {
+    const viewport = window.visualViewport;
+    const visible = viewport?.height ?? window.innerHeight;
+    const share = Math.max(GROW_FLOOR, Math.round(visible * GROW_SHARE));
+    if (!viewport || viewport.scale > 1.01 || window.innerHeight - visible < 1) return share;
+    const field = area.getBoundingClientRect();
+    const below = (rootRef.current?.getBoundingClientRect().bottom ?? field.bottom) - field.bottom;
+    const top = Math.max(0, field.top - viewport.offsetTop);
+    const room = Math.floor(visible - top - below - 8);
+    return Math.max(mode === "create" ? 68 : 96, Math.min(share, room));
+  }
 
   /**
    * Size the field to its text (up to the cap). Measuring goes through
@@ -575,8 +750,7 @@ export function Editor({
   function autoGrow(instant = false) {
     const area = areaRef.current;
     if (!area) return;
-    const viewport = window.visualViewport?.height ?? window.innerHeight;
-    const cap = Math.max(GROW_FLOOR, Math.round(viewport * GROW_SHARE));
+    const cap = growCap(area);
     // Measuring at "auto" resets the inner scroll; put it back so a long
     // draft does not jump while it is typed into.
     const scrollTop = area.scrollTop;
@@ -608,8 +782,8 @@ export function Editor({
   function revealCaret(area: HTMLTextAreaElement, offset: number, viewportY?: number) {
     const caret = caretPoint(area, offset);
     const rect = area.getBoundingClientRect();
-    const viewport = window.visualViewport?.height ?? window.innerHeight;
-    const target = (viewportY ?? viewport * 0.4) - caret.height / 2;
+    const viewport = window.visualViewport;
+    const target = (viewportY ?? (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight) * 0.4) - caret.height / 2;
     const room = Math.max(0, area.scrollHeight - area.clientHeight);
     // Field tops (on screen) that can show the caret line at `target`.
     const lowest = target - Math.min(Math.max(0, area.clientHeight - caret.height), caret.top);
@@ -676,6 +850,7 @@ export function Editor({
       landed = landed && area.value === next;
     }
     setContent(next);
+    if (next !== prev) clearError("other");
     if (!suggest) setSuggestion(null);
     const settle = () => {
       area.setSelectionRange(selStart, selEnd);
@@ -776,6 +951,12 @@ export function Editor({
   function keepFieldFocus(event: ReactMouseEvent) {
     event.preventDefault();
   }
+  /** Send keeps the caret for a mouse too, so a failed send (or the next
+   * memo) goes on in the field. A tap still lets the keyboard go: sending
+   * on a phone hands the screen back to the feed. */
+  function keepSendFocus(event: ReactMouseEvent) {
+    if (window.matchMedia?.("(pointer: fine)").matches) event.preventDefault();
+  }
 
   /** Land a markdown edit: new value plus an exact selection to restore. */
   function applyPatch(patch: EditPatch) {
@@ -811,18 +992,20 @@ export function Editor({
       return;
     }
     setError(null);
-    setCompressing((value) => value + acceptedCount);
-    for (const file of images.slice(0, acceptedCount)) {
-      if (!mountedRef.current) {
-        imageSlots.settle(false);
-        continue;
-      }
+    // Each image gets its tile at once, showing the file itself while it
+    // compresses; the compressed image then takes over that same tile
+    // (tileKeysRef), so it pops in once and never trades places with a
+    // spinner.
+    const batch = images.slice(0, acceptedCount).map((file) => ({ file, key: crypto.randomUUID(), url: previewOf(file) }));
+    for (const { url } of batch) if (url) preparingUrlsRef.current.add(url);
+    setPreparing((value) => [...value, ...batch.map(({ key, url }) => ({ key, url }))]);
+    let added = 0;
+    for (const { file, key, url } of batch) {
       let reservationOpen = true;
       try {
+        if (!mountedRef.current) continue;
         const payload = await compressImage(file);
         if (!mountedRef.current) {
-          imageSlots.settle(false);
-          reservationOpen = false;
           URL.revokeObjectURL(payload.previewUrl);
           continue;
         }
@@ -835,33 +1018,43 @@ export function Editor({
           setSendQueued(false);
           continue;
         }
+        tileKeysRef.current.set(payload.id, key);
         setNewImages((value) => [...value, payload]);
+        added += 1;
       } catch (cause) {
-        if (reservationOpen) imageSlots.settle(false);
         if (mountedRef.current) {
           fail(errorMessage(cause, "Couldn’t process the image", "图片处理失败"));
           // A queued send would go out without the image it was waiting for.
           setSendQueued(false);
         }
       } finally {
-        if (mountedRef.current) setCompressing((value) => value - 1);
+        if (reservationOpen) imageSlots.settle(false);
+        if (url) {
+          URL.revokeObjectURL(url);
+          preparingUrlsRef.current.delete(url);
+        }
+        if (mountedRef.current) setPreparing((value) => value.filter((item) => item.key !== key));
       }
     }
+    // The tiles are silent to a screen reader until they land: say so then.
+    if (added > 0 && mountedRef.current) announce(added === 1 ? tr("Added the image", "已添加图片") : tr(`Added ${added} images`, `已添加 ${added} 张图片`));
   }
 
   function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     if (busy || submittingRef.current) return;
+    const plainOnly = plainPasteRef.current;
+    plainPasteRef.current = false;
     const files = [...event.clipboardData.items]
       .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
       .map((item) => item.getAsFile())
       .filter((file): file is File => file !== null);
-    if (files.length > 0) {
+    // ⌘⇧V asks for the words: a picture wins only where there are none.
+    const takesImages = plainOnly ? !event.clipboardData.getData("text/plain").trim() : pasteTakesImages(event.clipboardData, files);
+    if (files.length > 0 && takesImages) {
       event.preventDefault();
       void addFiles(files);
       return;
     }
-    const plainOnly = plainPasteRef.current;
-    plainPasteRef.current = false;
     const area = event.currentTarget;
     const start = area.selectionStart;
     const end = area.selectionEnd;
@@ -1120,6 +1313,20 @@ export function Editor({
   }
 
   /**
+   * Keep writing after a send: Send's own press keeps the caret for a mouse
+   * (keepSendFocus), but a keyboard press leaves focus on a button that is
+   * now disabled (or on <body> in Safari). Not on touch, where focusing
+   * would raise the keyboard, and not if the reader has moved on meanwhile.
+   */
+  function returnFocusToField() {
+    const area = areaRef.current;
+    const active = document.activeElement;
+    if (!area || active === area || !mountedRef.current) return;
+    const stayed = !active || active === document.body || rootRef.current?.contains(active);
+    if (stayed && window.matchMedia?.("(pointer: fine)").matches) area.focus({ preventScroll: true });
+  }
+
+  /**
    * Send / Save. Pressed while an image is still compressing, the press is
    * held (`sendQueued`) and the save goes out by itself once the last image
    * lands; `fromQueue` is that deferred run. ⌘↩ on an untouched edit has
@@ -1152,8 +1359,13 @@ export function Editor({
       draftIdRef.current = crypto.randomUUID();
       imageSlots.syncCommitted(existingImages.length);
       for (const image of newImages) URL.revokeObjectURL(image.previewUrl);
+      // An Undo still on a toast belongs to the memo just sent, not the next.
+      undoEpochRef.current += 1;
+      releaseHeldRemovals();
+      tileKeysRef.current.clear();
       setContent("");
       setNewImages([]);
+      setRemovingKeys(new Set());
       previewUrls.current = [];
       setSuggestion(null);
       setLinkOpen(false);
@@ -1181,15 +1393,11 @@ export function Editor({
       });
       if (ok && mode === "create") {
         clearComposer(false);
-        // Keep writing: Send leaves focus on a button that is now disabled
-        // (or on <body> in Safari). Not on touch, where focusing would raise
-        // the keyboard, and not if the reader has moved on meanwhile.
-        const area = areaRef.current;
-        const active = document.activeElement;
-        const stayed = !active || active === document.body || rootRef.current?.contains(active);
-        if (area && stayed && window.matchMedia?.("(pointer: fine)").matches) area.focus({ preventScroll: true });
+        returnFocusToField();
       }
     } catch (cause) {
+      // The draft is still here to fix and send again.
+      returnFocusToField();
       const rotateCreateId =
         mode === "create" && cause instanceof ApiError && (cause.code === "MEMO_ID_RETIRED" || cause.code === "VERSION_CONFLICT");
       if (rotateCreateId) {
@@ -1235,6 +1443,28 @@ export function Editor({
   const veil = veilRef.current;
   const showCounter = effectiveContentLength >= COUNTER_FROM;
 
+  // One flat list of tiles, so a compressing image keeps its tile (same
+  // key, same element) when its compressed self lands in newImages.
+  const tiles: AttachmentTile[] = [
+    ...keptExisting.map((image): AttachmentTile => ({ kind: "stored", key: image.id, image })),
+    ...newImages.map((image): AttachmentTile => ({ kind: "pending", key: tileKeysRef.current.get(image.id) ?? image.id, image })),
+    ...preparing.map(({ key, url }): AttachmentTile => ({ kind: "preparing", key, url }))
+  ];
+  // What stays, numbered like the card's own "View image 2 of 3".
+  const removable = tiles.flatMap((tile) => (tile.kind !== "preparing" && !removingKeys.has(tile.image.id) ? [tile.image.id] : []));
+  // The row folds shut while its last tile leaves, and unmounts after.
+  const attachmentsOpen = removable.length > 0 || compressing > 0;
+  // The note rows fold open and shut (see .editor-note); a closing one keeps
+  // its last words while it folds, as an aria-hidden copy.
+  const errorText = imageLimitExceeded
+    ? tr(`Remove images until no more than ${MAX_IMAGES} remain`, `请移除图片，最多保留 ${MAX_IMAGES} 张`)
+    : (error?.text ?? null);
+  if (errorText) lastErrorRef.current = errorText;
+  if (conflictMessage) lastConflictRef.current = conflictMessage;
+  // The tag list: open, stepped aside for an IME, or playing its exit.
+  const list = suggestion ?? leavingSuggestion;
+  const listOpen = suggestion !== null && !composing;
+
   return (
     <div
       ref={rootRef}
@@ -1264,9 +1494,11 @@ export function Editor({
           aria-label={tr("Memo content", "笔记内容")}
           aria-describedby={mode === "create" && contextTag ? contextTagDescriptionId : undefined}
           aria-autocomplete="list"
-          aria-expanded={suggestion !== null}
-          aria-controls={suggestion ? suggestionListId : undefined}
-          aria-activedescendant={suggestion ? `${suggestionListId}-option-${suggestion.index}` : undefined}
+          aria-expanded={listOpen}
+          aria-controls={listOpen ? suggestionListId : undefined}
+          aria-activedescendant={listOpen ? `${suggestionListId}-option-${suggestion.index}` : undefined}
+          // The wraps act on the field's selection; Bold's tip names them.
+          aria-keyshortcuts="Meta+B Control+B Meta+I Control+I Meta+E Control+E Meta+Shift+S Control+Shift+S Meta+Shift+H Control+Shift+H"
           value={content}
           placeholder={tr("What’s on your mind…", "现在的想法是……")}
           rows={mode === "create" ? 2 : 3}
@@ -1275,18 +1507,20 @@ export function Editor({
           onChange={(event) => {
             if (busy || submittingRef.current) return;
             setContent(event.target.value);
-            // Mid-composition the text is the IME's (pinyin, kana): no tag
-            // list until compositionend hands over the result.
-            if (composingRef.current || (event.nativeEvent as InputEvent).isComposing) setSuggestion(null);
-            else refreshSuggestion(event.target.value, event.target.selectionStart);
+            // A refused file or a failed send is old news once the text moves on.
+            clearError("other");
+            // Mid-composition the text is the IME's (pinyin, kana): the list
+            // waits, stepped aside, until compositionend hands over the result.
+            if (!composingRef.current && !(event.nativeEvent as InputEvent).isComposing) refreshSuggestion(event.target.value, event.target.selectionStart);
             autoGrow();
           }}
           onCompositionStart={() => {
             composingRef.current = true;
-            setSuggestion(null);
+            setComposing(true);
           }}
           onCompositionEnd={(event) => {
             composingRef.current = false;
+            setComposing(false);
             refreshSuggestion(event.currentTarget.value, event.currentTarget.selectionStart);
           }}
           onScroll={() => {
@@ -1307,151 +1541,208 @@ export function Editor({
         ) : null}
       </div>
 
-      {suggestion ? (
-        <div ref={suggestRef} id={suggestionListId} className="tag-suggest" role="listbox" aria-label={tr("Tag suggestions", "标签建议")}>
-          {suggestion.items.map((tag, index) => (
+      {list ? (
+        <div
+          ref={suggestRef}
+          id={suggestionListId}
+          className={`tag-suggest${suggestion ? "" : " is-closing"}${suggestion && composing ? " is-paused" : ""}`}
+          role="listbox"
+          aria-label={tr("Tag suggestions", "标签建议")}
+          aria-hidden={listOpen ? undefined : true}
+          onAnimationEnd={(event) => {
+            if (event.target === event.currentTarget && event.animationName.startsWith("menu-out")) setLeavingSuggestion(null);
+          }}
+        >
+          {list.items.map((tag, index) => (
             <button
               key={tag}
-              id={`${suggestionListId}-option-${index}`}
+              id={listOpen ? `${suggestionListId}-option-${index}` : undefined}
               type="button"
               role="option"
               tabIndex={-1}
-              aria-selected={index === suggestion.index}
-              className={index === suggestion.index ? "is-active" : ""}
+              aria-selected={index === list.index}
+              className={index === list.index ? "is-active" : ""}
               onMouseDown={(event) => {
                 event.preventDefault();
-                applySuggestion(tag);
+                if (listOpen) applySuggestion(tag);
               }}
               onMouseMove={(event) => {
                 // The pointer picks the row the keyboard would act on, so
                 // only one row is ever lit. A list redrawn under a resting
                 // pointer (movement 0) leaves the keyboard's row alone.
-                if (event.movementX === 0 && event.movementY === 0) return;
+                if (!listOpen || (event.movementX === 0 && event.movementY === 0)) return;
                 if (index !== suggestion.index) setSuggestion({ ...suggestion, index });
               }}
               disabled={locked}
             >
-              {suggestionRow(tag, suggestion.query)}
+              {suggestionRow(tag, list.query)}
             </button>
           ))}
         </div>
       ) : null}
 
-      {totalImages > 0 || compressing > 0 ? (
-        <div className="editor-attachments">
-          {keptExisting.map((image) => (
-            <div
-              key={image.id}
-              className={`attachment${removingKeys.has(image.id) ? " is-removing" : ""}`}
-              onAnimationEnd={(event) => {
-                if (event.animationName !== "attach-out") return;
-                settleRemove(image.id, () => {
-                  imageSlots.releaseCommitted();
-                  setRemovedIds((value) => [...value, image.id]);
-                });
-              }}
-            >
-              <StoredImg image={image} />
-              <button
-                type="button"
-                className="attachment-remove"
-                aria-label={tr("Remove image", "移除图片")}
-                onClick={() => beginRemove(image.id)}
-                disabled={locked}
-              >
-                <X size={12} aria-hidden="true" />
-              </button>
+      <div className={`editor-attach${attachmentsOpen ? " is-open" : ""}`}>
+        <div className="editor-attach-clip">
+          {tiles.length > 0 ? (
+            <div className="editor-attachments">
+              {tiles.map((tile) => {
+                if (tile.kind === "preparing") {
+                  // The file itself stands in while it compresses; the
+                  // compressed image takes over this same tile.
+                  return (
+                    <div key={tile.key} className="attachment is-busy" role="img" aria-label={tr("Compressing image", "压缩图片中")}>
+                      {tile.url ? <img src={tile.url} alt="" decoding="async" /> : null}
+                      <span className="attachment-spinner">
+                        <Loader2 size={16} className="spin" aria-hidden="true" />
+                      </span>
+                    </div>
+                  );
+                }
+                const image = tile.image;
+                const removing = removingKeys.has(image.id);
+                const position = removable.indexOf(image.id);
+                return (
+                  <div
+                    key={tile.key}
+                    className={`attachment${removing ? " is-removing" : ""}${settledTiles.has(image.id) ? " is-settled" : ""}`}
+                    aria-hidden={removing || undefined}
+                    onAnimationEnd={(event) => {
+                      if (event.animationName !== "attach-out") return;
+                      if (tile.kind === "stored") {
+                        settleRemove(image.id, () => {
+                          imageSlots.releaseCommitted();
+                          setRemovedIds((value) => [...value, image.id]);
+                          offerUndo(() => {
+                            if (reclaimSlot()) setRemovedIds((value) => value.filter((id) => id !== image.id));
+                          });
+                        });
+                        return;
+                      }
+                      // Undo puts a pending image back in the slot it left.
+                      const pending = tile.image;
+                      const slot = newImages.findIndex((item) => item.id === pending.id);
+                      settleRemove(pending.id, () => {
+                        imageSlots.releaseCommitted();
+                        setNewImages((value) => value.filter((item) => item.id !== pending.id));
+                        if (!onNoticeRef.current) {
+                          URL.revokeObjectURL(pending.previewUrl);
+                          return;
+                        }
+                        holdRemoval(pending);
+                        offerUndo(() => {
+                          if (!heldRemovalsRef.current.includes(pending) || !reclaimSlot()) return;
+                          heldRemovalsRef.current = heldRemovalsRef.current.filter((item) => item !== pending);
+                          setNewImages((value) =>
+                            value.some((item) => item.id === pending.id) ? value : [...value.slice(0, slot), pending, ...value.slice(slot)]
+                          );
+                        });
+                      });
+                    }}
+                  >
+                    {tile.kind === "stored" ? <StoredImg image={tile.image} /> : <img src={tile.image.previewUrl} alt="" decoding="async" />}
+                    <button
+                      type="button"
+                      className="attachment-remove"
+                      aria-label={
+                        removable.length > 1 && position >= 0
+                          ? tr(`Remove image ${position + 1} of ${removable.length}`, `移除图片 ${position + 1}/${removable.length}`)
+                          : tr("Remove image", "移除图片")
+                      }
+                      tabIndex={removing ? -1 : undefined}
+                      onClick={(event) => beginRemove(image.id, event.currentTarget)}
+                      disabled={locked}
+                    >
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
-          ))}
-          {newImages.map((image) => (
-            <div
-              key={image.previewUrl}
-              className={`attachment${removingKeys.has(image.previewUrl) ? " is-removing" : ""}`}
-              onAnimationEnd={(event) => {
-                if (event.animationName !== "attach-out") return;
-                settleRemove(image.previewUrl, () => {
-                  imageSlots.releaseCommitted();
-                  URL.revokeObjectURL(image.previewUrl);
-                  setNewImages((value) => value.filter((item) => item.previewUrl !== image.previewUrl));
-                });
-              }}
-            >
-              <img src={image.previewUrl} alt="" decoding="async" />
-              <button
-                type="button"
-                className="attachment-remove"
-                aria-label={tr("Remove image", "移除图片")}
-                onClick={() => beginRemove(image.previewUrl)}
-                disabled={locked}
-              >
-                <X size={12} aria-hidden="true" />
-              </button>
-            </div>
-          ))}
-          {Array.from({ length: compressing }).map((_, index) => (
-            <div key={`busy-${index}`} className="attachment is-busy" aria-label={tr("Compressing image", "压缩图片中")}>
-              <Loader2 size={18} className="spin" aria-hidden="true" />
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <div className={`link-pop${linkOpen ? " is-open" : ""}`} aria-hidden={!linkOpen}>
-        <div className="link-pop-inner">
-          <Link2 size={14} aria-hidden="true" />
-          <input
-            ref={linkRef}
-            type="url"
-            inputMode="url"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            enterKeyHint="done"
-            value={linkValue}
-            placeholder={tr(
-              "Paste an image URL https://… (external preview; uses no storage)",
-              "粘贴图片链接 https://…（外链预览，不占用存储）"
-            )}
-            tabIndex={linkOpen ? 0 : -1}
-            disabled={locked}
-            onChange={(event) => setLinkValue(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                confirmLink();
-              }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                closeLink();
-                areaRef.current?.focus();
-              }
-            }}
-          />
-          <button type="button" className="ghost-button link-pop-add" tabIndex={linkOpen ? 0 : -1} onClick={confirmLink} disabled={locked}>
-            {tr("Insert", "插入")}
-          </button>
+          ) : null}
         </div>
       </div>
 
-      {imageLimitExceeded ? (
-        <p className="editor-error" role="alert">
-          {tr(`Remove images until no more than ${MAX_IMAGES} remain`, `请移除图片，最多保留 ${MAX_IMAGES} 张`)}
-        </p>
-      ) : error ? (
-        <p className="editor-error" role="alert">
-          {error.text}
-        </p>
-      ) : null}
-      {conflictMessage ? (
-        <div className="editor-conflict" role="alert">
-          <p>{conflictMessage}</p>
-          {onAcceptRemoteBase ? (
-            <button type="button" className="ghost-button" onClick={onAcceptRemoteBase} disabled={locked}>
-              {tr("Keep my draft and continue", "保留草稿并继续")}
+      {/* The note slot: the image-link row, then the error and conflict
+          lines, each folding open and shut in place (see .editor-notes). */}
+      <div className="editor-notes">
+        <div className={`link-pop${linkOpen ? " is-open" : ""}`} aria-hidden={!linkOpen}>
+          <div className="link-pop-inner">
+            <Link2 size={14} aria-hidden="true" />
+            <input
+              ref={linkRef}
+              type="url"
+              inputMode="url"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              enterKeyHint="done"
+              value={linkValue}
+              placeholder={tr(
+                "Paste an image URL https://… (external preview; uses no storage)",
+                "粘贴图片链接 https://…（外链预览，不占用存储）"
+              )}
+              tabIndex={linkOpen ? 0 : -1}
+              disabled={locked}
+              onChange={(event) => {
+                setLinkValue(event.target.value);
+                clearError("link");
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  confirmLink();
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  closeLink();
+                  areaRef.current?.focus();
+                }
+              }}
+            />
+            <button type="button" className="ghost-button link-pop-add" tabIndex={linkOpen ? 0 : -1} onClick={confirmLink} disabled={locked}>
+              {tr("Insert", "插入")}
             </button>
-          ) : null}
+          </div>
         </div>
-      ) : null}
+
+        <div className={`editor-note${errorText ? " is-open" : ""}`}>
+          <div className="editor-note-inner">
+            {errorText ? (
+              <p key={imageLimitExceeded ? "limit" : `error-${error?.seq ?? 0}`} className="editor-error" role="alert">
+                {errorText}
+              </p>
+            ) : (
+              <p key="leaving" className="editor-error is-leaving" aria-hidden="true">
+                {lastErrorRef.current}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className={`editor-note${conflictMessage ? " is-open" : ""}`}>
+          <div className="editor-note-inner">
+            {conflictMessage ? (
+              <div key="conflict" className="editor-conflict" role="alert">
+                <p>{conflictMessage}</p>
+                {onAcceptRemoteBase ? (
+                  <button type="button" className="ghost-button" onClick={onAcceptRemoteBase} disabled={locked}>
+                    {tr("Keep my draft and continue", "保留草稿并继续")}
+                  </button>
+                ) : null}
+              </div>
+            ) : lastConflictRef.current ? (
+              <div key="leaving" className="editor-conflict" aria-hidden="true">
+                <p>{lastConflictRef.current}</p>
+                {onAcceptRemoteBase ? (
+                  <button type="button" className="ghost-button" tabIndex={-1}>
+                    {tr("Keep my draft and continue", "保留草稿并继续")}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
 
       <div className="editor-bar">
         <div className="editor-tools">
@@ -1477,7 +1768,14 @@ export function Editor({
             aria-label={tr("Bold", "加粗")}
             disabled={locked}
             aria-keyshortcuts="Meta+B Control+B"
-            {...tip.bind({ text: tr(`Bold (${MOD}B)`, `加粗（${MOD}B）`) })}
+            // The other wraps have no button of their own; their keys ride
+            // along here (and on the field's aria-keyshortcuts).
+            {...tip.bind({
+              text: tr(
+                `Bold (${MOD}B) · italic ${MOD}I · code ${MOD}E · strike ${MOD}${SHIFT}S · highlight ${MOD}${SHIFT}H`,
+                `加粗（${MOD}B）· 斜体 ${MOD}I · 代码 ${MOD}E · 删除线 ${MOD}${SHIFT}S · 高亮 ${MOD}${SHIFT}H`
+              )
+            })}
           >
             <Bold size={16} aria-hidden="true" />
           </button>
@@ -1510,6 +1808,7 @@ export function Editor({
             <Table size={16} aria-hidden="true" />
           </button>
           <button
+            ref={addImageRef}
             type="button"
             onMouseDown={keepFieldFocus}
             className="icon-button"
@@ -1578,6 +1877,7 @@ export function Editor({
           <button
             type="button"
             className={`send-button${uploadPercent !== null ? " is-uploading" : ""}${sending ? " is-sending" : ""}`}
+            onMouseDown={keepSendFocus}
             onClick={() => void submit()}
             disabled={!canSubmit && !canQueue}
             aria-label={mode === "create" ? tr("Send", "发送") : tr("Save", "保存")}

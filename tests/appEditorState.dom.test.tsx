@@ -950,7 +950,7 @@ describe("Editor attachment reservations", () => {
     await waitFor(() => expect(mocks.compressImage).toHaveBeenCalledTimes(2));
     await act(async () => second.resolve(pendingImage("second")));
 
-    await waitFor(() => expect(screen.getAllByRole("button", { name: "Remove image" })).toHaveLength(9));
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /^Remove image/ })).toHaveLength(9));
     expect(screen.getByText("You can add up to 9 images")).not.toBeNull();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:second");
   });

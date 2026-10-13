@@ -2323,9 +2323,13 @@ button.crumb:active { background: var(--wash-strong); }
    paint underneath the first memo card. */
 .composer { position: relative; z-index: 30; width: calc(100% - var(--content-inset) * 2); margin: 20px 0 6px; animation: rise-in 0.28s var(--ease-out) both; view-transition-name: composer; }
 
+/* A flex column, not a grid: a row folding shut (attachments, notes) can
+   then hand its gap back with a negative margin, which a grid track would
+   floor at zero. */
 .editor {
   position: relative;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   /* Sides 13, not 14: +1 border +2 textarea pad puts the typed text on 16,
      the memo cards' own text inset — composer text over card text, one seam. */
@@ -2378,7 +2382,7 @@ button.crumb:active { background: var(--wash-strong); }
 .editor-context-tag {
   display: inline-flex;
   align-items: center;
-  justify-self: start;
+  align-self: flex-start;
   gap: 4px;
   max-width: min(100%, 24rem);
   padding: 3px 7px;
@@ -2458,10 +2462,27 @@ button.crumb:active { background: var(--wash-strong); }
   border: 1px solid var(--glass-rim-strong);
   border-radius: var(--r-lg);
   box-shadow: var(--menu-highlight), var(--shadow-lg);
-  animation: menu-morph 0.15s var(--ease-spring) both;
+  /* The menus' own entrance and exit (.action-menu). Filled backwards
+     only, so once in, its opacity is free for the IME pause below. */
+  animation: menu-morph 0.18s var(--ease-spring) backwards;
+  transition: opacity var(--t) var(--ease), visibility 0s;
+}
+/* Opened above the line (Editor, placeSuggest): rises from it instead. */
+.tag-suggest[data-side="up"] { animation-name: menu-morph-up; }
+.tag-suggest.is-closing { animation: menu-out 0.12s var(--ease) both; pointer-events: none; }
+.tag-suggest.is-closing[data-side="up"] { animation-name: menu-out-up; }
+/* An IME is composing (the text is pinyin until it commits): the list
+   steps aside and comes back for the committed word without replaying its
+   entrance. Visibility lands after the fade, so nothing is hit meanwhile. */
+.tag-suggest.is-paused {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--t-fast) var(--ease), visibility 0s var(--t-fast);
 }
 .tag-suggest button {
   display: flex;
+  align-items: center;
   min-width: 0;
   padding: 7px 10px;
   color: var(--ink-soft);
@@ -2470,8 +2491,10 @@ button.crumb:active { background: var(--wash-strong); }
   text-align: left;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  transition: background 0.14s ease, color 0.14s ease;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
+/* A finger gets a full row: 31px is a pointer's size. */
+@media (pointer: coarse) { .tag-suggest button { min-height: 40px; } }
 /* One lit row: the pointer moves the active index (Editor, mousemove), so
    no separate :hover look can light a second row under a resting pointer. */
 .tag-suggest button.is-active { background: var(--wash-strong); color: var(--primary-dark); }
@@ -2482,6 +2505,22 @@ button.crumb:active { background: var(--wash-strong); }
 /* The run typed so far, a step up the weight ladder. */
 .tag-suggest-hit { font-weight: 600; }
 
+/* The attachment row folds open with its first tile and shut as its last
+   one leaves (grid-rows 0fr → 1fr, like the link row), handing its gap
+   back while shut so the bar never jumps by a row. The clip lets the
+   tiles' contact shadow through. */
+.editor-attach {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-bottom: -10px;
+  transition: grid-template-rows var(--t) var(--ease), margin-bottom var(--t) var(--ease);
+}
+.editor-attach.is-open {
+  grid-template-rows: 1fr;
+  margin-bottom: 0;
+  transition-duration: var(--t-slow);
+}
+.editor-attach-clip { min-height: 0; overflow: clip; overflow-clip-margin: 3px; }
 .editor-attachments { display: flex; flex-wrap: wrap; gap: 8px; }
 .attachment {
   position: relative;
@@ -2493,12 +2532,28 @@ button.crumb:active { background: var(--wash-strong); }
   box-shadow: var(--shadow-xs);
   animation: pop-in 0.22s var(--ease-pop) both;
 }
+/* Tiles the editor opened with are already on screen in the card: no pop
+   on top of the card stage's cross-fade. */
+.attachment.is-settled { animation: none; }
 /* Exit before unmount: recede, then hand the row the freed width (the
    trailing negative margin swallows the flex gap so nothing snaps). */
 .attachment.is-removing { animation: attach-out 0.2s var(--ease) both; }
 .attachment.is-removing .attachment-remove { pointer-events: none; }
-.attachment img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.attachment.is-busy { display: grid; place-items: center; color: var(--muted); background: var(--surface-2); }
+.attachment img { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity var(--t) var(--ease); }
+/* Compressing: the file itself, a shade back, under a small spinner chip;
+   the compressed image takes over the same tile and comes up to full. */
+.attachment.is-busy { display: grid; place-items: center; background: var(--surface-2); }
+.attachment.is-busy > * { grid-area: 1 / 1; }
+.attachment.is-busy img { opacity: 0.6; }
+.attachment-spinner {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: #fff;
+  background: rgba(12, 14, 19, 0.62);
+  border-radius: 50%;
+}
 .attachment-remove {
   position: absolute;
   top: 3px;
@@ -2516,17 +2571,44 @@ button.crumb:active { background: var(--wash-strong); }
 }
 .attachment:hover .attachment-remove, .attachment-remove:focus-visible { opacity: 1; transform: scale(1); }
 @media (hover: none) { .attachment-remove { opacity: 1; transform: scale(1); } }
-/* Fingers get a 32px target anchored in the thumbnail's corner (the tile
-   clips anything outside it, so the area grows inward; 32px keeps it to the
-   corner, since removing a pending image has no Undo); the glyph keeps its
-   size. */
-@media (pointer: coarse) {
-  .attachment-remove::before { content: ""; position: absolute; top: -3px; right: -3px; width: 32px; height: 32px; }
-}
+/* Mid-send the × is locked, and the global button:disabled (which outranks
+   the bare class) would show every one at half strength. Where it hides
+   until hovered it stays hidden; hovered or always shown, it dims. */
+.attachment-remove:disabled { opacity: 0; }
+.attachment:hover .attachment-remove:disabled { opacity: 0.5; }
+@media (hover: none) { .attachment-remove:disabled { opacity: 0.5; } }
+/* Fingers get a 32px target anchored in the thumbnail's corner (the coarse
+   hit-area block below): the tile clips anything outside it, so the area
+   grows inward, and 32px keeps the rest of the tile clear. */
 @media (hover: hover) { .attachment-remove:hover { background: var(--danger); } }
 .attachment-remove:active { transform: scale(0.85); }
 
+/* Under the content, above the bar: the image-link row and the error and
+   conflict lines. Each folds open and shut in place (grid-rows 0fr → 1fr,
+   the inner clipped), and open rows stand 10px apart. The slot's own 2px
+   rim is room for the link field inside the clip; with the gaps either
+   side it leaves the bar 24px under the content while nothing is open, and
+   12px either side of whatever is. */
+.editor-notes { display: grid; padding-block: 2px; }
+.editor-note {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows var(--t) var(--ease), margin-top var(--t) var(--ease), opacity var(--t-fast) var(--ease), visibility 0s var(--t);
+}
+.editor-note.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition: grid-template-rows var(--t-slow) var(--ease), margin-top var(--t-slow) var(--ease), opacity var(--t) var(--ease), visibility 0s;
+}
+.editor-notes > .is-open ~ .is-open { margin-top: 10px; }
+.editor-note-inner { min-height: 0; overflow: hidden; }
+
 .editor-error { margin: 0; color: var(--danger); font-size: var(--fs-sm); font-weight: 500; animation: fade-up 0.2s var(--ease) both; }
+/* A closing line keeps its words while the row folds, without rising again. */
+.editor-error.is-leaving { animation: none; }
 .editor-conflict {
   display: flex;
   align-items: center;
@@ -2557,7 +2639,8 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 600;
   background: color-mix(in srgb, var(--primary-tint) 90%, transparent);
   border: 2px dashed color-mix(in srgb, var(--primary) 55%, transparent);
-  border-radius: var(--r-md);
+  /* 5px inset + the card's 1px border inside its 12px corner: 12 − 6. */
+  border-radius: var(--r-sm);
   opacity: 0;
   visibility: hidden;
   transform: scale(0.985);
@@ -2575,21 +2658,27 @@ button.crumb:active { background: var(--wash-strong); }
 }
 .editor.is-dropping:has(> .editor-drop.is-refusing) { border-color: var(--line-strong); }
 
-/* Image-link row: glides open under the attachments (grid-rows 0fr → 1fr). */
+/* Image-link row: the note slot's first row, gliding open under the
+   attachments like the others. Its field's 2px of focus room above and
+   below is the slot's rim, so a shut row is truly 0px tall. */
 .link-pop {
   display: grid;
   grid-template-rows: 0fr;
   opacity: 0;
-  transition: grid-template-rows 0.18s var(--ease), opacity 0.14s var(--ease);
+  transition: grid-template-rows var(--t) var(--ease), opacity var(--t-fast) var(--ease);
 }
-.link-pop.is-open { grid-template-rows: 1fr; opacity: 1; }
+.link-pop.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition: grid-template-rows var(--t-slow) var(--ease), opacity var(--t) var(--ease);
+}
 .link-pop-inner {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 0;
   overflow: hidden;
-  padding: 2px;
+  padding: 0 2px;
   color: var(--muted);
 }
 .link-pop-inner input {
@@ -2614,6 +2703,15 @@ button.crumb:active { background: var(--wash-strong); }
 .editor-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; container: editor-bar / inline-size; }
 .editor-tools { display: flex; align-items: center; gap: 2px; }
 .editor-actions { display: flex; align-items: center; gap: 8px; }
+/* A send locks the editor at once, but most sends are quicker than a beat:
+   the locked controls dim only if it takes longer, and come back at once.
+   Send's spinner waits the same SPINNER_DELAY_MS (Editor), the pin pad its
+   keys the same 0.15s. The delay rides each control's opacity, the last
+   entry in its transition list (first for the ×). */
+.editor .ghost-button { transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), opacity var(--t) var(--ease); }
+.editor[aria-busy="true"] .icon-button:disabled,
+.editor[aria-busy="true"] .ghost-button:disabled { transition-delay: 0s, 0s, 0s, 0.15s; }
+.editor[aria-busy="true"] .attachment-remove:disabled { transition-delay: 0.15s, 0s, 0s; }
 /* The preparing note leaves first where it would push Send off the bar
    (the chip's sending state and a spoken status still say it). */
 @container editor-bar (max-width: 459px) { .editor-status { display: none; } }
@@ -5204,7 +5302,9 @@ button.stats-tag-row:active { scale: 0.992; }
   /* The search field's text ends 30px from its edge: grow over that pad, not
      over the text. */
   .searchbox-clear::before { inset: -12px -7px -12px -5px; }
-  .attachment-remove::before { inset: -7px; }
+  /* 18 → 32, anchored in the tile's corner (the × sits 3px in): the tile
+     clips anything outside it, so the area grows inward only. */
+  .attachment-remove::before { inset: -3px -3px auto auto; width: 32px; height: 32px; }
   .lang-seg button::before { inset: -6px 0; }
   /* Tag rows are 34px apart on fine pointers; a touch row gets the full 44
      so its chevron, name and ⋯ can each take the row's height. */

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from "vitest";
-import { htmlToMarkdown } from "../src/lib/htmlToMarkdown";
+import { htmlCarriesText, htmlToMarkdown } from "../src/lib/htmlToMarkdown";
 
 describe("htmlToMarkdown", () => {
   it("keeps links, emphasis, strike, highlight and inline code", () => {
@@ -54,5 +54,18 @@ describe("htmlToMarkdown", () => {
     expect(htmlToMarkdown("<p>one</p><p>two<br>three</p>")).toBeNull();
     // A code editor's styled copy: its indentation lives in the plain text.
     expect(htmlToMarkdown('<div style="white-space: pre;"><div><span style="font-weight: bold;">const</span> a = 1;</div></div>')).toBeNull();
+  });
+});
+
+describe("htmlCarriesText", () => {
+  it("tells a lone copied picture from copied words", () => {
+    // A browser's "Copy image": the picture's markup, nothing to read.
+    expect(htmlCarriesText('<meta charset="utf-8"><img src="https://e.com/a.png" alt="A chart of the week">')).toBe(false);
+    expect(htmlCarriesText('<a href="https://e.com/"><img src="https://e.com/a.png"></a>')).toBe(false);
+    expect(htmlCarriesText("<style>td { color: red }</style><img src='x.png'>")).toBe(false);
+    expect(htmlCarriesText("")).toBe(false);
+    // Spreadsheet cells and slide text are words, picture or not.
+    expect(htmlCarriesText("<table><tr><td>Q1</td><td>12</td></tr></table>")).toBe(true);
+    expect(htmlCarriesText("<p>Agenda<img src='x.png'></p>")).toBe(true);
   });
 });

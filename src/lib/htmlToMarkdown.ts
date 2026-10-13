@@ -253,6 +253,19 @@ function tidy(text: string): string {
 }
 
 /**
+ * Whether a clipboard text/html payload holds any words, as opposed to a
+ * lone picture (a browser's "Copy image" puts `<img src>` beside the image
+ * file). Alt text, styles and scripts are not words on the page.
+ */
+export function htmlCarriesText(html: string): boolean {
+  if (!html.trim() || typeof DOMParser === "undefined") return false;
+  const body = new DOMParser().parseFromString(html, "text/html").body;
+  if (!body) return false;
+  for (const hidden of Array.from(body.querySelectorAll("script, style, template, noscript, title"))) hidden.remove();
+  return /\S/.test((body.textContent ?? "").replace(/\xa0/g, " "));
+}
+
+/**
  * Markdown for a clipboard text/html payload, or null when plain-text paste
  * should go ahead untouched: nothing richer than paragraphs was found, or
  * the HTML is a code editor's styled copy (white-space: pre spans), whose
