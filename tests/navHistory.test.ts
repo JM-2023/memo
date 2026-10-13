@@ -71,6 +71,23 @@ describe("nav store", () => {
     expect(store.get(id)?.place).toBeNull();
   });
 
+  it("remembers which entry each one covers, with its place, across a reload", () => {
+    const store = createNavStore();
+    const root = store.replace(null, ROOT_LENS);
+    store.setPlace(root, { anchorId: "m7", offset: 80, scrollY: 1800, cap: 60 });
+    const tag = store.push(tagLens, root);
+    expect(store.below(tag)?.place?.anchorId).toBe("m7");
+    expect(lensesEqual(store.below(tag)!.lens, ROOT_LENS)).toBe(true);
+    // Edited in place, the entry still covers the same one.
+    store.replace(tag, { ...tagLens, query: "stew" });
+    expect(store.below(tag)?.place?.scrollY).toBe(1800);
+    // The bottom of the stack covers nothing.
+    expect(store.below(root)).toBeNull();
+
+    store.flush();
+    expect(createNavStore().below(tag)?.place?.anchorId).toBe("m7");
+  });
+
   it("clears memory and storage together (logout)", () => {
     const store = createNavStore();
     const id = store.push(tagLens);

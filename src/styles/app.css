@@ -1303,6 +1303,11 @@ a:hover { text-decoration: underline; }
 .heatmap-head { display: flex; align-items: center; justify-content: space-between; }
 /* The arrows keep their full hit area; only the title gives way. */
 .heatmap-nav { flex: none; width: 28px; height: 28px; border-radius: var(--r-xs); }
+/* Spent arrows look disabled but stay focusable (aria-disabled): a disabled
+   button would drop the keyboard focus resting on it. */
+.heatmap-nav[aria-disabled="true"] { cursor: default; opacity: 0.5; }
+@media (hover: hover) { .heatmap-nav[aria-disabled="true"]:hover { background: none; color: var(--muted); } }
+.heatmap-nav[aria-disabled="true"]:active { transform: none; }
 /* min-width: 0 lets the button shrink to the row's remaining width when the
    label outgrows it — an English week range plus its count needs ~170px, and
    the row has ~157px at the sidebar's 302px floor. The swap below then folds
@@ -1420,6 +1425,11 @@ a:hover { text-decoration: underline; }
 }
 @media (hover: hover) { button.heat-cell:hover { outline-color: color-mix(in srgb, var(--heat-3) 38%, transparent); filter: saturate(1.16) brightness(1.05); } }
 button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
+/* A day without memos is no pick (Heatmap.tsx): it keeps its bubble and
+   its arrow-key stop, and drops the halo that offered a press. */
+button.heat-cell[aria-disabled="true"] { cursor: default; }
+@media (hover: hover) { button.heat-cell[aria-disabled="true"]:hover { outline-color: transparent; filter: none; } }
+button.heat-cell[aria-disabled="true"]:active { filter: none; }
 
 /* ---- Sidebar nav + tags ---- */
 /* Full-width rows share a left text baseline; their backgrounds are inset. */
@@ -1433,9 +1443,11 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 }
 
 .sidebar-nav { display: grid; margin: 14px 0 4px; }
+/* Rows don't isolate: their washes and the selection mark (.sel-glow) paint
+   in the sidebar's own stacking context, beneath every row's text, so the
+   mark gliding across other rows never covers their names. */
 .nav-item {
   position: relative;
-  isolation: isolate;
   display: flex;
   align-items: center;
   width: 100%;
@@ -1468,7 +1480,18 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 }
 .nav-item:active { transform: scale(0.98); }
 .nav-item.is-active { color: var(--leaf); font-weight: 600; }
-.nav-item.is-active::after { background: var(--leaf-tint); }
+/* The current place's tint is one mark for the whole sidebar, nav rows and
+   tag rows alike: Sidebar's useSelectionGlide slides it from the row it
+   leaves to the row it lands on. The row's own wash stands down under it. */
+.sel-glow {
+  position: absolute;
+  inset: 0 var(--row-background-inset);
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--leaf-tint);
+  pointer-events: none;
+}
+.nav-item.is-active::after { background: transparent; }
 .nav-item.is-active svg { color: var(--leaf); }
 /* Keep counts at the column's right edge with a minimum gap after labels. */
 .nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1498,7 +1521,6 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
 .tag-item { display: grid; }
 .tag-row {
   position: relative;
-  isolation: isolate;
   display: flex;
   align-items: center;
   /* 10px lead (inline in TagTree) + 22px chevron + this 3px + the label's 4px
@@ -1535,7 +1557,7 @@ button.heat-cell:active { filter: saturate(1.05) brightness(0.9); }
   transform: translateY(-50%);
   animation: tick-in 0.2s var(--ease-pop) both;
 }
-.tag-row.is-active::after { background: var(--leaf-tint); }
+.tag-row.is-active::after { background: transparent; }
 .tag-row.is-active .tag-label { color: var(--leaf); font-weight: 600; }
 .tag-expand {
   display: grid;
@@ -2030,6 +2052,18 @@ button.crumb:active { background: var(--wash-strong); }
   transition: width 0.18s var(--ease-out);
 }
 .searchbox.is-open { width: min(240px, 40vw); }
+/* Its own snapshot: memos ↔ Trash drops the Brain and the funnel, and the
+   box glides to its new place rather than cross-fading with itself ~76px
+   away inside the topbar's group. Natural-size snapshots, as the pills: an
+   open box and a closed one hand over at their own widths. It rides above
+   the topbar band (see the stacking table in the view-transition section);
+   alone (review, an empty Trash) it fades. */
+.searchbox { view-transition-name: searchbox; }
+::view-transition-old(searchbox),
+::view-transition-new(searchbox) { inline-size: auto; block-size: 100%; }
+::view-transition-group(searchbox) { z-index: 3; }
+::view-transition-old(searchbox):only-child { animation: fade-out var(--t-fast) var(--ease) both; }
+::view-transition-new(searchbox):only-child { animation: fade-in var(--t) var(--ease) both; }
 .searchbox-icon { position: absolute; left: 10px; color: var(--muted); pointer-events: none; }
 .searchbox input {
   width: 100%;
@@ -2041,9 +2075,10 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: var(--fs-md);
   outline: none;
   box-shadow: var(--shadow-xs);
-  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
+  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), padding-right var(--t) var(--ease);
 }
-.searchbox:has(.searchbox-clear) input { padding-right: 30px; }
+/* The inset makes room as the × scales in, and gives it back as it goes. */
+.searchbox:has(.searchbox-clear.is-shown) input { padding-right: 30px; }
 .searchbox input::placeholder { color: var(--muted); }
 @media (hover: hover) { .searchbox input:hover { border-color: var(--line-strong); } }
 .searchbox input:focus { border-color: var(--line-focus); }
@@ -2064,7 +2099,21 @@ button.crumb:active { background: var(--wash-strong); }
   height: 20px;
   color: var(--muted);
   border-radius: 50%;
-  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
+  /* Mounted throughout (App.tsx); empty, it is shrunk, clear and out of
+     reach. The exit runs at two-thirds of the entrance; visibility flips
+     after the fade, so the × never blinks out mid-shrink. */
+  opacity: 0;
+  scale: 0.6;
+  visibility: hidden;
+  pointer-events: none;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease), scale var(--t-fast) var(--ease), visibility 0s linear var(--t-fast);
+}
+.searchbox-clear.is-shown {
+  opacity: 1;
+  scale: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), opacity var(--t) var(--ease-out), scale var(--t) var(--ease-out), visibility 0s;
 }
 @media (hover: hover) { .searchbox-clear:hover { background: var(--wash-strong); color: var(--ink); } }
 .searchbox-clear:active { transform: scale(0.85); }
@@ -2146,8 +2195,10 @@ button.crumb:active { background: var(--wash-strong); }
   border-radius: var(--r-xs);
   transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
-@media (hover: hover) { .range-cal-nav:hover:not(:disabled) { background: var(--wash); color: var(--ink); } }
-.range-cal-nav:disabled { opacity: 0.35; }
+@media (hover: hover) { .range-cal-nav:hover:not(:disabled, [aria-disabled="true"]) { background: var(--wash); color: var(--ink); } }
+/* aria-disabled, not disabled: the arrow keeps the focus resting on it. */
+.range-cal-nav:disabled,
+.range-cal-nav[aria-disabled="true"] { cursor: default; opacity: 0.35; }
 .range-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; overflow: hidden; overflow: clip; }
 /* Six week rows, always (RangeCalendar), paged as one sheet with the
    heatmap's slide; the grid clips the 20px it travels. */
@@ -2848,16 +2899,28 @@ button.crumb:active { background: var(--wash-strong); }
    rows 1fr → 0fr with the fade, like a toast's slot. Its top margin lands
    on 0 while the composer's grows back from the 12px beat to its own 20px,
    so nothing below jumps when the slot finally unmounts. */
+/* Arriving runs the same fold the other way (@starting-style: from 0fr, no
+   margin, clear), so the line opens its own room and the composer eases
+   down under it rather than the page jumping by a line; the exit keeps its
+   quicker beat. The clip always holds: the line is drawn inside its slot. */
 .sync-notice-slot {
   display: grid;
   grid-template-rows: 1fr;
   width: calc(100% - var(--content-inset) * 2);
   margin-top: 16px;
+  transition: grid-template-rows var(--t-slow) var(--ease-out), margin-top var(--t-slow) var(--ease-out), opacity var(--t-slow) var(--ease-out);
+}
+@starting-style {
+  .sync-notice-slot { grid-template-rows: 0fr; margin-top: 0; opacity: 0; }
+}
+.sync-notice-slot.is-leaving {
+  grid-template-rows: 0fr;
+  margin-top: 0;
+  opacity: 0;
+  pointer-events: none;
   transition: grid-template-rows 0.16s var(--ease), margin-top 0.16s var(--ease), opacity 0.16s var(--ease);
 }
-.sync-notice-slot.is-leaving { grid-template-rows: 0fr; margin-top: 0; opacity: 0; pointer-events: none; }
-.sync-notice-clip { min-height: 0; }
-.sync-notice-slot.is-leaving .sync-notice-clip { overflow: hidden; }
+.sync-notice-clip { min-height: 0; overflow: hidden; }
 .sync-notice {
   display: flex;
   align-items: center;
@@ -2869,7 +2932,8 @@ button.crumb:active { background: var(--wash-strong); }
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
-  animation: rise-in 0.24s var(--ease-out) both;
+  /* No entrance of its own: the slot's fold-in is it (a rise inside the
+     opening fold, on top of the slot's fade, read as two arrivals). */
   view-transition-name: sync-notice;
 }
 .sync-notice > svg { flex: none; color: var(--muted); }
@@ -2887,7 +2951,10 @@ button.crumb:active { background: var(--wash-strong); }
 @media (hover: hover) { .sync-notice-retry:hover:not(:disabled) { background: var(--primary-tint); } }
 .sync-notice-retry:active { transform: scale(0.96); }
 .sync-notice-retry:disabled { opacity: 1; color: var(--muted); }
-/* The composer's own top margin follows; the notice keeps the 16px beat. */
+/* The composer's own top margin follows; the notice keeps the 16px beat.
+   It eases on the slot's beats both ways (20 → 12 as the line opens, back
+   as it folds), so nothing below the line snaps by 8px. */
+.composer { transition: margin-top var(--t-slow) var(--ease-out); }
 .sync-notice-slot + .composer { margin-top: 12px; }
 .sync-notice-slot.is-leaving + .composer { margin-top: 20px; transition: margin-top 0.16s var(--ease); }
 
@@ -2910,13 +2977,33 @@ button.crumb:active { background: var(--wash-strong); }
 .review-banner svg { flex: none; color: var(--leaf); }
 /* The search's answer in one line above the results: what was found, where,
    and how much of it meaning added. The banner's voice, without the icon. */
+/* It sits in the column between the composer and the feed, mounted while a
+   search can be up: folded (rows 0fr, no margin) it costs nothing; shown it
+   opens on the feed's own beats — 16px above it, 14px (the feed's row gap)
+   to the first card — and the cards ride down with it instead of jumping a
+   line. Closing runs at two-thirds of the opening; visibility waits out the
+   fold, so the words fade rather than blink. */
 .search-summary {
+  display: grid;
+  grid-template-rows: 0fr;
+  width: calc(100% - var(--content-inset) * 2);
   margin: 0;
   color: var(--muted);
   font-size: var(--fs-sm);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows var(--t) var(--ease), margin var(--t) var(--ease), opacity var(--t-fast) var(--ease), visibility 0s linear var(--t);
+}
+.search-summary > [aria-hidden="true"] { min-height: 0; overflow: hidden; }
+.search-summary.is-shown {
+  grid-template-rows: 1fr;
+  margin: 16px 0 -2px;
+  opacity: 1;
+  visibility: visible;
+  transition: grid-template-rows var(--t-slow) var(--ease-out), margin var(--t-slow) var(--ease-out), opacity var(--t-slow) var(--ease-out), visibility 0s;
 }
 /* "· looking for related…" while meaning is still on its way: a rung
    quieter than the count it qualifies. */
@@ -5165,9 +5252,24 @@ button.stats-tag-row:active { scale: 0.992; }
     overscroll-behavior: contain;
   }
   /* Vertical pans stay the browser's (the sidebar scrolls); a sideways
-     drag reaches useDrawerSwipe, which swipes the drawer shut. */
+     drag reaches useDrawerSwipe, which swipes the drawer shut — from the
+     drawer or from the dimmed strip beside it. */
   .sidebar,
-  .sidebar-inner { touch-action: pan-y pinch-zoom; }
+  .sidebar-inner,
+  .drawer-backdrop { touch-action: pan-y pinch-zoom; }
+  /* Pulled past its open edge the drawer gives a little (the swipe's rubber
+     band); this strip of its own paper fills in behind it, so the gap at
+     the screen edge never shows the page. */
+  .sidebar::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 100%;
+    bottom: 0;
+    width: 40px;
+    background: inherit;
+    pointer-events: none;
+  }
   .sidebar.is-open.is-closing { transform: translateX(-102%); transition: transform 0.16s var(--ease); animation: none; }
   .drawer-backdrop {
     position: fixed;
@@ -5212,8 +5314,43 @@ button.stats-tag-row:active { scale: 0.992; }
   /* While a search is up, an untouched composer folds away so results start
      right under the search box — with the keyboard open, a full composer
      left room for barely one card. A draft (text or images) or a focused
-     composer stays put; clearing the search brings it back. */
-  .composer[data-searching]:not(:focus-within):not(:has(.editor-attachments)):has(textarea:placeholder-shown) { display: none; }
+     composer stays put; clearing the search brings it back.
+     It folds rather than vanishing: rows 1fr → 0fr with its margins, so the
+     feed rides up ~120px instead of jumping, and back down on the way out.
+     minmax(0, …): a bare 0fr track floors at the editor's padding and
+     border, which left a 28px blank where the composer had been.
+     The fade rides filter, not opacity — the composer's rise-in entrance
+     fills both ways and would pin opacity at 1. Overflow is clipped only
+     while folded (the tag suggestions hang out of the box when open), and
+     on unfolding is handed back once the box has its height again. */
+  .composer:not([hidden]) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    transition:
+      grid-template-rows var(--t-slow) var(--ease-out),
+      margin var(--t-slow) var(--ease-out),
+      filter var(--t-slow) var(--ease-out),
+      visibility 0s,
+      overflow 0s linear var(--t-slow);
+    transition-behavior: allow-discrete;
+  }
+  .composer > .editor { min-height: 0; }
+  .composer[data-searching]:not(:focus-within):not(:has(.editor-attachments)):has(textarea:placeholder-shown) {
+    grid-template-rows: minmax(0, 0fr);
+    margin-top: 0;
+    margin-bottom: 0;
+    overflow: clip;
+    filter: opacity(0);
+    visibility: hidden;
+    transition:
+      grid-template-rows var(--t) var(--ease),
+      margin var(--t) var(--ease),
+      filter var(--t-fast) var(--ease),
+      visibility 0s linear var(--t),
+      overflow 0s;
+    transition-behavior: allow-discrete;
+  }
   /* A lone image may span the card; grids keep their column counts and
      their cells shrink to fit. */
   .memo-images { --single-box: 100%; }
@@ -6098,12 +6235,28 @@ button.stats-tag-row:active { scale: 0.992; }
   position: absolute;
   right: 2px;
   bottom: 2px;
+  display: grid;
   padding: 1px;
+  line-height: 0;
   border-radius: 50%;
   color: var(--primary-dark);
   background: var(--surface);
   box-sizing: content-box;
+  /* Kept mounted (App.tsx): it pops in when work starts and shrinks away
+     when it ends, the exit at two-thirds of the entrance; the spinner rests
+     while it is hidden. */
+  opacity: 0;
+  scale: 0.5;
+  visibility: hidden;
+  transition: opacity var(--t-fast) var(--ease), scale var(--t-fast) var(--ease), visibility 0s linear var(--t-fast);
 }
+.semantic-toggle-progress.is-shown {
+  opacity: 1;
+  scale: 1;
+  visibility: visible;
+  transition: opacity var(--t) var(--ease-out), scale var(--t) var(--ease-pop), visibility 0s;
+}
+.semantic-toggle-progress:not(.is-shown) .spin { animation-play-state: paused; }
 @media (hover: hover) {
   .semantic-toggle.is-active:hover:not(:disabled) { background: var(--primary-tint-strong); color: var(--primary-dark); }
 }

@@ -149,7 +149,19 @@ export function SearchFilter(props: SearchFilterProps) {
           <span className="action-menu__title filter-title-row" role="presentation">
             {tr("Date range", "日期范围")}
             {rangeOn ? (
-              <button type="button" className="filter-mini-clear" onClick={props.onClearDates}>
+              <button
+                type="button"
+                className="filter-mini-clear"
+                onClick={(event) => {
+                  // Clear leaves with the range it clears: hand focus on to
+                  // the next control first, or it falls out of the panel.
+                  if (event.currentTarget === document.activeElement) {
+                    const panel = event.currentTarget.closest(".filter-panel");
+                    panel?.querySelector<HTMLElement>(".filter-preset, .range-cal-day[tabindex='0']")?.focus({ preventScroll: true });
+                  }
+                  props.onClearDates();
+                }}
+              >
                 {tr("Clear", "清除")}
               </button>
             ) : null}
@@ -205,7 +217,23 @@ export function SearchFilter(props: SearchFilterProps) {
                     type="button"
                     className="saved-delete"
                     aria-label={tr(`Delete saved filter “${item.name}”`, `删除筛选「${item.name}」`)}
-                    onClick={() => props.onDeleteSaved(item)}
+                    onClick={(event) => {
+                      // The row goes with its preset: focus moves to the
+                      // neighbouring row's × (a run of deletes keeps its
+                      // place), else Save current filters, else the panel's
+                      // first row — before it can fall to <body>.
+                      if (event.currentTarget === document.activeElement) {
+                        const row = event.currentTarget.closest(".saved-row");
+                        const after = row?.nextElementSibling;
+                        const next =
+                          after?.querySelector<HTMLElement>(".saved-delete") ??
+                          row?.previousElementSibling?.querySelector<HTMLElement>(".saved-delete") ??
+                          (after instanceof HTMLButtonElement ? after : null) ??
+                          row?.closest(".filter-panel")?.querySelector<HTMLElement>("[data-facet]:not(:disabled)");
+                        next?.focus({ preventScroll: true });
+                      }
+                      props.onDeleteSaved(item);
+                    }}
                   >
                     <X size={13} aria-hidden="true" />
                   </button>

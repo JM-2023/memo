@@ -1,5 +1,5 @@
 import { Check, CloudOff, Loader2, WifiOff } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
 import { announce } from "../lib/liveAnnouncer";
@@ -8,13 +8,19 @@ export interface SyncNoticeContent {
   /** What the line is about; a new kind starts its retry state afresh. */
   kind: "loading" | "load-failed" | "offline" | "unreachable";
   text: string;
+  /**
+   * The same words as `text` with their figures rolling (RollingText), as
+   * every other live count in the chrome does. Shown to the eye only; `text`
+   * stays the copy assistive tech reads.
+   */
+  line?: ReactNode;
   /** Said instead of `text` once a retry didn't help. */
   failedText?: string;
   /** The reader's "try again"; resolves whether it got through (void: unknown). */
   onRetry?: () => Promise<boolean> | void;
 }
 
-type Shown = SyncNoticeContent | { kind: "restored"; text: string; failedText?: undefined; onRetry?: undefined };
+type Shown = SyncNoticeContent | { kind: "restored"; text: string; line?: undefined; failedText?: undefined; onRetry?: undefined };
 
 /** A retry reads as one even when the answer is instant. */
 const RETRY_MIN_MS = 600;
@@ -31,7 +37,9 @@ function wait(ms: number) {
  * offline, or pulls failing while online. A retry shows that it is running
  * (and says so in words when it didn't help); the connection coming back is
  * said once ("Back online"), and the line then folds its height away rather
- * than letting the composer and feed jump up by its height.
+ * than letting the composer and feed jump up by its height. It arrives the
+ * same way, unfolding from nothing (app.css, @starting-style), so the page
+ * under it glides down instead of being pushed.
  *
  * Not a live region: it mounts with its text, so the app's standing regions
  * speak it (App announces the notice itself; the retry outcome and "Back
@@ -117,14 +125,23 @@ export function SyncNotice({ notice }: { notice: SyncNoticeContent | null }) {
     ) : (
       <CloudOff size={14} aria-hidden="true" />
     );
-  const text = retryPhase === "failed" && shown.failedText ? shown.failedText : shown.text;
+  const failed = retryPhase === "failed" && shown.failedText;
+  const text = failed || shown.text;
+  const line = !failed ? shown.line : undefined;
 
   return (
     <div className={`sync-notice-slot${leaving ? " is-leaving" : ""}`}>
       <div className="sync-notice-clip">
         <div className={`sync-notice${shown.kind === "restored" ? " is-restored" : ""}`}>
           {icon}
-          <span className="sync-notice-text">{text}</span>
+          {line ? (
+            <span className="sync-notice-text">
+              <span className="sr-only">{text}</span>
+              <span aria-hidden="true">{line}</span>
+            </span>
+          ) : (
+            <span className="sync-notice-text">{text}</span>
+          )}
           {shown.onRetry ? (
             <button type="button" className="sync-notice-retry" onClick={() => void runRetry()} disabled={retrying || leaving}>
               {/* Both words share one cell, so the button keeps its width. */}

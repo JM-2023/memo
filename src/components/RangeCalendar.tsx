@@ -166,13 +166,18 @@ export function RangeCalendar({ from, to, minDay = null, onStart, onRange }: Ran
         </span>
         <span className={to ? "is-set" : awaitingEnd ? "is-pending" : ""}>{endLabel}</span>
       </div>
+      {/* Spent arrows say so (aria-disabled) instead of disabling, which
+          dropped the focus they held: Enter held on › at this month walked
+          the keyboard out of the panel. */}
       <div className="range-cal-head">
         <button
           type="button"
           className="range-cal-nav"
           aria-label={tr("Previous month", "上个月")}
-          disabled={atFirstMonth}
-          onClick={() => shiftMonth(-1)}
+          aria-disabled={atFirstMonth ? true : undefined}
+          onClick={() => {
+            if (!atFirstMonth) shiftMonth(-1);
+          }}
         >
           <ChevronLeft size={14} aria-hidden="true" />
         </button>
@@ -185,8 +190,10 @@ export function RangeCalendar({ from, to, minDay = null, onStart, onRange }: Ran
           type="button"
           className="range-cal-nav"
           aria-label={tr("Next month", "下个月")}
-          disabled={atCurrentMonth}
-          onClick={() => shiftMonth(1)}
+          aria-disabled={atCurrentMonth ? true : undefined}
+          onClick={() => {
+            if (!atCurrentMonth) shiftMonth(1);
+          }}
         >
           <ChevronRight size={14} aria-hidden="true" />
         </button>

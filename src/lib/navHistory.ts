@@ -42,6 +42,8 @@ export interface NavPlace {
 interface NavEntry {
   lens: NavLens;
   place: NavPlace | null;
+  /** The entry this one was pushed on top of: what Back steps down to. */
+  prev: string | null;
 }
 
 const STORAGE_KEY = "memo:nav";
@@ -74,6 +76,13 @@ export function lensesEqual(a: NavLens, b: NavLens): boolean {
 export function isRootLens(lens: NavLens): boolean {
   return lens.view === "memos" && !lens.tag && !lens.day && !lens.drilldown && lens.query.trim() === "" && !hasActiveFilters(lens.filters);
 }
+
+/**
+ * Said on window just before the app scrolls the page itself — a reading
+ * place put back, not the reader moving through the feed — so scroll-driven
+ * chrome (the phone topbar's tuck) can tell the two apart.
+ */
+export const SCROLL_JUMP_EVENT = "memo:scroll-jump";
 
 function dayOrNull(value: unknown): string | null {
   return typeof value === "string" && DAY_KEY_PATTERN.test(value) ? value : null;
@@ -173,10 +182,16 @@ function historyState(id: string): Record<string, unknown> {
 
 export interface NavStore {
   get(id: string): { lens: NavLens; place: NavPlace | null } | null;
-  /** Point the current history entry at `lens` (no new entry). */
-  replace(id: string | null, lens: NavLens): string;
-  /** Add a history entry for `lens` on top of the current one. */
-  push(lens: NavLens): string;
+  /** The entry under `id` in Back — the lens the reader came from — if known. */
+  below(id: string): { lens: NavLens; place: NavPlace | null } | null;
+  /**
+   * Point the current history entry at `lens` (no new entry). `prev` names
+   * the entry it sits on (a lens taking over a layer's entry); left out, an
+   * entry edited in place keeps the one it had.
+   */
+  replace(id: string | null, lens: NavLens, prev?: string | null): string;
+  /** Add a history entry for `lens` on top of the current one (`prev`). */
+  push(lens: NavLens, prev?: string | null): string;
   /** Add a layer's entry over the lens entry `id` (see isLayerState). */
   pushLayer(id: string): void;
   setPlace(id: string, place: NavPlace | null): void;
@@ -199,7 +214,8 @@ function readStorage(): Map<string, NavEntry> {
     if (!Array.isArray(item) || typeof item[0] !== "string") continue;
     const raw = item[1] as Record<string, unknown> | null;
     const lens = parseNavLens(raw?.lens);
-    if (lens) entries.set(item[0], { lens, place: parsePlace(raw?.place) });
+    const prev = typeof raw?.prev === "string" && raw.prev ? raw.prev : null;
+    if (lens) entries.set(item[0], { lens, place: parsePlace(raw?.place), prev });
   }
   return entries;
 }
@@ -234,11 +250,15 @@ export function createNavStore(): NavStore {
     get(id) {
       return entries.get(id) ?? null;
     },
-    replace(id, lens) {
+    below(id) {
+      const prev = entries.get(id)?.prev;
+      return prev ? (entries.get(prev) ?? null) : null;
+    },
+    replace(id, lens, prev) {
       const key = id ?? newId();
       // A lens edited in place (typing a search) is no longer the list the
       // stored place was measured in.
-      put(key, { lens, place: null });
+      put(key, { lens, place: null, prev: prev === undefined ? (entries.get(key)?.prev ?? null) : prev });
       if (navIdOf(window.history.state) !== key) {
         try {
           window.history.replaceState(historyState(key), "");
@@ -248,9 +268,9 @@ export function createNavStore(): NavStore {
       }
       return key;
     },
-    push(lens) {
+    push(lens, prev = null) {
       const key = newId();
-      put(key, { lens, place: null });
+      put(key, { lens, place: null, prev });
       try {
         window.history.pushState({ memoNav: key }, "");
       } catch {
@@ -344,6 +364,7 @@ const READER_INPUT = ["wheel", "touchstart", "keydown", "mousedown"] as const;
  * so the next few frames re-aim — until the reader scrolls themselves.
  */
 export function restoreFeedPlace(place: NavPlace): void {
+  window.dispatchEvent(new Event(SCROLL_JUMP_EVENT));
   const slot = place.anchorId ? findSlot(place.anchorId) : null;
   if (!slot) {
     window.scrollTo(0, place.scrollY);

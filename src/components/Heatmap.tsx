@@ -291,6 +291,10 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
   const leaveHeightRef = useRef<number | null>(null);
   const leaveSerialRef = useRef(0);
 
+  // A day without memos would only filter the feed down to nothing (and, on
+  // a phone, close the drawer onto that empty list), so it is no pick: still
+  // a stop for the arrows and its "0 memos" bubble, but idle — unless it is
+  // the day in force, which stays the way back out of its own lens.
   const cellNode = (cell: HeatCell) =>
     cell.inRange && !cell.isFuture ? (
       <button
@@ -306,6 +310,7 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
           `${formatDayLabel(cell.key, locale)}，${count(cell.count, "memo")}`
         )}
         aria-pressed={activeDay === cell.key}
+        aria-disabled={cell.count === 0 && activeDay !== cell.key ? true : undefined}
         tabIndex={cell.key === rovingDay ? 0 : -1}
         {...withFocus(
           tip.bind(
@@ -319,7 +324,10 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
           () => setFocusedDay(cell.key)
         )}
         onKeyDown={(event) => moveCellFocus(event, cell.key)}
-        onClick={() => onPickDay(activeDay === cell.key ? null : cell.key)}
+        onClick={() => {
+          if (activeDay === cell.key) onPickDay(null);
+          else if (cell.count > 0) onPickDay(cell.key);
+        }}
       />
     ) : (
       <span key={cell.key} className={`heat-cell placeholder${cell.inRange ? " future" : ""}`} aria-hidden="true" />
@@ -391,14 +399,19 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
   const enterClass = enterDir === null ? "" : enterDir > 0 ? " slide-left" : enterDir < 0 ? " slide-right" : " heat-arrive";
   const swapDir = lastGrid !== null && lastGrid.period === period ? direction : 0;
 
+  // The arrows say they are spent (aria-disabled) rather than disabling: a
+  // disabled button drops the focus it holds, so Enter held on › walked the
+  // keyboard off the heatmap at the last page.
   return (
     <div className="heatmap">
       <div className="heatmap-head">
         <button
           type="button"
           className="icon-button heatmap-nav"
-          onClick={() => shift(-1)}
-          disabled={!canBack}
+          onClick={() => {
+            if (canBack) shift(-1);
+          }}
+          aria-disabled={canBack ? undefined : true}
           aria-label={tr(...PREV_LABEL[period])}
         >
           <ChevronLeft size={15} aria-hidden="true" />
@@ -414,18 +427,25 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay }: Heat
         >
           <SwapText id={gridKey} dir={swapDir} tweenWidth={false} className="heatmap-title-swap">
             {title}
-            {/* A memo added on this page rolls the count; a new page swaps
-                it with the title. */}
-            <span className="heatmap-total">
-              <RollingCount value={rangeTotal} unit="memo" />
-            </span>
+            {/* The page's own count, once paged away: on the current page
+                the period figures right above already say it, and the title
+                only repeated them. A memo added on the page rolls it; a new
+                page swaps it with the title, so it arrives and leaves with
+                the page it counts. */}
+            {offset !== 0 ? (
+              <span className="heatmap-total">
+                <RollingCount value={rangeTotal} unit="memo" />
+              </span>
+            ) : null}
           </SwapText>
         </button>
         <button
           type="button"
           className="icon-button heatmap-nav"
-          onClick={() => shift(1)}
-          disabled={!canForward}
+          onClick={() => {
+            if (canForward) shift(1);
+          }}
+          aria-disabled={canForward ? undefined : true}
           aria-label={tr(...NEXT_LABEL[period])}
         >
           <ChevronRight size={15} aria-hidden="true" />

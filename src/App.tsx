@@ -1127,9 +1127,28 @@ export default function App() {
     setEditSeed(null);
   }, []);
 
+  // Opening the drawer lands on where the reader is — the marked nav row,
+  // the tag in force, the heatmap day — not on the account menu at its top.
+  // Read when the drawer opens (a getter), so it is the row of that moment.
+  const drawerPlaceRef = useMemo(
+    () => ({
+      get current(): HTMLElement | null {
+        const drawer = document.getElementById("app-sidebar");
+        const place =
+          drawer?.querySelector<HTMLElement>(".sidebar-nav [aria-current='page'], .tag-label[aria-pressed='true']") ??
+          drawer?.querySelector<HTMLElement>(".heat-cell[aria-pressed='true']") ??
+          drawer?.querySelector<HTMLElement>(".sidebar-nav .nav-item") ??
+          null;
+        place?.scrollIntoView?.({ block: "nearest" });
+        return place;
+      }
+    }),
+    []
+  );
   const drawerRef = useModalA11y<HTMLElement>({
     enabled: drawerOpen,
     onEscape: () => closeDrawer(),
+    initialFocusRef: drawerPlaceRef,
     allowOutsideSelector: "[role='menu']",
     isolateExemptSelector: ".drawer-backdrop"
   });
@@ -1933,6 +1952,67 @@ export default function App() {
   const searchEmptyTitle = searchScopeText
     ? tr(`No matching memos ${searchScopeText}`, `${searchScopeText}没有找到相关笔记`)
     : tr("No matching memos", "没有找到相关笔记");
+  // The summary stays mounted through Trash and All memos so it can fold
+  // in under the search box and back out; folding, it keeps its last line.
+  const summaryShown = (searching || trashSearching) && feedMemos.length > 0;
+  const summaryLineRef = useRef<ReactNode>(null);
+  if (summaryShown) summaryLineRef.current = searching ? searchSummaryLine : trashSummaryLine;
+  // A feed emptied by its lenses, with no search up: the title names them
+  // (a day keeps its year: the trail's chip drops it, but the feed spans
+  // years), and one press lifts them. The tag stays — it is where the reader
+  // is, not what narrowed the list; alone, the way out is All memos.
+  const lensEmpty = ((): { title: string; body: string; action: string; onAction: () => void; home?: boolean } | null => {
+    if (view !== "memos" || searching) return null;
+    const fullDay = (key: string) => statsDrilldownLabel({ kind: "day", day: key }, locale);
+    const facets = FACET_ROWS.filter((row) => filters[row.key]);
+    const { dateFrom, dateTo } = filters;
+    const ranged = dateFrom !== null || dateTo !== null;
+    const lenses = (activeDay ? 1 : 0) + (ranged ? 1 : 0) + (statsDrilldown ? 1 : 0) + facets.length;
+    if (lenses === 0) {
+      if (!activeTag) return null;
+      return {
+        title: tr(`No memos in #${activeTag}`, `#${activeTag} 下没有笔记`),
+        body: tr("Head back to all your memos.", "回到全部笔记看看"),
+        action: tr("Show all memos", "显示全部笔记"),
+        // Called on a press, long after the callbacks below are declared.
+        onAction: () => showAll(),
+        home: true
+      };
+    }
+    const body =
+      lenses > 1
+        ? activeTag
+          ? tr(`Clear them to see everything in #${activeTag}.`, `清除后显示 #${activeTag} 下的全部笔记`)
+          : tr("Clear them to see all your memos.", "清除后显示全部笔记")
+        : activeTag
+          ? tr(`Clear it to see everything in #${activeTag}.`, `清除后显示 #${activeTag} 下的全部笔记`)
+          : tr("Clear it to see all your memos.", "清除后显示全部笔记");
+    const lift = { body, onAction: () => clearRefinements() };
+    if (lenses > 1) return { ...lift, title: tr("No memos match these filters", "没有符合这些筛选条件的笔记"), action: tr("Clear filters", "清除筛选") };
+    if (activeDay) return { ...lift, title: tr(`No memos on ${fullDay(activeDay)}`, `${fullDay(activeDay)} 没有笔记`), action: tr("Clear date", "清除日期") };
+    if (statsDrilldown) {
+      const label = statsDrilldownLabel(statsDrilldown, locale);
+      return { ...lift, title: tr(`No memos for ${label}`, `${label} 没有笔记`), action: tr("Clear statistics filter", "清除统计筛选") };
+    }
+    if (ranged) {
+      const [lo, hi] = dateFrom !== null && dateTo !== null && dateTo < dateFrom ? [dateTo, dateFrom] : [dateFrom, dateTo];
+      const title =
+        lo !== null && hi !== null
+          ? lo === hi
+            ? tr(`No memos on ${fullDay(lo)}`, `${fullDay(lo)} 没有笔记`)
+            : tr(`No memos from ${fullDay(lo)} to ${fullDay(hi)}`, `${fullDay(lo)} 至 ${fullDay(hi)} 没有笔记`)
+          : lo !== null
+            ? tr(`No memos since ${fullDay(lo)}`, `${fullDay(lo)} 以来没有笔记`)
+            : tr(`No memos up to ${fullDay(hi!)}`, `${fullDay(hi!)} 及之前没有笔记`);
+      return { ...lift, title, action: tr("Clear date range", "清除日期范围") };
+    }
+    const row = facets[0];
+    return {
+      ...lift,
+      title: row.key === "noTags" ? tr("No untagged memos", "没有无标签的笔记") : tr(`No memos ${row.en.toLowerCase()}`, `没有${row.zh}的笔记`),
+      action: tr(`Clear “${row.en}”`, `清除「${row.zh}」`)
+    };
+  })();
   // What the polite live region reads: the settled answer, not every
   // keystroke's (or the "still looking" state's) intermediate one.
   const searchSettled =
@@ -2116,18 +2196,6 @@ export default function App() {
     if (isRootLens(navLensRef.current)) rootPlaceRef.current = place;
   }, []);
 
-  /** A discrete lens change: a new result list, and a new Back step. */
-  const changeFeed = useCallback(
-    (apply: () => void) => {
-      noteLeavingPlace();
-      swapFeed(() => {
-        navIntentRef.current = "push";
-        apply();
-      }, { rewind: true });
-    },
-    [swapFeed, noteLeavingPlace]
-  );
-
   /**
    * A lens the reader has been in before (Back/Forward, the ⌂ pill): the
    * same morph, but landing on the card they left rather than the top. The
@@ -2146,6 +2214,44 @@ export default function App() {
       );
     },
     [swapFeed]
+  );
+
+  /**
+   * The reading place a move to `target` should land on, if it is a lens
+   * the reader has just left: All memos (where ⌂ goes back to), or the entry
+   * under this one in Back — the tag a search was typed in, the list a chip
+   * narrowed. Any other lens is a new list, and starts at the top.
+   */
+  const returnPlaceFor = useCallback((target: NavLens): NavPlace | null => {
+    if (lensesEqual(target, navLensRef.current)) return null;
+    if (isRootLens(target)) return rootPlaceRef.current;
+    const id = currentNavIdRef.current;
+    const below = id ? navStoreRef.current?.below(id) : null;
+    return below && lensesEqual(below.lens, target) ? below.place : null;
+  }, []);
+
+  /**
+   * A discrete lens change: a new result list, and a new Back step. The
+   * one path every control takes — tag rows, heatmap days, chips and their
+   * ×, crumbs, the search's × and Esc, presets, Trash, Daily review — so they
+   * all behave alike. `to` names the lens the change leads to (from the one
+   * on screen); one the reader has just left lands back on the card they
+   * left it at, the way Back and ⌂ do, instead of rewinding to the top.
+   */
+  const changeFeed = useCallback(
+    (apply: () => void, to?: (lens: NavLens) => NavLens) => {
+      noteLeavingPlace();
+      const place = to ? returnPlaceFor(to(navLensRef.current)) : null;
+      if (place) {
+        returnToFeed(apply, place, "push");
+        return;
+      }
+      swapFeed(() => {
+        navIntentRef.current = "push";
+        apply();
+      }, { rewind: true });
+    },
+    [swapFeed, noteLeavingPlace, returnPlaceFor, returnToFeed]
   );
 
   // Declared after the query-scroll effect above so a restored place wins
@@ -2180,13 +2286,25 @@ export default function App() {
       // one Back step per search (Back clears it again), and the place left
       // behind (All memos' too, for ⌂) is measured now. Later keystrokes
       // edit that entry in place.
-      if (next.trim() !== "" && navLensRef.current.query.trim() === "") {
+      const current = navLensRef.current;
+      if (next.trim() !== "" && current.query.trim() === "") {
         noteLeavingPlace();
         navIntentRef.current = "push";
+      } else if (next.trim() === "" && current.query.trim() !== "") {
+        // Typed back to nothing: the list the search was typed over returns,
+        // at the card it was left at (measured by the first keystroke) — as
+        // the × and Esc bring it back. The emptied query skips the deferral
+        // so the list and its place land in one commit.
+        const place = returnPlaceFor({ ...current, query: "" });
+        if (place) {
+          queryLeapRef.current = "";
+          pendingPlaceRef.current = place;
+          setPlaceTick((tick) => tick + 1);
+        }
       }
       setQuery(next);
     },
-    [noteLeavingPlace]
+    [noteLeavingPlace, returnPlaceFor]
   );
 
   /**
@@ -2217,14 +2335,23 @@ export default function App() {
       if (view === "memos" && activeTag === path) {
         return;
       }
-      changeFeed(() => {
-        setActiveTag(path);
-        setStatsDrilldown(null);
-        setView("memos");
-        // Inside a tag every memo carries it, so "No tags" would only ever
-        // answer with an empty feed; the chip folds away with the move.
-        if (path) setFilters((current) => (current.noTags ? { ...current, noTags: false } : current));
-      });
+      changeFeed(
+        () => {
+          setActiveTag(path);
+          setStatsDrilldown(null);
+          setView("memos");
+          // Inside a tag every memo carries it, so "No tags" would only ever
+          // answer with an empty feed; the chip folds away with the move.
+          if (path) setFilters((current) => (current.noTags ? { ...current, noTags: false } : current));
+        },
+        (lens) => ({
+          ...lens,
+          view: "memos",
+          tag: path,
+          drilldown: null,
+          filters: path && lens.filters.noTags ? { ...lens.filters, noTags: false } : lens.filters
+        })
+      );
     },
     [view, activeTag, changeFeed]
   );
@@ -2234,14 +2361,23 @@ export default function App() {
       if (view === "memos" && activeDay === key) {
         return;
       }
-      changeFeed(() => {
-        setActiveDay(key);
-        // One date lens at a time: a heatmap day replaces a date range
-        // (their intersection was a second chip and, mostly, an empty feed).
-        if (key) setFilters((current) => (current.dateFrom !== null || current.dateTo !== null ? { ...current, dateFrom: null, dateTo: null } : current));
-        setStatsDrilldown(null);
-        setView("memos");
-      });
+      changeFeed(
+        () => {
+          setActiveDay(key);
+          // One date lens at a time: a heatmap day replaces a date range
+          // (their intersection was a second chip and, mostly, an empty feed).
+          if (key) setFilters((current) => (current.dateFrom !== null || current.dateTo !== null ? { ...current, dateFrom: null, dateTo: null } : current));
+          setStatsDrilldown(null);
+          setView("memos");
+        },
+        (lens) => ({
+          ...lens,
+          view: "memos",
+          day: key,
+          drilldown: null,
+          filters: key ? { ...lens.filters, dateFrom: null, dateTo: null } : lens.filters
+        })
+      );
     },
     [view, activeDay, changeFeed]
   );
@@ -2338,22 +2474,44 @@ export default function App() {
 
   /** Widens a scoped search to the whole notebook, keeping the query. */
   const searchAllMemos = useCallback(() => {
-    changeFeed(() => {
-      setActiveTag(null);
-      setActiveDay(null);
-      setStatsDrilldown(null);
-      setFilters(EMPTY_FILTERS);
-    });
+    changeFeed(
+      () => {
+        setActiveTag(null);
+        setActiveDay(null);
+        setStatsDrilldown(null);
+        setFilters(EMPTY_FILTERS);
+      },
+      (lens) => ({ ...lens, tag: null, day: null, drilldown: null, filters: EMPTY_FILTERS })
+    );
   }, [changeFeed]);
 
   /** Facet on/off is a discrete choice — it rides the same feed morph as a
       tag or sort change, whether it comes from the panel or a chip's ×. */
   const toggleFacet = useCallback(
     (key: FacetKey) => {
-      changeFeed(() => setFilters((current) => ({ ...current, [key]: !current[key] })));
+      changeFeed(
+        () => setFilters((current) => ({ ...current, [key]: !current[key] })),
+        (lens) => ({ ...lens, filters: { ...lens.filters, [key]: !lens.filters[key] } })
+      );
     },
     [changeFeed]
   );
+
+  /**
+   * The empty feed's way out of the lenses that emptied it: every
+   * refinement chip at once (day, statistics bar, date range, facets), the
+   * tag kept — it is where the reader is, not what narrowed it.
+   */
+  const clearRefinements = useCallback(() => {
+    changeFeed(
+      () => {
+        setActiveDay(null);
+        setStatsDrilldown(null);
+        setFilters(EMPTY_FILTERS);
+      },
+      (lens) => ({ ...lens, day: null, drilldown: null, filters: EMPTY_FILTERS })
+    );
+  }, [changeFeed]);
 
   // The calendar's first tap (an open "since") updates in place rather than
   // morphing. Starting a range is a Back step; closing it (below) is not.
@@ -2378,37 +2536,49 @@ export default function App() {
       // one pick, one Back step.
       const { filters: current } = navLensRef.current;
       const closing = current.dateFrom !== null && current.dateTo === null;
-      changeFeed(() => {
-        if (closing) navIntentRef.current = "replace";
-        setFilters((value) => ({ ...value, dateFrom: from, dateTo: to }));
-        setActiveDay(null);
-      });
+      changeFeed(
+        () => {
+          if (closing) navIntentRef.current = "replace";
+          setFilters((value) => ({ ...value, dateFrom: from, dateTo: to }));
+          setActiveDay(null);
+        },
+        (lens) => ({ ...lens, day: null, filters: { ...lens.filters, dateFrom: from, dateTo: to } })
+      );
     },
     [changeFeed]
   );
 
   const clearDateRange = useCallback(() => {
-    changeFeed(() => setFilters((current) => ({ ...current, dateFrom: null, dateTo: null })));
+    changeFeed(
+      () => setFilters((current) => ({ ...current, dateFrom: null, dateTo: null })),
+      (lens) => ({ ...lens, filters: { ...lens.filters, dateFrom: null, dateTo: null } })
+    );
   }, [changeFeed]);
 
   const clearStatsDrilldown = useCallback(() => {
-    changeFeed(() => setStatsDrilldown(null));
+    changeFeed(
+      () => setStatsDrilldown(null),
+      (lens) => ({ ...lens, drilldown: null })
+    );
   }, [changeFeed]);
 
   const openStatsDrilldown = useCallback(
     (drilldown: StatsDrilldown) => {
-      changeFeed(() => {
-        setStatsOpen(false);
-        setStatsDrilldown(drilldown);
-        setActiveTag(null);
-        setActiveDay(null);
-        swapQuery("");
-        setFilters(EMPTY_FILTERS);
-        setView("memos");
-        setSelectMode(false);
-        setSelected(new Set());
-        setConfirmBatchDelete(false);
-      });
+      changeFeed(
+        () => {
+          setStatsOpen(false);
+          setStatsDrilldown(drilldown);
+          setActiveTag(null);
+          setActiveDay(null);
+          swapQuery("");
+          setFilters(EMPTY_FILTERS);
+          setView("memos");
+          setSelectMode(false);
+          setSelected(new Set());
+          setConfirmBatchDelete(false);
+        },
+        (lens) => ({ ...lens, view: "memos", drilldown, tag: null, day: null, query: "", filters: EMPTY_FILTERS })
+      );
     },
     [changeFeed, swapQuery]
   );
@@ -2424,14 +2594,17 @@ export default function App() {
         showToast(tr(`Couldn’t apply “${item.name}”: #${tag} no longer exists`, `无法应用「${item.name}」：#${tag} 已不存在`), "error");
         return;
       }
-      changeFeed(() => {
-        setView("memos");
-        setActiveTag(item.tag);
-        setActiveDay(item.day);
-        setStatsDrilldown(null);
-        swapQuery(item.query);
-        setFilters(item.filters);
-      });
+      changeFeed(
+        () => {
+          setView("memos");
+          setActiveTag(item.tag);
+          setActiveDay(item.day);
+          setStatsDrilldown(null);
+          swapQuery(item.query);
+          setFilters(item.filters);
+        },
+        (lens) => ({ ...lens, view: "memos", tag: item.tag, day: item.day, drilldown: null, query: item.query, filters: item.filters })
+      );
     },
     [changeFeed, swapQuery, knownTags, showToast, tr]
   );
@@ -2523,16 +2696,19 @@ export default function App() {
   const openTrash = useCallback(() => {
     if (view === "trash") return;
     if (holdForOpenEdit("open Trash", "打开回收站")) return;
-    changeFeed(() => {
-      setView("trash");
-      setTrashQuery("");
-      setStatsDrilldown(null);
-      // Same flush: the "已选 N 条" pill hands topbar-action to the Empty
-      // Trash pill inside one morph instead of two competing transitions.
-      setSelectMode(false);
-      setSelected(new Set());
-      setConfirmBatchDelete(false);
-    });
+    changeFeed(
+      () => {
+        setView("trash");
+        setTrashQuery("");
+        setStatsDrilldown(null);
+        // Same flush: the "已选 N 条" pill hands topbar-action to the Empty
+        // Trash pill inside one morph instead of two competing transitions.
+        setSelectMode(false);
+        setSelected(new Set());
+        setConfirmBatchDelete(false);
+      },
+      (lens) => ({ ...lens, view: "trash", drilldown: null })
+    );
   }, [view, changeFeed, holdForOpenEdit]);
 
   /**
@@ -2552,14 +2728,18 @@ export default function App() {
     // Re-clicking the nav item on a still-valid day is a no-op; on a rolled-
     // over day it deals the new batch in place.
     if (view === "review" && next === reviewDay) return;
-    changeFeed(() => {
-      if (next !== reviewDay) setReviewDay(next);
-      setView("review");
-      setStatsDrilldown(null);
-      setSelectMode(false);
-      setSelected(new Set());
-      setConfirmBatchDelete(false);
-    });
+    changeFeed(
+      () => {
+        if (next !== reviewDay) setReviewDay(next);
+        setView("review");
+        setStatsDrilldown(null);
+        setSelectMode(false);
+        setSelected(new Set());
+        setConfirmBatchDelete(false);
+      },
+      // Re-dealt in place (a new day), the review is a new list, not a return.
+      (lens) => (view === "review" ? lens : { ...lens, view: "review", drilldown: null })
+    );
   }, [view, reviewDay, reviewSettings, activeMemos, changeFeed, holdForOpenEdit, drawReviewDay]);
 
   // Crossing midnight while the review view sits open: returning focus (or
@@ -2652,10 +2832,12 @@ export default function App() {
       // over the layer's own entry: one Back step back to the lens the layer
       // covered, and closing the layer has no entry left to step off.
       layerEntryRef.current = false;
-      currentNavIdRef.current = store.replace(null, navLens);
+      currentNavIdRef.current = store.replace(null, navLens, id);
       return;
     }
-    currentNavIdRef.current = intent === "push" && entry ? store.push(navLens) : store.replace(id, navLens);
+    // Each pushed entry remembers the one it covers, so a later pick that
+    // lands back on that lens can return to its reading place (changeFeed).
+    currentNavIdRef.current = intent === "push" && entry ? store.push(navLens, id) : store.replace(id, navLens);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs per lens change; applyNavLens reads this render
   }, [phase, navLens]);
 
@@ -3985,6 +4167,35 @@ export default function App() {
     document.querySelector<HTMLButtonElement>(".loc-trigger")?.focus({ preventScroll: true });
   }, [selectMode]);
 
+  // The same floor for the controls a lens change removes from under the
+  // press: ⌂, an ancestor crumb (it becomes the pill), a chip's ×, the
+  // Trash/Review ⌂, the empty feed's way out. Armed on the press with what
+  // has focus; once the new lens commits, a focus left on <body> lands on
+  // the chip now in the removed one's slot (so × after × clears the trail
+  // in turn), else on the location pill. Expires so a press that changed
+  // nothing can't steer a later, unrelated lens change.
+  const focusFloorRef = useRef<{ from: Element; chip: number; at: number } | null>(null);
+  const armFocusFloor = useCallback(() => {
+    const from = document.activeElement;
+    if (!from || from === document.body) return;
+    const chips = [...document.querySelectorAll(".topbar .filter-chip")];
+    focusFloorRef.current = { from, chip: chips.findIndex((chip) => chip.contains(from)), at: performance.now() };
+  }, []);
+  useLayoutEffect(() => {
+    const floor = focusFloorRef.current;
+    focusFloorRef.current = null;
+    if (!floor || floor.from.isConnected || performance.now() - floor.at > 1500) return;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    const chips = [...document.querySelectorAll<HTMLElement>(".topbar .filter-chip")];
+    const chip = floor.chip >= 0 && chips.length > 0 ? chips[Math.min(floor.chip, chips.length - 1)] : null;
+    const target = chip
+      ? chip.matches("button")
+        ? chip
+        : chip.querySelector<HTMLElement>("button.filter-chip-x")
+      : document.querySelector<HTMLElement>(".topbar .loc-trigger");
+    target?.focus({ preventScroll: true });
+  }, [navLens]);
+
   async function handlePinTag(path: string, pinned: boolean) {
     try {
       const result = await guard(() => pinTag(path, pinned));
@@ -4427,7 +4638,12 @@ export default function App() {
                   )}
                 </span>
                 {selectLens.length > 0 ? (
-                  <span className="select-lens" title={selectLens.join(" · ")}>
+                  <span
+                    className="select-lens"
+                    // The app's bubble, not a native title, and only while
+                    // the ellipsis is actually hiding part of the scope.
+                    {...bindAnchored(tip, (anchor) => (isTruncated(anchor) ? { text: selectLens.join(" · ") } : null))}
+                  >
                     {tr("in ", "范围：")}
                     {selectLens.join(" · ")}
                   </span>
@@ -4511,7 +4727,16 @@ export default function App() {
               // same cascade-in, ⌂ steps back out to All memos (the trail
               // folds back on its own snapshot — see .view-trail).
               <nav className="crumbs view-trail" aria-label={tr("Location", "当前位置")}>
-                <button type="button" className="crumb crumb-home" onClick={showAll} aria-label={tr("All memos", "全部笔记")} style={{ animationDelay: "0s" }}>
+                <button
+                  type="button"
+                  className="crumb crumb-home"
+                  onClick={() => {
+                    armFocusFloor();
+                    showAll();
+                  }}
+                  aria-label={tr("All memos", "全部笔记")}
+                  style={{ animationDelay: "0s" }}
+                >
                   <Home size={15} aria-hidden="true" />
                 </button>
                 <ChevronRight size={13} className="crumb-sep" aria-hidden="true" style={{ animationDelay: "0.015s" }} />
@@ -4524,7 +4749,16 @@ export default function App() {
               // Daily review borrows the Trash breadcrumb language: ⌂ / ✦
               // 每日回顾, same cascade-in, ⌂ steps back out to All memos.
               <nav className="crumbs view-trail" aria-label={tr("Location", "当前位置")}>
-                <button type="button" className="crumb crumb-home" onClick={showAll} aria-label={tr("All memos", "全部笔记")} style={{ animationDelay: "0s" }}>
+                <button
+                  type="button"
+                  className="crumb crumb-home"
+                  onClick={() => {
+                    armFocusFloor();
+                    showAll();
+                  }}
+                  aria-label={tr("All memos", "全部笔记")}
+                  style={{ animationDelay: "0s" }}
+                >
                   <Home size={15} aria-hidden="true" />
                 </button>
                 <ChevronRight size={13} className="crumb-sep" aria-hidden="true" style={{ animationDelay: "0.015s" }} />
@@ -4538,7 +4772,17 @@ export default function App() {
               // current tag inside one — IS the dropdown trigger: label and
               // caret fused into one pill that the topbar-action transition
               // glides between breadcrumb layouts.
-              <Crumbs path={activeTag} onHome={showAll} onPick={(path) => pickTag(path)}>
+              <Crumbs
+                path={activeTag}
+                onHome={() => {
+                  armFocusFloor();
+                  showAll();
+                }}
+                onPick={(path) => {
+                  armFocusFloor();
+                  pickTag(path);
+                }}
+              >
                 <Menu
                   align="left"
                   portal
@@ -4685,7 +4929,10 @@ export default function App() {
                     clearLabel={tr(`Clear date filter: ${formatDayLabel(activeDay, locale)}`, `清除日期筛选：${formatDayLabel(activeDay, locale)}`)}
                     transitionName="day-filter-chip"
                     delay={chipDelay("day")}
-                    onClear={() => pickDay(null)}
+                    onClear={() => {
+                      armFocusFloor();
+                      pickDay(null);
+                    }}
                   />
                 ) : null}
                 {statsChipLabel ? (
@@ -4695,7 +4942,10 @@ export default function App() {
                     clearLabel={tr(`Clear statistics filter: ${statsChipLabel}`, `清除统计筛选：${statsChipLabel}`)}
                     transitionName="stats-filter-chip"
                     delay={chipDelay("stats")}
-                    onClear={clearStatsDrilldown}
+                    onClear={() => {
+                      armFocusFloor();
+                      clearStatsDrilldown();
+                    }}
                   />
                 ) : null}
                 {rangeChipLabel ? (
@@ -4706,7 +4956,10 @@ export default function App() {
                     editLabel={tr(`Edit date range: ${rangeChipLabel}`, `编辑日期范围：${rangeChipLabel}`)}
                     transitionName="range-filter-chip"
                     delay={chipDelay("range")}
-                    onClear={clearDateRange}
+                    onClear={() => {
+                      armFocusFloor();
+                      clearDateRange();
+                    }}
                     onEdit={() => {
                       setFilterOpenTarget("range");
                       setFilterOpenRequest((n) => n + 1);
@@ -4722,7 +4975,10 @@ export default function App() {
                     editLabel={tr(`Edit filters: “${row.en}”`, `编辑筛选：「${row.zh}」`)}
                     transitionName={`facet-chip-${row.key}`}
                     delay={chipDelay(row.key)}
-                    onClear={() => toggleFacet(row.key)}
+                    onClear={() => {
+                      armFocusFloor();
+                      toggleFacet(row.key);
+                    }}
                     onEdit={() => {
                       setFilterOpenTarget(row.key);
                       setFilterOpenRequest((n) => n + 1);
@@ -4775,7 +5031,10 @@ export default function App() {
                         // also back out on the same press.
                         event.preventDefault();
                         event.stopPropagation();
-                        changeFeed(() => swapQuery(""));
+                        changeFeed(
+                          () => swapQuery(""),
+                          (lens) => ({ ...lens, query: "" })
+                        );
                       } else event.currentTarget.blur();
                     } else if (event.key === "Enter" && window.matchMedia("(pointer: coarse)").matches) {
                       // The feed already follows each keystroke; on a phone
@@ -4796,22 +5055,30 @@ export default function App() {
                 <span id="search-syntax-hint" className="search-sr">
                   {searchSyntaxHint}
                 </span>
-                {searchText ? (
-                  <button
-                    type="button"
-                    className="searchbox-clear"
-                    aria-label={tr("Clear search", "清空搜索")}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => {
-                      // The same restoration the home pill performs, so it
-                      // reads the same: one click, the full list glides back.
-                      changeFeed(() => swapQuery(""));
-                      searchRef.current?.focus();
-                    }}
-                  >
-                    <X size={13} aria-hidden="true" />
-                  </button>
-                ) : null}
+                {/* Always mounted, so it can scale in as the first letter
+                    lands and out as the last goes (the input's right padding
+                    eases with it); while empty it is out of reach. */}
+                <button
+                  type="button"
+                  className={`searchbox-clear${searchText ? " is-shown" : ""}`}
+                  aria-label={tr("Clear search", "清空搜索")}
+                  aria-hidden={searchText ? undefined : true}
+                  tabIndex={searchText ? undefined : -1}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    if (!searchText) return;
+                    // The same restoration the home pill performs, so it
+                    // reads the same: one click, the full list glides back
+                    // (to the reading place, when it was there before).
+                    changeFeed(
+                      () => swapQuery(""),
+                      (lens) => ({ ...lens, query: "" })
+                    );
+                    searchRef.current?.focus();
+                  }}
+                >
+                  <X size={13} aria-hidden="true" />
+                </button>
               </div>
               <button
                 type="button"
@@ -4876,9 +5143,11 @@ export default function App() {
                 }}
               >
                 <Brain size={17} aria-hidden="true" />
-                {semanticBusy ? (
-                  <Loader2 size={9} className="semantic-toggle-progress spin" aria-hidden="true" />
-                ) : null}
+                {/* Kept mounted so the badge pops in when work starts and
+                    shrinks away when it ends instead of blinking. */}
+                <span className={`semantic-toggle-progress${semanticBusy ? " is-shown" : ""}`} aria-hidden="true">
+                  <Loader2 size={9} className="spin" />
+                </span>
               </button>
               <SearchFilter
                 filters={filters}
@@ -4936,21 +5205,22 @@ export default function App() {
                   onFocus={() => setSearchOpen(true)}
                   onBlur={() => setSearchOpen(false)}
                 />
-                {trashQuery ? (
-                  <button
-                    type="button"
-                    className="searchbox-clear"
-                    aria-label={tr("Clear search", "清空搜索")}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={(event) => {
-                      const input = event.currentTarget.parentElement?.querySelector("input");
-                      changeFeed(() => setTrashQuery(""));
-                      input?.focus();
-                    }}
-                  >
-                    <X size={13} aria-hidden="true" />
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  className={`searchbox-clear${trashQuery ? " is-shown" : ""}`}
+                  aria-label={tr("Clear search", "清空搜索")}
+                  aria-hidden={trashQuery ? undefined : true}
+                  tabIndex={trashQuery ? undefined : -1}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    if (!trashQuery) return;
+                    const input = event.currentTarget.parentElement?.querySelector("input");
+                    changeFeed(() => setTrashQuery(""));
+                    input?.focus();
+                  }}
+                >
+                  <X size={13} aria-hidden="true" />
+                </button>
               </div>
               <p className="search-sr" role="status">
                 {searchAnnouncement}
@@ -4994,7 +5264,23 @@ export default function App() {
                         : tr(
                             `Loading memos · ${formatNumber(loadedMemoCount)} of ${formatNumber(bootstrapLoad.total)}`,
                             `正在载入笔记 · ${formatNumber(loadedMemoCount)} / ${formatNumber(bootstrapLoad.total)}`
-                          )
+                          ),
+                    // The same words with the count on the odometer, so each
+                    // page rolls its figures on instead of re-printing them.
+                    line:
+                      bootstrapLoad.total === null ? (
+                        <>
+                          {tr("Loading memos · ", "正在载入笔记 · 已载入 ")}
+                          <RollingText value={loadedMemoCount} />
+                          {tr(" loaded", " 条")}
+                        </>
+                      ) : (
+                        <>
+                          {tr("Loading memos · ", "正在载入笔记 · ")}
+                          <RollingText value={loadedMemoCount} />
+                          {tr(` of ${formatNumber(bootstrapLoad.total)}`, ` / ${formatNumber(bootstrapLoad.total)}`)}
+                        </>
+                      )
                   }
               : syncNotice
                 ? // Offline, or pulls failing while online. Until it clears,
@@ -5012,8 +5298,9 @@ export default function App() {
           }
         />
 
-        {/* data-searching: on phones an empty composer folds away while a
-            search is up, so results start under the search box (app.css). */}
+        {/* data-searching: on phones an empty composer folds away (height
+            and fade) while a search is up, so results start under the
+            search box (app.css). */}
         <div className="composer" hidden={view !== "memos"} data-searching={view === "memos" && trimmedQuery ? "" : undefined}>
           <Editor
             mode="create"
@@ -5027,6 +5314,20 @@ export default function App() {
             onSubmit={handleCreate}
           />
         </div>
+
+        {view !== "review" ? (
+          // Announced through the live region in the search tools, once
+          // typing settles; this line is the one sighted readers scan. Its
+          // figures roll, so the sentence is read from a plain copy. Kept
+          // mounted between searches, and in the column rather than the
+          // feed's grid (whose row gap a folded line would still cost): it
+          // folds open over the results and closes again instead of
+          // shoving them by a line.
+          <p className={`search-summary${summaryShown ? " is-shown" : ""}`} aria-hidden={summaryShown ? undefined : true}>
+            {summaryShown ? <span className="sr-only">{searching ? `${searchSummary}${searchPendingNote}` : trashSummary}</span> : null}
+            <span aria-hidden="true">{summaryLineRef.current}</span>
+          </p>
+        ) : null}
 
         <section
           ref={feedRef}
@@ -5044,15 +5345,6 @@ export default function App() {
                 {tr(` · ${count(feedMemos.length, "memo")} to revisit`, ` · 回顾 ${count(feedMemos.length, "memo")}`)}
               </span>
             </div>
-          ) : null}
-          {(searching || trashSearching) && feedMemos.length > 0 ? (
-            // Announced through the live region in the search tools, once
-            // typing settles; this line is the one sighted readers scan. Its
-            // figures roll, so the sentence is read from a plain copy.
-            <p className="search-summary">
-              <span className="sr-only">{searching ? `${searchSummary}${searchPendingNote}` : trashSummary}</span>
-              <span aria-hidden="true">{searching ? searchSummaryLine : trashSummaryLine}</span>
-            </p>
           ) : null}
           {feedMemos.length === 0 ? (
             <div className="feed-empty">
@@ -5096,9 +5388,32 @@ export default function App() {
                         )
                       : tr("Memos outside this view may still match by meaning.", "范围外的笔记可能有意思相近的")}
                   </p>
-                  <button type="button" className="ghost-button feed-empty-action" onClick={searchAllMemos}>
+                  <button
+                    type="button"
+                    className="ghost-button feed-empty-action"
+                    onClick={() => {
+                      armFocusFloor();
+                      searchAllMemos();
+                    }}
+                  >
                     <Search size={15} aria-hidden="true" />
                     {tr("Search all memos", "在全部笔记中搜索")}
+                  </button>
+                </>
+              ) : lensEmpty ? (
+                <>
+                  <p className="feed-empty-title">{lensEmpty.title}</p>
+                  <p>{lensEmpty.body}</p>
+                  <button
+                    type="button"
+                    className="ghost-button feed-empty-action"
+                    onClick={() => {
+                      armFocusFloor();
+                      lensEmpty.onAction();
+                    }}
+                  >
+                    {lensEmpty.home ? <Home size={15} aria-hidden="true" /> : <X size={15} aria-hidden="true" />}
+                    {lensEmpty.action}
                   </button>
                 </>
               ) : (

@@ -1,5 +1,5 @@
 import { ChevronDown, Cpu, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sparkles, Sun, SunMoon, Trash2, Upload, type LucideIcon } from "lucide-react";
-import { memo, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { useI18n } from "../lib/i18n";
 import { dayKeyOf, periodStats, totalStats, type PeriodKind } from "../lib/stats";
 import type { TagNode } from "../lib/tags";
@@ -60,11 +60,96 @@ const THEME_OPTIONS: { choice: ThemeChoice; icon: LucideIcon; en: string; zh: st
   { choice: "dark", icon: Moon, en: "Dark", zh: "深色" }
 ];
 
+/** The --ease-out token (app.css): Web Animations can't read the variable. */
+const GLIDE_EASING = "cubic-bezier(0.16, 1, 0.3, 1)";
+
+/**
+ * One selection mark for the whole sidebar. The current place — a nav row
+ * or a tag row — carries a .sel-glow; when the place changes, the new row's
+ * glow starts where the old one was painted and glides home, rather than
+ * one row fading out while another fades in. The old position is read
+ * during render, while the DOM still shows it (and mid-glide, so a quick
+ * second pick carries on from the painted frame). The glow rides inside its
+ * row, so a tag-tree fold or reorder that moves the row carries it along.
+ * With no row to land on (a search, a facet), the old mark fades where it
+ * was; arriving from none, the new one fades in. Reduced motion: it moves.
+ */
+function useSelectionGlide(rootRef: RefObject<HTMLElement>, place: string | null) {
+  const placeRef = useRef(place);
+  // Set by a render that moved the place: the mark's rect as it was painted.
+  const moveRef = useRef<{ from: DOMRect | null; radius: string } | null>(null);
+  if (placeRef.current !== place) {
+    placeRef.current = place;
+    const glow = rootRef.current?.querySelector(".sel-glow:not(.is-ghost)");
+    moveRef.current = { from: glow?.getBoundingClientRect() ?? null, radius: glow ? getComputedStyle(glow).borderRadius : "" };
+  }
+
+  useLayoutEffect(() => {
+    const move = moveRef.current;
+    moveRef.current = null;
+    const root = rootRef.current;
+    if (!move || !root || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const from = move.from;
+    const glow = root.querySelector<HTMLElement>(".sel-glow:not(.is-ghost)");
+    if (glow && typeof glow.animate !== "function") return;
+    if (!from || from.height === 0) {
+      glow?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: GLIDE_EASING });
+      return;
+    }
+    if (!glow) {
+      // Nothing to land on: the old mark recedes in place. The ghost sits in
+      // the scroller's own coordinates, so a scroll mid-fade carries it.
+      const origin = root.getBoundingClientRect();
+      const ghost = document.createElement("span");
+      ghost.className = "sel-glow is-ghost";
+      ghost.setAttribute("aria-hidden", "true");
+      Object.assign(ghost.style, {
+        inset: "auto",
+        top: `${from.top - origin.top + root.scrollTop}px`,
+        left: `${from.left - origin.left + root.scrollLeft}px`,
+        width: `${from.width}px`,
+        height: `${from.height}px`,
+        // Out of its row it can't inherit the row's corners.
+        borderRadius: move.radius
+      });
+      root.appendChild(ghost);
+      if (typeof ghost.animate !== "function") {
+        ghost.remove();
+        return;
+      }
+      const fade = ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 120, easing: GLIDE_EASING, fill: "forwards" });
+      const drop = () => ghost.remove();
+      void fade.finished.then(drop, drop);
+      return;
+    }
+    // Cancel a glide still running before measuring where this one ends.
+    for (const animation of glow.getAnimations()) animation.cancel();
+    const to = glow.getBoundingClientRect();
+    const dx = from.left - to.left;
+    const dy = from.top - to.top;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(from.height - to.height) < 1) return;
+    glow.animate(
+      [
+        { transform: `translate(${dx}px, ${dy}px)`, width: `${from.width}px`, height: `${from.height}px` },
+        { transform: "none", width: `${to.width}px`, height: `${to.height}px` }
+      ],
+      { duration: 220, easing: GLIDE_EASING }
+    );
+  }, [place, rootRef]);
+}
+
 function SidebarView(props: SidebarProps) {
   const { memos, tagTree, uniqueTagCount, countsByDay, activeTag, activeDay, filtersActive, view, trashCount, theme } = props;
   const { language, setLanguage, tr, count } = useI18n();
   const tip = useTip();
   const [period, setPeriod] = useState<PeriodKind>("week");
+  // Where the reader is, as one sidebar row: Trash, Daily review, All memos
+  // unfiltered, or a tag. A tag stays a lens behind Trash and review, but it
+  // is not the place on screen there, so its row isn't marked.
+  const selectedTag = view === "memos" ? activeTag : null;
+  const place = view !== "memos" ? `nav:${view}` : !filtersActive ? "nav:all" : selectedTag ? `tag:${selectedTag}` : null;
+  const innerRef = useRef<HTMLDivElement>(null);
+  useSelectionGlide(innerRef, place);
 
   useEffect(() => {
     if (!props.drawerOpen || !props.onCloseDrawer) return;
@@ -110,7 +195,7 @@ function SidebarView(props: SidebarProps) {
   }
 
   return (
-    <div className="sidebar-inner">
+    <div ref={innerRef} className="sidebar-inner">
       <header className="sidebar-head">
         <Menu
           align="left"
@@ -385,10 +470,11 @@ function SidebarView(props: SidebarProps) {
       <nav className="sidebar-nav">
         <button
           type="button"
-          className={`nav-item${view === "memos" && !filtersActive ? " is-active" : ""}`}
-          aria-current={view === "memos" && !filtersActive ? "page" : undefined}
+          className={`nav-item${place === "nav:all" ? " is-active" : ""}`}
+          aria-current={place === "nav:all" ? "page" : undefined}
           onClick={props.onShowAll}
         >
+          {place === "nav:all" ? <span className="sel-glow" aria-hidden="true" /> : null}
           <Inbox size={16} aria-hidden="true" />
           <span className="nav-label">{tr("All memos", "全部笔记")}</span>
           <span className="nav-count">
@@ -401,6 +487,7 @@ function SidebarView(props: SidebarProps) {
           aria-current={view === "review" ? "page" : undefined}
           onClick={props.onOpenReview}
         >
+          {view === "review" ? <span className="sel-glow" aria-hidden="true" /> : null}
           <Sparkles size={16} aria-hidden="true" />
           <span className="nav-label">{tr("Daily review", "每日回顾")}</span>
         </button>
@@ -410,6 +497,7 @@ function SidebarView(props: SidebarProps) {
           aria-current={view === "trash" ? "page" : undefined}
           onClick={props.onOpenTrash}
         >
+          {view === "trash" ? <span className="sel-glow" aria-hidden="true" /> : null}
           <Trash2 size={16} aria-hidden="true" />
           <span className="nav-label">{tr("Trash", "回收站")}</span>
           <span className="nav-count">
@@ -420,7 +508,7 @@ function SidebarView(props: SidebarProps) {
 
       <TagTree
         tree={tagTree}
-        activeTag={activeTag}
+        activeTag={selectedTag}
         pinnedTags={props.pinnedTags}
         onPickTag={props.onPickTag}
         onPinTag={props.onPinTag}

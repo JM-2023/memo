@@ -10,6 +10,7 @@ import { TipProvider } from "../src/components/Tip";
 import { useTopbarTuck } from "../src/hooks/useTopbarTuck";
 import { dateKey } from "../src/lib/dates";
 import { LanguageProvider } from "../src/lib/i18n";
+import { SCROLL_JUMP_EVENT } from "../src/lib/navHistory";
 import type { Memo } from "../src/lib/types";
 
 const mocks = vi.hoisted(() => ({
@@ -215,6 +216,114 @@ describe("lens history", () => {
   });
 });
 
+describe("ways back", () => {
+  afterEach(() => {
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+  });
+
+  it("returns a cleared search to the reading place it left, by × and by backspacing", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByText(/beta note/);
+    const scrollTo = window.scrollTo as unknown as ReturnType<typeof vi.fn>;
+    // 900px down All memos when the search starts.
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 900 });
+    const search = screen.getByPlaceholderText("Search memos") as HTMLInputElement;
+    await user.type(search, "beta");
+    await waitFor(() => expect(screen.queryByText(/alpha note/)).toBeNull());
+
+    scrollTo.mockClear();
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
+    await screen.findByText(/alpha note/);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(0, 900));
+
+    await user.type(search, "b");
+    await waitFor(() => expect(screen.queryByText(/alpha note/)).toBeNull());
+    scrollTo.mockClear();
+    await user.type(search, "{Backspace}");
+    await screen.findByText(/alpha note/);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(0, 900));
+  });
+
+  it("names the lenses that emptied the feed, offers the way out, and keeps focus on the trail", async () => {
+    const user = userEvent.setup();
+    const { container } = renderApp();
+    await screen.findByText(/beta note/);
+    fireEvent.click(container.querySelector<HTMLButtonElement>(".heat-cell.is-today")!);
+    await screen.findByRole("button", { name: /^Clear date filter/ });
+    await user.click(screen.getByRole("button", { name: "Filter memos" }));
+    await user.click(screen.getByRole("button", { name: /With images/ }));
+    await user.keyboard("{Escape}");
+    expect(await screen.findByText("No memos match these filters")).toBeTruthy();
+
+    // The day chip's × takes itself away: focus moves on to the chip now
+    // standing in its place, not down to the page.
+    act(() => screen.getByRole("button", { name: /^Clear date filter/ }).focus());
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Clear date filter/ })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Clear “With images” filter" }));
+
+    // One lens left: named, with its own way out.
+    expect(await screen.findByText("No memos with images")).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Clear “With images”" }).focus());
+    await user.keyboard("{Enter}");
+    await screen.findByText(/alpha note/);
+    expect(document.activeElement?.classList.contains("loc-trigger")).toBe(true);
+  });
+
+  it("lands focus on the location pill when ⌂ leaves Trash", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByText(/beta note/);
+    await user.click(screen.getByRole("button", { name: /^Trash/ }));
+    const home = await screen.findByRole("button", { name: "All memos" });
+    act(() => home.focus());
+    await user.keyboard("{Enter}");
+    await screen.findByText(/beta note/);
+    await waitFor(() => expect(document.activeElement?.classList.contains("loc-trigger")).toBe(true));
+  });
+});
+
+describe("sidebar selection", () => {
+  it("moves one mark from the row it leaves to the row it lands on", async () => {
+    const user = userEvent.setup();
+    // Motion on, so the mark glides.
+    matchMediaWith(() => false);
+    const rows = new Map<string, DOMRect>([
+      ["nav", new DOMRect(6, 100, 268, 40)],
+      ["tag", new DOMRect(6, 320, 268, 34)]
+    ]);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (!this.classList.contains("sel-glow")) return new DOMRect(0, 0, 0, 0);
+      return rows.get(this.closest(".tag-row") ? "tag" : "nav")!;
+    });
+    const glides: Keyframe[][] = [];
+    Object.defineProperty(HTMLElement.prototype, "animate", {
+      configurable: true,
+      value(this: HTMLElement, keyframes: Keyframe[]) {
+        if (this.classList.contains("sel-glow")) glides.push(keyframes);
+        return { cancel() {}, pause() {}, play() {}, finish() {}, finished: Promise.resolve(), addEventListener() {}, removeEventListener() {}, onfinish: null };
+      }
+    });
+    try {
+      renderApp();
+      await screen.findByText(/beta note/);
+      expect(document.querySelectorAll(".sel-glow")).toHaveLength(1);
+      expect(document.querySelector(".sel-glow")?.closest(".nav-item")?.getAttribute("aria-current")).toBe("page");
+
+      await user.click(screen.getByRole("button", { name: /^alpha/ }));
+      await waitFor(() => expect(document.querySelector(".sel-glow")?.closest(".tag-row")).toBeTruthy());
+      expect(document.querySelectorAll(".sel-glow")).toHaveLength(1);
+      // It starts where All memos' mark was painted and runs home.
+      const glide = glides.find((frames) => String(frames[0]?.transform).startsWith("translate("));
+      expect(glide?.[0]).toMatchObject({ transform: "translate(0px, -220px)", height: "40px" });
+      expect(glide?.[1]).toMatchObject({ transform: "none", height: "34px" });
+    } finally {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).animate;
+    }
+  });
+});
+
 describe("trash search", () => {
   it("filters trashed memos by keyword without the semantic or filter controls", async () => {
     const user = userEvent.setup();
@@ -284,7 +393,16 @@ describe("date lenses", () => {
         <RangeCalendar from={null} to={null} minDay={minDay} onStart={vi.fn()} onRange={vi.fn()} />
       </Providers>
     );
-    expect((screen.getByRole("button", { name: "Previous month" }) as HTMLButtonElement).disabled).toBe(true);
+    // Spent, but still a focus stop: a disabled arrow would drop the focus
+    // resting on it (Enter held on ‹ walked off the calendar).
+    const previous = screen.getByRole("button", { name: "Previous month" }) as HTMLButtonElement;
+    expect(previous.getAttribute("aria-disabled")).toBe("true");
+    expect(previous.disabled).toBe(false);
+    act(() => previous.focus());
+    const month = document.querySelector(".range-cal-month")?.textContent;
+    fireEvent.click(previous);
+    expect(document.querySelector(".range-cal-month")?.textContent).toBe(month);
+    expect(document.activeElement).toBe(previous);
     const before = document.querySelector<HTMLButtonElement>(`[data-day="${dateKey(first)}"]`);
     const floor = document.querySelector<HTMLButtonElement>(`[data-day="${minDay}"]`);
     expect(before?.disabled).toBe(true);
@@ -342,6 +460,8 @@ describe("mobile chrome", () => {
         vi.runOnlyPendingTimers();
       });
     };
+    // The page's own scroll range (jsdom lays nothing out).
+    Object.defineProperty(document.documentElement, "scrollHeight", { configurable: true, value: 5000 });
     vi.useFakeTimers();
     try {
       scrollTo(400);
@@ -360,6 +480,61 @@ describe("mobile chrome", () => {
     } finally {
       vi.useRealTimers();
       Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+      delete (document.documentElement as unknown as { scrollHeight?: number }).scrollHeight;
+    }
+  });
+
+  it("leaves the search row alone for a place the app restores, and for the bounce past the bottom", () => {
+    matchMediaWith((query) => query.includes("max-width: 440px") || query.includes("prefers-reduced-motion"));
+    function Bar() {
+      const ref = useRef<HTMLDivElement>(null);
+      useTopbarTuck(ref, true);
+      return (
+        <div ref={ref} className="topbar">
+          <div className="breadcrumb" />
+          <div className="search-tools" />
+        </div>
+      );
+    }
+    const { container } = render(<Bar />);
+    const bar = container.querySelector<HTMLElement>(".topbar")!;
+    Object.defineProperties(container.querySelector(".breadcrumb")!, { offsetTop: { value: 16 }, offsetHeight: { value: 44 } });
+    Object.defineProperties(container.querySelector(".search-tools")!, { offsetTop: { value: 68 }, offsetHeight: { value: 40 } });
+    Object.defineProperty(document.documentElement, "scrollHeight", { configurable: true, value: 2000 + window.innerHeight });
+    const scrollTo = (y: number) => {
+      Object.defineProperty(window, "scrollY", { configurable: true, value: y });
+      act(() => {
+        window.dispatchEvent(new Event("scroll"));
+        vi.runOnlyPendingTimers();
+      });
+    };
+    vi.useFakeTimers();
+    // After the fake timers, so the clock read is this one whichever
+    // performance object they leave in place.
+    let clock = 1000;
+    const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    try {
+      // Back lands 1,500px down: the app moved the page, nobody read down it.
+      act(() => {
+        window.dispatchEvent(new Event(SCROLL_JUMP_EVENT));
+      });
+      scrollTo(1500);
+      expect(bar.dataset.tuck).toBeUndefined();
+      // Reading on from there is reading.
+      clock += 400;
+      scrollTo(1600);
+      expect(bar.dataset.tuck).toBe("in");
+
+      // Read to the end; iOS overshoots the bottom and bounces back to it.
+      scrollTo(2000);
+      scrollTo(2080);
+      scrollTo(2000);
+      expect(bar.dataset.tuck).toBe("in");
+    } finally {
+      clockSpy.mockRestore();
+      vi.useRealTimers();
+      Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+      delete (document.documentElement as unknown as { scrollHeight?: number }).scrollHeight;
     }
   });
 });

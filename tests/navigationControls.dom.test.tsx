@@ -6,8 +6,10 @@ import { useRef, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Heatmap } from "../src/components/Heatmap";
 import { RangeCalendar } from "../src/components/RangeCalendar";
+import { RollingText } from "../src/components/RollingText";
 import { SearchFilter, type FilterOpenTarget } from "../src/components/SearchFilter";
 import { StatsModal } from "../src/components/StatsModal";
+import { SyncNotice } from "../src/components/SyncNotice";
 import { TagTree } from "../src/components/TagTree";
 import { TipProvider } from "../src/components/Tip";
 import { useTopbarTuck } from "../src/hooks/useTopbarTuck";
@@ -180,11 +182,76 @@ describe("sidebar heatmap", () => {
     expect(title().hasAttribute("aria-disabled")).toBe(false);
   });
 
-  it("rolls the page total when a memo lands on the shown page", () => {
-    const view = renderHeatmap(null, new Map([[todayKey, 2]]));
+  it("counts a paged-away period in its title, and rolls the count when a memo lands there", () => {
+    const earlier = dateKey(addDays(monthStart(-1), 4));
+    const view = renderHeatmap(null, new Map([[earlier, 2]]));
+    // The current period's figures sit right above the heatmap already.
+    expect(document.querySelector(".heatmap-total")).toBeNull();
+    view.rerenderWith(earlier, new Map([[earlier, 2]]));
     expect(document.querySelector(".heatmap-total .roll")).toBeTruthy();
-    view.rerenderWith(null, new Map([[todayKey, 3]]));
+    view.rerenderWith(earlier, new Map([[earlier, 3]]));
     expect(document.querySelector(".heatmap-total")?.querySelector(".roll-char-in")).toBeTruthy();
+  });
+
+  it("keeps a spent arrow as a focus stop, and leaves days without memos unpicked", async () => {
+    const user = userEvent.setup();
+    const onPickDay = vi.fn();
+    const busy = dateKey(addDays(monthStart(-1), 4));
+    const quiet = dateKey(addDays(monthStart(-1), 5));
+    render(
+      <Providers>
+        <Heatmap countsByDay={new Map([[busy, 1]])} minDay="2000-01-01" activeDay={null} period="month" onPickDay={onPickDay} />
+      </Providers>
+    );
+    // The current page is the last: › is spent but keeps the focus on it.
+    const next = screen.getByRole("button", { name: "Next month" }) as HTMLButtonElement;
+    expect(next.getAttribute("aria-disabled")).toBe("true");
+    expect(next.disabled).toBe(false);
+    act(() => next.focus());
+    await user.keyboard("{Enter}");
+    expect(document.activeElement).toBe(next);
+    expect(title().textContent).toContain(monthName(today));
+
+    await user.click(screen.getByRole("button", { name: "Previous month" }));
+    const quietCell = screen.getByRole("button", { name: new RegExp(`^${formatDayLabel(quiet, "en-US")},`) });
+    expect(quietCell.getAttribute("aria-disabled")).toBe("true");
+    await user.click(quietCell);
+    expect(onPickDay).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: new RegExp(`^${formatDayLabel(busy, "en-US")},`) }));
+    expect(onPickDay).toHaveBeenCalledWith(busy);
+  });
+});
+
+describe("sync line figures", () => {
+  it("reads the plain sentence and shows the count on rolling figures", () => {
+    render(
+      <Providers>
+        <SyncNotice
+          notice={{
+            kind: "loading",
+            text: "Loading memos · 120 of 800",
+            line: (
+              <>
+                Loading memos · <RollingText value={120} /> of 800
+              </>
+            )
+          }}
+        />
+      </Providers>
+    );
+    const text = document.querySelector(".sync-notice-text")!;
+    expect(text.querySelector(":scope > .sr-only")?.textContent).toBe("Loading memos · 120 of 800");
+    expect(text.querySelector(":scope > [aria-hidden='true'] .roll")).toBeTruthy();
+  });
+
+  it("without a figure line, shows the sentence as it is", () => {
+    render(
+      <Providers>
+        <SyncNotice notice={{ kind: "loading", text: "Loading memos · 3 loaded" }} />
+      </Providers>
+    );
+    expect(document.querySelector(".sync-notice-text")?.textContent).toBe("Loading memos · 3 loaded");
+    expect(document.querySelector(".sync-notice-text [aria-hidden='true']")).toBeNull();
   });
 });
 
@@ -253,6 +320,41 @@ describe("filter chip edit lands on its own control", () => {
     const view = render(renderFilter(filters, 0, "hasImage"));
     view.rerender(renderFilter(filters, 1, "hasImage"));
     await waitFor(() => expect((document.activeElement as HTMLElement | null)?.dataset.facet).toBe("hasImage"));
+  });
+
+  it("keeps focus in the panel when Clear leaves with the range it clears", async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [filters, setFilters] = useState<FeedFilters>({ ...EMPTY_FILTERS, dateFrom: dateKey(monthStart(-1)), dateTo: dateKey(addDays(monthStart(-1), 5)) });
+      return (
+        <Providers>
+          <SearchFilter
+            filters={filters}
+            saved={[]}
+            activeSavedId={null}
+            canSave={false}
+            disabled={false}
+            minDay="2000-01-01"
+            openRequest={0}
+            openTarget="range"
+            onToggleFacet={vi.fn()}
+            onDateChange={vi.fn()}
+            onPresetRange={vi.fn()}
+            onClearDates={() => setFilters((current) => ({ ...current, dateFrom: null, dateTo: null }))}
+            onApplySaved={vi.fn()}
+            onDeleteSaved={vi.fn()}
+            onSaveCurrent={vi.fn()}
+          />
+        </Providers>
+      );
+    }
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Filter memos" }));
+    const clear = await screen.findByRole("button", { name: "Clear" });
+    act(() => clear.focus());
+    await user.keyboard("{Enter}");
+    expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
+    expect(document.activeElement?.closest(".filter-panel")).toBeTruthy();
   });
 });
 

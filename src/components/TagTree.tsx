@@ -181,6 +181,9 @@ function TagRow(props: TagRowProps) {
   return (
     <li className="tag-item" data-flip={node.path}>
       <div ref={rowRef} className={`tag-row${isActive ? " is-active" : ""}${pinned ? " is-pinned" : ""}`} style={{ paddingLeft: `${10 + depth * 18}px` }}>
+        {/* The sidebar's one selection mark: it glides here from the row it
+            leaves (Sidebar's useSelectionGlide), nav rows included. */}
+        {isActive ? <span className="sel-glow" aria-hidden="true" /> : null}
         {/* Chevron and ⋯ stay out of the tab order: the label is the row's
             one stop, → / ← fold and unfold, Shift+F10 opens the ⋯ menu. */}
         {hasChildren ? (
@@ -292,7 +295,8 @@ function TagRow(props: TagRowProps) {
   );
 }
 
-const TRACK_EASING = "cubic-bezier(0.22, 0.9, 0.24, 1)";
+/** The --ease-out token (app.css): Web Animations can't read the variable. */
+const TRACK_EASING = "cubic-bezier(0.16, 1, 0.3, 1)";
 
 function TagTreeView({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenameTag, onRemoveTag }: TagTreeProps) {
   const { tr } = useI18n();

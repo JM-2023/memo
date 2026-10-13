@@ -322,6 +322,79 @@ describe("drawer swipe", () => {
     swipe(sidebar(), [250, 300], [80, 310]);
     await waitFor(() => expect(sidebar().classList.contains("is-open")).toBe(false));
   });
+
+  it("swipes shut from the dimmed strip beside the drawer too", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByText(/beta note/);
+    await openDrawer(user);
+    vi.spyOn(sidebar(), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 300, 800));
+    swipe(document.querySelector(".drawer-backdrop")!, [350, 300], [170, 310]);
+    await waitFor(() => expect(sidebar().classList.contains("is-open")).toBe(false));
+  });
+
+  it("gives a little past the open edge instead of stopping dead", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByText(/beta note/);
+    await openDrawer(user);
+    vi.spyOn(sidebar(), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 300, 800));
+    // The drawer's held frames, as the swipe pins them.
+    const frames: Keyframe[][] = [];
+    const animation = (drawer: boolean) => ({
+      pause() {},
+      play() {},
+      cancel() {},
+      finish() {},
+      finished: Promise.resolve(),
+      addEventListener() {},
+      removeEventListener() {},
+      effect: {
+        setKeyframes: (next: Keyframe[]) => {
+          if (drawer) frames.push(next);
+        }
+      }
+    });
+    Object.defineProperty(HTMLElement.prototype, "animate", {
+      configurable: true,
+      value(this: HTMLElement, keyframes: Keyframe[]) {
+        if (this === sidebar()) frames.push(keyframes);
+        return animation(this === sidebar());
+      }
+    });
+    try {
+      // Left far enough to be the drawer's, then back right well past open.
+      pointer(sidebar(), "pointerdown", 200, 300, 1000);
+      pointer(sidebar(), "pointermove", 180, 300, 1040);
+      pointer(sidebar(), "pointermove", 400, 300, 1080);
+      const held = String(frames.at(-1)?.[0]?.transform);
+      const shift = Number(/translateX\(([-\d.]+)px\)/.exec(held)?.[1]);
+      expect(shift).toBeGreaterThan(0);
+      expect(shift).toBeLessThan(28);
+      pointer(sidebar(), "pointerup", 400, 300, 1120);
+      expect(sidebar().classList.contains("is-open")).toBe(true);
+    } finally {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).animate;
+    }
+  });
+});
+
+describe("drawer focus", () => {
+  it("opens on the reader's place: the current nav row, or the tag in force", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByText(/beta note/);
+    await openDrawer(user);
+    await waitFor(() => expect(document.activeElement?.getAttribute("aria-current")).toBe("page"));
+    expect(document.activeElement?.textContent).toContain("All memos");
+
+    await user.click(within(sidebar()).getByRole("button", { name: /^alpha/ }));
+    await waitFor(() => expect(sidebar().classList.contains("is-open")).toBe(false));
+    await waitFor(() => expect(screen.queryByText(/beta note/)).toBeNull());
+    await openDrawer(user);
+    await waitFor(() => expect(document.activeElement?.classList.contains("tag-label")).toBe(true));
+    expect(document.activeElement?.getAttribute("aria-pressed")).toBe("true");
+  });
 });
 
 describe("tab title", () => {
