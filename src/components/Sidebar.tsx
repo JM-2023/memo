@@ -78,6 +78,8 @@ function useSelectionGlide(rootRef: RefObject<HTMLElement>, place: string | null
   const placeRef = useRef(place);
   // Set by a render that moved the place: the mark's rect as it was painted.
   const moveRef = useRef<{ from: DOMRect | null; radius: string } | null>(null);
+  // The row a glide has sunk to the mark's layer (see below), until it lands.
+  const sunkRef = useRef<HTMLElement | null>(null);
   if (placeRef.current !== place) {
     placeRef.current = place;
     const glow = rootRef.current?.querySelector(".sel-glow:not(.is-ghost)");
@@ -88,7 +90,11 @@ function useSelectionGlide(rootRef: RefObject<HTMLElement>, place: string | null
     const move = moveRef.current;
     moveRef.current = null;
     const root = rootRef.current;
-    if (!move || !root || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!move || !root) return;
+    // A new place ends the glide before it: that row comes back up.
+    sunkRef.current?.style.removeProperty("z-index");
+    sunkRef.current = null;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const from = move.from;
     const glow = root.querySelector<HTMLElement>(".sel-glow:not(.is-ghost)");
     if (glow && typeof glow.animate !== "function") return;
@@ -128,13 +134,30 @@ function useSelectionGlide(rootRef: RefObject<HTMLElement>, place: string | null
     const dx = from.left - to.left;
     const dy = from.top - to.top;
     if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(from.height - to.height) < 1) return;
-    glow.animate(
+    // The mark stays under every row's name only while its row isn't a
+    // stacking context, and a clicked row is one: its press scale is still
+    // easing back when the pick lands. The mark's -1 then only ranks it
+    // under its own row's text, and the row paints over every row before it,
+    // so a pick further down blanked each name the mark crossed. Sunk to
+    // the mark's own layer for the glide, the row keeps it underneath.
+    const row = glow.parentElement;
+    if (row) {
+      row.style.zIndex = "-1";
+      sunkRef.current = row;
+    }
+    const glide = glow.animate(
       [
         { transform: `translate(${dx}px, ${dy}px)`, width: `${from.width}px`, height: `${from.height}px` },
         { transform: "none", width: `${to.width}px`, height: `${to.height}px` }
       ],
       { duration: 220, easing: GLIDE_EASING }
     );
+    const land = () => {
+      if (!row || sunkRef.current !== row) return;
+      row.style.removeProperty("z-index");
+      sunkRef.current = null;
+    };
+    void glide.finished.then(land, land);
   }, [place, rootRef]);
 }
 

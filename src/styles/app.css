@@ -1452,7 +1452,9 @@ button.heat-cell[aria-disabled="true"]:active { filter: none; }
 .sidebar-nav { display: grid; margin: 14px 0 4px; }
 /* Rows don't isolate: their washes and the selection mark (.sel-glow) paint
    in the sidebar's own stacking context, beneath every row's text, so the
-   mark gliding across other rows never covers their names. */
+   mark gliding across other rows never covers their names. The press scale
+   below does isolate a row for a moment, so Sidebar's useSelectionGlide
+   sinks the row the mark is gliding into to z-index -1 until it lands. */
 .nav-item {
   position: relative;
   display: flex;
