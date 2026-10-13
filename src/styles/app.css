@@ -5155,7 +5155,9 @@ button.stats-tag-row:active { scale: 0.992; }
    nothing. The page needs no snapshot of its own. Only named parts move;
    the rest (background, sidebar, cards past the morph budget) holds still,
    which the live page already does, and live it takes clicks. Reduced
-   motion captures it again for its dissolve (see the reduce block). */
+   motion captures it again for its dissolve (see the reduce block). What is
+   captured still can't be hit — a card, the top bar — so a press on it is
+   relayed to the element drawn there (viewTransition.ts, relayPress). */
 :root { view-transition-name: none; }
 ::view-transition-group(*) { animation-duration: 0.24s; animation-timing-function: var(--ease-out); }
 /* Departing cards (deletion, filtered out) sink slightly as they fade, so a
@@ -5737,8 +5739,8 @@ button.stats-tag-row:active { scale: 0.992; }
      The cards carry no names under reduce (viewTransition.ts), so they
      dissolve inside the page's own snapshot — captured here, for once, and
      summed with plus-lighter so whatever did not change holds steady. While
-     it is captured, a click lands on <html> (see :root above): the price of
-     the dissolve, for its 150ms. */
+     it is captured, a press lands on <html> (see :root above) and is relayed
+     to the element drawn under it. */
   :root { view-transition-name: root; }
   ::view-transition-group(*) { animation: none !important; }
   ::view-transition-old(*) { animation: fade-out var(--t) var(--ease) both !important; }
