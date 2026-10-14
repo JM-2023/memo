@@ -3,7 +3,8 @@ import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode
 import { flushSync } from "react-dom";
 import { useI18n } from "../lib/i18n";
 import { SwapText } from "./SwapText";
-import { EASE_OUT } from "../lib/motion";
+import { EASE, EASE_OUT } from "../lib/motion";
+import { SCROLL_JUMP_EVENT } from "../lib/navHistory";
 
 /** Visible body height of a folded memo — keep in step with .memo-fold's max-height. */
 export const FOLD_HEIGHT = 320;
@@ -36,6 +37,14 @@ interface MemoFoldProps {
 
 /** Depth of the fade at the folded edge — keep in step with --fold-fade's initial value. */
 const FOLD_FADE = "56px";
+/**
+ * Show less with the card's top above the viewport: how long the roll back to
+ * the memo's start takes. A short base, plus 10ms per 100px travelled, so
+ * a very long memo does not streak past in a blur; capped.
+ */
+function rollDuration(distance: number): number {
+  return Math.min(560, 280 + distance / 10);
+}
 
 /* Search hits a folded body hides. useSearchHighlight publishes, per fold
    element, how many hits there are when every one of them sits below the
@@ -70,7 +79,8 @@ export function MemoFold({ content, expanded, onExpandedChange, regionId, childr
   const { formatNumber, tr } = useI18n();
   const foldRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
-  const motionRef = useRef<Animation | null>(null);
+  // The running fold motion — an Animation, or the roll's own handle.
+  const motionRef = useRef<{ cancel(): void } | null>(null);
   // .is-unfolding keeps the fade on past .is-expanded while it drains away.
   const [unfolding, setUnfolding] = useState(false);
   const live = onExpandedChange !== undefined;
@@ -138,9 +148,11 @@ export function MemoFold({ content, expanded, onExpandedChange, regionId, childr
     // Folding pulls everything below the body up by hundreds of pixels. With
     // the card's top in view the reader watches it close in place: the box
     // eases down to the fold while the fade comes back. With the top above
-    // the viewport there is nothing to watch, so it snaps, and the toggle
-    // stays where the pointer is so the reader does not land in some later
-    // memo.
+    // the viewport the toggle stays where the pointer is, so the reader does
+    // not land in some later memo, and the page rolls back to the memo's
+    // start: the page scrolls up on one curve while the box closes by
+    // exactly what it scrolled, frame by frame, so everything above the
+    // toggle slides down past it instead of jumping in one frame.
     const cardTop = (fold.closest(".memo-card") ?? fold).getBoundingClientRect().top;
     const from = fold.getBoundingClientRect().height;
     const before = button.getBoundingClientRect().top;
@@ -150,7 +162,12 @@ export function MemoFold({ content, expanded, onExpandedChange, regionId, childr
       setUnfolding(false);
     });
     const to = fold.getBoundingClientRect().height;
-    if (canAnimate && cardTop >= 0 && from > to) {
+    if (!canAnimate || from <= to) {
+      const after = button.getBoundingClientRect().top;
+      if (after < before) window.scrollBy({ top: after - before, behavior: "instant" });
+      return;
+    }
+    if (cardTop >= 0) {
       // max-height rather than height: the folded rule's own cap takes over
       // exactly where the animation lands.
       motionRef.current = fold.animate(
@@ -162,8 +179,50 @@ export function MemoFold({ content, expanded, onExpandedChange, regionId, childr
       );
       return;
     }
-    const after = button.getBoundingClientRect().top;
-    if (after < before) window.scrollBy({ top: after - before, behavior: "instant" });
+    // The page only scrolls in whole device pixels, so a box eased on its own
+    // would leave the toggle a fraction off on each frame, rounding to a
+    // pixel up or down. Instead the curve paces the scroll, and the box is cut to
+    // exactly what the scroll paid back. The fade's animation is the clock.
+    const fade = fold.animate([{ "--fold-fade": "0px" }, { "--fold-fade": FOLD_FADE }], { duration: rollDuration(from - to), easing: EASE });
+    fold.style.maxHeight = `${from}px`;
+    const roll = {
+      cancel() {
+        fade.cancel();
+        fold.style.maxHeight = "";
+      }
+    };
+    motionRef.current = roll;
+    // Counted from what each scroll actually moved, so a wheel turned
+    // mid-roll is never undone.
+    let given = 0;
+    // What the page's top kept it from scrolling: the toggle has to rise.
+    let blocked = 0;
+    const follow = () => {
+      if (motionRef.current !== roll || !fold.isConnected) return;
+      const done = fade.playState === "finished";
+      const progress = done ? 1 : fade.effect?.getComputedTiming().progress ?? 0;
+      const owed = (from - to) * progress - given - blocked;
+      if (owed > 0) {
+        const y = window.scrollY;
+        // The app is moving the page, not the reader: the phone topbar's
+        // search row stays as it was.
+        window.dispatchEvent(new Event(SCROLL_JUMP_EVENT));
+        window.scrollBy({ top: -owed, behavior: "instant" });
+        const moved = y - window.scrollY;
+        given += moved;
+        // Under a pixel short is rounding, paid on a later frame.
+        if (owed - moved >= 1) blocked += owed - moved;
+      }
+      if (done) {
+        // The folded rule takes over; the toggle settles the last fraction.
+        motionRef.current = null;
+        fold.style.maxHeight = "";
+        return;
+      }
+      fold.style.maxHeight = `${from - given - blocked}px`;
+      window.requestAnimationFrame(follow);
+    };
+    window.requestAnimationFrame(follow);
   }
 
   // A link or tag below the fold that receives keyboard focus would sit

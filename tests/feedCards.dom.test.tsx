@@ -14,6 +14,7 @@ import { Menu } from "../src/components/Menu";
 import { TagTree } from "../src/components/TagTree";
 import { formatTime } from "../src/lib/dates";
 import { LanguageProvider } from "../src/lib/i18n";
+import { SCROLL_JUMP_EVENT } from "../src/lib/navHistory";
 import type { TagNode } from "../src/lib/tags";
 import type { Memo } from "../src/lib/types";
 
@@ -141,6 +142,7 @@ describe("long-memo fold", () => {
       options: KeyframeAnimationOptions;
       finish: () => void;
       cancel: ReturnType<typeof vi.fn>;
+      handle: { playState: AnimationPlayState; progress: number };
     }
     let animations: Recorded[];
 
@@ -157,8 +159,15 @@ describe("long-memo fold", () => {
           let resolve!: () => void;
           const finished = new Promise<void>((done) => (resolve = done));
           const cancel = vi.fn();
-          animations.push({ el: this, keyframes, options, finish: () => resolve(), cancel });
-          return { finished, cancel };
+          const handle = {
+            finished,
+            cancel,
+            playState: "running" as AnimationPlayState,
+            progress: 0,
+            effect: { getComputedTiming: () => ({ progress: handle.progress }) }
+          };
+          animations.push({ el: this, keyframes, options, finish: () => resolve(), cancel, handle });
+          return handle;
         })
       });
       vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
@@ -204,11 +213,115 @@ describe("long-memo fold", () => {
       expect(scrollBy).not.toHaveBeenCalled();
     });
 
-    it("snaps shut and keeps the toggle under the pointer when the card's top is above the viewport", async () => {
+    function rollSetup(startY: number) {
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => frames.push(callback));
+      let scrollY = startY;
+      Object.defineProperty(window, "scrollY", { configurable: true, get: () => scrollY });
+      return {
+        frames,
+        frame: () => act(() => frames.shift()?.(performance.now())),
+        scroll: (by: number) => (scrollY = Math.max(0, scrollY + by)),
+        scrollY: () => scrollY
+      };
+    }
+
+    it("rolls back to the memo's start when the card's top is above the viewport, the toggle held under the pointer", async () => {
       const user = userEvent.setup();
       const { container, scrollBy } = setup(-700);
       await user.click(screen.getByRole("button", { name: "Show more" }));
       await act(async () => foldAnimations()[0].finish());
+      const page = rollSetup(2000);
+      scrollBy.mockImplementation(({ top }: ScrollToOptions) => page.scroll(top ?? 0));
+      const jumps = vi.fn();
+      window.addEventListener(SCROLL_JUMP_EVENT, jumps);
+
+      await user.click(screen.getByRole("button", { name: "Show less" }));
+      const fold = container.querySelector<HTMLElement>(".memo-fold")!;
+      expect(fold.classList.contains("is-expanded")).toBe(false);
+      // The curve lives on the fade; the box holds its open height inline.
+      const roll = foldAnimations()[1];
+      expect(roll.keyframes).toEqual([{ "--fold-fade": "0px" }, { "--fold-fade": "56px" }]);
+      // 580px to travel: the base 280ms plus 58ms.
+      expect(roll.options).toMatchObject({ duration: 338 });
+      expect(fold.style.maxHeight).toBe("900px");
+      // Nothing jumps on the click itself...
+      expect(scrollBy).not.toHaveBeenCalled();
+
+      // ...the page scrolls up on the curve, and the box closes by exactly
+      // what it scrolled, so the toggle stays put.
+      page.frame();
+      expect(scrollBy).not.toHaveBeenCalled();
+      roll.handle.progress = 0.5;
+      page.frame();
+      expect(scrollBy).toHaveBeenLastCalledWith({ top: -290, behavior: "instant" });
+      expect(fold.style.maxHeight).toBe("610px");
+      // The reader's own wheel mid-roll is theirs: it is not undone.
+      page.scroll(120);
+      roll.handle.progress = 0.8;
+      page.frame();
+      expect(scrollBy).toHaveBeenLastCalledWith({ top: -174, behavior: "instant" });
+      expect(fold.style.maxHeight).toBe("436px");
+      roll.handle.playState = "finished";
+      page.frame();
+      expect(scrollBy).toHaveBeenLastCalledWith({ top: -116, behavior: "instant" });
+      // The folded rule takes over where the roll lands.
+      expect(fold.style.maxHeight).toBe("");
+      expect(page.scrollY()).toBe(2000 - 580 + 120);
+      expect(page.frames).toHaveLength(0);
+      // The app moved the page, not the reader: the phone topbar holds.
+      expect(jumps).toHaveBeenCalled();
+      window.removeEventListener(SCROLL_JUMP_EVENT, jumps);
+    });
+
+    it("still closes the box when the page's top stops the roll", async () => {
+      const user = userEvent.setup();
+      const { container, scrollBy } = setup(-700);
+      await user.click(screen.getByRole("button", { name: "Show more" }));
+      await act(async () => foldAnimations()[0].finish());
+      const page = rollSetup(100);
+      scrollBy.mockImplementation(({ top }: ScrollToOptions) => page.scroll(top ?? 0));
+
+      await user.click(screen.getByRole("button", { name: "Show less" }));
+      const fold = container.querySelector<HTMLElement>(".memo-fold")!;
+      const roll = foldAnimations()[1];
+      roll.handle.progress = 0.5;
+      page.frame();
+      // 290px owed, 100px of page to give: the toggle rises the other 190.
+      expect(page.scrollY()).toBe(0);
+      expect(fold.style.maxHeight).toBe("610px");
+      roll.handle.playState = "finished";
+      page.frame();
+      expect(fold.style.maxHeight).toBe("");
+    });
+
+    it("hands an interrupted roll's box back at its current height", async () => {
+      const user = userEvent.setup();
+      const { container } = setup(-700);
+      await user.click(screen.getByRole("button", { name: "Show more" }));
+      await act(async () => foldAnimations()[0].finish());
+      const page = rollSetup(2000);
+      await user.click(screen.getByRole("button", { name: "Show less" }));
+      const fold = container.querySelector<HTMLElement>(".memo-fold")!;
+      const roll = foldAnimations()[1];
+      roll.handle.progress = 0.5;
+      page.frame();
+      expect(fold.style.maxHeight).toBe("610px");
+
+      await user.click(screen.getByRole("button", { name: "Show more" }));
+      expect(roll.cancel).toHaveBeenCalled();
+      // The cap is gone, so the reopened box can grow to its full height.
+      expect(fold.style.maxHeight).toBe("");
+      page.frame();
+      expect(page.frames).toHaveLength(0);
+    });
+
+    it("snaps shut under reduced motion, still keeping the toggle under the pointer", async () => {
+      const user = userEvent.setup();
+      const { container, scrollBy } = setup(-700);
+      await user.click(screen.getByRole("button", { name: "Show more" }));
+      await act(async () => foldAnimations()[0].finish());
+      stubMatchMedia(true);
       vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
         if (this.classList.contains("memo-fold-toggle")) return new DOMRect(0, this.previousElementSibling?.classList.contains("is-expanded") ? 300 : -280, 80, 20);
         if (this.classList.contains("memo-fold")) return new DOMRect(0, -670, 300, this.classList.contains("is-expanded") ? 900 : 320);
