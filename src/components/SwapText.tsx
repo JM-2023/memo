@@ -35,6 +35,22 @@ function dirClass(dir: number): string {
 }
 
 /**
+ * The box's laid-out size: fractional, and blind to transforms. A rect is
+ * scaled by every transformed ancestor — a label measured inside a button
+ * still pressed to 0.96 came out 4% short, so the incoming copy was pinned
+ * narrower than its own text, sat off-centre with its last letter clipped,
+ * and jumped back when the pin came off. offsetWidth/Height ignore the
+ * transform but round, which left the tween a fraction off the layout it
+ * hands over to. Null when the box is not laid out.
+ */
+function layoutSize(el: HTMLElement): BoxSize | null {
+  const style = window.getComputedStyle(el);
+  const width = parseFloat(style.width);
+  const height = parseFloat(style.height);
+  return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null;
+}
+
+/**
  * Directional text swap: the outgoing copy slides out on an absolute layer
  * while the incoming one slides in, and the container tweens between the two
  * sizes so neighbouring content glides instead of jumping. Width is the usual
@@ -65,14 +81,14 @@ export function SwapText({ id, dir = 0, className, tweenWidth = true, children }
   const last = lastRef.current;
   if (last !== null && last.id !== id) {
     // Render-phase capture: the DOM still shows the outgoing content, so its
-    // current visual size is the starting point of the size tween. Using the
-    // rendered rect (rather than offsetWidth/Height) lets a rapid second swap
-    // take over from the exact in-flight size without a snap.
-    const rect = boxRef.current?.getBoundingClientRect();
-    fromSizeRef.current = rect ? { width: rect.width, height: rect.height } : null;
+    // current size is the starting point of the size tween. Mid-tween that is
+    // the animated width, so a rapid second swap takes over from the exact
+    // in-flight size without a snap.
+    const size = boxRef.current ? layoutSize(boxRef.current) : null;
+    fromSizeRef.current = size;
     serialRef.current += 1;
     enterDirRef.current = dir;
-    setOld({ node: last.node, dir, serial: serialRef.current, width: rect ? rect.width : null });
+    setOld({ node: last.node, dir, serial: serialRef.current, width: size ? size.width : null });
   }
   lastRef.current = { id, node: children };
 
@@ -80,14 +96,15 @@ export function SwapText({ id, dir = 0, className, tweenWidth = true, children }
     const el = boxRef.current;
     const from = fromSizeRef.current;
     fromSizeRef.current = null;
-    // Cancel after the outgoing visual size has been captured above. This
+    // Cancel after the outgoing size has been captured above. This
     // reveals the new content's natural size for measurement and prevents
     // multiple size effects from competing during quick repeated swaps.
     sizeAnimationRef.current?.cancel();
     sizeAnimationRef.current = null;
     if (!el || from === null) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const to = { width: el.offsetWidth, height: el.offsetHeight };
+    const to = layoutSize(el);
+    if (to === null) return;
     const start: Keyframe = {};
     const end: Keyframe = {};
     if (tweenWidth && Math.abs(to.width - from.width) >= 1) {
@@ -101,12 +118,15 @@ export function SwapText({ id, dir = 0, className, tweenWidth = true, children }
     if (Object.keys(end).length === 0) return;
     // Pin the incoming layer to its final width before the box starts
     // narrower (or wider) than that, so its line breaks are settled from the
-    // first frame. Rounded up from the fractional rect: offsetWidth rounds
-    // down, and a pin even a third of a pixel short of the natural width
-    // wraps the last word. The pin comes off with the tween — the layer is
-    // then sized by the box again, which has arrived at the same width.
+    // first frame. A hundredth of a pixel over the layout width: the computed
+    // width comes back rounded to a few decimals, and a pin even a fraction
+    // short of the natural width wraps the last word. Any more than a hair
+    // over shows: a button centres its text in the wider layer, so a
+    // whole-pixel ceiling left the label up to half a pixel off, and it
+    // twitched back when the pin came off with the tween and the box sized
+    // the layer again.
     const cur = tweenWidth ? curRef.current : null;
-    if (cur) cur.style.width = `${Math.ceil(el.getBoundingClientRect().width)}px`;
+    if (cur) cur.style.width = `${to.width + 0.01}px`;
     const unpin = () => {
       if (cur) cur.style.width = "";
     };
