@@ -108,11 +108,13 @@ describe("statistics drilldown", () => {
     fireEvent.click(within(monthChart).getByRole("button", { name: `${monthLabel}: 1 memo` }));
     fireEvent.click(screen.getByRole("button", { name: `Show 1 memo from ${dayLabel}` }));
 
-    const weekdayChart = screen.getByRole("group", { name: /^Distribution by weekday\./ });
+    const weekdayChart = screen.getByRole("group", { name: "Distribution by weekday" });
     fireEvent.click(within(weekdayChart).getByRole("button", { name: `${weekdayLabel}: 1 memo` }));
 
-    const hourChart = screen.getByRole("group", { name: /^Distribution by time\./ });
+    const hourChart = screen.getByRole("group", { name: "Distribution by time" });
     fireEvent.click(within(hourChart).getByRole("button", { name: `${hourRange}: 1 memo` }));
+    const rhythm = screen.getByRole("group", { name: "Memos by weekday and hour" });
+    fireEvent.click(within(rhythm).getByRole("button", { name: `${weekdayLabel} · ${hourRange}: 1 memo` }));
     fireEvent.click(screen.getByRole("button", { name: "Show 1 memo tagged work/client" }));
 
     expect(onDrilldown.mock.calls.map(([filter]) => filter)).toEqual([
@@ -121,6 +123,7 @@ describe("statistics drilldown", () => {
       { kind: "day", day: `${year}-03-02` },
       { kind: "weekday", year, weekday },
       { kind: "hour", year, hour: 9 },
+      { kind: "slot", year, weekday, hour: 9 },
       { kind: "tag", year, tag: "work/client" }
     ]);
   });

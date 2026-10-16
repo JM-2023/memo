@@ -154,10 +154,14 @@ exclude tags, untagged), a time range, and how many memos to draw.
 ### Statistics
 
 The sidebar carries the running totals and a heatmap that follows the week / month /
-year selector and pages backwards period by period. The full view adds monthly
-activity, weekday and time-of-day distributions, top tags, and streaks.
+year selector and pages backwards period by period. The full view takes one year
+at a time: its memo count against the same stretch of the year before, active days,
+the longest streak, characters and images; the year as a single strip of days;
+memos by month with last year's months marked beside them; a weekday × hour
+writing-rhythm grid; top tags; and all-time figures. Every figure drills into the
+memos behind it.
 
-![The statistics view: daily activity per month, memos by month, and distribution by weekday and time of day](docs/screenshots/statistics.png)
+![The statistics view: the year's figures, a strip of days, memos by month against last year, and the writing rhythm](docs/screenshots/statistics.png)
 
 All timestamps are stored in UTC and rendered in the reader's local time zone.
 

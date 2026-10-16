@@ -140,18 +140,40 @@ export interface StreakInfo {
   current: number;
 }
 
-export function computeStreaks(byDay: Map<string, number>, now = new Date()): StreakInfo {
-  if (byDay.size === 0) return { longest: 0, current: 0 };
+export interface DayRun {
+  length: number;
+  /** First and last day keys of the run; null when there are no days. */
+  start: string | null;
+  end: string | null;
+}
+
+/**
+ * The longest run of consecutive days among `keys` (any order). On a tie the
+ * later run wins: the recent one is the one a reader remembers.
+ */
+export function longestRun(keys: Iterable<string>): DayRun {
   // Keys share one format, so lexicographic order is date order; parsing them
   // lands on UTC midnights, which keeps day differences exact.
-  const keys = [...byDay.keys()].sort();
-  let longest = 1;
+  const sorted = [...keys].sort();
+  if (sorted.length === 0) return { length: 0, start: null, end: null };
+  let best: DayRun = { length: 1, start: sorted[0], end: sorted[0] };
+  let runStart = sorted[0];
   let run = 1;
-  for (let i = 1; i < keys.length; i += 1) {
-    const gap = (new Date(keys[i]).getTime() - new Date(keys[i - 1]).getTime()) / 86_400_000;
-    run = gap === 1 ? run + 1 : 1;
-    longest = Math.max(longest, run);
+  for (let i = 1; i < sorted.length; i += 1) {
+    const gap = (new Date(sorted[i]).getTime() - new Date(sorted[i - 1]).getTime()) / 86_400_000;
+    if (gap === 1) run += 1;
+    else {
+      run = 1;
+      runStart = sorted[i];
+    }
+    if (run >= best.length) best = { length: run, start: runStart, end: sorted[i] };
   }
+  return best;
+}
+
+export function computeStreaks(byDay: Map<string, number>, now = new Date()): StreakInfo {
+  if (byDay.size === 0) return { longest: 0, current: 0 };
+  const longest = longestRun(byDay.keys()).length;
   let current = 0;
   let cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   if (!byDay.has(dateKey(cursor))) cursor = addDays(cursor, -1);

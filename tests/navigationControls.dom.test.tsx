@@ -261,7 +261,7 @@ describe("sync line figures", () => {
 });
 
 describe("statistics mini calendar", () => {
-  it("steps a week with ↑ ↓, to the nearest day with memos", () => {
+  it("steps a week with ← →, to the nearest day with memos, and a day with ↑ ↓", () => {
     const year = today.getFullYear() - 1;
     const at = (day: number): Memo => {
       const created = new Date(year, 2, day, 12).toISOString();
@@ -276,13 +276,13 @@ describe("statistics mini calendar", () => {
     const name = (day: number) => `Show 1 memo from ${new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric" }).format(new Date(year, 2, day))}`;
     const second = screen.getByRole("button", { name: name(2) });
     act(() => second.focus());
-    fireEvent.keyDown(second, { key: "ArrowDown" });
+    fireEvent.keyDown(second, { key: "ArrowRight" });
     expect(document.activeElement).toBe(screen.getByRole("button", { name: name(10) }));
-    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
     expect(document.activeElement).toBe(screen.getByRole("button", { name: name(20) }));
-    fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: name(10) }));
     fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: name(10) }));
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
     expect(document.activeElement).toBe(screen.getByRole("button", { name: name(3) }));
   });
 });

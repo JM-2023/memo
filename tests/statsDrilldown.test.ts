@@ -45,6 +45,13 @@ describe("stats drilldown matching", () => {
     expect(memoMatchesStatsDrilldown(mondayMorning, { kind: "hour", year: 2025, hour: 9 })).toBe(false);
   });
 
+  it("matches a weekday's hour, the writing-rhythm cell, inside the selected year", () => {
+    expect(memoMatchesStatsDrilldown(mondayMorning, { kind: "slot", year: 2026, weekday: 0, hour: 9 })).toBe(true);
+    expect(memoMatchesStatsDrilldown(mondayMorning, { kind: "slot", year: 2026, weekday: 1, hour: 9 })).toBe(false);
+    expect(memoMatchesStatsDrilldown(mondayMorning, { kind: "slot", year: 2026, weekday: 0, hour: 10 })).toBe(false);
+    expect(memoMatchesStatsDrilldown(mondayMorning, { kind: "slot", year: 2025, weekday: 0, hour: 9 })).toBe(false);
+  });
+
   it("matches one complete tag path exactly and only within the selected year", () => {
     expect(memoMatchesStatsDrilldown(mondayMorning, { kind: "tag", year: 2026, tag: "work/project" })).toBe(true);
     expect(memoMatchesStatsDrilldown(mondayMorning, { kind: "tag", year: 2026, tag: "work" })).toBe(false);
@@ -81,6 +88,7 @@ describe("stats drilldown labels", () => {
     { drilldown: { kind: "day", day: "2026-07-06" }, en: "Jul 6, 2026", zh: "2026年7月6日" },
     { drilldown: { kind: "weekday", year: 2026, weekday: 0 }, en: "Monday · 2026", zh: "2026年 · 星期一" },
     { drilldown: { kind: "hour", year: 2026, hour: 9 }, en: "9 AM – 10 AM · 2026", zh: "2026年 · 9时 – 10时" },
+    { drilldown: { kind: "slot", year: 2026, weekday: 2, hour: 21 }, en: "Wednesday · 9 PM – 10 PM · 2026", zh: "2026年 · 星期三 · 21时 – 22时" },
     { drilldown: { kind: "tag", year: 2026, tag: "工作/项目" }, en: "#工作/项目 · 2026", zh: "2026年 · #工作/项目" }
   ];
 

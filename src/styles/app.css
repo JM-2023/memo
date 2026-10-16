@@ -4107,6 +4107,11 @@ button.is-busy:disabled { opacity: 1; }
 
 /* =========================================================================
    Stats modal — a year at a glance
+   --------------------------------------------------------------------------
+   Read top-down: the year's figure against the year before, the year as one
+   strip of days, its months, its writing rhythm, then its tags beside the
+   all-time ledger. One surface; sections are set apart by whitespace and
+   hairlines, never card frames, and every mark is the one accent or ink.
    ========================================================================= */
 .stats-modal {
   display: flex;
@@ -4141,19 +4146,29 @@ button.is-busy:disabled { opacity: 1; }
 .stats-year { min-width: 76px; text-align: center; font-size: var(--fs-md); font-weight: 600; animation: fade-up 0.18s var(--ease) both; }
 .stats-body {
   display: grid;
-  gap: 18px;
-  padding: 18px 20px 26px;
+  gap: 32px;
+  padding: 20px 20px 28px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
-/* One entrance per section (staggered inline in the JSX), so the modal reads
-   top-down — hero, calendar, charts, footnotes — instead of raining tiles. */
-.stats-section { display: grid; gap: 10px; animation: rise-in 0.2s var(--ease-out) both; }
+/* One entrance per section (staggered inline in the JSX), so the panel reads
+   top-down instead of raining tiles. */
+.stats-section { display: grid; gap: 12px; min-width: 0; animation: rise-in 0.2s var(--ease-out) both; }
 .stats-section-title { margin: 0; color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 600; }
+/* Heading row: the section title left, its key or one-line reading right. */
+.stats-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-width: 0; }
+.stats-section-note { margin: 0; min-width: 0; color: var(--muted); font-size: var(--fs-xs); font-weight: 500; text-align: right; }
+/* Words that change with the year arrive with a short rise: the spans are
+   keyed by their text, so only a real change replays it. */
+@keyframes stats-swap-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.stats-swap { display: inline-block; max-width: 100%; animation: stats-swap-in 0.22s var(--ease-out) both; }
+/* From-only: rises to whatever opacity the element rests at, so a mark that
+   rests hidden stays hidden through its entrance. */
+@keyframes stats-emerge { from { opacity: 0; } }
 
-/* Tier 1: the year's headline figure, set in type — no card frame. The
-   supporting figures share one muted line beneath it. */
-.stats-hero { gap: 3px; padding-top: 2px; }
+/* ---- Tier 1: the year's figure and its four supporting figures ---- */
+.stats-overview { grid-template-columns: minmax(0, 0.9fr) minmax(0, 2fr); align-items: end; gap: 18px 40px; }
+.stats-hero { display: grid; gap: 4px; min-width: 0; }
 .stats-hero-main {
   display: flex;
   align-items: baseline;
@@ -4181,91 +4196,22 @@ button.is-busy:disabled { opacity: 1; }
 @media (hover: hover) {
   .stats-hero-main:hover:not(:disabled) .stats-drill-cue { opacity: 0.9; transform: translateX(0); }
 }
-.stats-hero-figs { display: flex; flex-wrap: wrap; gap: 4px 18px; color: var(--muted); font-size: var(--fs-sm); font-weight: 500; }
-.stats-fig { white-space: nowrap; }
-.stats-fig .roll { color: var(--ink-soft); font-weight: 600; }
+/* Two lines under the figure — against the year before, then the pace. The
+   comparison is said, not coloured: more or fewer reads in the words. */
+.stats-hero-note { display: grid; justify-items: start; margin: 0; color: var(--muted); font-size: var(--fs-sm); font-weight: 500; }
 
-.months-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 14px 18px; }
-/* Tier 2: twelve bare calendar textures on the section's shared surface —
-   whitespace separates the months, not twelve identical card frames. */
-.mini-month {
-  display: grid;
-  gap: 6px;
-  align-content: start;
-  margin: -4px;
-  padding: 4px;
-  border-radius: var(--r-sm);
-  transition: background var(--t) var(--ease);
-}
-.mini-month-head { display: flex; align-items: baseline; justify-content: space-between; font-size: var(--fs-xs); font-weight: 600; }
-.mini-month-pick {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  min-width: 0;
-  margin: -3px 0 -3px -4px;
-  padding: 3px 4px;
-  text-align: left;
-  border-radius: var(--r-xs);
-  transition: color var(--t) var(--ease), transform var(--t-fast) var(--ease);
-}
-.mini-month-pick:disabled { opacity: 1; }
-.mini-month-cue {
-  flex: none;
-  color: var(--primary-dark);
-  opacity: 0;
-  transform: translateX(-3px);
-  transition: opacity var(--t) var(--ease), transform var(--t) var(--ease-out);
-}
-@media (hover: hover) {
-  .mini-month:has(.mini-month-pick:hover:not(:disabled)) { background: color-mix(in srgb, var(--primary-tint) 42%, transparent); }
-  .mini-month-pick:hover:not(:disabled) { color: var(--primary-dark); }
-  .mini-month-pick:hover:not(:disabled) .mini-month-cue { opacity: 0.8; transform: translateX(0); }
-}
-.mini-month-pick:focus-visible .mini-month-cue { opacity: 0.8; transform: translateX(0); }
-.mini-month-pick:active:not(:disabled) { transform: scale(0.96); }
-.mini-month-name { color: var(--ink-soft); }
-.mini-month-count { color: var(--muted); }
-.mini-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
-.mini-cell {
-  width: 100%;
-  height: auto;
-  aspect-ratio: 1;
-  padding: 0;
-  /* These sit straight on the modal's shared surface (no white card behind them since
-     the unboxing): an ink-relative wash plus a hairline inset ring keeps
-     empty days legible in both themes and gives coloured cells a crisp edge. */
-  background: color-mix(in srgb, var(--ink) 6%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent);
-  border-radius: 3px;
-  outline: 2px solid transparent;
-  outline-offset: 1px;
-  /* Background and opacity included so switching years crossfades the whole
-     grid — cells melting into or out of a month's edge fade, never pop. */
-  transition: outline-color var(--t) var(--ease), filter var(--t) var(--ease), background var(--t-slow) var(--ease), box-shadow var(--t-slow) var(--ease), opacity var(--t-slow) var(--ease);
-}
-@media (hover: hover) {
-  button.mini-cell:hover { outline-color: color-mix(in srgb, var(--heat-3) 42%, transparent); filter: saturate(1.16) brightness(1.06); }
-}
-button.mini-cell { cursor: pointer; }
-button.mini-cell:focus-visible { outline-color: color-mix(in srgb, var(--heat-3) 62%, transparent); }
-button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
-.mini-cell.placeholder { opacity: 0; pointer-events: none; }
-.mini-cell.placeholder.future { opacity: 1; background: color-mix(in srgb, var(--ink) 3%, transparent); box-shadow: none; }
-.mini-cell.level-1 { background: var(--heat-1); }
-.mini-cell.level-2 { background: var(--heat-2); }
-.mini-cell.level-3 { background: var(--heat-3); }
-.mini-cell.level-4 { background: var(--heat-4); }
-.mini-cell.is-today { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--heat-4) 85%, var(--ink)); }
+.stats-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
+.stats-kpi { display: grid; gap: 2px; align-content: end; min-width: 0; padding: 2px 0 2px 16px; border-left: 1px solid var(--glass-rim); }
+.stats-kpi-label,
+.stats-kpi-sub { min-width: 0; margin: 0; overflow: hidden; color: var(--muted); font-size: var(--fs-xs); font-weight: 500; white-space: nowrap; text-overflow: ellipsis; }
+.stats-kpi-value { margin: 0; font-size: var(--fs-xl); font-weight: 700; letter-spacing: -0.01em; line-height: 1.25; white-space: nowrap; }
+/* A unit qualifying the figure it sits inside, so it steps down from it. */
+.stats-kpi-unit { color: var(--muted); font-size: var(--fs-sm); font-weight: 500; letter-spacing: 0; }
 
-/* Heading row: the section title left, the calendar's key right. */
-.stats-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-/* Less ▢▢▢▢▢ More — five swatches wearing the calendar cells' own level
-   classes, so a retuned heat scale recolours the key with the grid. Set in
-   the axis labels' type; the swatches are decoration (see StatsModal). */
+/* ---- Tier 2: the year as one strip of days ---- */
 .heat-legend { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; user-select: none; }
 .heat-legend-cells { display: inline-flex; gap: 3px; }
-.heat-legend .mini-cell { width: 10px; height: 10px; }
+.heat-legend .year-cell { width: 10px; height: 10px; animation: none; }
 /* Visually hidden, still read: the standard clip recipe. .sr-only is the
    shared utility (rolling numbers' spoken value, the app's live regions);
    .heat-legend-sr is the scale's screen-reader sentence and .send-progress-sr
@@ -4275,9 +4221,99 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
 .heat-legend-sr,
 .send-progress-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 
+/* The strip and the rhythm grid scroll sideways only where they must (a
+   phone); the padding gives focus rings room inside the clip. */
+.year-strip-scroll,
+.rhythm-scroll {
+  position: relative;
+  margin: -3px -4px;
+  padding: 3px 4px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+.year-strip { --day-col: 30px; display: grid; gap: 6px; }
+/* The month row shares the grid's columns, so each name starts over the
+   week holding its first day. */
+.year-strip-months,
+.year-strip-grid { display: grid; grid-template-columns: var(--day-col) repeat(var(--weeks), minmax(0, 1fr)); column-gap: 3px; }
+.year-strip-grid { grid-template-rows: repeat(7, auto); grid-auto-flow: column; row-gap: 3px; }
+/* The name column stays put while a phone scrolls the strip under it; its
+   ring of surface covers the gaps the cells pass through. */
+.year-strip-day,
+.year-strip-corner,
+.rhythm-day,
+.rhythm-corner {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--menu-fill);
+  /* 3px all round for the gaps, plus the scroller's 4px focus-ring margin
+     on the left. */
+  box-shadow: 0 0 0 3px var(--menu-fill), -5px 0 0 3px var(--menu-fill);
+}
+.year-strip-corner { grid-column: 1; grid-row: 1; }
+.year-strip-day { display: flex; align-items: center; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; line-height: 1; white-space: nowrap; }
+.year-strip-month {
+  justify-self: start;
+  max-width: 100%;
+  margin-left: -4px;
+  padding: 2px 4px;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  white-space: nowrap;
+  border-radius: var(--r-xs);
+  transition: color var(--t) var(--ease), background var(--t) var(--ease), transform var(--t-fast) var(--ease);
+}
+.year-strip-month:disabled { opacity: 1; color: var(--muted); }
+@media (hover: hover) { .year-strip-month:hover:not(:disabled) { color: var(--primary-dark); background: var(--wash); } }
+.year-strip-month:active:not(:disabled) { transform: scale(0.96); }
+
+/* The cells fill in from January on open; a year switch recolours them in
+   the same left-to-right sweep (--w is the week column). */
+@keyframes year-cell-in { from { opacity: 0; transform: scale(0.5); } }
+.year-cell {
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  /* Straight on the panel's surface: an ink-relative wash plus a hairline
+     inset ring keeps empty days legible in both themes and gives coloured
+     cells a crisp edge. */
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent);
+  border-radius: 3px;
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  animation: year-cell-in 0.36s var(--ease-out) backwards;
+  animation-delay: calc(var(--w, 0) * 5ms + 60ms);
+  transition:
+    outline-color var(--t) var(--ease),
+    filter var(--t) var(--ease),
+    background-color 0.3s var(--ease) calc(var(--w, 0) * 4ms),
+    box-shadow 0.3s var(--ease) calc(var(--w, 0) * 4ms),
+    opacity 0.3s var(--ease) calc(var(--w, 0) * 4ms);
+}
+.year-cell:disabled { opacity: 1; }
+@media (hover: hover) {
+  .year-cell:hover:not(:disabled) { outline-color: color-mix(in srgb, var(--heat-3) 42%, transparent); filter: saturate(1.16) brightness(1.06); }
+}
+.year-cell:focus-visible { outline-color: color-mix(in srgb, var(--heat-3) 62%, transparent); }
+.year-cell:active:not(:disabled) { filter: saturate(1.05) brightness(0.88); }
+.year-cell.level-1 { background-color: var(--heat-1); }
+.year-cell.level-2 { background-color: var(--heat-2); }
+.year-cell.level-3 { background-color: var(--heat-3); }
+.year-cell.level-4 { background-color: var(--heat-4); }
+.year-cell.is-today { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--heat-4) 85%, var(--ink)); }
+.year-cell.is-future { background-color: color-mix(in srgb, var(--ink) 3%, transparent); box-shadow: inset 0 0 0 1px transparent; }
+.year-cell.is-void { opacity: 0; }
+
+/* ---- Tier 3: months, with last year as a tick ---- */
 .bar-chart { display: grid; gap: 6px; }
-.stats-bars { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; align-items: end; height: 120px; }
+.stats-bars { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; align-items: end; height: 140px; }
 .stats-bar-col {
+  position: relative;
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -4292,7 +4328,6 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
   transition: background var(--t) var(--ease);
 }
 .stats-bar-col:disabled { opacity: 1; cursor: default; }
-.stats-bar-col:not(:disabled) { cursor: pointer; }
 .stats-bar-col:focus-visible { outline-offset: -2px; }
 .stats-bar {
   position: relative;
@@ -4300,14 +4335,13 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
   /* One accent: the tag bars' solid fill, no gradient. */
   background: var(--primary);
   border-radius: 5px 5px 2px 2px;
-  animation: bar-rise 0.24s var(--ease-out) both;
+  animation: bar-rise 0.3s var(--ease-out) both;
   /* Height and fill included so switching years glides the bars to their new
      size in a left-to-right ripple (--bar-d, set inline per column). */
-  transition: height var(--t-slow) var(--ease-out) var(--bar-d, 0s), background 0.2s var(--ease) var(--bar-d, 0s);
+  transition: height 0.3s var(--ease-out) var(--bar-d, 0s), background 0.2s var(--ease) var(--bar-d, 0s);
 }
-/* Hover = the tag rows' neutral column wash + the accent's own emphasis step.
-   Bars are baseline-anchored, so nothing lifts, scales or moves: the pointer
-   only tints the column it is over and deepens the bar inside it. */
+/* Hover = the column's neutral wash + the accent's own emphasis step. Bars
+   are baseline-anchored, so nothing lifts, scales or moves. */
 @media (hover: hover) {
   .stats-bar-col:hover:not(:disabled) { background: var(--wash); }
   .stats-bar-col:hover:not(:disabled) .stats-bar { background: var(--primary-dark); }
@@ -4315,27 +4349,58 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
 .stats-bar-col:focus-visible:not(:disabled) .stats-bar { background: var(--primary-dark); }
 .stats-bar-col:active:not(:disabled) .stats-bar { background: color-mix(in srgb, var(--primary-dark) 82%, var(--ink)); }
 .stats-bar.is-zero { background: var(--surface-3); }
-/* The count above each bar, in the axis labels' type. Anchored to the bar's
-   top, so it rides the entrance and the year-switch height glide for free. */
+/* The count above each bar, in the axis labels' type. It sits in the column
+   on the bars' own scale and glides with the bar's height; on open it
+   arrives once the bars have risen. Layered over last year's tick, it
+   knocks the tick out behind it. */
 .stats-bar-value {
   position: absolute;
-  bottom: calc(100% + 3px);
+  bottom: calc((100% - 16px) * var(--v, 0) + 2px);
   left: 50%;
   z-index: 1;
+  padding: 1px 3px;
   color: var(--muted);
   font-size: var(--fs-2xs);
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
+  background: var(--menu-fill);
+  border-radius: 3px;
   transform: translateX(-50%);
-  transition: opacity var(--t) var(--ease);
+  pointer-events: none;
+  animation: stats-emerge 0.24s var(--ease) 0.18s backwards;
+  transition: bottom 0.3s var(--ease-out) var(--bar-d, 0s), opacity var(--t) var(--ease);
 }
+.stats-bar-value:empty { display: none; }
+/* Over a hovered column the knock-out wears the column's wash too (a flat
+   layer, not a gradient), so it never shows as a box. */
+@media (hover: hover) { .stats-bar-col:hover:not(:disabled) .stats-bar-value { background: linear-gradient(var(--wash), var(--wash)), var(--menu-fill); } }
 /* Too narrow for every value (BarChart measures): only the local peaks keep
    theirs, plus the bar under the pointer or focus. */
 .stats-bars.is-sparse .stats-bar-value { opacity: 0; }
 .stats-bars.is-sparse .stats-bar-value.is-peak,
 .stats-bars.is-sparse .stats-bar-col:focus-visible .stats-bar-value { opacity: 1; }
 @media (hover: hover) { .stats-bars.is-sparse .stats-bar-col:hover:not(:disabled) .stats-bar-value { opacity: 1; } }
+/* Last year's count for the month: an ink tick across the column at its
+   height, ringed in the surface so it reads over the bar as well as above
+   it. The bars' own scale, so a tick above a bar means last year was ahead.
+   (100% − 16px) is the bars' height box: the column less its label row. */
+.stats-bar-mark {
+  position: absolute;
+  bottom: calc((100% - 16px) * var(--m, 0) - 1px);
+  left: 50%;
+  width: min(calc(100% - 4px), 40px);
+  height: 2px;
+  background: var(--ink-soft);
+  border-radius: 1px;
+  box-shadow: 0 0 0 1.5px var(--menu-fill);
+  opacity: 0;
+  transform: translateX(-50%);
+  pointer-events: none;
+  animation: stats-emerge 0.3s var(--ease) 0.22s backwards;
+  transition: bottom 0.3s var(--ease-out) var(--bar-d, 0s), opacity var(--t) var(--ease);
+}
+.bar-chart.has-compare .stats-bar-mark:not(.is-zero) { opacity: 0.8; }
 .stats-bar-labels {
   display: grid;
   grid-auto-flow: column;
@@ -4346,21 +4411,116 @@ button.mini-cell:active { filter: saturate(1.05) brightness(0.88); }
   font-weight: 500;
   text-align: center;
 }
-.stats-chart-row { display: grid; grid-template-columns: 2fr 3fr; gap: 18px; align-items: start; }
-.stats-chart { display: grid; min-width: 0; gap: 10px; }
-.stats-chart .stats-bars { height: 96px; }
+/* The two series, named in the axis labels' type beside the title. */
+.stats-series-key { display: inline-flex; gap: 14px; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; transition: opacity var(--t) var(--ease); }
+.stats-series-key.is-hidden { opacity: 0; }
+.stats-series { display: inline-flex; align-items: center; gap: 6px; }
+.stats-series-bar { width: 8px; height: 10px; background: var(--primary); border-radius: 2px 2px 1px 1px; }
+.stats-series-tick { width: 12px; height: 2px; background: var(--ink-soft); border-radius: 1px; opacity: 0.8; }
 
-/* Top tags of the year: quiet ranked bars — name, share, count. Rows are
-   keyed by tag name, so switching years FLIP-glides survivors to their new
-   rank (TagRows), sinks the dropped rows out on an absolute layer, raises
-   newcomers in, and rolls the counts — no slot ever teleports its contents. */
+/* ---- Tier 3: writing rhythm, a weekday × hour punch card ---- */
+.rhythm {
+  --day-col: 30px;
+  --row: 26px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 128px;
+  grid-template-areas: "grid side" "foot .";
+  gap: 6px 20px;
+}
+.rhythm-grid { grid-area: grid; display: grid; gap: 2px; }
+.rhythm-row { display: grid; grid-template-columns: var(--day-col) repeat(24, minmax(0, 1fr)); height: var(--row); }
+.rhythm-day { display: flex; align-items: center; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; line-height: 1; white-space: nowrap; }
+.rhythm-cell { display: grid; place-items: center; min-width: 0; padding: 0; border-radius: var(--r-xs); transition: background var(--t) var(--ease); }
+.rhythm-cell:disabled { opacity: 1; }
+.rhythm-cell:focus-visible { outline-offset: -2px; }
+/* An empty hour keeps a pinpoint, so the grid reads as a grid. */
+.rhythm-cell::before { content: ""; grid-area: 1 / 1; width: 3px; height: 3px; background: color-mix(in srgb, var(--ink) 16%, transparent); border-radius: 50%; }
+/* Area follows the count (--s is a square-root scale, set inline); the dots
+   swell in on open and re-size in a diagonal ripple across years (--d). */
+@keyframes rhythm-dot-in { from { scale: 0; } }
+.rhythm-dot {
+  grid-area: 1 / 1;
+  width: min(20px, 86%);
+  aspect-ratio: 1;
+  background: var(--primary);
+  border-radius: 50%;
+  scale: var(--s, 0);
+  animation: rhythm-dot-in 0.4s var(--ease-out) backwards;
+  animation-delay: calc(var(--d, 0ms) + 140ms);
+  transition: scale 0.34s var(--ease-out) var(--d, 0ms), background var(--t) var(--ease);
+}
+@media (hover: hover) {
+  .rhythm-cell:hover:not(:disabled) { background: var(--wash); }
+  .rhythm-cell:hover:not(:disabled) .rhythm-dot { background: var(--primary-dark); }
+}
+.rhythm-cell:focus-visible .rhythm-dot { background: var(--primary-dark); }
+.rhythm-cell:active:not(:disabled) .rhythm-dot { background: color-mix(in srgb, var(--primary-dark) 82%, var(--ink)); }
+
+/* The margins: totals per weekday at the right of their rows, per hour under
+   their columns — one step quieter than the dots, in the ramp's middle. */
+.rhythm-side { grid-area: side; display: grid; gap: 2px; align-content: start; }
+.rhythm-total {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.4em;
+  align-items: center;
+  gap: 8px;
+  height: var(--row);
+  padding: 0 4px 0 6px;
+  border-radius: var(--r-xs);
+  transition: background var(--t) var(--ease);
+}
+.rhythm-total:disabled { opacity: 1; }
+.rhythm-total:focus-visible { outline-offset: -2px; }
+.rhythm-total-track { height: 6px; overflow: hidden; background: var(--surface-3); border-radius: 3px; }
+.rhythm-total-fill {
+  display: block;
+  width: calc(var(--f, 0) * 100%);
+  height: 100%;
+  background: var(--heat-2);
+  border-radius: inherit;
+  transition: width 0.3s var(--ease-out) var(--d, 0ms), background var(--t) var(--ease);
+}
+.rhythm-total-count { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; text-align: right; }
+.rhythm-foot { grid-area: foot; display: grid; grid-template-columns: var(--day-col) repeat(24, minmax(0, 1fr)); grid-template-rows: 36px auto; row-gap: 5px; }
+.rhythm-hour { display: flex; align-items: flex-end; justify-content: center; min-width: 0; height: 100%; padding: 0 2px; border-radius: var(--r-xs) var(--r-xs) 2px 2px; transition: background var(--t) var(--ease); }
+.rhythm-hour:disabled { opacity: 1; }
+.rhythm-hour:focus-visible { outline-offset: -2px; }
+.rhythm-hour-bar {
+  width: min(100%, 14px);
+  height: max(2px, calc(var(--f, 0) * 100%));
+  background: var(--heat-2);
+  border-radius: 3px 3px 1px 1px;
+  transition: height 0.3s var(--ease-out) var(--d, 0ms), background var(--t) var(--ease);
+}
+.rhythm-hour:disabled .rhythm-hour-bar { background: var(--surface-3); }
+@media (hover: hover) {
+  :is(.rhythm-total, .rhythm-hour):hover:not(:disabled) { background: var(--wash); }
+  .rhythm-total:hover:not(:disabled) .rhythm-total-fill,
+  .rhythm-hour:hover:not(:disabled) .rhythm-hour-bar { background: var(--primary); }
+}
+.rhythm-total:focus-visible .rhythm-total-fill,
+.rhythm-hour:focus-visible .rhythm-hour-bar { background: var(--primary); }
+.rhythm-hour-label { justify-self: center; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; line-height: 1; white-space: nowrap; }
+
+/* ---- Tier 4: tags of the year beside the all-time ledger ---- */
+.stats-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px 40px; align-items: start; }
+.stats-pair.is-single { grid-template-columns: minmax(0, 1fr); }
+
+/* Top tags of the year: ranked rows — rank, name, count and share of the
+   year's memos, a bar under them. Rows are keyed by tag name, so switching
+   years FLIP-glides survivors to their new rank (TagRows), sinks the dropped
+   rows out on an absolute layer, raises newcomers in, and rolls the counts —
+   no slot ever teleports its contents. */
 .stats-tags { position: relative; display: grid; gap: 2px; }
 .stats-tag-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 1.25em minmax(0, 1fr);
+  /* The rank sits on the name's line, not centred on name + bar. */
+  align-items: baseline;
+  gap: 10px;
   width: 100%;
-  padding: 5px 6px;
+  margin-left: -6px;
+  padding: 6px 6px 8px;
   text-align: left;
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), scale var(--t-fast) var(--ease);
@@ -4375,14 +4535,17 @@ button.stats-tag-row:active { scale: 0.992; }
   pointer-events: none;
   animation: tag-row-out var(--t) var(--ease) both;
 }
-.stats-tag-name-box { flex: none; width: min(170px, 36%); min-width: 0; }
-.stats-tag-name { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 500; }
-.stats-tag-track { flex: 1; height: 4px; background: var(--surface-3); border-radius: 2px; }
-.stats-tag-fill { display: block; height: 100%; max-width: 100%; background: var(--primary); border-radius: inherit; transition: width var(--t-slow) var(--ease-out); }
-.stats-tag-count { flex: none; min-width: 2em; color: var(--muted); font-size: var(--fs-xs); font-weight: 500; text-align: right; }
-.stats-tags-empty { margin: 0; padding: 5px 2px; color: var(--muted); font-size: var(--fs-sm); font-weight: 500; animation: fade-up 0.2s var(--ease-out) both; }
+.stats-tag-rank { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; text-align: right; }
+.stats-tag-main { display: grid; gap: 6px; min-width: 0; }
+.stats-tag-line { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-width: 0; }
+.stats-tag-name { min-width: 0; overflow: hidden; color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 500; white-space: nowrap; text-overflow: ellipsis; }
+.stats-tag-count { flex: none; display: inline-flex; align-items: baseline; gap: 8px; color: var(--ink-soft); font-size: var(--fs-xs); font-weight: 500; }
+.stats-tag-share { min-width: 2.8em; color: var(--muted); text-align: right; }
+.stats-tag-track { height: 4px; overflow: hidden; background: var(--surface-3); border-radius: 2px; }
+.stats-tag-fill { display: block; height: 100%; max-width: 100%; background: var(--primary); border-radius: inherit; transition: width 0.3s var(--ease-out); }
+.stats-tags-empty { margin: 0; padding: 5px 0; color: var(--muted); font-size: var(--fs-sm); font-weight: 500; animation: fade-up 0.2s var(--ease-out) both; }
 
-/* Tier 4, all-time footnotes: a hairline ledger — rows, not boxes. */
+/* All-time footnotes: a hairline ledger — rows, not boxes. */
 .stats-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); column-gap: 28px; }
 .stats-fact { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 10px; padding: 8px 2px; border-top: 1px solid var(--glass-rim); }
 .stats-fact.is-wide { grid-column: 1 / -1; }
@@ -4390,6 +4553,12 @@ button.stats-tag-row:active { scale: 0.992; }
 .stats-fact-value { margin-left: auto; max-width: 100%; overflow-wrap: anywhere; font-size: var(--fs-md); font-weight: 600; white-space: normal; }
 /* A suffix qualifying the figure it sits inside, so it steps down from it. */
 .stats-fact-sub { color: var(--muted); font-size: var(--fs-sm); font-weight: 500; }
+
+@media (max-width: 860px) {
+  .stats-overview { grid-template-columns: minmax(0, 1fr); }
+  .stats-kpi:first-child { padding-left: 0; border-left: 0; }
+  .stats-pair { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* =========================================================================
    Daily review settings dialog — Tier B floating surface. Sections rise in
@@ -5345,26 +5514,15 @@ button.stats-tag-row:active { scale: 0.992; }
 }
 
 @media (max-width: 720px) {
-  .stats-chart-row { grid-template-columns: 1fr; gap: 14px; }
-  .months-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
-  .stats-body { padding: 14px 14px 20px; }
+  .stats-body { gap: 28px; padding: 14px 14px 20px; }
   /* The scale itself steps down rather than the one rule that uses it. */
   :root { --fs-display: 2rem; }
-  .stats-bars { gap: 3px; }
+  .stats-bars { gap: 3px; height: 124px; }
   .stats-bar-labels { gap: 3px; }
-  .bar-chart.is-medium,
-  .bar-chart.is-dense {
-    overflow-x: auto;
-    overscroll-behavior-inline: contain;
-    padding-bottom: 4px;
-    scrollbar-width: thin;
-  }
-  .bar-chart.is-medium .stats-bars,
-  .bar-chart.is-medium .stats-bar-labels { min-width: 561px; }
-  /* 24 hourly buckets keep a real touch target and scroll as one aligned
-     chart instead of collapsing into hairline columns on a phone. */
-  .bar-chart.is-dense .stats-bars,
-  .bar-chart.is-dense .stats-bar-labels { min-width: 1125px; }
+  /* The strip and the punch card keep legible, tappable cells and scroll
+     sideways as one aligned chart instead of shrinking to hairlines. */
+  .year-strip { --day-col: 26px; min-width: 720px; }
+  .rhythm { --row: 24px; grid-template-columns: minmax(0, 1fr) 96px; column-gap: 12px; min-width: 620px; }
 }
 
 @media (max-width: 560px) {
@@ -5543,6 +5701,14 @@ button.stats-tag-row:active { scale: 0.992; }
 @keyframes topbar-untuck {
   from { clip-path: inset(0 0 var(--topbar-tuck) 0); }
   to { clip-path: inset(0 0 0 0); }
+}
+
+@media (max-width: 560px) {
+  /* A one-line reading takes its own line under the title. */
+  .stats-section-head:has(.stats-section-note) { flex-direction: column; gap: 2px; }
+  .stats-section-note { text-align: left; }
+  .stats-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 14px; }
+  .stats-kpi:nth-child(odd) { padding-left: 0; border-left: 0; }
 }
 
 @media (max-width: 400px) {

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StatsModal } from "../src/components/StatsModal";
 import { TipProvider } from "../src/components/Tip";
 import { LanguageProvider } from "../src/lib/i18n";
-import { localMaxima, totalStats } from "../src/lib/stats";
+import { localMaxima, longestRun, totalStats } from "../src/lib/stats";
 import type { Memo } from "../src/lib/types";
 
 function Providers({ children }: { children: ReactNode }) {
@@ -58,7 +58,8 @@ describe("statistics bar values", () => {
       memoAt("a", new Date(year, 2, 2, 9, 15)),
       memoAt("b", new Date(year, 2, 3, 9, 40)),
       memoAt("c", new Date(year, 2, 4, 9, 5)),
-      memoAt("d", new Date(year, 3, 6, 21, 0))
+      memoAt("d", new Date(year, 3, 6, 21, 0)),
+      memoAt("e", new Date(year, 5, 6, 21, 0))
     ];
     renderStats(memos);
 
@@ -74,12 +75,12 @@ describe("statistics bar values", () => {
     expect(april.querySelector(".stats-bar-value")?.classList.contains("is-peak")).toBe(false);
     const may = within(monthChart).getByRole("button", { name: `May ${year}: 0 memos` });
     expect(may.querySelector(".stats-bar-value")?.textContent).toBe("");
-
-    // 9 AM (3) and 9 PM (1) are the hour chart's two local maxima.
-    const hourChart = screen.getByRole("group", { name: /^Distribution by time\./ });
-    expect(hourChart.querySelectorAll(".stats-bar-value.is-peak")).toHaveLength(2);
+    // March and June are the month chart's two local maxima.
+    expect(monthChart.querySelectorAll(".stats-bar-value.is-peak")).toHaveLength(2);
     // Nothing has been laid out (jsdom), so no chart thins its labels.
     expect(document.querySelector(".stats-bars.is-sparse")).toBeNull();
+    // No year before this one: last year's ticks stay hidden.
+    expect(monthChart.classList.contains("has-compare")).toBe(false);
   });
 
   it("thins the labels to the peaks once they would collide", () => {
@@ -100,17 +101,14 @@ describe("statistics bar values", () => {
     });
     try {
       const year = new Date().getFullYear();
-      // 120 memos, all at 9 AM across four January weeks: the hour chart's
-      // three-digit label (21px) no longer fits its 20px column, while the
-      // weekday chart's two-digit labels (14px) still do.
+      // 120 memos across January: the three-digit label (21px) no longer
+      // fits its 20px column, so only the peak keeps its label.
       const memos = Array.from({ length: 120 }, (_, index) => memoAt(`m${index}`, new Date(year, 0, 1 + (index % 28), 9, 0)));
       renderStats(memos);
-      const hourBars = screen.getByRole("group", { name: /^Distribution by time\./ }).querySelector(".stats-bars");
-      expect(hourBars?.classList.contains("is-sparse")).toBe(true);
-      expect(hourBars?.querySelectorAll(".stats-bar-value.is-peak")).toHaveLength(1);
-      expect(hourBars?.querySelector(".stats-bar-value.is-peak")?.textContent).toBe("120");
-      const weekdayBars = screen.getByRole("group", { name: /^Distribution by weekday\./ }).querySelector(".stats-bars");
-      expect(weekdayBars?.classList.contains("is-sparse")).toBe(false);
+      const monthBars = screen.getByRole("group", { name: /^Memos by month\./ }).querySelector(".stats-bars");
+      expect(monthBars?.classList.contains("is-sparse")).toBe(true);
+      expect(monthBars?.querySelectorAll(".stats-bar-value.is-peak")).toHaveLength(1);
+      expect(monthBars?.querySelector(".stats-bar-value.is-peak")?.textContent).toBe("120");
     } finally {
       if (originalLeft) Object.defineProperty(HTMLElement.prototype, "offsetLeft", originalLeft);
       else delete (HTMLElement.prototype as unknown as Record<string, unknown>).offsetLeft;
@@ -137,11 +135,11 @@ describe("daily activity legend", () => {
     const cells = legend?.querySelector(".heat-legend-cells");
     expect(cells?.getAttribute("aria-hidden")).toBe("true");
     expect(Array.from(cells?.children ?? [], (cell) => cell.className)).toEqual([
-      "mini-cell level-0",
-      "mini-cell level-1",
-      "mini-cell level-2",
-      "mini-cell level-3",
-      "mini-cell level-4"
+      "year-cell level-0",
+      "year-cell level-1",
+      "year-cell level-2",
+      "year-cell level-3",
+      "year-cell level-4"
     ]);
   });
 
@@ -153,6 +151,31 @@ describe("daily activity legend", () => {
     expect(legend?.textContent).toContain("多");
     expect(screen.getByText("颜色深浅表示每天的笔记数，从 1 条到 5 条或更多。")).toBeTruthy();
     expect(screen.getByText("距首条笔记")).toBeTruthy();
+  });
+});
+
+describe("the year against the one before", () => {
+  it("compares a part year with the same stretch of last year, and ticks last year's months", () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const memos = [
+      memoAt("a", new Date(year, 0, 1, 9)),
+      memoAt("b", new Date(year - 1, 0, 1, 9)),
+      memoAt("c", new Date(year - 1, 0, 1, 10)),
+      // Last year, after today's date: not part of the comparison.
+      ...(now.getMonth() < 11 ? [memoAt("d", new Date(year - 1, 11, 31, 9))] : [])
+    ];
+    renderStats(memos);
+    expect(document.querySelector(".stats-hero-note")?.textContent).toContain("1 fewer than this time last year");
+    const monthChart = screen.getByRole("group", { name: /^Memos by month\./ });
+    expect(monthChart.classList.contains("has-compare")).toBe(true);
+    expect(within(monthChart).getByRole("button", { name: `January ${year}: 1 memo, ${year - 1}: 2 memos` })).toBeTruthy();
+  });
+
+  it("finds the longest run of days, the later one on a tie", () => {
+    expect(longestRun(["2026-03-02", "2026-03-01", "2026-03-05", "2026-03-06"])).toEqual({ length: 2, start: "2026-03-05", end: "2026-03-06" });
+    expect(longestRun(["2025-12-31", "2026-01-01", "2026-01-03"])).toEqual({ length: 2, start: "2025-12-31", end: "2026-01-01" });
+    expect(longestRun([])).toEqual({ length: 0, start: null, end: null });
   });
 });
 

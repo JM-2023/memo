@@ -108,6 +108,8 @@ function parseDrilldown(value: unknown): StatsDrilldown | null {
       return int(raw.year) && int(raw.weekday) ? { kind: "weekday", year: raw.year, weekday: raw.weekday } : null;
     case "hour":
       return int(raw.year) && int(raw.hour) ? { kind: "hour", year: raw.year, hour: raw.hour } : null;
+    case "slot":
+      return int(raw.year) && int(raw.weekday) && int(raw.hour) ? { kind: "slot", year: raw.year, weekday: raw.weekday, hour: raw.hour } : null;
     case "tag":
       return int(raw.year) && typeof raw.tag === "string" && raw.tag ? { kind: "tag", year: raw.year, tag: raw.tag } : null;
     default:

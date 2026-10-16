@@ -13,6 +13,8 @@ export type StatsDrilldown =
   | { kind: "day"; day: string }
   | { kind: "weekday"; year: number; weekday: number }
   | { kind: "hour"; year: number; hour: number }
+  /** One cell of the writing-rhythm grid: a weekday's hour. */
+  | { kind: "slot"; year: number; weekday: number; hour: number }
   | { kind: "tag"; year: number; tag: string };
 
 /**
@@ -41,6 +43,8 @@ export function memoMatchesStatsDrilldown(memo: Memo, drilldown: StatsDrilldown)
       return (created.getDay() + 6) % 7 === drilldown.weekday;
     case "hour":
       return created.getHours() === drilldown.hour;
+    case "slot":
+      return (created.getDay() + 6) % 7 === drilldown.weekday && created.getHours() === drilldown.hour;
     case "tag":
       // Top Tags counts complete extracted paths, not hierarchical ancestors.
       return tagsOf(memo).includes(drilldown.tag);
@@ -83,6 +87,8 @@ export function statsDrilldownLabel(drilldown: StatsDrilldown, locale = "en-US")
       return formatYearContext(formatWeekday(drilldown.weekday, locale), drilldown.year, locale);
     case "hour":
       return formatYearContext(formatHourRange(drilldown.hour, locale), drilldown.year, locale);
+    case "slot":
+      return formatYearContext(`${formatWeekday(drilldown.weekday, locale)} · ${formatHourRange(drilldown.hour, locale)}`, drilldown.year, locale);
     case "tag":
       return formatYearContext(`#${drilldown.tag}`, drilldown.year, locale);
   }

@@ -3,9 +3,9 @@ import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Ke
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
-import { dateFormat, dateKey, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
+import { dateFormat, daysBetweenInclusive, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
-import { buildHeatMonth, computeStreaks, countsByDay, localMaxima, totalStats, wordCountOf, type HeatMonth } from "../lib/stats";
+import { buildHeatWeeks, computeStreaks, countsByDay, localMaxima, longestRun, totalStats, wordCountOf, type DayRun, type HeatCell } from "../lib/stats";
 import type { StatsDrilldown } from "../lib/statsDrilldown";
 import { tagsOf } from "../lib/tags";
 import type { Memo } from "../lib/types";
@@ -21,12 +21,44 @@ interface StatsModalProps {
   closeSignal?: number;
 }
 
+function weekdayNames(locale: string, width: "long" | "short"): string[] {
+  const formatter = dateFormat(locale, { weekday: width });
+  const monday = new Date(2026, 0, 5);
+  return Array.from({ length: 7 }, (_, index) => formatter.format(new Date(2026, 0, monday.getDate() + index)));
+}
+
+function formatHour(hour: number, locale: string): string {
+  return dateFormat(locale, { hour: "numeric" }).format(new Date(2026, 0, 5, hour));
+}
+
+function formatHourRange(hour: number, locale: string): string {
+  return `${formatHour(hour, locale)} – ${formatHour(hour + 1, locale)}`;
+}
+
+/* Local-midnight parse: `new Date("2026-03-05")` lands on UTC midnight, which
+   shifts a day backwards in negative-offset timezones. */
+function parseDayKey(key: string): Date {
+  const [year, month, day] = key.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function argMax(values: number[]): number {
+  let best = 0;
+  for (let index = 1; index < values.length; index += 1) if (values[index] > values[best]) best = index;
+  return best;
+}
+
 interface BarChartProps {
   label: string;
   values: number[];
-  max: number;
   labels: string[];
   tips: string[];
+  /**
+   * A second series drawn as a tick across each column — the previous year.
+   * Always passed, so the ticks fade instead of popping when a year has no
+   * predecessor to compare with.
+   */
+  compare: { name: string; values: number[]; shown: boolean };
   onPick: (index: number) => void;
 }
 
@@ -34,14 +66,16 @@ interface BarChartProps {
  * Baseline-anchored bars that rise in with a slight stagger and drill down.
  * Each bar prints its count above itself, so the figures read without a
  * pointer. When a chart is too narrow for every label to have its own room
- * (measured, not guessed — the hour chart at middling widths), only the
- * local peaks keep theirs, plus the hovered or focused bar; the tip still
- * carries the full sentence.
+ * (measured, not guessed), only the local peaks keep theirs, plus the hovered
+ * or focused bar; the tip still carries the full sentence.
  */
-function BarChart({ label, values, max, labels, tips, onPick }: BarChartProps) {
+function BarChart({ label, values, labels, tips, compare, onPick }: BarChartProps) {
   const { count, formatNumber } = useI18n();
   const tip = useTip();
-  const summary = `${label}. ${tips.map((item, index) => `${item}: ${count(values[index], "memo")}`).join("; ")}`;
+  const max = Math.max(1, ...values, ...(compare.shown ? compare.values : []));
+  const nameOf = (index: number) =>
+    `${tips[index]}: ${count(values[index], "memo")}${compare.shown ? `, ${compare.name}: ${count(compare.values[index], "memo")}` : ""}`;
+  const summary = `${label}. ${values.map((_, index) => nameOf(index)).join("; ")}`;
   const density = values.length >= 20 ? " is-dense" : values.length >= 10 ? " is-medium" : "";
   const peaks = localMaxima(values);
   const barsRef = useRef<HTMLDivElement>(null);
@@ -72,41 +106,383 @@ function BarChart({ label, values, max, labels, tips, onPick }: BarChartProps) {
   }, [signature, formatNumber]);
 
   return (
-    <div className={`bar-chart${density}`} role="group" aria-label={summary}>
+    <div className={`bar-chart${density}${compare.shown ? " has-compare" : ""}`} role="group" aria-label={summary}>
       <div ref={barsRef} className={`stats-bars${sparse ? " is-sparse" : ""}`}>
-        {values.map((value, index) => (
-          <button
-            key={index}
-            type="button"
-            className="stats-bar-col"
-            disabled={value === 0}
-            aria-label={`${tips[index]}: ${count(value, "memo")}`}
-            onClick={() => onPick(index)}
-            {...tip.bind({ strong: count(value, "memo"), text: tips[index] }, { delay: DATA_TIP_DELAY })}
-          >
-            <span
-              className={`stats-bar${value > 0 ? "" : " is-zero"}`}
-              style={
-                {
-                  height: value > 0 ? `${(value / max) * 100}%` : "4px",
-                  animationDelay: `${Math.min(index, 6) * 0.008}s`,
-                  // Year switches resize the bars in a left-to-right ripple.
-                  "--bar-d": `${Math.min(index, 6) * 0.008}s`
-                } as CSSProperties
-              }
+        {values.map((value, index) => {
+          // Year switches resize the bars in a left-to-right ripple.
+          const ripple = `${Math.min(index, 11) * 0.014}s`;
+          const before = compare.values[index] ?? 0;
+          return (
+            <button
+              key={index}
+              type="button"
+              className="stats-bar-col"
+              disabled={value === 0}
+              aria-label={nameOf(index)}
+              onClick={() => onPick(index)}
+              {...tip.bind(
+                { strong: count(value, "memo"), text: compare.shown ? `${tips[index]} · ${compare.name} ${formatNumber(before)}` : tips[index] },
+                { delay: DATA_TIP_DELAY }
+              )}
             >
-              {/* Hidden from assistive tech: the button's name carries the count. */}
-              <span className={`stats-bar-value${peaks[index] ? " is-peak" : ""}`} aria-hidden="true">
+              <span
+                className={`stats-bar${value > 0 ? "" : " is-zero"}`}
+                style={{ height: value > 0 ? `${(value / max) * 100}%` : "4px", animationDelay: `${Math.min(index, 11) * 0.018}s`, "--bar-d": ripple } as CSSProperties}
+              />
+              <span className={`stats-bar-mark${before > 0 ? "" : " is-zero"}`} style={{ "--m": before / max, "--bar-d": ripple } as CSSProperties} aria-hidden="true" />
+              {/* A sibling of the bar, not its child, so it can sit over last
+                  year's tick. Hidden from assistive tech: the button's name
+                  carries the count. */}
+              <span className={`stats-bar-value${peaks[index] ? " is-peak" : ""}`} style={{ "--v": value / max, "--bar-d": ripple } as CSSProperties} aria-hidden="true">
                 {value > 0 ? formatNumber(value) : null}
               </span>
-            </span>
-          </button>
-        ))}
+            </button>
+          );
+        })}
       </div>
       <div className="stats-bar-labels" aria-hidden="true">
-        {labels.map((label, index) => (
-          <span key={index}>{label}</span>
+        {labels.map((text, index) => (
+          <span key={index}>{text}</span>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** Weeks in the strip: a Monday-first year spans 53 week columns (54 only for a leap year that starts on a Sunday). */
+const STRIP_WEEKS = 53;
+
+interface YearStripProps {
+  year: number;
+  weeks: HeatCell[][];
+  monthCounts: number[];
+  onPickDay: (key: string) => void;
+  onPickMonth: (month: number) => void;
+}
+
+/**
+ * The year as one strip: a column per week, a row per weekday, Monday on
+ * top. Cells are keyed by grid position, so switching years recolours them in
+ * place, in a left-to-right sweep. Month names above the strip drill into
+ * their month; days with memos drill into their day. On a phone the strip
+ * keeps legible cells and scrolls sideways, opening on today.
+ */
+function YearStrip({ year, weeks, monthCounts, onPickDay, onPickMonth }: YearStripProps) {
+  const { count, locale, tr } = useI18n();
+  const tip = useTip();
+  const columns = Math.max(STRIP_WEEKS, weeks.length);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const placedRef = useRef(false);
+  const dayRefs = useRef(new Map<string, HTMLButtonElement>());
+  const [focused, setFocused] = useState<string | null>(null);
+  const shortDays = useMemo(() => weekdayNames(locale, "short"), [locale]);
+  const monthFormatter = useMemo(() => dateFormat(locale, { month: "short" }), [locale]);
+  const dayFormatter = useMemo(() => dateFormat(locale, { year: "numeric", month: "short", day: "numeric" }), [locale]);
+
+  // Weeks run in date order and each is Monday→Sunday, so walking them
+  // column by column lists the days in date order.
+  const activeDays = useMemo(() => weeks.flat().filter((cell) => cell.inRange && !cell.isFuture && cell.count > 0).map((cell) => cell.key), [weeks]);
+  const roving = focused && activeDays.includes(focused) ? focused : (activeDays[activeDays.length - 1] ?? null);
+  const monthStarts = useMemo(() => {
+    const starts: number[] = [];
+    weeks.forEach((week, column) => {
+      for (const cell of week) if (cell.inRange && cell.key.endsWith("-01")) starts[Number(cell.key.slice(5, 7)) - 1] = column;
+    });
+    return starts;
+  }, [weeks]);
+
+  useLayoutEffect(() => {
+    // Only a strip wider than its box scrolls: open on today (current year)
+    // or January (past years). The first placement is instant, later ones
+    // (year switches) glide.
+    const box = scrollRef.current;
+    if (!box) return;
+    const first = !placedRef.current;
+    placedRef.current = true;
+    if (box.scrollWidth <= box.clientWidth + 1) return;
+    const today = box.querySelector<HTMLElement>(".year-cell.is-today");
+    const left = today ? today.offsetLeft + today.offsetWidth + 32 - box.clientWidth : 0;
+    box.scrollTo({ left: Math.max(0, left), behavior: first ? "auto" : "smooth" });
+  }, [year]);
+
+  function moveFocus(event: ReactKeyboardEvent<HTMLButtonElement>, key: string) {
+    const current = activeDays.indexOf(key);
+    if (current < 0) return;
+    let next = current;
+    if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = activeDays.length - 1;
+    // Down the column is the next day, as the strip reads; only days with
+    // memos are stops.
+    else if (event.key === "ArrowUp") next = Math.max(0, current - 1);
+    else if (event.key === "ArrowDown") next = Math.min(activeDays.length - 1, current + 1);
+    else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      // A week back or on: the nearest day with memos to that date, on that
+      // side of this one.
+      const forward = event.key === "ArrowRight";
+      const goal = parseDayKey(key).getTime() + (forward ? 7 : -7) * 86_400_000;
+      let bestDistance = Infinity;
+      for (let index = forward ? current + 1 : current - 1; index >= 0 && index < activeDays.length; index += forward ? 1 : -1) {
+        const distance = Math.abs(parseDayKey(activeDays[index]).getTime() - goal);
+        // Ties go to the day further along: the step should feel like a step.
+        if (distance > bestDistance) break;
+        next = index;
+        bestDistance = distance;
+      }
+    } else return;
+    event.preventDefault();
+    const target = activeDays[next];
+    setFocused(target);
+    dayRefs.current.get(target)?.focus({ preventScroll: false });
+  }
+
+  return (
+    <div ref={scrollRef} className="year-strip-scroll">
+      <div className="year-strip" style={{ "--weeks": columns } as CSSProperties}>
+        <div className="year-strip-months">
+          <span className="year-strip-corner" aria-hidden="true" />
+          {monthCounts.map((memoCount, month) => {
+            const start = monthStarts[month] ?? 0;
+            const end = monthStarts[month + 1] ?? columns;
+            const name = formatMonthYear(year, month, locale);
+            return (
+              <button
+                key={month}
+                type="button"
+                className="year-strip-month"
+                style={{ gridColumn: `${start + 2} / ${end + 2}` }}
+                disabled={memoCount === 0}
+                aria-label={tr(`Show ${count(memoCount, "memo")} from ${name}`, `查看 ${name}的 ${count(memoCount, "memo")}`)}
+                onClick={() => onPickMonth(month)}
+                {...tip.bind({ strong: count(memoCount, "memo"), text: name }, { delay: DATA_TIP_DELAY })}
+              >
+                {monthFormatter.format(new Date(year, month, 1))}
+              </button>
+            );
+          })}
+        </div>
+        <div className="year-strip-grid">
+          {shortDays.map((name, index) => (
+            <span key={`d${index}`} className="year-strip-day" aria-hidden="true">
+              {index % 2 === 0 && index < 6 ? name : null}
+            </span>
+          ))}
+          {Array.from({ length: columns }, (_, column) =>
+            Array.from({ length: 7 }, (_, row) => {
+              const cell = weeks[column]?.[row];
+              const sweep = { "--w": column } as CSSProperties;
+              if (cell && cell.inRange && !cell.isFuture && cell.count > 0) {
+                const day = dayFormatter.format(parseDayKey(cell.key));
+                return (
+                  <button
+                    key={`${column}-${row}`}
+                    ref={(element) => {
+                      if (element) dayRefs.current.set(cell.key, element);
+                      else dayRefs.current.delete(cell.key);
+                    }}
+                    type="button"
+                    className={`year-cell level-${cell.level}${cell.isToday ? " is-today" : ""}`}
+                    style={sweep}
+                    aria-label={tr(`Show ${count(cell.count, "memo")} from ${day}`, `查看 ${day}的 ${count(cell.count, "memo")}`)}
+                    tabIndex={cell.key === roving ? 0 : -1}
+                    {...withFocus(
+                      tip.bind(
+                        { strong: count(cell.count, "memo"), text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}` },
+                        { delay: DATA_TIP_DELAY }
+                      ),
+                      () => setFocused(cell.key)
+                    )}
+                    onKeyDown={(event) => moveFocus(event, cell.key)}
+                    onClick={() => onPickDay(cell.key)}
+                  />
+                );
+              }
+              // Every slot stays a (disabled) button, so a day that gains or
+              // loses memos across years recolours instead of remounting.
+              const kind = !cell || !cell.inRange ? " is-void" : cell.isFuture ? " is-future" : ` level-0${cell.isToday ? " is-today" : ""}`;
+              return <button key={`${column}-${row}`} type="button" className={`year-cell${kind}`} style={sweep} disabled tabIndex={-1} aria-hidden="true" />;
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface RhythmChartProps {
+  /** Memos per [weekday (Monday first)][hour]. */
+  slots: number[][];
+  weekdayCounts: number[];
+  hourCounts: number[];
+  onPickWeekday: (weekday: number) => void;
+  onPickHour: (hour: number) => void;
+  onPickSlot: (weekday: number, hour: number) => void;
+}
+
+/** Arrow-key stops in the rhythm grid, by [row, column] in reading order. */
+function stepRhythm(stops: [number, number][], from: number, key: string): number | null {
+  const [row, column] = stops[from];
+  switch (key) {
+    case "Home":
+      return 0;
+    case "End":
+      return stops.length - 1;
+    case "ArrowLeft":
+      return Math.max(0, from - 1);
+    case "ArrowRight":
+      return Math.min(stops.length - 1, from + 1);
+    case "ArrowUp":
+    case "ArrowDown": {
+      // The nearest stop by hour in the closest weekday row that has one.
+      const step = key === "ArrowDown" ? 1 : -1;
+      for (let target = row + step; target >= 0 && target < 7; target += step) {
+        let best = -1;
+        stops.forEach(([r, c], index) => {
+          if (r === target && (best < 0 || Math.abs(c - column) < Math.abs(stops[best][1] - column))) best = index;
+        });
+        if (best >= 0) return best;
+      }
+      return from;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * When the writing happens: a weekday × hour punch card. A dot's area
+ * follows its count; the weekday totals sit at the right of their rows and
+ * the hour totals under their columns, each drilling into its slice. Dots
+ * re-size in a diagonal ripple when the year changes.
+ */
+function RhythmChart({ slots, weekdayCounts, hourCounts, onPickWeekday, onPickHour, onPickSlot }: RhythmChartProps) {
+  const { count, locale, tr } = useI18n();
+  const tip = useTip();
+  const shortDays = useMemo(() => weekdayNames(locale, "short"), [locale]);
+  const longDays = useMemo(() => weekdayNames(locale, "long"), [locale]);
+  const slotMax = Math.max(1, ...slots.flat());
+  const weekdayMax = Math.max(1, ...weekdayCounts);
+  const hourMax = Math.max(1, ...hourCounts);
+  const stops = useMemo(() => {
+    const list: [number, number][] = [];
+    slots.forEach((row, r) => row.forEach((value, c) => value > 0 && list.push([r, c])));
+    return list;
+  }, [slots]);
+  const [focused, setFocused] = useState<string | null>(null);
+  const cellRefs = useRef(new Map<string, HTMLButtonElement>());
+  const rovingIndex = Math.max(0, stops.findIndex(([r, c]) => `${r}-${c}` === focused));
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const placedRef = useRef(false);
+  const firstHour = hourCounts.findIndex((value) => value > 0);
+
+  useLayoutEffect(() => {
+    // Where the grid must scroll (a phone), open on the first hour anything
+    // was written rather than on empty small hours.
+    const box = scrollRef.current;
+    if (!box) return;
+    const first = !placedRef.current;
+    placedRef.current = true;
+    if (box.scrollWidth <= box.clientWidth + 1) return;
+    const hour = box.querySelectorAll<HTMLElement>(".rhythm-hour")[Math.max(0, firstHour)];
+    const day = box.querySelector<HTMLElement>(".rhythm-day");
+    const left = hour && day ? hour.offsetLeft - day.offsetWidth - 8 : 0;
+    box.scrollTo({ left: Math.max(0, left), behavior: first ? "auto" : "smooth" });
+  }, [firstHour]);
+
+  function moveFocus(event: ReactKeyboardEvent<HTMLButtonElement>, r: number, c: number) {
+    const from = stops.findIndex(([sr, sc]) => sr === r && sc === c);
+    if (from < 0) return;
+    const next = stepRhythm(stops, from, event.key);
+    if (next === null) return;
+    event.preventDefault();
+    const [nr, nc] = stops[next];
+    setFocused(`${nr}-${nc}`);
+    cellRefs.current.get(`${nr}-${nc}`)?.focus({ preventScroll: true });
+  }
+
+  return (
+    <div ref={scrollRef} className="rhythm-scroll">
+      <div className="rhythm">
+        <div className="rhythm-grid" role="group" aria-label={tr("Memos by weekday and hour", "按星期和时段的笔记")}>
+          {slots.map((row, r) => (
+            <div key={r} className="rhythm-row">
+              <span className="rhythm-day" aria-hidden="true">
+                {shortDays[r]}
+              </span>
+              {row.map((value, c) => {
+                const key = `${r}-${c}`;
+                const style = { "--s": value > 0 ? 0.3 + 0.7 * Math.sqrt(value / slotMax) : 0, "--d": `${c * 7 + r * 16}ms` } as CSSProperties;
+                if (value === 0) {
+                  return (
+                    <button key={c} type="button" className="rhythm-cell is-zero" disabled tabIndex={-1} aria-hidden="true">
+                      <span className="rhythm-dot" style={style} />
+                    </button>
+                  );
+                }
+                const slot = `${longDays[r]} · ${formatHourRange(c, locale)}`;
+                return (
+                  <button
+                    key={c}
+                    ref={(element) => {
+                      if (element) cellRefs.current.set(key, element);
+                      else cellRefs.current.delete(key);
+                    }}
+                    type="button"
+                    className="rhythm-cell"
+                    aria-label={`${slot}: ${count(value, "memo")}`}
+                    tabIndex={stops[rovingIndex]?.[0] === r && stops[rovingIndex]?.[1] === c ? 0 : -1}
+                    {...withFocus(tip.bind({ strong: count(value, "memo"), text: slot }, { delay: DATA_TIP_DELAY }), () => setFocused(key))}
+                    onKeyDown={(event) => moveFocus(event, r, c)}
+                    onClick={() => onPickSlot(r, c)}
+                  >
+                    <span className="rhythm-dot" style={style} />
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+        <div className="rhythm-side" role="group" aria-label={tr("Distribution by weekday", "星期分布")}>
+          {weekdayCounts.map((value, weekday) => (
+            <button
+              key={weekday}
+              type="button"
+              className="rhythm-total"
+              disabled={value === 0}
+              aria-label={`${longDays[weekday]}: ${count(value, "memo")}`}
+              onClick={() => onPickWeekday(weekday)}
+              {...tip.bind({ strong: count(value, "memo"), text: longDays[weekday] }, { delay: DATA_TIP_DELAY })}
+            >
+              <span className="rhythm-total-track">
+                <span className="rhythm-total-fill" style={{ "--f": value / weekdayMax, "--d": `${weekday * 16}ms` } as CSSProperties} />
+              </span>
+              <span className="rhythm-total-count">
+                <RollingText value={value} />
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="rhythm-foot" role="group" aria-label={tr("Distribution by time", "时段分布")}>
+          <span className="rhythm-corner" aria-hidden="true" />
+          {hourCounts.map((value, hour) => (
+            <button
+              key={hour}
+              type="button"
+              className="rhythm-hour"
+              disabled={value === 0}
+              aria-label={`${formatHourRange(hour, locale)}: ${count(value, "memo")}`}
+              onClick={() => onPickHour(hour)}
+              {...tip.bind({ strong: count(value, "memo"), text: formatHourRange(hour, locale) }, { delay: DATA_TIP_DELAY })}
+            >
+              <span className="rhythm-hour-bar" style={{ "--f": value / hourMax, "--d": `${hour * 7}ms` } as CSSProperties} />
+            </button>
+          ))}
+          <span className="rhythm-corner" aria-hidden="true" />
+          {hourCounts.map((_, hour) => (
+            <span key={hour} className="rhythm-hour-label" aria-hidden="true">
+              {hour % 3 === 0 ? formatHour(hour, locale) : null}
+            </span>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -128,7 +504,7 @@ const TAG_GLIDE: KeyframeAnimationOptions = { duration: 220, easing: "cubic-bezi
  * in, and tweens the list height — a re-ranking reads as rows trading places
  * instead of five fixed slots teleporting their contents.
  */
-function TagRows({ tags, emptyLabel, onPick }: { tags: [string, number][]; emptyLabel: string; onPick: (tag: string) => void }) {
+function TagRows({ tags, total, emptyLabel, onPick }: { tags: [string, number][]; total: number; emptyLabel: string; onPick: (tag: string) => void }) {
   const { count, formatNumber, tr } = useI18n();
   const max = tags[0]?.[1] ?? 1;
   const boxRef = useRef<HTMLDivElement>(null);
@@ -198,6 +574,10 @@ function TagRows({ tags, emptyLabel, onPick }: { tags: [string, number][]; empty
     boxAnimRef.current = anim;
   });
 
+  // The share of the year's memos that carry the tag — the figure a ranking
+  // alone can't say.
+  const share = (tagCount: number) => (total > 0 ? `${Math.round((tagCount / total) * 100)}%` : "");
+
   return (
     <div ref={boxRef} className="stats-tags">
       {tags.map(([name, tagCount], index) => (
@@ -213,14 +593,20 @@ function TagRows({ tags, emptyLabel, onPick }: { tags: [string, number][]; empty
           aria-label={tr(`Show ${count(tagCount, "memo")} tagged ${name}`, `查看带有 #${name} 的 ${count(tagCount, "memo")}`)}
           onClick={() => onPick(name)}
         >
-          <span className="stats-tag-name-box">
-            <span className="stats-tag-name">#{name}</span>
+          <span className="stats-tag-rank" aria-hidden="true">
+            {index + 1}
           </span>
-          <span className="stats-tag-track">
-            <span className="stats-tag-fill" style={{ width: `${(tagCount / max) * 100}%` }} />
-          </span>
-          <span className="stats-tag-count">
-            <RollingText value={tagCount} />
+          <span className="stats-tag-main">
+            <span className="stats-tag-line">
+              <span className="stats-tag-name">#{name}</span>
+              <span className="stats-tag-count">
+                <RollingText value={tagCount} />
+                <span className="stats-tag-share">{share(tagCount)}</span>
+              </span>
+            </span>
+            <span className="stats-tag-track">
+              <span className="stats-tag-fill" style={{ width: `${(tagCount / max) * 100}%` }} />
+            </span>
           </span>
         </button>
       ))}
@@ -233,38 +619,20 @@ function TagRows({ tags, emptyLabel, onPick }: { tags: [string, number][]; empty
           aria-hidden="true"
           onAnimationEnd={() => setLeaving((current) => current.filter((item) => item !== ghost))}
         >
-          <span className="stats-tag-name-box">
-            <span className="stats-tag-name">#{ghost.name}</span>
+          <span className="stats-tag-rank" />
+          <span className="stats-tag-main">
+            <span className="stats-tag-line">
+              <span className="stats-tag-name">#{ghost.name}</span>
+              <span className="stats-tag-count">{formatNumber(ghost.count)}</span>
+            </span>
+            <span className="stats-tag-track">
+              <span className="stats-tag-fill" style={{ width: `${ghost.pct}%` }} />
+            </span>
           </span>
-          <span className="stats-tag-track">
-            <span className="stats-tag-fill" style={{ width: `${ghost.pct}%` }} />
-          </span>
-          <span className="stats-tag-count">{formatNumber(ghost.count)}</span>
         </div>
       ))}
     </div>
   );
-}
-
-function weekdayNames(locale: string, width: "long" | "narrow"): string[] {
-  const formatter = dateFormat(locale, { weekday: width });
-  const monday = new Date(2026, 0, 5);
-  return Array.from({ length: 7 }, (_, index) => formatter.format(new Date(2026, 0, monday.getDate() + index)));
-}
-
-function formatHour(hour: number, locale: string): string {
-  return dateFormat(locale, { hour: "numeric" }).format(new Date(2026, 0, 5, hour));
-}
-
-function formatHourRange(hour: number, locale: string): string {
-  return `${formatHour(hour, locale)} – ${formatHour(hour + 1, locale)}`;
-}
-
-/* Local-midnight parse: `new Date("2026-03-05")` lands on UTC midnight, which
-   shifts a day backwards in negative-offset timezones. */
-function parseDayKey(key: string): Date {
-  const [year, month, day] = key.split("-").map(Number);
-  return new Date(year, month - 1, day);
 }
 
 interface YearData {
@@ -272,53 +640,79 @@ interface YearData {
   words: number;
   activeDays: number;
   imageCount: number;
-  months: { month: number; count: number; heat: HeatMonth }[];
-  monthMax: number;
+  /** Memos with at least one image. */
+  imageMemos: number;
+  weeks: HeatCell[][];
+  monthCounts: number[];
   weekdayCounts: number[];
-  weekdayMax: number;
   hourCounts: number[];
-  hourMax: number;
+  /** [weekday (Monday first)][hour]. */
+  slots: number[][];
+  /** The year's longest run of consecutive days with memos. */
+  run: DayRun;
 }
 
 function buildYearData(memos: Memo[], byDay: Map<string, number>, year: number, now: Date): YearData {
   const monthCounts = Array.from({ length: 12 }, () => 0);
   const weekdayCounts = Array.from({ length: 7 }, () => 0);
   const hourCounts = Array.from({ length: 24 }, () => 0);
-  const days = new Set<string>();
+  const slots = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
   let words = 0;
   let imageCount = 0;
+  let imageMemos = 0;
   let memoCount = 0;
 
   for (const memo of memos) {
     const created = new Date(memo.createdAt);
     if (created.getFullYear() !== year) continue;
+    const weekday = (created.getDay() + 6) % 7;
     memoCount += 1;
     words += wordCountOf(memo);
     imageCount += memo.images.length;
+    if (memo.images.length > 0) imageMemos += 1;
     monthCounts[created.getMonth()] += 1;
-    weekdayCounts[(created.getDay() + 6) % 7] += 1;
+    weekdayCounts[weekday] += 1;
     hourCounts[created.getHours()] += 1;
-    days.add(dateKey(created));
+    slots[weekday][created.getHours()] += 1;
   }
 
+  const prefix = `${year}-`;
+  const yearDays = [...byDay.keys()].filter((key) => key.startsWith(prefix));
   return {
     memoCount,
     words,
-    activeDays: days.size,
+    activeDays: yearDays.length,
     imageCount,
-    months: monthCounts.map((count, month) => ({ month, count, heat: buildHeatMonth(year, month, byDay, now) })),
-    monthMax: Math.max(1, ...monthCounts),
+    imageMemos,
+    weeks: buildHeatWeeks(new Date(year, 0, 1), new Date(year, 11, 31), byDay, now),
+    monthCounts,
     weekdayCounts,
-    weekdayMax: Math.max(1, ...weekdayCounts),
     hourCounts,
-    hourMax: Math.max(1, ...hourCounts)
+    slots,
+    run: longestRun(yearDays)
   };
 }
 
+/** Memos per month of `year`, and how many were written by `cutoff`. */
+function monthTally(memos: Memo[], year: number, cutoff: number): { months: number[]; total: number; byCutoff: number } {
+  const months = Array.from({ length: 12 }, () => 0);
+  let total = 0;
+  let byCutoff = 0;
+  for (const memo of memos) {
+    const created = new Date(memo.createdAt);
+    if (created.getFullYear() !== year) continue;
+    months[created.getMonth()] += 1;
+    total += 1;
+    if (created.getTime() <= cutoff) byCutoff += 1;
+  }
+  return { months, total, byCutoff };
+}
+
 /**
- * Deep-dive statistics: a year of mini heatmaps plus distribution charts,
- * all derived client-side from the already-loaded memos. Opens from the
- * sidebar stat tiles.
+ * Deep-dive statistics for one year — its headline figures against the year
+ * before, the year as a day strip, its months, its writing rhythm and its
+ * tags — then the all-time ledger. Everything is derived client-side from
+ * the loaded memos and drills into the feed. Opens from the sidebar figures.
  */
 export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeSignal = 0 }: StatsModalProps) {
   const { count, formatNumber, locale, tr } = useI18n();
@@ -363,59 +757,23 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
 
   const byDay = useMemo(() => countsByDay(memos), [memos]);
   const yearData = useMemo(() => buildYearData(memos, byDay, year, now), [memos, byDay, year, now]);
-  const activeHeatDays = useMemo(
-    () =>
-      yearData.months
-        .flatMap(({ heat }) => heat.weeks.flat())
-        .filter((cell) => cell.inRange && !cell.isFuture && cell.count > 0)
-        .map((cell) => cell.key)
-        .sort(),
-    [yearData]
-  );
-  const activeHeatDaySet = useMemo(() => new Set(activeHeatDays), [activeHeatDays]);
-  const [focusedHeatDay, setFocusedHeatDay] = useState<string | null>(null);
-  const heatDayRefs = useRef(new Map<string, HTMLButtonElement>());
-  const rovingHeatDay = focusedHeatDay && activeHeatDaySet.has(focusedHeatDay) ? focusedHeatDay : (activeHeatDays[0] ?? null);
-
-  function moveHeatDayFocus(event: ReactKeyboardEvent<HTMLButtonElement>, key: string) {
-    const current = activeHeatDays.indexOf(key);
-    if (current < 0) return;
-    let next = current;
-    if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = activeHeatDays.length - 1;
-    else if (event.key === "ArrowLeft") next = Math.max(0, current - 1);
-    else if (event.key === "ArrowRight") next = Math.min(activeHeatDays.length - 1, current + 1);
-    else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-      // A week up or down, as the grid reads (and the sidebar heatmap moves):
-      // only active days are stops, so the nearest one to that date, on that
-      // side of this one.
-      const down = event.key === "ArrowDown";
-      const goal = parseDayKey(key).getTime() + (down ? 7 : -7) * 86_400_000;
-      let bestDistance = Infinity;
-      for (let index = down ? current + 1 : current - 1; index >= 0 && index < activeHeatDays.length; index += down ? 1 : -1) {
-        const distance = Math.abs(parseDayKey(activeHeatDays[index]).getTime() - goal);
-        // Ties go to the day further along: the step should feel like a step.
-        if (distance > bestDistance) break;
-        next = index;
-        bestDistance = distance;
-      }
-    } else return;
-    event.preventDefault();
-    const target = activeHeatDays[next];
-    setFocusedHeatDay(target);
-    heatDayRefs.current.get(target)?.focus({ preventScroll: true });
-  }
+  // The year before, for the comparison: in full for a past year; for the
+  // current one, up to this date a year ago, so a part year meets a part year.
+  const before = useMemo(() => {
+    const cutoff = year === maxYear ? new Date(year - 1, now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime() : Infinity;
+    return monthTally(memos, year - 1, cutoff);
+  }, [memos, year, maxYear, now]);
 
   const totals = useMemo(() => totalStats(memos, now), [memos, now]);
   const streaks = useMemo(() => computeStreaks(byDay, now), [byDay, now]);
   const allWords = useMemo(() => memos.reduce((sum, memo) => sum + wordCountOf(memo), 0), [memos]);
   const allImages = useMemo(() => memos.reduce((sum, memo) => sum + memo.images.length, 0), [memos]);
-  const weekdaysFull = useMemo(() => weekdayNames(locale, "long"), [locale]);
-  const weekdaysNarrow = useMemo(() => weekdayNames(locale, "narrow"), [locale]);
-  const monthFormatter = useMemo(() => new Intl.DateTimeFormat(locale, { month: "short" }), [locale]);
-  const dayFormatter = useMemo(() => new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric" }), [locale]);
+  const longDays = useMemo(() => weekdayNames(locale, "long"), [locale]);
+  const monthFormatter = useMemo(() => dateFormat(locale, { month: "short" }), [locale]);
+  const dayFormatter = useMemo(() => dateFormat(locale, { year: "numeric", month: "short", day: "numeric" }), [locale]);
+  const spanFormatter = useMemo(() => dateFormat(locale, { month: "short", day: "numeric" }), [locale]);
 
-  // Top tags of the selected year — the one categorical stat in the modal.
+  // Top tags of the selected year — the one categorical stat in the panel.
   const topTags = useMemo(() => {
     const counts = new Map<string, number>();
     for (const memo of memos) {
@@ -433,8 +791,68 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
     return best;
   }, [byDay]);
 
+  // ---- The year's headline, said in words first. ----
+  const { memoCount, activeDays, words, imageCount, imageMemos, run } = yearData;
   // Rounded to one decimal; the trailing .0 is dropped so integers stay short.
-  const perActiveDay = yearData.activeDays > 0 ? Math.round((yearData.memoCount / yearData.activeDays) * 10) / 10 : 0;
+  const perActiveDay = activeDays > 0 ? Math.round((memoCount / activeDays) * 10) / 10 : 0;
+  const lastYear = year - 1;
+  // Against the year before, in words: the figure already says "memos".
+  let delta: string;
+  if (before.total > 0) {
+    const gap = memoCount - before.byCutoff;
+    const amount = formatNumber(Math.abs(gap));
+    if (year === maxYear) {
+      delta =
+        gap > 0
+          ? tr(`${amount} more than this time last year`, `比去年同期多 ${amount} 条`)
+          : gap < 0
+            ? tr(`${amount} fewer than this time last year`, `比去年同期少 ${amount} 条`)
+            : tr("Level with this time last year", "与去年同期持平");
+    } else {
+      delta =
+        gap > 0
+          ? tr(`${amount} more than ${lastYear}`, `比 ${lastYear} 年多 ${amount} 条`)
+          : gap < 0
+            ? tr(`${amount} fewer than ${lastYear}`, `比 ${lastYear} 年少 ${amount} 条`)
+            : tr(`Level with ${lastYear}`, `与 ${lastYear} 年持平`);
+    }
+  } else {
+    delta = lastYear < minYear ? tr("Your first year of memos", "记录的第一年") : tr(`Nothing written in ${lastYear}`, `${lastYear} 年没有笔记`);
+  }
+  const pace = memoCount > 0 ? tr(`${formatNumber(perActiveDay)} per active day`, `活跃日均 ${formatNumber(perActiveDay)} 条`) : tr("Nothing written this year", "这一年还没有笔记");
+
+  const elapsed = year === maxYear ? daysBetweenInclusive(new Date(year, 0, 1), now) : daysBetweenInclusive(new Date(year, 0, 1), new Date(year, 11, 31));
+  const coverage = activeDays > 0 ? Math.max(1, Math.round((activeDays / elapsed) * 100)) : 0;
+  const runSpan =
+    run.start && run.end ? (run.start === run.end ? spanFormatter.format(parseDayKey(run.start)) : spanFormatter.formatRange(parseDayKey(run.start), parseDayKey(run.end))) : "";
+  const kpis: { label: string; value: number; unit?: string; sub: string }[] = [
+    {
+      label: tr("Active days", "活跃天数"),
+      value: activeDays,
+      sub: activeDays > 0 ? (year === maxYear ? tr(`${coverage}% of days so far`, `占今年已过天数 ${coverage}%`) : tr(`${coverage}% of the year`, `占全年 ${coverage}%`)) : ""
+    },
+    { label: tr("Longest streak", "最长连击"), value: run.length, unit: tr(run.length === 1 ? " day" : " days", " 天"), sub: runSpan },
+    {
+      label: tr("Characters", "字数"),
+      value: words,
+      sub: memoCount > 0 ? tr(`${formatNumber(Math.round(words / memoCount))} per memo`, `平均每条 ${formatNumber(Math.round(words / memoCount))} 字`) : ""
+    },
+    {
+      label: tr("Images", "图片"),
+      value: imageCount,
+      sub: imageMemos > 0 ? tr(`in ${count(imageMemos, "memo")}`, `来自 ${count(imageMemos, "memo")}`) : ""
+    }
+  ];
+
+  const peakWeekday = argMax(yearData.weekdayCounts);
+  const peakHour = argMax(yearData.hourCounts);
+  const rhythmNote =
+    memoCount > 0
+      ? tr(
+          `Most often on ${longDays[peakWeekday]}, ${formatHourRange(peakHour, locale)}`,
+          `最常在${longDays[peakWeekday]} · ${formatHourRange(peakHour, locale)}`
+        )
+      : "";
 
   const facts: { label: string; value: number; suffix?: string; wide?: boolean }[] = [
     { label: tr("Total memos", "总笔记"), value: totals.memoCount },
@@ -500,49 +918,54 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
         </header>
 
         <div className="stats-body">
-          {/* Hierarchy: one hero figure, its supporting figures in a muted
-              line, then progressively quieter sections — no two tiers share
-              a treatment, and nothing wears a card frame. */}
-          <section className="stats-section stats-hero">
-            <button
-              type="button"
-              className="stats-hero-main"
-              disabled={yearData.memoCount === 0}
-              aria-label={tr(`Show ${count(yearData.memoCount, "memo")} from ${year}`, `查看 ${year} 年的 ${count(yearData.memoCount, "memo")}`)}
-              onClick={() => requestDrilldown({ kind: "year", year })}
-            >
-              <span className="stats-hero-value">
-                <RollingText value={yearData.memoCount} />
-              </span>
-              <span className="stats-hero-unit">{tr(yearData.memoCount === 1 ? "memo" : "memos", "条笔记")}</span>
-              {yearData.memoCount > 0 ? <ChevronRight size={19} className="stats-drill-cue" aria-hidden="true" /> : null}
-            </button>
-            <div className="stats-hero-figs">
-              <span className="stats-fig">
-                {tr("", "活跃 ")}
-                <RollingText value={yearData.activeDays} />
-                {tr(yearData.activeDays === 1 ? " active day" : " active days", " 天")}
-              </span>
-              <span className="stats-fig">
-                {tr("", "日均 ")}
-                <RollingText value={perActiveDay} text={String(perActiveDay)} />
-                {tr(" per active day", " 条")}
-              </span>
-              <span className="stats-fig">
-                <RollingText value={yearData.words} />
-                {tr(" characters", " 字")}
-              </span>
-              <span className="stats-fig">
-                <RollingText value={yearData.imageCount} />
-                {tr(yearData.imageCount === 1 ? " image" : " images", " 张图片")}
-              </span>
+          {/* Tier 1: the year's figure in display type with its comparison
+              in words, beside four supporting figures on hairlines. */}
+          <section className="stats-section stats-overview">
+            <div className="stats-hero">
+              <button
+                type="button"
+                className="stats-hero-main"
+                disabled={memoCount === 0}
+                aria-label={tr(`Show ${count(memoCount, "memo")} from ${year}`, `查看 ${year} 年的 ${count(memoCount, "memo")}`)}
+                onClick={() => requestDrilldown({ kind: "year", year })}
+              >
+                <span className="stats-hero-value">
+                  <RollingText value={memoCount} />
+                </span>
+                <span className="stats-hero-unit">{tr(memoCount === 1 ? "memo" : "memos", "条笔记")}</span>
+                {memoCount > 0 ? <ChevronRight size={19} className="stats-drill-cue" aria-hidden="true" /> : null}
+              </button>
+              <p className="stats-hero-note">
+                <span key={delta} className="stats-swap">
+                  {delta}
+                </span>
+                <span key={pace} className="stats-swap">
+                  {pace}
+                </span>
+              </p>
             </div>
+            <dl className="stats-kpis">
+              {kpis.map((kpi) => (
+                <div key={kpi.label} className="stats-kpi">
+                  <dt className="stats-kpi-label">{kpi.label}</dt>
+                  <dd className="stats-kpi-value">
+                    <RollingText value={kpi.value} />
+                    {kpi.unit ? <span className="stats-kpi-unit">{kpi.unit}</span> : null}
+                  </dd>
+                  <dd className="stats-kpi-sub">
+                    <span key={kpi.sub} className="stats-swap">
+                      {kpi.sub || " "}
+                    </span>
+                  </dd>
+                </div>
+              ))}
+            </dl>
           </section>
 
-          <section className="stats-section" style={{ animationDelay: "0.02s" }}>
+          <section className="stats-section" style={{ animationDelay: "0.03s" }}>
             <div className="stats-section-head">
               <h3 className="stats-section-title">{tr("Daily activity", "每日活跃")}</h3>
-              {/* The scale, built from the calendar's own cell classes so it
+              {/* The scale, built from the strip's own cell classes so it
                   recolours with them. The swatches are decoration; a screen
                   reader gets the sentence instead. */}
               <div className="heat-legend">
@@ -552,157 +975,94 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
                 <span aria-hidden="true">{tr("Less", "少")}</span>
                 <span className="heat-legend-cells" aria-hidden="true">
                   {[0, 1, 2, 3, 4].map((level) => (
-                    <span key={level} className={`mini-cell level-${level}`} />
+                    <span key={level} className={`year-cell level-${level}`} />
                   ))}
                 </span>
                 <span aria-hidden="true">{tr("More", "多")}</span>
               </div>
             </div>
-            <div className="months-grid">
-              {yearData.months.map(({ month, count: memoCount, heat }) => (
-                <div key={month} className="mini-month">
-                  <span className="mini-month-head">
-                    <button
-                      type="button"
-                      className="mini-month-pick"
-                      disabled={memoCount === 0}
-                      aria-label={tr(
-                        `Show ${count(memoCount, "memo")} from ${formatMonthYear(year, month, locale)}`,
-                        `查看 ${formatMonthYear(year, month, locale)}的 ${count(memoCount, "memo")}`
-                      )}
-                      onClick={() => requestDrilldown({ kind: "month", year, month })}
-                    >
-                      <span className="mini-month-name">{monthFormatter.format(new Date(year, month, 1))}</span>
-                      {memoCount > 0 ? <ChevronRight size={12} className="mini-month-cue" aria-hidden="true" /> : null}
-                    </button>
-                    <span className="mini-month-count">
-                      <RollingText value={memoCount} />
-                    </span>
-                  </span>
-                  <span className="mini-grid">
-                    {/* Cells keyed by grid position, not date — switching years
-                        mutates them in place so the colours crossfade. Every
-                        month renders six week rows, so the calendar (and every
-                        section below it) keeps one height across years instead
-                        of jumping when a year needs more or fewer weeks. */}
-                    {Array.from({ length: 6 }, (_, weekIndex) =>
-                      Array.from({ length: 7 }, (_, dayIndex) => {
-                        const cell = heat.weeks[weekIndex]?.[dayIndex];
-                        if (cell && cell.inRange && !cell.isFuture && cell.count > 0) {
-                          return (
-                            <button
-                              key={`${weekIndex}-${dayIndex}`}
-                              ref={(element) => {
-                                if (element) heatDayRefs.current.set(cell.key, element);
-                                else heatDayRefs.current.delete(cell.key);
-                              }}
-                              type="button"
-                              className={`mini-cell level-${cell.level}${cell.isToday ? " is-today" : ""}`}
-                              aria-label={tr(
-                                `Show ${count(cell.count, "memo")} from ${dayFormatter.format(parseDayKey(cell.key))}`,
-                                `查看 ${dayFormatter.format(parseDayKey(cell.key))}的 ${count(cell.count, "memo")}`
-                              )}
-                              tabIndex={cell.key === rovingHeatDay ? 0 : -1}
-                              {...withFocus(
-                                tip.bind(
-                                  {
-                                    strong: count(cell.count, "memo"),
-                                    text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}`
-                                  },
-                                  { delay: DATA_TIP_DELAY }
-                                ),
-                                () => setFocusedHeatDay(cell.key)
-                              )}
-                              onKeyDown={(event) => moveHeatDayFocus(event, cell.key)}
-                              onClick={() => requestDrilldown({ kind: "day", day: cell.key })}
-                            />
-                          );
-                        }
-                        return cell && cell.inRange && !cell.isFuture ? (
-                          <span
-                            key={`${weekIndex}-${dayIndex}`}
-                            className={`mini-cell level-${cell.level}${cell.isToday ? " is-today" : ""}`}
-                            aria-hidden="true"
-                          />
-                        ) : (
-                          <span
-                            key={`${weekIndex}-${dayIndex}`}
-                            className={`mini-cell placeholder${cell?.inRange ? " future" : ""}`}
-                            aria-hidden="true"
-                          />
-                        );
-                      })
-                    )}
-                  </span>
-                </div>
-              ))}
-            </div>
+            <YearStrip
+              year={year}
+              weeks={yearData.weeks}
+              monthCounts={yearData.monthCounts}
+              onPickDay={(day) => requestDrilldown({ kind: "day", day })}
+              onPickMonth={(month) => requestDrilldown({ kind: "month", year, month })}
+            />
           </section>
 
-          <section className="stats-section" style={{ animationDelay: "0.04s" }}>
-            <h3 className="stats-section-title">{tr("Memos by month", "每月笔记")}</h3>
+          <section className="stats-section" style={{ animationDelay: "0.06s" }}>
+            <div className="stats-section-head">
+              <h3 className="stats-section-title">{tr("Memos by month", "每月笔记")}</h3>
+              <div className={`stats-series-key${before.total > 0 ? "" : " is-hidden"}`} aria-hidden="true">
+                <span className="stats-series">
+                  <span className="stats-series-bar" />
+                  {year}
+                </span>
+                <span className="stats-series">
+                  <span className="stats-series-tick" />
+                  {lastYear}
+                </span>
+              </div>
+            </div>
             <BarChart
               label={tr("Memos by month", "每月笔记")}
-              values={yearData.months.map(({ count }) => count)}
-              max={yearData.monthMax}
-              labels={yearData.months.map(({ month }) => monthFormatter.format(new Date(year, month, 1)))}
-              tips={yearData.months.map(({ month }) => formatMonthYear(year, month, locale))}
+              values={yearData.monthCounts}
+              labels={yearData.monthCounts.map((_, month) => monthFormatter.format(new Date(year, month, 1)))}
+              tips={yearData.monthCounts.map((_, month) => formatMonthYear(year, month, locale))}
+              compare={{ name: formatYear(lastYear, locale), values: before.months, shown: before.total > 0 }}
               onPick={(month) => requestDrilldown({ kind: "month", year, month })}
             />
           </section>
 
-          <section className="stats-section stats-chart-row" style={{ animationDelay: "0.06s" }}>
-            <div className="stats-chart">
-              <h3 className="stats-section-title">{tr("Distribution by weekday", "星期分布")}</h3>
-              <BarChart
-                label={tr("Distribution by weekday", "星期分布")}
-                values={yearData.weekdayCounts}
-                max={yearData.weekdayMax}
-                labels={weekdaysNarrow}
-                tips={weekdaysFull}
-                onPick={(weekday) => requestDrilldown({ kind: "weekday", year, weekday })}
-              />
+          <section className="stats-section" style={{ animationDelay: "0.09s" }}>
+            <div className="stats-section-head">
+              <h3 className="stats-section-title">{tr("Writing rhythm", "写作节奏")}</h3>
+              <p className="stats-section-note">
+                <span key={rhythmNote} className="stats-swap">
+                  {rhythmNote}
+                </span>
+              </p>
             </div>
-            <div className="stats-chart">
-              <h3 className="stats-section-title">{tr("Distribution by time", "时段分布")}</h3>
-              <BarChart
-                label={tr("Distribution by time", "时段分布")}
-                values={yearData.hourCounts}
-                max={yearData.hourMax}
-                labels={yearData.hourCounts.map((_, index) => (index % 6 === 0 ? formatHour(index, locale) : ""))}
-                tips={yearData.hourCounts.map((_, index) => formatHourRange(index, locale))}
-                onPick={(hour) => requestDrilldown({ kind: "hour", year, hour })}
-              />
-            </div>
+            <RhythmChart
+              slots={yearData.slots}
+              weekdayCounts={yearData.weekdayCounts}
+              hourCounts={yearData.hourCounts}
+              onPickWeekday={(weekday) => requestDrilldown({ kind: "weekday", year, weekday })}
+              onPickHour={(hour) => requestDrilldown({ kind: "hour", year, hour })}
+              onPickSlot={(weekday, hour) => requestDrilldown({ kind: "slot", year, weekday, hour })}
+            />
           </section>
 
-          {uniqueTagCount > 0 ? (
-            <section className="stats-section" style={{ animationDelay: "0.08s" }}>
-              <h3 className="stats-section-title">{tr("Top tags", "常用标签")}</h3>
-              {/* Kept mounted across tagless years (the empty note takes the
-                  rows' place), so the section never pops in or out. */}
-              <TagRows
-                tags={topTags}
-                emptyLabel={tr("No tags this year", "这一年还没有用过标签")}
-                onPick={(tag) => requestDrilldown({ kind: "tag", year, tag })}
-              />
+          <div className={`stats-pair${uniqueTagCount > 0 ? "" : " is-single"}`}>
+            {uniqueTagCount > 0 ? (
+              <section className="stats-section" style={{ animationDelay: "0.12s" }}>
+                <h3 className="stats-section-title">{tr("Top tags", "常用标签")}</h3>
+                {/* Kept mounted across tagless years (the empty note takes the
+                    rows' place), so the section never pops in or out. */}
+                <TagRows
+                  tags={topTags}
+                  total={memoCount}
+                  emptyLabel={tr("No tags this year", "这一年还没有用过标签")}
+                  onPick={(tag) => requestDrilldown({ kind: "tag", year, tag })}
+                />
+              </section>
+            ) : null}
+
+            <section className="stats-section" style={{ animationDelay: "0.12s" }}>
+              <h3 className="stats-section-title">{tr("All time", "全部时间")}</h3>
+              <div className="stats-facts">
+                {facts.map((fact) => (
+                  <div key={fact.label} className={`stats-fact${fact.wide ? " is-wide" : ""}`}>
+                    <span className="stats-fact-label">{fact.label}</span>
+                    <span className="stats-fact-value">
+                      <RollingText value={fact.value} />
+                      {fact.suffix ? <span className="stats-fact-sub">{fact.suffix}</span> : null}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </section>
-          ) : null}
-
-          <section className="stats-section" style={{ animationDelay: "0.08s" }}>
-            <h3 className="stats-section-title">{tr("All time", "全部时间")}</h3>
-            <div className="stats-facts">
-              {facts.map((fact) => (
-                <div key={fact.label} className={`stats-fact${fact.wide ? " is-wide" : ""}`}>
-                  <span className="stats-fact-label">{fact.label}</span>
-                  <span className="stats-fact-value">
-                    <RollingText value={fact.value} />
-                    {fact.suffix ? <span className="stats-fact-sub">{fact.suffix}</span> : null}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </section>
+          </div>
         </div>
       </div>
     </div>
