@@ -1,4 +1,5 @@
-import { onTransitionCommitted, onTransitionUpdate, paintedTransitionOffsets, skipLiveTransition, transitionUpdating, type PaintedOffset } from "./viewTransition";
+import { onTransitionCommitted, onTransitionUpdate, paintedTransitionOffsets, skipLiveTransition, transitionLive, transitionUpdating, type PaintedOffset } from "./viewTransition";
+import { captureChrome, chromeMotions, type ChromeCapture, type ChromeStage } from "./chromeMotion";
 import { layoutRect, motionOffset, type Box } from "./feedBoxes";
 import { EASE, EASE_OUT, T_BASE, T_ENTER, T_EXIT } from "./motion";
 
@@ -16,9 +17,11 @@ import { EASE, EASE_OUT, T_BASE, T_ENTER, T_EXIT } from "./motion";
  *    back to where it was painted and released.
  *
  * Cards that simply mount — the first page, the next one, a typed search's
- * results — get the feed's entrance here as well (`observe`).
+ * results — get the feed's entrance here as well (`observe`). And the chrome
+ * around the feed moves in the same run as the cards (lib/chromeMotion.ts):
+ * `select` is a change of the chrome alone — select mode, a pill arming.
  */
-export type FeedIntent = "create" | "lens" | "pin" | "unpin" | "trash" | "restore" | "purge" | "edit-save" | "task" | "remote";
+export type FeedIntent = "create" | "lens" | "pin" | "unpin" | "trash" | "restore" | "purge" | "edit-save" | "task" | "remote" | "select";
 export type InPlaceIntent = Exclude<FeedIntent, "create" | "lens">;
 
 /** Where a named card went, for the caller's focus and words. */
@@ -225,14 +228,41 @@ const UNSEEN = 0.05;
 export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
   const glides = new Map<HTMLElement, Animation>();
   const lifted = new Set<HTMLElement>();
-  const ghosts = new Set<HTMLElement>();
+  const ghosts = new Set<Element>();
+  // The chrome's live motions; its stand-ins join the cards' ghosts.
+  const chromeLive = new Set<Animation>();
 
   function stopGlides(): void {
     for (const animation of glides.values()) animation.cancel();
     glides.clear();
     for (const el of lifted) el.style.zIndex = "";
     lifted.clear();
+    for (const animation of chromeLive) animation.cancel();
+    chromeLive.clear();
   }
+
+  const stage: ChromeStage = {
+    ease,
+    animate(el, keyframes, timing) {
+      const animation = el.animate(keyframes, timing);
+      chromeLive.add(animation);
+      const done = () => chromeLive.delete(animation);
+      void Promise.resolve(animation.finished).then(done, done);
+      return animation;
+    },
+    owns(el) {
+      for (const animation of chromeLive) if ((animation.effect as KeyframeEffect | null)?.target === el) return true;
+      return false;
+    },
+    keep(ghost, animation) {
+      ghosts.add(ghost);
+      const remove = () => {
+        ghost.remove();
+        ghosts.delete(ghost);
+      };
+      void Promise.resolve(animation.finished).then(remove, remove);
+    }
+  };
 
   // The hold now running; a later one (or a settle) ends it.
   let holding = 0;
@@ -486,10 +516,12 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     if (!transitionUpdating()) enter(fresh);
   }
 
-  function play(capture: Capture): FeedMotionResult {
+  /** What the cards do: the reader's place kept now, the motions to play once whatever is in flight has stopped. */
+  function plan(capture: Capture, reduced: boolean): { result: FeedMotionResult; changed: boolean; motions: Array<() => void> } {
     const result: FeedMotionResult = { departed: new Map() };
+    const motions: Array<() => void> = [];
     const feed = options.feed();
-    if (!feed) return result;
+    if (!feed) return { result, changed: false, motions };
 
     // The reader's place. A change wholly above the screen — a memo arriving
     // from another device, a card pinned out of the middle of the page —
@@ -527,10 +559,6 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     }
 
     const height = window.innerHeight;
-    // Reduced motion keeps every decision below and changes only how each
-    // one plays: a dissolve in place, never a cut and never a journey.
-    const reduced = reducedMotion();
-    const motions: Array<() => void> = [];
     let changed = false;
     // Whether an exit ghost plays: the glides (queued first, run after both
     // passes) then close over it.
@@ -612,16 +640,26 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
       }
     }
 
+    return { result, changed, motions };
+  }
+
+  function play(capture: Capture | null, chrome: ChromeCapture | null): FeedMotionResult {
+    // Reduced motion keeps every decision and changes only how each one
+    // plays: a dissolve in place, never a cut and never a journey.
+    const reduced = reducedMotion();
+    const cards = capture ? plan(capture, reduced) : { result: { departed: new Map<string, Departure>() }, changed: false, motions: [] };
+    const around = chrome ? chromeMotions(chrome, stage, reduced) : [];
     // Nothing moved: whatever is in flight keeps flying.
-    if (!changed) return result;
+    if (!cards.changed && around.length === 0) return cards.result;
     // Something moved under a view transition still on screen: end it here
     // (the DOM holds its end state) and carry on from the frame it painted.
-    if (capture.overTransition) skipLiveTransition();
-    // Glides still running were captured where they were painted, and the
-    // new ones start from there.
+    if ((cards.changed && capture?.overTransition) || (around.length > 0 && transitionLive())) skipLiveTransition();
+    // What is still running was captured where it was painted, and the new
+    // motions start from there.
     stopGlides();
-    for (const motion of motions) motion();
-    return result;
+    for (const motion of cards.motions) motion();
+    for (const motion of around) motion();
+    return cards.result;
   }
 
   return {
@@ -635,20 +673,24 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
         return EMPTY;
       }
       let taken: Capture | null = null;
+      let chrome: ChromeCapture | null = null;
       try {
         // Cards mounted just before this change enter first, so it starts
         // from the frame their entrance paints.
         flush();
         taken = capture(intent, ids);
+        const root = options.feed()?.closest("main");
+        chrome = root ? captureChrome(root, stage) : null;
       } catch {
         taken = null;
+        chrome = null;
       }
       commit();
       // The change's own new cards are play's to move.
       claim();
-      if (!taken) return EMPTY;
+      if (!taken && !chrome) return EMPTY;
       try {
-        return play(taken);
+        return play(taken, chrome);
       } catch {
         // Motion is decoration: a failure here must never fail the action.
         settle();

@@ -9,10 +9,10 @@ interface FilterChipProps {
   label: string;
   /** Accessible name for removing this lens. */
   clearLabel: string;
-  /** Unique view-transition-name. It makes the chip glide when the breadcrumb
-      before it changes width, morph in place when its label changes (repicking
-      a heatmap day), and fold back on removal (see the chip rules in the
-      view-transition section of app.css). */
+  /** Unique name, as view-transition-name and as the chip's motion key
+      (lib/chromeMotion.ts). It makes the chip glide when the breadcrumb
+      before it changes width, morph in place when its label changes
+      (repicking a heatmap day), and fold back on removal. */
   transitionName: string;
   /** Entrance stagger when several chips mount in one commit (a saved preset
       restoring day + facets at once); a lone chip enters immediately. */
@@ -46,7 +46,7 @@ export function FilterChip({ icon: Icon, label, clearLabel, transitionName, dela
   if (entranceDelay) style.animationDelay = entranceDelay;
   if (!onEdit) {
     return (
-      <button type="button" className="filter-chip" style={style} aria-label={clearLabel} onClick={onClear} {...truncationTip}>
+      <button type="button" className="filter-chip" style={style} data-motion={transitionName} aria-label={clearLabel} onClick={onClear} {...truncationTip}>
         <Icon size={13} aria-hidden="true" />
         <span className="filter-chip-label">{label}</span>
         <X size={12} className="filter-chip-x" aria-hidden="true" />
@@ -54,7 +54,7 @@ export function FilterChip({ icon: Icon, label, clearLabel, transitionName, dela
     );
   }
   return (
-    <span className="filter-chip is-editable" style={style}>
+    <span className="filter-chip is-editable" style={style} data-motion={transitionName}>
       <button type="button" className="filter-chip-main" aria-label={editLabel} onClick={onEdit} {...truncationTip}>
         <Icon size={13} aria-hidden="true" />
         <span className="filter-chip-label">{label}</span>

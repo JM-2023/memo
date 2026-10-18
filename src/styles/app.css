@@ -5889,6 +5889,21 @@ button.stats-tag-row:active { scale: 0.992; }
   .editor[aria-busy="true"] .icon-button:disabled,
   .editor[aria-busy="true"] .ghost-button:disabled { transition-delay: 0s, 0s, 0s, 0.15s !important; }
   .editor[aria-busy="true"] .attachment-remove:disabled { transition-delay: 0.15s, 0s, 0s !important; }
+  /* The chrome dissolves the same way. Crumbs, filter chips and the
+     selection toolbar fade in where they stand instead of sliding in from
+     the left (a crumb folding back fades out), and so does the composer
+     when a view brings it back; their moves and hand-overs are the feed's
+     motion layer's, opacity alone here too (lib/chromeMotion.ts). */
+  .crumb,
+  .crumb-sep,
+  .filter-chip,
+  .select-pill,
+  .select-delete,
+  .select-lens,
+  .trash-select-button,
+  .composer { animation: fade-in var(--t) var(--ease) both !important; }
+  .crumb.is-leaving,
+  .crumb-sep.is-leaving { animation: fade-out var(--t-fast) var(--ease) both !important; }
   /* Feed swaps dissolve instead of moving: every group sits at its final box
      (nothing glides or resizes) while the two states cross-fade in 150ms.
      The cards carry no names under reduce (viewTransition.ts), so they

@@ -3065,56 +3065,51 @@ export default function App() {
   }
 
   /**
-   * Select mode swaps the whole breadcrumb row for the selection toolbar; a
-   * view transition carries the swap — the fused location pill morphs into
-   * the "已选 N 条" counter (they share view-transition-name: topbar-action)
-   * while the card checkboxes pop in via their own CSS transitions.
+   * Select mode swaps the whole breadcrumb row for the selection toolbar, as
+   * one change of the chrome (lib/chromeMotion.ts): the fused location pill
+   * morphs into the "已选 N 条" counter — they hold the same slot — the trail
+   * folds away and the toolbar's pills cascade in, while the card checkboxes
+   * pop in via their own CSS transitions.
    */
   const enterSelectMode = useCallback((firstId?: string) => {
     if (holdForOpenEdit("select memos", "多选笔记")) return;
-    withViewTransition(() =>
-      flushSync(() => {
-        setSelectMode(true);
-        setSelected(new Set(firstId ? [firstId] : []));
-        setConfirmBatchDelete(false);
-        setBulkTagOpen(false);
-        setTagMemoId(null);
-        pendingBatchTagRef.current = null;
-      })
-    );
-  }, [holdForOpenEdit]);
+    moveFeed("select", [], () => {
+      setSelectMode(true);
+      setSelected(new Set(firstId ? [firstId] : []));
+      setConfirmBatchDelete(false);
+      setBulkTagOpen(false);
+      setTagMemoId(null);
+      pendingBatchTagRef.current = null;
+    });
+  }, [holdForOpenEdit, moveFeed]);
 
   const exitSelectMode = useCallback(() => {
-    withViewTransition(() =>
-      flushSync(() => {
-        setSelectMode(false);
-        setSelected(new Set());
-        setConfirmBatchDelete(false);
-        setBulkTagOpen(false);
-        setTagMemoId(null);
-        pendingBatchTagRef.current = null;
-      })
-    );
-  }, []);
+    moveFeed("select", [], () => {
+      setSelectMode(false);
+      setSelected(new Set());
+      setConfirmBatchDelete(false);
+      setBulkTagOpen(false);
+      setTagMemoId(null);
+      pendingBatchTagRef.current = null;
+    });
+  }, [moveFeed]);
 
   /**
-   * Selection changes are instant setState — a view transition per card tap
-   * would throttle rapid toggling. The one exception: while the delete pill
+   * Selection changes are instant setState — motion per card tap would get
+   * in the way of rapid toggling. The one exception: while the delete pill
    * is armed, any selection change disarms it, and THAT label/width change
    * deserves the same morph arming got.
    */
   const mutateSelection = useCallback((apply: () => void) => {
     if (confirmBatchDeleteRef.current) {
-      withViewTransition(() =>
-        flushSync(() => {
-          setConfirmBatchDelete(false);
-          apply();
-        })
-      );
+      moveFeed("select", [], () => {
+        setConfirmBatchDelete(false);
+        apply();
+      });
     } else {
       apply();
     }
-  }, []);
+  }, [moveFeed]);
 
   const toggleSelect = useCallback(
     (memo: Memo) => {
@@ -4188,13 +4183,14 @@ export default function App() {
 
   /**
    * Arming/disarming Empty Trash swaps the pill's label (and width) — run it
-   * through a view transition so the pill morphs instead of snapping. Blur
-   * and view-switch disarms stay plain setState: they race other transitions.
+   * as a change of the chrome so the pill morphs instead of snapping, and
+   * stays pressable throughout. Blur and view-switch disarms stay plain
+   * setState: they race other changes.
    */
   const setEmptyTrashArm = useCallback((value: boolean) => {
     if (value) emptyTrashArmedAtRef.current = performance.now();
-    withViewTransition(() => flushSync(() => setConfirmEmptyTrash(value)));
-  }, []);
+    moveFeed("select", [], () => setConfirmEmptyTrash(value));
+  }, [moveFeed]);
   // A primed Empty Trash button disarms on its own if the second click
   // never lands (but not while the delete request is in flight).
   useEffect(() => {
@@ -4211,8 +4207,8 @@ export default function App() {
   /** Batch-delete arming: same pill-morph language as Empty Trash. */
   const setBatchDeleteArm = useCallback((value: boolean) => {
     if (value) batchDeleteArmedAtRef.current = performance.now();
-    withViewTransition(() => flushSync(() => setConfirmBatchDelete(value)));
-  }, []);
+    moveFeed("select", [], () => setConfirmBatchDelete(value));
+  }, [moveFeed]);
   useEffect(() => {
     if (!confirmBatchDelete) return;
     const timer = window.setTimeout(() => setBatchDeleteArm(false), 4000);
