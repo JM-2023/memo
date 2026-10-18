@@ -379,6 +379,86 @@ describe("App editor lifecycle", () => {
   });
 });
 
+describe("App edit save", () => {
+  async function openEdit(user: ReturnType<typeof userEvent.setup>) {
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+    const card = (await screen.findByText("memo-81 original")).closest("article")!;
+    await user.click(within(card).getByRole("button", { name: /^Memo actions/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    const draft = (await within(card).findByRole("combobox")) as HTMLTextAreaElement;
+    return { card, draft };
+  }
+
+  function spoken(): string {
+    return document.querySelector('[data-live-region] [role="status"]')?.textContent ?? "";
+  }
+
+  it("stops a save on Esc and keeps the edit open as it was", async () => {
+    let signal: AbortSignal | undefined;
+    mocks.updateMemo.mockImplementation(
+      (_id: string, _patch: unknown, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          signal = options?.signal;
+          signal?.addEventListener("abort", () => reject(new DOMException("The save was stopped.", "AbortError")));
+        })
+    );
+    const user = userEvent.setup();
+    const { card, draft } = await openEdit(user);
+    await user.type(draft, " revised");
+    await user.click(within(card).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.updateMemo).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(draft, { key: "Escape" });
+    expect(await screen.findByText("Stopped saving your edits", { selector: ".toast-text" })).not.toBeNull();
+    expect(signal?.aborted).toBe(true);
+    // Not discarded: the editor is still open on the same draft.
+    expect(within(card).getByRole("combobox")).toBe(draft);
+    expect(draft.value).toBe("memo-81 original revised");
+    expect(screen.queryByText("Discarded your edits")).toBeNull();
+  });
+
+  it("lands a save whose stopped first try got through as saved, not as a conflict", async () => {
+    const base = memo(81);
+    const saved = { ...base, content: "memo-81 original revised", seq: base.seq + 1, updatedAt: "2026-01-01T00:05:00.000Z" };
+    mocks.updateMemo.mockRejectedValueOnce(new ApiError("VERSION_CONFLICT", 409, "changed", undefined, saved));
+    const user = userEvent.setup();
+    const { card, draft } = await openEdit(user);
+    await user.type(draft, " revised");
+    await user.click(within(card).getByRole("button", { name: "Save" }));
+
+    await screen.findByText("Saved your edits", { selector: ".toast-text" });
+    await waitFor(() => expect(within(card).queryByRole("combobox")).toBeNull());
+    expect(screen.getByText("memo-81 original revised")).not.toBeNull();
+    expect(document.querySelector(".editor-conflict")).toBeNull();
+  });
+
+  it("says a conflict once, in the edit's own note, without a toast", async () => {
+    const base = memo(81);
+    const current = { ...base, content: "memo-81 changed on another device", seq: base.seq + 1, updatedAt: "2026-01-01T00:05:00.000Z" };
+    mocks.updateMemo.mockRejectedValueOnce(new ApiError("VERSION_CONFLICT", 409, "changed", undefined, current));
+    const user = userEvent.setup();
+    const { card, draft } = await openEdit(user);
+    await user.type(draft, " revised");
+    await user.click(within(card).getByRole("button", { name: "Save" }));
+
+    const note = await waitFor(() => {
+      const found = card.querySelector<HTMLElement>(".editor-note.is-open .editor-conflict");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(note.getAttribute("role")).toBeNull();
+    const message = note.querySelector("p")!.textContent!;
+    expect(message).toContain("This memo changed elsewhere.");
+    expect(spoken()).toBe(message);
+    expect(document.querySelector(".toast-text")).toBeNull();
+    expect(draft.value).toBe("memo-81 original revised");
+  });
+});
+
 describe("App task flip queue", () => {
   it("bases a queued second batch on the first response before React commits a render", async () => {
     const user = userEvent.setup();

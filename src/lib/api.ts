@@ -67,6 +67,8 @@ export function requestTimeoutMs(bodyChars: number): number {
 export interface RequestOptions {
   /** Fraction (0..1) of the request body sent so far; switches the transport to XHR. */
   onUploadProgress?: (fraction: number) => void;
+  /** The caller's abort (Esc stopping a send), for calls that build their own init. */
+  signal?: AbortSignal;
 }
 
 interface UploadHooks {
@@ -138,7 +140,7 @@ async function request<T>(
   };
   const lifetime = requestTimeoutMs(typeof init?.body === "string" ? init.body.length : 0);
   arm(lifetime);
-  const callerSignal = init?.signal;
+  const callerSignal = init?.signal ?? options?.signal;
   const abortFromCaller = () => controller.abort(callerSignal?.reason);
   if (callerSignal?.aborted) abortFromCaller();
   else callerSignal?.addEventListener("abort", abortFromCaller, { once: true });

@@ -80,7 +80,7 @@ import { dateKey, formatDayLabel } from "./lib/dates";
 import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow } from "./lib/feedSafety";
 import { EXIT_MS } from "./lib/motion";
 import { useI18n } from "./lib/i18n";
-import { pruneImageCache } from "./lib/imageCache";
+import { peekImage, pruneImageCache } from "./lib/imageCache";
 import { announce, mountLiveRegions } from "./lib/liveAnnouncer";
 import { clearLocalDeviceData } from "./lib/logoutCleanup";
 import { splitTaskLine } from "./lib/markdown";
@@ -3259,8 +3259,43 @@ export default function App() {
    * it off again before the card mounts with it, so the name stays unique.
    * A memo whose card is already in the feed (an idempotent retry that sync
    * delivered first) keeps the plain drop-in.
+   *
+   * The pictures ride along the same way: each composer tile going out
+   * carries `sent-img-<id>` for the outgoing capture, and the update hands
+   * the name to that picture's cell in the new card (as Lightbox hands its
+   * photo's name over), so a tile grows into its cell instead of riding up
+   * with the composer's frame. They share the feed's morph budget: a tile
+   * takes a name only while the cards captured with it leave room.
    */
   function landCreated(saved: Memo, data: EditorSubmission): Promise<void> {
+    // The card draws its pictures from memory (compressImage primed the
+    // cache), but decoding is still async, and one not yet decoded when the
+    // card is captured would grow into a blank cell. So they are decoded
+    // first, for a beat at most; one that misses it stays with the composer.
+    const decodeWait = 120;
+    const morphs = typeof document.startViewTransition === "function" && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const decoders: HTMLImageElement[] = [];
+    const decoding = saved.images.map((image) => {
+      // The variant the card's first render takes: a lone picture the
+      // original, a grid the preview (StoredImage, cachedVariant).
+      const url = morphs ? peekImage(image.id, saved.images.length === 1 ? "full" : "thumb") : null;
+      if (!url || typeof HTMLImageElement.prototype.decode !== "function") return Promise.resolve(null);
+      const decoder = new Image();
+      decoder.src = url;
+      decoders.push(decoder);
+      return decoder.decode().then(
+        () => image.id,
+        () => null
+      );
+    });
+    const warm = new Set<string>();
+    for (const task of decoding) void task.then((id) => id && warm.add(id));
+    const ready = decoders.length > 0 ? Promise.race([Promise.allSettled(decoding), new Promise((done) => window.setTimeout(done, decodeWait))]) : Promise.resolve();
+    return ready.then(() => landCreatedNow(saved, data, new Set(warm), decoders));
+  }
+
+  /** landCreated once its pictures are decoded (`warm`: the ones that are). */
+  function landCreatedNow(saved: Memo, data: EditorSubmission, warm: ReadonlySet<string>, decoders: HTMLImageElement[]): Promise<void> {
     return new Promise((resolve) => {
       const root = document.documentElement;
       const name = `memo-${saved.id}`;
@@ -3285,8 +3320,16 @@ export default function App() {
       const typed = shared ? firstLine(field, field.querySelector<HTMLElement>("textarea")) : null;
       if (shared) field.style.viewTransitionName = name;
       let landed: HTMLElement | null = null;
+      // Tiles named for the outgoing capture, and the card cells that took
+      // their names over.
+      let riders: HTMLElement[] = [];
+      const cells: HTMLElement[] = [];
       const transition = withViewTransition((animated) => {
         if (shared) field.style.viewTransitionName = "";
+        for (const tile of riders) {
+          tile.style.viewTransitionName = "";
+          tile.style.removeProperty("view-transition-class");
+        }
         if (animated) root.dataset.vtCreate = saved.id;
         enterSuppressRef.current = animated;
         try {
@@ -3305,6 +3348,18 @@ export default function App() {
               root.style.setProperty("--sent-dx", `${card.x - typed.x}px`);
               root.style.setProperty("--sent-dy", `${card.y - typed.y}px`);
             }
+            for (const tile of riders) {
+              const id = tile.dataset.imageId ?? "";
+              const index = saved.images.findIndex((image) => image.id === id);
+              const cell = landed.querySelector<HTMLElement>(`.memo-images > [data-lightbox-index="${index}"]`);
+              if (index < 0 || !cell) continue;
+              cell.style.viewTransitionName = `sent-img-${id}`;
+              cell.style.setProperty("view-transition-class", "sent-img");
+              cells.push(cell);
+            }
+            // A slot's content-visibility leaves a just-mounted card's
+            // insides unrendered at capture, and names in there unseen.
+            if (cells.length > 0) landed.style.contentVisibility = "visible";
           }
         } finally {
           enterSuppressRef.current = false;
@@ -3315,8 +3370,31 @@ export default function App() {
         if (shared) field.style.viewTransitionName = "";
         return;
       }
+      // The outgoing capture waits for the next frame, so the tiles can still
+      // be named now — after withViewTransition has picked which cards morph,
+      // so the pictures only take the room those leave (the new card is one
+      // more). The 32 is tuneFeedTransitionNames' own (viewTransition.ts).
+      if (shared) {
+        const budget = 32;
+        const sent = new Set(saved.images.map((image) => image.id));
+        const named = Array.from(document.querySelectorAll<HTMLElement>(".memo-slot")).filter((slot) => slot.style.viewTransitionName).length;
+        riders = Array.from(document.querySelectorAll<HTMLElement>(".composer .attachment[data-image-id]:not(.is-removing)"))
+          .filter((tile) => sent.has(tile.dataset.imageId ?? "") && warm.has(tile.dataset.imageId ?? ""))
+          .slice(0, Math.max(0, budget - named - 1));
+        for (const tile of riders) {
+          tile.style.viewTransitionName = `sent-img-${tile.dataset.imageId}`;
+          tile.style.setProperty("view-transition-class", "sent-img");
+        }
+      }
       // The marks last exactly as long as the transition that reads them.
       const clear = () => {
+        for (const cell of cells) {
+          cell.style.viewTransitionName = "";
+          cell.style.removeProperty("view-transition-class");
+        }
+        if (cells.length > 0) landed?.style.removeProperty("content-visibility");
+        // The decoded pictures needed holding only until the card drew them.
+        decoders.length = 0;
         landed?.style.removeProperty("view-transition-class");
         if (root.dataset.vtCreate !== saved.id) return;
         delete root.dataset.vtCreate;
@@ -3331,7 +3409,9 @@ export default function App() {
     const content = activeTag ? inheritTagContext(data.content, activeTag) : data.content;
     setCreating(true);
     try {
-      const result = await guard(() => createMemo(data.clientId, content, data.newImages, { onUploadProgress: data.onUploadProgress }));
+      const result = await guard(() =>
+        createMemo(data.clientId, content, data.newImages, { onUploadProgress: data.onUploadProgress, signal: data.signal })
+      );
       if (!result) return false;
       let saved = result.memo;
       if (result.idempotent) {
@@ -3341,12 +3421,16 @@ export default function App() {
         const draftImageIds = new Set(data.newImages.map((image) => image.id));
         const storedImageIds = new Set(saved.images.map((image) => image.id));
         const resumed = await guard(() =>
-          updateMemo(saved.id, {
-            expectedSeq: saved.seq,
-            content,
-            addImages: data.newImages.filter((image) => !storedImageIds.has(image.id)),
-            removeImageIds: saved.images.filter((image) => !draftImageIds.has(image.id)).map((image) => image.id)
-          })
+          updateMemo(
+            saved.id,
+            {
+              expectedSeq: saved.seq,
+              content,
+              addImages: data.newImages.filter((image) => !storedImageIds.has(image.id)),
+              removeImageIds: saved.images.filter((image) => !draftImageIds.has(image.id)).map((image) => image.id)
+            },
+            { signal: data.signal }
+          )
         );
         if (!resumed?.memo) return false;
         saved = resumed.memo;
@@ -3371,9 +3455,19 @@ export default function App() {
         showToast(tr("Saved the memo — this view hides it", "已保存这条笔记，当前视图下看不到它"), "info", {
           action: { label: tr("Show", "显示"), run: () => revealMemo(savedId) }
         });
+      } else {
+        // The card says it to the eye; this says it to a screen reader.
+        announce(tr("Sent", "已发送"));
       }
       return true;
     } catch (cause) {
+      // Esc stopped it (Editor). Nothing landed here, and the draft is still
+      // in the composer under its clientId: if the request got through after
+      // all, sending again finds that memo instead of making a second.
+      if (data.signal?.aborted) {
+        showToast(tr("Stopped sending the memo", "已停止发送这条笔记"));
+        return false;
+      }
       if (cause instanceof ApiError && cause.code === "VERSION_CONFLICT") {
         if (cause.current) {
           if (memoMatchesSubmittedDraft(cause.current, content, data.newImages.map((image) => image.id))) {
@@ -3382,6 +3476,7 @@ export default function App() {
             // draft avoids rotating the id and creating a duplicate memo.
             await landCreated(cause.current, data);
             for (const image of data.newImages) URL.revokeObjectURL(image.previewUrl);
+            announce(tr("Sent", "已发送"));
             return true;
           }
           applySyncChanges([cause.current], [], []);
@@ -3399,7 +3494,12 @@ export default function App() {
     if (!(cause instanceof ApiError) || cause.code !== "VERSION_CONFLICT") return false;
     if (cause.current) applySyncChanges([cause.current], [], []);
     void runSync();
-    if (preserveDraft && editingId) setEditConflictId(editingId);
+    if (preserveDraft && editingId) {
+      // The open edit's own note says it, once, with the way on (Editor
+      // speaks it politely): the draft is safe, so no error toast on top.
+      setEditConflictId(editingId);
+      return true;
+    }
     showToast(
       preserveDraft
         ? tr("A newer version arrived. Your draft is safe — review it before saving again.", "远端已有新版本，草稿已保留，请确认后再次保存")
@@ -3474,9 +3574,24 @@ export default function App() {
             addImages: data.newImages,
             removeImageIds: data.removeImageIds
           },
-          { onUploadProgress: data.onUploadProgress }
+          { onUploadProgress: data.onUploadProgress, signal: data.signal }
         )
-      );
+      ).catch((cause: unknown) => {
+        // A save that got through but whose answer never came back (a lost
+        // response, or Esc once the request had left) meets its own version
+        // on the next try: that is this edit, saved — not a change made
+        // elsewhere. The same recovery as a create's (handleCreate).
+        const kept = memo.images.filter((image) => !data.removeImageIds.includes(image.id)).map((image) => image.id);
+        if (
+          cause instanceof ApiError &&
+          cause.code === "VERSION_CONFLICT" &&
+          cause.current &&
+          memoMatchesSubmittedDraft(cause.current, data.content, [...new Set([...kept, ...data.newImages.map((image) => image.id)])])
+        ) {
+          return { memo: cause.current };
+        }
+        throw cause;
+      });
       if (!result?.memo) return false;
       const saved = result.memo;
       const land = () => {
@@ -3523,6 +3638,13 @@ export default function App() {
       );
       return true;
     } catch (cause) {
+      // Esc stopped it (Editor): the edit stays open as it was. A save that
+      // reached the server anyway meets its own version on the next try,
+      // which lands as saved (above).
+      if (data.signal?.aborted) {
+        showToast(tr("Stopped saving your edits", "已停止保存这次修改"));
+        return false;
+      }
       if (reconcileVersionConflict(cause, true)) return false;
       throw cause;
     } finally {

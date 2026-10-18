@@ -2379,7 +2379,7 @@ button.crumb:active { background: var(--wash-strong); }
    position:relative + z-index because its entrance animation leaves a
    stacking context behind — without the bump, the tag-suggest popover would
    paint underneath the first memo card. */
-.composer { position: relative; z-index: 30; width: calc(100% - var(--content-inset) * 2); margin: 20px 0 6px; animation: rise-in 0.28s var(--ease-out) both; view-transition-name: composer; }
+.composer { position: relative; z-index: 30; width: calc(100% - var(--content-inset) * 2); margin: 20px 0 6px; animation: rise-in var(--t-enter) var(--ease-out) both; view-transition-name: composer; }
 
 /* A flex column, not a grid: a row folding shut (attachments, notes) can
    then hand its gap back with a negative margin, which a grid track would
@@ -2408,7 +2408,7 @@ button.crumb:active { background: var(--wash-strong); }
   background: var(--field-bg);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
-  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), height 0.12s var(--ease);
+  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), height var(--t-fast) var(--ease);
 }
 .editor-edit textarea:focus { border-color: var(--line-focus); }
 
@@ -2419,9 +2419,14 @@ button.crumb:active { background: var(--wash-strong); }
   background: transparent;
   color: var(--ink);
   font-size: var(--fs-md);
-  /* What is typed here becomes .memo-content, so it is set as prose too. */
+  /* What is typed here becomes .memo-content, so it is set as prose too —
+     with the card's own leading, Han/Latin gap and last-line rule (.memo-card
+     .memo-content), so a paragraph wraps into the same lines on both and a
+     sent memo's text lands where the field drew it. */
   font-variant-numeric: normal;
-  line-height: 1.65;
+  line-height: 1.7;
+  text-autospace: normal;
+  text-wrap: pretty;
   white-space: pre-wrap;
   overflow-wrap: break-word;
   outline: none;
@@ -2430,7 +2435,18 @@ button.crumb:active { background: var(--wash-strong); }
   caret-color: var(--primary);
   /* autoGrow sets height per input (via its current height, so this really
      eases): a new line opens smoothly, a sent draft closes the same way. */
-  transition: height 0.12s var(--ease);
+  transition: height var(--t-fast) var(--ease);
+}
+/* Sending: the field keeps focus (so a failed send, or the next memo, goes
+   on in it) but takes no typing until the answer is in. It says so: the
+   caret goes at once, and the text eases back to soft ink after the busy
+   hold, so a quick send never flickers. A failure (or Esc) snaps it back:
+   the resting rule has no colour transition. The edit field's border and
+   ring ride the same list. */
+.editor[aria-busy="true"] textarea {
+  color: var(--ink-soft);
+  caret-color: transparent;
+  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), height var(--t-fast) var(--ease), color var(--t) var(--ease) var(--t-hold);
 }
 /* Pinned (not UA default) so the over-limit mirror reproduces the exact
    same line breaks. Create mode only: .editor-edit keeps its own padding,
@@ -2473,8 +2489,10 @@ button.crumb:active { background: var(--wash-strong); }
   padding: 2px;
   color: transparent;
   font-size: var(--fs-md);
-  line-height: 1.65;
+  line-height: 1.7;
   letter-spacing: 0;
+  text-autospace: normal;
+  text-wrap: pretty;
   white-space: pre-wrap;
   overflow-wrap: break-word;
   pointer-events: none;
@@ -2492,7 +2510,7 @@ button.crumb:active { background: var(--wash-strong); }
   color: var(--muted);
   font-size: var(--fs-xs);
   font-weight: 500;
-  animation: fade-up 0.2s var(--ease) both;
+  animation: fade-up var(--t-slow) var(--ease) both;
 }
 /* Over the cap the count turns into words ("1204 over") and steps up a
    weight; colour only seconds it. */
@@ -2503,7 +2521,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: var(--fs-xs);
   font-weight: 500;
   white-space: nowrap;
-  animation: fade-up 0.2s var(--ease) both;
+  animation: fade-up var(--t-slow) var(--ease) both;
 }
 
 .tag-suggest {
@@ -2595,7 +2613,10 @@ button.crumb:active { background: var(--wash-strong); }
 .attachment.is-settled { animation: none; }
 /* Exit before unmount: recede, then hand the row the freed width (the
    trailing negative margin swallows the flex gap so nothing snaps). */
-.attachment.is-removing { animation: attach-out 0.2s var(--ease) both; }
+.attachment.is-removing { animation: attach-out var(--t-slow) var(--ease) both; }
+/* Reduced motion's removal: the tile fades where it stands, then the row
+   closes up at once (the reduce block plays it; Editor settles on either). */
+@keyframes attach-dissolve { to { opacity: 0; } }
 .attachment.is-removing .attachment-remove { pointer-events: none; }
 .attachment img { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity var(--t) var(--ease); }
 /* Compressing: the file itself, a shade back, under a small spinner chip;
@@ -2640,6 +2661,14 @@ button.crumb:active { background: var(--wash-strong); }
    grows inward, and 32px keeps the rest of the tile clear. */
 @media (hover: hover) { .attachment-remove:hover { background: var(--danger); } }
 .attachment-remove:active { transform: scale(0.85); }
+/* Sending (App's landCreated): each picture is its own pair, a tile named
+   for the outgoing capture and its cell in the new card for the incoming
+   one, so the tile grows into the cell on the text's beat. Both snapshots
+   fill the moving box and crop as the pictures themselves do, so a square
+   thumbnail opening into a wide cell is never stretched. */
+:root[data-vt-create]::view-transition-group(.sent-img) { animation-duration: var(--t-enter); animation-timing-function: var(--ease-out); }
+:root[data-vt-create]::view-transition-old(.sent-img),
+:root[data-vt-create]::view-transition-new(.sent-img) { block-size: 100%; object-fit: cover; }
 
 /* Under the content, above the bar: the image-link row and the error and
    conflict lines. Each folds open and shut in place (grid-rows 0fr → 1fr,
@@ -2664,20 +2693,26 @@ button.crumb:active { background: var(--wash-strong); }
 .editor-notes > .is-open ~ .is-open { margin-top: 10px; }
 .editor-note-inner { min-height: 0; overflow: hidden; }
 
-.editor-error { margin: 0; color: var(--danger); font-size: var(--fs-sm); font-weight: 500; animation: fade-up 0.2s var(--ease) both; }
-/* A closing line keeps its words while the row folds, without rising again. */
-.editor-error.is-leaving { animation: none; }
+/* The line arrives once: opening, the row's fold and fade are its entrance
+   (a rise inside the fold read as two arrivals, as it did for the sync
+   notice). Only a new complaint replacing one already showing rises in on
+   its own (Editor marks it). A closing line keeps its words while the row
+   folds. */
+.editor-error { margin: 0; color: var(--danger); font-size: var(--fs-sm); font-weight: 500; }
+.editor-error.is-replacing { animation: fade-up var(--t-slow) var(--ease) both; }
+/* A save conflict leaves the draft safe, so it is said calmly, on the sync
+   notice's material: the words and the one way on, no alarm colour. */
 .editor-conflict {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 9px 10px;
-  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  padding: 8px 8px 8px 12px;
+  border: 1px solid var(--line);
   border-radius: var(--r-md);
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
-  font-size: var(--fs-xs);
+  color: var(--ink-soft);
+  background: var(--surface-2);
+  font-size: var(--fs-sm);
   font-weight: 500;
 }
 .editor-conflict p { margin: 0; }
@@ -2763,13 +2798,13 @@ button.crumb:active { background: var(--wash-strong); }
 .editor-actions { display: flex; align-items: center; gap: 8px; }
 /* A send locks the editor at once, but most sends are quicker than a beat:
    the locked controls dim only if it takes longer, and come back at once.
-   Send's spinner waits the same SPINNER_DELAY_MS (Editor), the pin pad its
-   keys the same 0.15s. The delay rides each control's opacity, the last
-   entry in its transition list (first for the ×). */
+   Send's spinner waits the same hold (BUSY_HOLD_MS in Editor), the field's
+   text and the pin pad's keys the same --t-hold. The delay rides each
+   control's opacity, the last entry in its transition list (first for the ×). */
 .editor .ghost-button { transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), opacity var(--t) var(--ease); }
 .editor[aria-busy="true"] .icon-button:disabled,
-.editor[aria-busy="true"] .ghost-button:disabled { transition-delay: 0s, 0s, 0s, 0.15s; }
-.editor[aria-busy="true"] .attachment-remove:disabled { transition-delay: 0.15s, 0s, 0s; }
+.editor[aria-busy="true"] .ghost-button:disabled { transition-delay: 0s, 0s, 0s, var(--t-hold); }
+.editor[aria-busy="true"] .attachment-remove:disabled { transition-delay: var(--t-hold), 0s, 0s; }
 /* The preparing note leaves first where it would push Send off the bar
    (the chip's sending state and a spoken status still say it). */
 @container editor-bar (max-width: 459px) { .editor-status { display: none; } }
@@ -2864,7 +2899,7 @@ button.crumb:active { background: var(--wash-strong); }
 .send-button.is-uploading { opacity: 1; }
 /* Sending (or holding a press for a compressing image) is work, not the
    empty composer's rest: the chip stays lifted at full opacity, and the
-   spinner fades in only if the send outlasts SPINNER_DELAY_MS. */
+   spinner fades in only if the send outlasts the busy hold (BUSY_HOLD_MS). */
 .send-button.is-sending { opacity: 1; box-shadow: var(--dl-shadow); }
 .send-spinner { display: inline-grid; animation: fade-in var(--t) var(--ease) both; }
 .send-progress {
@@ -5372,13 +5407,17 @@ button.stats-tag-row:active { scale: 0.992; }
    card's (App sets --sent-dx/--sent-dy): the old one toward the card's text,
    the new one from the field's. The two texts stay on top of each other the
    whole way, so the cross-fade reads as one text while the card's frame and
-   date gather around it. */
+   date gather around it. The field sets the card's leading, so a paragraph's
+   lines match; a blank line is shorter on the card (.memo-blank), so the
+   cross-fade is front-loaded — both halves within --t-fast, on one curve so
+   they still sum to one — and the lines below a blank one never hold a
+   doubled ghost while the two slide into place. */
 @keyframes sent-seat { to { translate: var(--sent-dx, 0px) var(--sent-dy, 0px); } }
 @keyframes sent-gather { from { translate: calc(-1 * var(--sent-dx, 0px)) calc(-1 * var(--sent-dy, 0px)); } }
 :root[data-vt-create]::view-transition-old(.sent),
 :root[data-vt-create]::view-transition-new(.sent) { inline-size: auto; block-size: auto; }
-:root[data-vt-create]::view-transition-old(.sent) { animation: fade-out 0.24s var(--ease-out) both, sent-seat 0.24s var(--ease-out) both; }
-:root[data-vt-create]::view-transition-new(.sent) { animation: fade-in var(--t-enter) var(--ease-out) both, sent-gather 0.24s var(--ease-out) both; }
+:root[data-vt-create]::view-transition-old(.sent) { animation: fade-out var(--t-fast) var(--ease-out) both, sent-seat var(--t-enter) var(--ease-out) both; }
+:root[data-vt-create]::view-transition-new(.sent) { animation: fade-in var(--t-fast) var(--ease-out) both, sent-gather var(--t-enter) var(--ease-out) both; }
 /* The composer enters in its own snapshot above the stable page background. */
 ::view-transition-new(composer):only-child { animation: rise-in 0.28s var(--ease-out) both; }
 ::view-transition-group(composer),
@@ -5900,8 +5939,27 @@ button.stats-tag-row:active { scale: 0.992; }
   :is(.overlay, .passcode-overlay)[aria-busy="true"] :is(.ghost-button, .accent-button, .danger-button, .icon-button):disabled { transition-delay: 0.15s !important; }
   .pin-pad[aria-busy="true"] .keypad button:disabled { transition-delay: 0s, 0s, 0s, 0.15s !important; }
   .editor[aria-busy="true"] .icon-button:disabled,
-  .editor[aria-busy="true"] .ghost-button:disabled { transition-delay: 0s, 0s, 0s, 0.15s !important; }
-  .editor[aria-busy="true"] .attachment-remove:disabled { transition-delay: 0.15s, 0s, 0s !important; }
+  .editor[aria-busy="true"] .ghost-button:disabled { transition-delay: 0s, 0s, 0s, var(--t-hold) !important; }
+  .editor[aria-busy="true"] .attachment-remove:disabled { transition-delay: var(--t-hold), 0s, 0s !important; }
+  /* The busy field's soft ink is colour, not motion: it keeps its ease. */
+  .editor[aria-busy="true"] textarea { transition: color var(--t) var(--ease) var(--t-hold) !important; }
+  /* The editor's own surfaces dissolve too. The drop veil fades in place
+     (150ms in, 100ms out), never swelling; the note and link rows cut open
+     and shut but their contents still fade; a tile, the counter, the
+     preparing note, a replacing error line and Send's spinner fade in where
+     they stand, and a removed tile fades before the row closes up. */
+  .composer { animation: fade-in var(--t) var(--ease) both !important; }
+  .editor-drop { transform: none !important; transition: opacity var(--t-fast) var(--ease), visibility 0s var(--t-fast) !important; }
+  .editor.is-dropping .editor-drop { transition: opacity var(--t) var(--ease), visibility 0s !important; }
+  .editor-note { transition: opacity var(--t) var(--ease), visibility 0s var(--t) !important; }
+  .editor-note.is-open { transition: opacity var(--t) var(--ease), visibility 0s !important; }
+  .link-pop { transition: opacity var(--t) var(--ease) !important; }
+  .attachment:not(.is-settled, .is-removing),
+  .editor-count,
+  .editor-status,
+  .editor-error.is-replacing,
+  .send-spinner { animation: fade-in var(--t) var(--ease) both !important; }
+  .attachment.is-removing { animation: attach-dissolve var(--t-fast) var(--ease) both !important; }
   /* Feed swaps dissolve instead of moving: every group sits at its final box
      (nothing glides or resizes) while the two states cross-fade in 150ms.
      The cards carry no names under reduce (viewTransition.ts), so they

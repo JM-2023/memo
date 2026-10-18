@@ -30,6 +30,17 @@ function field(): HTMLTextAreaElement {
   return screen.getByRole("combobox", { name: "Memo content" }) as HTMLTextAreaElement;
 }
 
+/** The complaint on show: the open note's line (spoken through the live
+ * region, so the line itself carries no role). Null while none is. */
+function shownError(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(".editor-note.is-open .editor-error");
+}
+
+/** What the standing live region of the given tone is saying. */
+function spoken(tone: "status" | "alert"): string {
+  return document.querySelector(`[${LIVE_REGION_ATTR}] [role="${tone}"]`)?.textContent ?? "";
+}
+
 function pending(id: string): NewImagePayload {
   return { id, dataBase64: "AA==", mime: "image/webp", width: 1, height: 1, previewUrl: `blob:${id}` };
 }
@@ -349,7 +360,7 @@ describe("Editor file drops", () => {
     fireEvent.dragOver(editor, over);
     expect(over.dataTransfer.dropEffect).toBe("none");
     expect(fireEvent.drop(editor, fileDrag([pdf]))).toBe(false);
-    expect(screen.getByRole("alert").textContent).toBe("Only images can be added");
+    expect(shownError()?.textContent).toBe("Only images can be added");
     cleanup();
 
     render(
@@ -433,7 +444,7 @@ describe("Editor send", () => {
     fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(["a"], "a.png", { type: "image/png" })] } });
     await user.click(screen.getByRole("button", { name: "Send" }));
     await act(async () => image.reject(new Error("Decoder gave up")));
-    expect((await screen.findByRole("alert")).textContent).toBe("Decoder gave up");
+    await waitFor(() => expect(shownError()?.textContent).toBe("Decoder gave up"));
     expect(screen.queryByText("Preparing image…")).toBeNull();
     expect(onSubmit).not.toHaveBeenCalled();
     expect(area.value).toBe("with a photo");
@@ -496,12 +507,12 @@ describe("Editor edit state", () => {
     await user.click(screen.getByRole("button", { name: "Insert image link" }));
     const link = document.querySelector(".link-pop-inner input") as HTMLInputElement;
     await user.type(link, "not a url{Enter}");
-    expect(screen.getByRole("alert").textContent).toBe("Enter an image URL beginning with http(s)://");
+    expect(shownError()?.textContent).toBe("Enter an image URL beginning with http(s)://");
     fireEvent.keyDown(link, { key: "Escape" });
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(shownError()).toBeNull();
 
     fireEvent.drop(document.querySelector(".editor")!, fileDrag([new File(["a"], "a.png", { type: "image/png" })]));
-    expect((await screen.findByRole("alert")).textContent).toBe("You can add up to 9 images");
+    await waitFor(() => expect(shownError()?.textContent).toBe("You can add up to 9 images"));
     const [first] = screen.getAllByRole("button", { name: /^Remove image/ });
     await user.click(first);
     // jsdom has no AnimationEvent, so React listens under the prefixed name.
@@ -511,7 +522,7 @@ describe("Editor edit state", () => {
       first.closest(".attachment")!.dispatchEvent(exited);
     });
     expect(screen.getAllByRole("button", { name: /^Remove image/ })).toHaveLength(8);
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(shownError()).toBeNull();
   });
 
   it("lets the composer go on Esc", async () => {
@@ -677,13 +688,14 @@ describe("Editor notes", () => {
     const user = userEvent.setup();
     const { area } = renderCreate();
     fireEvent.drop(area.closest(".editor")!, fileDrag([new File(["%PDF"], "a.pdf", { type: "application/pdf" })]));
-    expect(screen.getByRole("alert").textContent).toBe("Only images can be added");
+    expect(shownError()?.textContent).toBe("Only images can be added");
     await user.type(area, "x");
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(shownError()).toBeNull();
     expect(document.querySelector(".editor-note:not(.is-open) .editor-error")?.textContent).toBe("Only images can be added");
   });
 
   it("keeps the caret in the field through a failed send, and says a second failure again", async () => {
+    const unmountRegions = mountLiveRegions();
     setPointer(true);
     const user = userEvent.setup();
     const onSubmit = vi.fn(async (_data: EditorSubmission): Promise<boolean> => {
@@ -695,12 +707,17 @@ describe("Editor notes", () => {
     // A mouse press on Send leaves the caret where it was.
     expect(fireEvent.mouseDown(sendButton)).toBe(false);
     await user.click(sendButton);
-    const first = await screen.findByRole("alert");
-    expect(first.textContent).toBe("Server hiccup");
+    await waitFor(() => expect(shownError()?.textContent).toBe("Server hiccup"));
+    const first = shownError();
+    // Said through the standing region, not by a freshly mounted alert.
+    expect(first?.getAttribute("role")).toBeNull();
+    expect(spoken("alert")).toBe("Server hiccup");
     expect(document.activeElement).toBe(area);
     await user.click(sendButton);
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByRole("alert")).not.toBe(first));
+    await waitFor(() => expect(shownError()).not.toBe(first));
+    expect(spoken("alert")).toBe("Server hiccup");
+    unmountRegions();
   });
 
   it("lets a tap on Send take focus, so a phone's keyboard can go", () => {

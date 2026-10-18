@@ -32,7 +32,12 @@ const COPIED = [
   "tabSize",
   "whiteSpace",
   "overflowWrap",
-  "wordBreak"
+  "wordBreak",
+  // The field sets the card's Han/Latin gap and last-line rule: both move
+  // where a line breaks, so the mirror must lay out the same way.
+  "textAutospace",
+  "textWrapMode",
+  "textWrapStyle"
 ] as const;
 
 export interface CaretPoint {
@@ -46,7 +51,11 @@ export function caretPoint(area: HTMLTextAreaElement, offset: number): CaretPoin
   const computed = window.getComputedStyle(area);
   const mirror = document.createElement("div");
   const style = mirror.style as unknown as Record<string, string>;
-  for (const key of COPIED) style[key] = (computed as unknown as Record<string, string>)[key];
+  // An engine without one of these properties has nothing to copy.
+  for (const key of COPIED) {
+    const value = (computed as unknown as Record<string, string | undefined>)[key];
+    if (value) style[key] = value;
+  }
   // clientWidth excludes a scrollbar the textarea may be showing.
   if (area.clientWidth > 0) {
     style.boxSizing = "content-box";
@@ -61,7 +70,7 @@ export function caretPoint(area: HTMLTextAreaElement, offset: number): CaretPoin
   marker.textContent = area.value.slice(offset, offset + 1) || "\u200b";
   mirror.appendChild(marker);
   document.body.appendChild(mirror);
-  const lineHeight = parseFloat(computed.lineHeight) || parseFloat(computed.fontSize) * 1.65 || 0;
+  const lineHeight = parseFloat(computed.lineHeight) || parseFloat(computed.fontSize) * 1.7 || 0;
   const border = area.clientWidth > 0 ? parseFloat(computed.borderTopWidth) || 0 : 0;
   const borderLeft = area.clientWidth > 0 ? parseFloat(computed.borderLeftWidth) || 0 : 0;
   const point = { top: marker.offsetTop + border, left: marker.offsetLeft + borderLeft, height: lineHeight };
