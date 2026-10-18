@@ -1813,7 +1813,7 @@ button.crumb:active { background: var(--wash-strong); }
    flex space. The sort control can move directly to its final position while
    the old path folds away above it. Zero width alone is not enough: as a flex
    item the span still spends one row gap, and when it unmounted mid-glide the
-   sort pill's view-transition target would shift 8px left — a visible kick
+   sort pill's resting place would shift 8px left — a visible kick
    after the motion had settled. The negative margin hands that gap back, so
    mounting/unmounting the ghosts never moves layout at all. */
 .crumb-ghosts {
@@ -4032,9 +4032,8 @@ button.is-busy:disabled { opacity: 1; }
   touch-action: pinch-zoom;
   /* A click on the backdrop closes; one on the picture does nothing. */
   cursor: zoom-out;
-  /* Its own snapshot group in any view transition — the photo morph below,
-     or a feed swap that lands while it is open — lifted over the card,
-     composer and topbar groups as it sits over them live. */
+  /* Its own snapshot group in the photo morph below, lifted over the
+     page's other groups as it sits over them live. */
   view-transition-name: lightbox;
 }
 .lightbox.is-zoomed { touch-action: auto; }
@@ -5432,9 +5431,9 @@ button.stats-tag-row:active { scale: 0.992; }
 /* That only holds while the page itself isn't captured: with the root in
    the snapshot tree, every hit during a transition resolves to <html>,
    pointer-events or not. The page needs no snapshot of its own: what isn't
-   named holds still, or moves live, and takes clicks. What is captured
-   still can't be hit, so a press on it is relayed to the element drawn
-   there (viewTransition.ts, relayPress). */
+   named holds still, or moves live, and takes clicks. What a morph
+   captures can't be hit until it ends — a send's text, composer and bar,
+   or the photo — and no morph runs past 0.24s. */
 :root { view-transition-name: none; }
 ::view-transition-group(*) { animation-duration: 0.24s; animation-timing-function: var(--ease-out); }
 /* A part with no partner on the other side recedes, or fades in calmly. */

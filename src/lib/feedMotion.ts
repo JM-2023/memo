@@ -906,10 +906,10 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
       : capture.intent === "lens"
         ? planLens(capture, reduced)
         : plan(capture, reduced);
-    // A send with no morph to close the composer (reduced motion, or no
-    // view transitions): its typed look hands over to the emptied one. A
-    // morph closes it itself; without one at full motion the field eases
-    // down on its own height.
+    // A send under reduced motion starts no morph to close the composer:
+    // its typed look dissolves into the emptied one. A morph closes it
+    // itself; without one at full motion (no view transitions) the field
+    // eases down on its own height.
     const handover = intent === "create" && !capture?.morphed && reduced ? new Set(["composer"]) : undefined;
     const around = chrome ? chromeMotions(chrome, stage, reduced, handover) : [];
     rebase(inFlight);

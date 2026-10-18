@@ -316,7 +316,7 @@ function TagTreeView({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenam
   const [seenTag, setSeenTag] = useState(activeTag);
   if (activeTag !== seenTag) {
     // Derived in render, so the subtree opens in the same commit that moves
-    // the lens and takes part in that view transition.
+    // the lens.
     setSeenTag(activeTag);
     const missing = ancestorsOf(activeTag).filter((path) => !openPaths.has(path));
     if (missing.length > 0) {

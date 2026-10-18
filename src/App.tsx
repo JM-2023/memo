@@ -444,7 +444,7 @@ function loadSortKey(): SortKey {
 }
 
 interface MemoSlotProps {
-  /** Per-memo view-transition-name; undefined past the morph budget. */
+  /** The card's key, `memo-<id>`, written to data-vt. */
   vtName: string | undefined;
   /** A semantic-only row held from the previous query's ranking (data-stale). */
   stale?: boolean;
@@ -456,11 +456,10 @@ interface MemoSlotProps {
  * (lib/feedMotion.ts) watches the feed and gives a slot its entrance when it
  * mounts outside a change that moves it some other way.
  *
- * data-vt holds the card's key — `memo-<id>` — for the motion layer, and the
- * view-transition-name that changeFeed restores after stripping it from
- * far-from-viewport slots before a swap: React bails out of re-rendering
- * unchanged slots, so the stripped style would otherwise leak into the new
- * state's capture.
+ * data-vt holds the card's key — `memo-<id>` — by which the motion layer,
+ * the reading place (navHistory) and search highlights find the slot. A
+ * send's morph names the landed slot inline, for that morph only
+ * (landCreated).
  */
 function MemoSlot({ vtName, stale, children }: MemoSlotProps) {
   return (
@@ -860,8 +859,7 @@ export default function App() {
   // The guessed pinnedAt/deletedAt shows at the click (see optimisticMemos);
   // the per-memo token both marks the request in flight — a second tap on
   // the same memo waits instead of racing into a false "changed elsewhere"
-  // conflict — and lets a late view-transition callback know its guess has
-  // already been settled.
+  // conflict.
   const [optimisticMemos, setOptimisticMemos] = useState<OptimisticLayer>(() => new Map());
   const memoActionTokensRef = useRef(new Map<string, object>());
 
@@ -1837,8 +1835,9 @@ export default function App() {
   const deferredQuery = useDeferredValue(trimmedQuery);
   // Controls that set the search text outright — the clear ×, a saved preset,
   // going home — are not typing, and the deferral actively breaks them: they
-  // run inside a view transition, whose callback must leave the DOM in its
-  // final state, and a deferred query lands one render too late for that. The
+  // run inside a change of the feed's motion layer, whose commit must leave
+  // the DOM in its final state, and a deferred query lands one render too
+  // late for that. The
   // swap glided the tag and the chips into place while the query's share of
   // the change popped in afterwards. Marking the value they set opts that one
   // value out of the deferral; typing (which clears the mark) never does.
@@ -2262,8 +2261,8 @@ export default function App() {
 
   // Typing opens a new result list, and a new list starts at the top — the
   // same rule every other lens follows through changeFeed. Search reached the
-  // feed straight from the input instead (a view transition per keystroke
-  // would be worse than no transition at all), so it was the one lens that
+  // feed straight from the input instead (moving the feed on every keystroke
+  // would be worse than not moving it at all), so it was the one lens that
   // left the reader's old offset in place: the shorter document clamped it,
   // and they landed partway down results they had never scrolled through.
   // Before paint, so the new list is never painted at the stale offset first.
@@ -2965,8 +2964,8 @@ export default function App() {
    * Opening 每日回顾 is what draws the batch: the first visit of a local day
    * freezes today's picks (in state and localStorage) and every later visit
    * replays them. Setting the batch inside the same flush as the view switch
-   * lets the view transition carry cards shared with the previous feed to
-   * their new positions instead of replaying entrances.
+   * lets the lens change carry cards shared with the previous feed to their
+   * new positions instead of replaying entrances.
    */
   const openReview = useCallback(() => {
     if (view !== "review" && holdForOpenEdit("open Daily review", "打开每日回顾")) return;
@@ -4185,7 +4184,8 @@ export default function App() {
 
   /**
    * One batch of memo mutations, settled together: the survivors' cards and
-   * the selection toolbar move in one view transition, the failures stay
+   * the selection toolbar move in one change of the feed's motion layer, the
+   * failures stay
    * selected so a retry is one tap away, and the toast reports the outcome.
    * Trash ↔ restore share this shape; each hands the other over as Undo.
    */
@@ -4260,7 +4260,8 @@ export default function App() {
 
   /**
    * Batch trash rides the same removal choreography as a single delete: one
-   * view transition in which every selected card recedes while the survivors
+   * change of the feed's motion layer in which every selected card recedes
+   * while the survivors
    * (and the selection toolbar collapsing back into the breadcrumb) glide.
    * Reversible, so its toast carries the reverse.
    */
@@ -5189,8 +5190,8 @@ export default function App() {
           </button>
           <div className="breadcrumb">
             {selectMode && (view === "memos" || view === "trash") ? (
-              // Multi-select toolbar. The count pill inherits the fused
-              // pill's view-transition-name, so entering the mode morphs the
+              // Multi-select toolbar. The count pill shares the fused
+              // pill's motion key, so entering the mode morphs the
               // location label into the live counter; the sibling pills
               // cascade in with the breadcrumb language. Inside Trash the
               // verbs are Restore and Delete forever.
@@ -5304,7 +5305,7 @@ export default function App() {
             ) : view === "trash" ? (
               // Trash reuses the tag-drilldown breadcrumb language: ⌂ / 回收站,
               // same cascade-in, ⌂ steps back out to All memos (the trail
-              // folds back on its own snapshot — see .view-trail).
+              // folds back as one piece — view-trail, lib/chromeMotion.ts).
               <nav className="crumbs view-trail" aria-label={tr("Location", "当前位置")}>
                 <button
                   type="button"
@@ -5446,7 +5447,7 @@ export default function App() {
             ) : null}
             {view === "trash" && trashedMemos.length > 0 && !selectMode ? (
               // Empty Trash lives in the same slot as Sort (and shares its
-              // view-transition-name), so swapping views morphs one pill into
+              // motion key), so swapping views morphs one pill into
               // the other.
               <button
                 type="button"
@@ -5497,7 +5498,7 @@ export default function App() {
               // breadcrumb says WHERE, the chips say THROUGH WHAT. Each is
               // the compact echo of its source control (heatmap day, panel
               // facet row: same icon, same label) and a single remove
-              // button. Unique view-transition-names give each one a glide
+              // button. Unique motion keys (data-motion) give each one a glide
               // when the breadcrumb resizes, an in-place morph when its
               // label changes, and a crumb-style fold-back on removal.
               <>
@@ -5934,8 +5935,8 @@ export default function App() {
         >
           {view === "review" && reviewDay && feedMemos.length > 0 ? (
             // The day's masthead: date and batch size, fixed all day. Its own
-            // view-transition-name keeps it steady while a settings change
-            // morphs the cards beneath it.
+            // motion key keeps it steady while a settings change moves the
+            // cards beneath it.
             <div className="review-banner">
               <Sparkles size={14} aria-hidden="true" />
               <span>

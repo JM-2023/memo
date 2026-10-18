@@ -29,8 +29,8 @@ let systemQuery: MediaQueryList | null = null;
  * chips, rows), while the page ground and body text snap — so for a few
  * frames light ink would sit on still-white cards. [data-theme-switching]
  * (app.css) turns every transition off for the two frames around the flip.
- * A view transition would do it too, but the app's many named groups would
- * make each theme change a heavy whole-page snapshot.
+ * A view transition would do it too, at the cost of a whole-page snapshot
+ * for each theme change.
  */
 let cancelSwitchFrame: (() => void) | null = null;
 function nextFrame(callback: () => void): () => void {

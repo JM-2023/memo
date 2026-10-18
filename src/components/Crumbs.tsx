@@ -9,9 +9,9 @@ interface CrumbsProps {
   onHome: () => void;
   onPick: (path: string) => void;
   /** The fused location pill (the sort/select dropdown) — always the trail's
-      last stop. It carries view-transition-name: topbar-action, so the pill
-      itself glides between positions; this component only animates ⌂ and the
-      ancestor segments around it. */
+      last stop. It answers to the motion key topbar-action
+      (lib/chromeMotion.ts), so the pill itself glides between positions;
+      this component only animates ⌂ and the ancestor segments around it. */
   children: ReactNode;
 }
 
@@ -24,7 +24,8 @@ function sharedCount(a: string[], b: string[]): number {
 /**
  * Location trail: ⌂ / ancestor / ancestor / [current ⌄]. The current segment
  * is NOT rendered here — the caller passes the fused dropdown pill as
- * children and the view transition morphs it from its old to its new spot.
+ * children and the feed's motion layer glides it from its old to its new
+ * spot.
  * Around that glide this component choreographs the supporting cast:
  *
  * - drilling one level deeper leaves the old current behind as a real crumb
@@ -104,9 +105,9 @@ export function Crumbs({ path, onHome, onPick, children }: CrumbsProps) {
     const prev = prevRef.current;
     prevRef.current = parts;
     if (parts.length < prev.length && sharedCount(prev, parts) === parts.length) {
-      // Up-navigation. prev's last segment is the old current (the pill's old
-      // snapshot), the segment before the drop becomes the new current (the
-      // pill's new snapshot) — ghost only what lies strictly between them.
+      // Up-navigation. prev's last segment is the old current (where the pill
+      // was), the segment before the drop becomes the new current (where the
+      // pill goes) — ghost only what lies strictly between them.
       // Going all the way home folds ⌂ back too, so the trail collapses with
       // the same language at every depth instead of blinking out.
       const dropped = prev.slice(parts.length, prev.length - 1);
@@ -150,7 +151,7 @@ export function Crumbs({ path, onHome, onPick, children }: CrumbsProps) {
                 />
               );
             })}
-            {/* The current segment's separator. Its own view-transition-name
+            {/* The current segment's separator. Its own motion key (loc-sep)
                 lets it glide alongside the pill instead of snapping when the
                 ancestor list changes width. */}
             <ChevronRight size={13} className="crumb-sep loc-sep" aria-hidden="true" />
