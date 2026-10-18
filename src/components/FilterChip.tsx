@@ -9,10 +9,10 @@ interface FilterChipProps {
   label: string;
   /** Accessible name for removing this lens. */
   clearLabel: string;
-  /** Unique name, as view-transition-name and as the chip's motion key
-      (lib/chromeMotion.ts). It makes the chip glide when the breadcrumb
-      before it changes width, morph in place when its label changes
-      (repicking a heatmap day), and fold back on removal. */
+  /** Unique name, as the chip's motion key (lib/chromeMotion.ts). It makes
+      the chip glide when the breadcrumb before it changes width, hand its
+      label over in place when that changes (repicking a heatmap day), and
+      fold back on removal. */
   transitionName: string;
   /** Entrance stagger when several chips mount in one commit (a saved preset
       restoring day + facets at once); a lone chip enters immediately. */
@@ -42,8 +42,7 @@ export function FilterChip({ icon: Icon, label, clearLabel, transitionName, dela
   const [entranceDelay] = useState(delay);
   // A label the chip's width cuts short shows in full in the bubble.
   const truncationTip = bindTruncationTip(useOptionalTip(), label, ".filter-chip-label");
-  const style: CSSProperties = { viewTransitionName: transitionName };
-  if (entranceDelay) style.animationDelay = entranceDelay;
+  const style: CSSProperties | undefined = entranceDelay ? { animationDelay: entranceDelay } : undefined;
   if (!onEdit) {
     return (
       <button type="button" className="filter-chip" style={style} data-motion={transitionName} aria-label={clearLabel} onClick={onClear} {...truncationTip}>

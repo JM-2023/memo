@@ -443,7 +443,7 @@ a:hover { text-decoration: underline; }
 @keyframes fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
-/* Removal exit for view-transition snapshots: recede + fade, no bounce. */
+/* Removal exit: recede + fade, no bounce (feedMotion's sink is its copy). */
 @keyframes card-depart { to { opacity: 0; transform: scale(0.965); } }
 @keyframes scale-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
 @keyframes pop-in { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
@@ -1718,15 +1718,6 @@ button.heat-cell[aria-disabled="true"]:active { filter: none; }
      with the cards below, and the sticky band still spans the full column. */
   padding: 16px var(--content-inset) 12px;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
-  /* Own snapshot group during view transitions. Every memo carries its own
-     view-transition-name, so each card is lifted into a group that paints
-     ABOVE the rest of the page. When the feed is scrolled, the cards tucked
-     under this sticky frosted bar would then paint over it mid-transition —
-     deleting a memo made the whole header (frosted band + searchbox) blink
-     out while the "全部笔记" pill floated on, then return once the transition
-     ended. Lifting the bar into its own group (ordered above the cards in the
-     view-transition section) keeps it pinned on top throughout. */
-  view-transition-name: topbar;
   /* The selection toolbar's tiers (see the responsive section) key off this
      row's own width rather than the viewport's: the row is narrowest just
      past the sidebar breakpoint, not on the smallest phone. */
@@ -1818,16 +1809,6 @@ button.crumb:active { background: var(--wash-strong); }
 /* Drilled one level in: the crumb the pill just vacated resolves in place,
    a beat late so the pill visibly slides off it first. */
 .crumb.is-settling, .crumb-sep.is-settling { animation: crumb-settle 0.18s var(--ease) 0.03s both; }
-/* The current segment's separator glides between layouts alongside the pill
-   instead of snapping when the ancestor list changes width. */
-.loc-sep { view-transition-name: loc-sep; }
-/* The Trash / Daily review trail (⌂ › 回收站, ⌂ › 每日回顾). Left in the
-   topbar snapshot, it could only ride the band's 240ms cross-fade, so going
-   home the topbar-action pill glided right through a still-legible
-   "每日回顾" — three labels stacked for most of the move. On its own
-   snapshot it folds back the way dropped crumbs do (see the view-transition
-   section) and clears the lane before the pill arrives. */
-.view-trail { view-transition-name: view-trail; }
 /* Leaving segments paint from the settled breadcrumb edge without taking up
    flex space. The sort control can move directly to its final position while
    the old path folds away above it. Zero width alone is not enough: as a flex
@@ -1865,13 +1846,13 @@ button.crumb:active { background: var(--wash-strong); }
 }
 /* The fused location pill — the breadcrumb's current segment ("全部笔记" at
    the root, the deepest tag inside one) and the view-options dropdown
-   trigger are one control: label + caret. Its view-transition-name is what
-   choreographs every layout change around it: picking a tag FLIP-glides the
-   pill to its new offset (label cross-fading en route) inside the same
-   transition that moves the cards, instead of double-imaging in the root
-   cross-fade. The name is shared with the Empty Trash pill and the select
-   counter — the three occupy the same "contextual action" slot and never
-   render together, so swapping states morphs one pill into the next. */
+   trigger are one control: label + caret. Its motion key (topbar-action,
+   lib/chromeMotion.ts) choreographs every layout change around it: picking
+   a tag glides the pill to its new offset, its label handing over en route,
+   in the same change that moves the cards. The key is shared with the Empty
+   Trash pill, the select counter and Review settings — they occupy the
+   same "contextual action" slot and never render together, so swapping
+   states morphs one pill into the next. */
 .loc-menu { min-width: 0; }
 .loc-menu .menu-trigger-slot { display: flex; min-width: 0; }
 .loc-trigger {
@@ -1885,11 +1866,9 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 600;
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
-  view-transition-name: topbar-action;
 }
 /* The root pill keeps the exact geometry of a tag pill: the topbar-action
-   morph home is then a pure glide + label cross-fade — no size change for
-   the snapshot to stretch into. */
+   morph home is then a pure glide + label cross-fade. */
 @media (hover: hover) {
   .loc-trigger:hover { background: var(--wash); }
   .loc-trigger:hover .loc-caret { color: var(--ink-soft); }
@@ -1921,7 +1900,6 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: var(--fs-sm);
   font-weight: 600;
   white-space: nowrap;
-  view-transition-name: topbar-action;
 }
 .select-count-num { flex: none; min-width: 0.62em; font-weight: 600; }
 .select-pill {
@@ -1953,7 +1931,7 @@ button.crumb:active { background: var(--wash-strong); }
 .select-tag svg { transition: transform var(--t) var(--ease-pop); }
 @media (hover: hover) { .select-tag:hover:not(:disabled, [aria-disabled="true"]) svg { transform: rotate(-7deg) scale(1.08); } }
 /* Batch delete — the select-mode twin of Empty Trash: same ghost pill, same
-   two-step arm, its own view-transition-name so arming morphs the width. */
+   two-step arm, its own motion key so arming morphs the width. */
 .select-delete {
   display: inline-flex;
   flex: none;
@@ -1967,7 +1945,6 @@ button.crumb:active { background: var(--wash-strong); }
   border-radius: var(--r-sm);
   animation: crumb-in var(--t-slow) var(--ease-out) backwards;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), filter var(--t) var(--ease);
-  view-transition-name: select-delete;
 }
 @media (hover: hover) { .select-delete:hover:not(:disabled, [aria-disabled="true"]) { background: var(--danger-tint); } }
 .select-delete:active:not(:disabled, [aria-disabled="true"]) { transform: scale(0.95); }
@@ -2006,9 +1983,8 @@ button.crumb:active { background: var(--wash-strong); }
    of a 12px ×, with the × glyph kept as the affordance cue. Motion speaks
    the trail's language: crumb-in on entry (staggered when a preset lands
    several at once — see App's chipDelay), a crumb-style fold-back on removal
-   (see the view-transition section), never a pop — filters join the trail,
-   they don't badge it. Each chip's unique view-transition-name arrives
-   inline from React. */
+   (lib/chromeMotion.ts), never a pop — filters join the trail, they don't
+   badge it. Each chip's unique motion key arrives from React (data-motion). */
 .filter-chip {
   display: inline-flex;
   align-items: center;
@@ -2109,18 +2085,6 @@ button.crumb:active { background: var(--wash-strong); }
 }
 .searchbox:has(+ .semantic-toggle.is-active) { --searchbox-closed: 180px; }
 .searchbox.is-open { width: max(var(--searchbox-closed), min(240px, 40vw)); }
-/* Its own snapshot: memos ↔ Trash drops the Brain and the funnel, and the
-   box glides to its new place rather than cross-fading with itself ~76px
-   away inside the topbar's group. Natural-size snapshots, as the pills: an
-   open box and a closed one hand over at their own widths. It rides above
-   the topbar band (see the stacking table in the view-transition section);
-   alone (review, an empty Trash) it fades. */
-.searchbox { view-transition-name: searchbox; }
-::view-transition-old(searchbox),
-::view-transition-new(searchbox) { inline-size: auto; block-size: 100%; }
-::view-transition-group(searchbox) { z-index: 3; }
-::view-transition-old(searchbox):only-child { animation: fade-out var(--t-fast) var(--ease) both; }
-::view-transition-new(searchbox):only-child { animation: fade-in var(--t) var(--ease) both; }
 .searchbox-icon { position: absolute; left: 10px; color: var(--muted); pointer-events: none; }
 .searchbox input {
   width: 100%;
@@ -2355,10 +2319,10 @@ button.crumb:active { background: var(--wash-strong); }
 }
 
 /* Empty Trash — the trash view's counterpart of the location pill: identical
-   ghost geometry, danger-tinted. It carries the shared topbar-action
-   view-transition-name (see .loc-trigger), so it arrives by morphing out of
-   the location pill rather than popping in; arming (label/width change)
-   rides a view transition too, so the pill stretches smoothly. */
+   ghost geometry, danger-tinted. It answers to the shared topbar-action key
+   (see .loc-trigger), so it arrives by morphing out of the location pill
+   rather than popping in; arming (label/width change) hands over in place,
+   so the pill stretches smoothly. */
 .trash-empty-button {
   display: inline-flex;
   align-items: center;
@@ -2370,7 +2334,6 @@ button.crumb:active { background: var(--wash-strong); }
   white-space: nowrap;
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), filter var(--t) var(--ease);
-  view-transition-name: topbar-action;
 }
 @media (hover: hover) { .trash-empty-button:hover:not(:disabled) { background: var(--danger-tint); } }
 .trash-empty-button:active:not(:disabled) { transform: scale(0.95); }
@@ -2396,8 +2359,6 @@ button.crumb:active { background: var(--wash-strong); }
   border-radius: var(--r-sm);
   animation: crumb-in var(--t-slow) var(--ease-out) backwards;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
-  /* Leaves with the trail (see .view-trail) — it sits in the pill's path too. */
-  view-transition-name: trash-select;
 }
 .trash-select-button svg { color: var(--muted); transition: color var(--t) var(--ease); }
 @media (hover: hover) {
@@ -2408,8 +2369,8 @@ button.crumb:active { background: var(--wash-strong); }
 
 /* 回顾设置 — the review view's counterpart of Empty Trash: identical ghost
    pill in the same slot, neutral tint (it opens a dialog, destroys nothing).
-   It shares the topbar-action view-transition-name, so switching views
-   morphs the location pill into it instead of popping it in. */
+   It shares the topbar-action motion key, so switching views morphs the
+   location pill into it instead of popping it in. */
 .review-config-button {
   display: inline-flex;
   align-items: center;
@@ -2421,7 +2382,6 @@ button.crumb:active { background: var(--wash-strong); }
   white-space: nowrap;
   border-radius: var(--r-sm);
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
-  view-transition-name: topbar-action;
 }
 .review-config-button svg { color: var(--muted); transition: color var(--t) var(--ease); }
 @media (hover: hover) {
@@ -2438,7 +2398,7 @@ button.crumb:active { background: var(--wash-strong); }
    position:relative + z-index because its entrance animation leaves a
    stacking context behind — without the bump, the tag-suggest popover would
    paint underneath the first memo card. */
-.composer { position: relative; z-index: 30; width: calc(100% - var(--content-inset) * 2); margin: 20px 0 6px; animation: rise-in var(--t-enter) var(--ease-out) both; view-transition-name: composer; }
+.composer { position: relative; z-index: 30; width: calc(100% - var(--content-inset) * 2); margin: 20px 0 6px; animation: rise-in var(--t-enter) var(--ease-out) both; }
 
 /* A flex column, not a grid: a row folding shut (attachments, notes) can
    then hand its gap back with a negative margin, which a grid track would
@@ -2525,7 +2485,6 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: var(--fs-xs);
   font-weight: 600;
   line-height: 1.25;
-  view-transition-name: composer-context-tag;
 }
 .editor-context-tag span {
   min-width: 0;
@@ -3033,7 +2992,6 @@ button.crumb:active { background: var(--wash-strong); }
   border-radius: var(--r-md);
   /* No entrance of its own: the slot's fold-in is it (a rise inside the
      opening fold, on top of the slot's fade, read as two arrivals). */
-  view-transition-name: sync-notice;
 }
 .sync-notice > svg { flex: none; color: var(--muted); }
 .sync-notice.is-restored > svg { color: var(--primary); }
@@ -3067,8 +3025,8 @@ button.crumb:active { background: var(--wash-strong); }
 }
 
 /* Daily-review masthead: the day's date and batch size, quiet type above the
-   cards. Its view-transition-name keeps it steady while a settings change
-   swaps the batch beneath it. */
+   cards. Its motion key keeps it steady while a settings change swaps the
+   batch beneath it. */
 .review-banner {
   display: flex;
   align-items: center;
@@ -3080,7 +3038,6 @@ button.crumb:active { background: var(--wash-strong); }
   font-size: var(--fs-sm);
   font-weight: 500;
   animation: rise-in var(--t-enter) var(--ease-out) both;
-  view-transition-name: review-banner;
 }
 .review-banner svg { flex: none; color: var(--leaf); }
 /* The search's answer in one line above the results: what was found, where,
@@ -3147,9 +3104,6 @@ button.crumb:active { background: var(--wash-strong); }
      deselected and a shadow follows its box's corners. */
   border-radius: var(--r-lg);
   transition: box-shadow var(--t) var(--ease), opacity var(--t) var(--ease);
-  /* Tags card snapshots so arrivals can rise instead of the generic calm
-     fade (see the view-transition section). */
-  view-transition-class: memo-card;
 }
 /* A semantic-only row held from the previous query's ranking while the new
    one is on its way (App: semanticStale). It stays where it was, so the feed
@@ -3178,9 +3132,8 @@ button.crumb:active { background: var(--wash-strong); }
    trashed, restored, deleted, or moved far off-screen — plays its exit in
    this layer, outside React's tree, pinned where the reader last saw it
    while its neighbours glide into the gap — over it (they are raised for
-   the glide), as the snapshot of a departing card sat under its neighbours,
-   so the closing list covers the exit instead of the fading text doubling
-   over the card arriving in its place. The layer has no box of its own; it
+   the glide), so the closing list covers the exit instead of the fading
+   text doubling over the card arriving in its place. The layer has no box of its own; it
    only gives the ghosts an origin. Nothing inside replays: a node put back
    into the page would otherwise restart every CSS entrance it holds. */
 .feed-ghosts { position: absolute; top: 0; left: 0; width: 0; height: 0; pointer-events: none; }
@@ -3735,7 +3688,7 @@ button.memo-tag:active {
    the actions that destroy). */
 .memo-time-state { font-weight: 600; }
 
-.feed-empty { display: grid; justify-items: center; gap: 6px; padding: 56px 20px; color: var(--muted); text-align: center; animation: rise-in var(--t-enter) var(--ease-out) both; view-transition-name: feed-empty; }
+.feed-empty { display: grid; justify-items: center; gap: 6px; padding: 56px 20px; color: var(--muted); text-align: center; animation: rise-in var(--t-enter) var(--ease-out) both; }
 /* Empty review day: the settings shortcut sits under the explanation. */
 .feed-empty-action { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; border: 1px solid var(--line-strong); }
 .feed-empty-action svg { color: var(--muted); }
@@ -5375,8 +5328,8 @@ button.stats-tag-row:active { scale: 0.992; }
   transform: translateX(-50%);
   pointer-events: none;
   /* Own snapshot group (lifted in the view-transition section): left in the
-     page beneath the snapshot tree, the toast slid UNDER the topbar-action pill
-     whenever a view switch ran while it was up. */
+     page beneath the snapshot tree, the stack would slide under a morph's
+     parts while it was up. */
   view-transition-name: toast;
 }
 .toast {
@@ -5465,57 +5418,40 @@ button.stats-tag-row:active { scale: 0.992; }
 .toast-dismiss:active { transform: scale(0.85); }
 
 /* =========================================================================
-   View transitions — feed filter/sort changes run inside
-   document.startViewTransition (lib/viewTransition.ts). Every card carries
-   view-transition-name: memo-<id>, so cards shared between the old and new
-   lists glide to their new positions (FLIP) — but only when both endpoints
-   are near their viewports: changeFeed strips the names of distant slots
-   on each side of the swap, so an off-screen shared card enters or departs
-   like its neighbours instead of streaking across the page. Departures
-   fade back; card
-   arrivals rise (memo-card class rule below), slightly late so departures
-   clear first. Identical result lists therefore produce no visible motion.
-   Browsers without the API keep the instant swap.
+   View transitions — kept for the few morphs that need snapshots
+   (lib/viewTransition.ts): the sent text becoming its card (App,
+   landCreated), a feed tile growing into the viewer's photo (Lightbox) and
+   the brand mark landing on the gate. Only the parts a morph names take
+   part; everything else — the cards included — stays live under it. The
+   feed and its chrome move through lib/feedMotion.ts.
    ========================================================================= */
 /* The snapshot tree covers the viewport and, by default, swallows every
-   pointer event while a transition runs — the second click on a freshly
-   armed Empty Trash pill (its arming morph is a transition) landed on the
-   overlay instead of the button. The live DOM already sits in its final
-   layout underneath, so let clicks fall through. */
+   pointer event while a transition runs. The live DOM already sits in its
+   final layout underneath, so let clicks fall through. */
 ::view-transition { pointer-events: none; }
 /* That only holds while the page itself isn't captured: with the root in
    the snapshot tree, every hit during a transition resolves to <html>,
-   pointer-events or not, so a tag picked within ~300ms of the last one did
-   nothing. The page needs no snapshot of its own. Only named parts move;
-   the rest (background, sidebar, cards past the morph budget) holds still,
-   which the live page already does, and live it takes clicks. Reduced
-   motion captures it again for its dissolve (see the reduce block). What is
-   captured still can't be hit — a card, the top bar — so a press on it is
-   relayed to the element drawn there (viewTransition.ts, relayPress). */
+   pointer-events or not. The page needs no snapshot of its own: what isn't
+   named holds still, or moves live, and takes clicks. What is captured
+   still can't be hit, so a press on it is relayed to the element drawn
+   there (viewTransition.ts, relayPress). */
 :root { view-transition-name: none; }
 ::view-transition-group(*) { animation-duration: 0.24s; animation-timing-function: var(--ease-out); }
-/* Departing cards (deletion, filtered out) sink slightly as they fade, so a
-   removal reads as the card receding while its neighbours glide up. */
+/* A part with no partner on the other side recedes, or fades in calmly. */
 ::view-transition-old(*):only-child { animation: card-depart var(--t-exit) var(--ease) both; }
 ::view-transition-new(*):only-child { animation: fade-in 0.2s var(--ease) 0.03s both; }
-/* Card arrivals rise in the feed's own entrance language. Scoped via
-   view-transition-class so chips,
-   banners and feed-empty keep the calm fade; browsers without class support
-   fall back to it too. */
-::view-transition-new(.memo-card):only-child { animation: rise-in var(--t-enter) var(--ease-out) 0.03s both; }
-/* …except the memo just sent (App's landCreated marks that transition): it
-   comes from the composer above, so it drops in a few pixels while the cards
-   below glide down to make room. (That is the fallback; normally the
-   composer's text travels into the card — see "Sending" below.) */
-:root[data-vt-create]::view-transition-new(.memo-card):only-child { animation: drop-in var(--t-enter) var(--ease-out) 0.03s both; }
-/* Departing cards follow the verb that sent them (withViewTransition's
-   `exit`, held on the root while that transition runs): a restore lifts out
-   of Trash — rise-in played upward — and a permanent delete fades where it
-   stood. Everything else keeps the sink above. In-place changes outside a
-   transition speak the same verbs through lib/feedMotion.ts. */
-@keyframes card-lift { to { opacity: 0; transform: translateY(-18px) scale(0.995); } }
-:root[data-vt-exit="lift"]::view-transition-old(.memo-card):only-child { animation: card-lift 0.16s var(--ease) both; }
-:root[data-vt-exit="fade"]::view-transition-old(.memo-card):only-child { animation: fade-out var(--t-exit) var(--ease) both; }
+/* Sending names the composer and the sticky bar for its morph only (App
+   marks the root with data-vt-create before the capture). The bar keeps its
+   own group so the text passes under it when the page is scrolled. The
+   composer's tag has its own too: left in the composer's snapshots, which
+   are pinned to the closing frame's bottom edge, it would cross-fade with
+   itself a line apart; on its own it holds still, at its natural size. */
+:root[data-vt-create] .topbar { view-transition-name: topbar; }
+:root[data-vt-create] .composer { view-transition-name: composer; }
+:root[data-vt-create] .composer .editor-context-tag { view-transition-name: composer-context-tag; }
+:root[data-vt-create]::view-transition-group(composer-context-tag) { z-index: 1; }
+:root[data-vt-create]::view-transition-old(composer-context-tag),
+:root[data-vt-create]::view-transition-new(composer-context-tag) { inline-size: auto; block-size: 100%; }
 /* Sending (App's landCreated). The typed text is the new card: for the
    outgoing capture the composer's field carries the card's name, so the
    text travels down and becomes the card instead of fading out above it —
@@ -5546,88 +5482,12 @@ button.stats-tag-row:active { scale: 0.992; }
 :root[data-vt-create]::view-transition-new(.sent) { inline-size: auto; block-size: auto; }
 :root[data-vt-create]::view-transition-old(.sent) { animation: fade-out var(--t-fast) var(--ease-out) both, sent-seat var(--t-enter) var(--ease-out) both; }
 :root[data-vt-create]::view-transition-new(.sent) { animation: fade-in var(--t-fast) var(--ease-out) both, sent-gather var(--t-enter) var(--ease-out) both; }
-/* The composer enters in its own snapshot above the stable page background. */
-::view-transition-new(composer):only-child { animation: rise-in 0.28s var(--ease-out) both; }
-::view-transition-group(composer),
-::view-transition-group(composer-context-tag) { z-index: 1; }
-/* Removing a filter chip folds it back the way dropped crumbs leave the
-   trail — without this the only-child fallback above would play card-depart,
-   the cards' language, on a trail element. */
-::view-transition-old(day-filter-chip):only-child,
-::view-transition-old(stats-filter-chip):only-child,
-::view-transition-old(range-filter-chip):only-child,
-::view-transition-old(facet-chip-noTags):only-child,
-::view-transition-old(facet-chip-hasImage):only-child,
-::view-transition-old(facet-chip-hasLink):only-child,
-::view-transition-old(facet-chip-hasOpenTask):only-child { animation: crumb-out 0.14s var(--ease) both; }
-::view-transition-old(composer-context-tag):only-child { animation: crumb-out 0.14s var(--ease) both; }
-::view-transition-new(composer-context-tag):only-child { animation: crumb-in 0.18s var(--ease-out) both; }
-/* Leaving Trash / Daily review, the trail folds back on the pill's own
-   front-loaded curve: the pill crosses it within the first ~60ms of its
-   glide home, so the fold has to be mostly done by then. Arriving, the live
-   crumb-in cascade already IS the entrance — a snapshot fade on top would
-   only dim it twice. Review ↔ Trash shares the name and morphs in place. */
-::view-transition-old(view-trail):only-child,
-::view-transition-old(trash-select):only-child { animation: crumb-out 0.14s var(--ease-out) both; }
-::view-transition-new(view-trail):only-child,
-::view-transition-new(trash-select):only-child { animation: none; }
-/* The date chips morph between labels of different widths (repicking a
-   heatmap day, a range growing a second date) — natural-size snapshots keep
-   the old label from stretching to the interpolating group width, same as
-   the topbar-action pin below. */
-::view-transition-old(day-filter-chip),
-::view-transition-new(day-filter-chip),
-::view-transition-old(stats-filter-chip),
-::view-transition-new(stats-filter-chip),
-::view-transition-old(range-filter-chip),
-::view-transition-new(range-filter-chip),
-::view-transition-old(composer-context-tag),
-::view-transition-new(composer-context-tag),
-::view-transition-old(select-delete),
-::view-transition-new(select-delete) { inline-size: auto; block-size: 100%; }
-/* The topbar-action pill morphs between labels of very different widths (a
-   short tag ↔ 全部笔记 ↔ 已选 N 条). Snapshots default to inline-size:100%/
-   block-size:auto, so the old label stretches to the interpolating group
-   width — going home, a narrow tag pill ballooned down-left while gliding
-   into the wide root pill. Pinned to the row height instead, every morph is
-   the same pure glide with the labels cross-fading at natural size.
-   The labels hand over in the first 140ms of the 240ms glide: cross-fading
-   for the whole move left the old label (and, being natural-size, its tail
-   past the narrowing group) legible beside the new one until the pill had
-   nearly landed. Both halves keep one duration and curve, so an unchanged
-   label still sums to full opacity under plus-lighter — no flicker. The
-   Trash ↔ review trail swaps its leaf ("回收站" ↔ "每日回顾") the same way. */
-::view-transition-old(topbar-action),
-::view-transition-new(topbar-action),
-::view-transition-old(view-trail),
-::view-transition-new(view-trail) { inline-size: auto; block-size: 100%; animation-duration: 0.14s; }
-/* Snapshot stacking during transitions (higher = painted on top):
-     cards & feed          auto (0)
-     composer              1
-     .topbar               2  — above the cards scrolled under the sticky bar,
-                                so the frosted header never blinks out
-     topbar controls       3  — the location / select / day pills, the
-                                crumb separator and the Trash / review
-                                trail sit above their own band
-     .toast                4  — the app's topmost layer (z-index 200 live),
-                                so no pill can glide over it mid-transition
-   Natural-size snapshots on the pills/toast keep labels of different widths
-   from stretching as they morph. */
+/* Snapshot stacking during a morph (higher = painted on top): the sent
+   text and the composer at auto, the sticky bar over them (2), the
+   lightbox and its photo (4, 5; lightbox section), and the toast stack
+   over everything (6) — the app's topmost layer live too. Natural-size
+   snapshots keep toasts of different widths from stretching. */
 ::view-transition-group(topbar) { z-index: 2; }
-::view-transition-group(topbar-action),
-::view-transition-group(select-delete),
-::view-transition-group(day-filter-chip),
-::view-transition-group(stats-filter-chip),
-::view-transition-group(range-filter-chip),
-::view-transition-group(facet-chip-noTags),
-::view-transition-group(facet-chip-hasImage),
-::view-transition-group(facet-chip-hasLink),
-::view-transition-group(facet-chip-hasOpenTask),
-::view-transition-group(loc-sep),
-::view-transition-group(view-trail),
-::view-transition-group(trash-select) { z-index: 3; }
-/* Toasts stay above everything, the lightbox's photo morph (5) included —
-   the stack paints over the viewer outside a transition too. */
 ::view-transition-group(toast) { z-index: 6; }
 ::view-transition-old(toast),
 ::view-transition-new(toast) { inline-size: auto; block-size: 100%; }
@@ -6157,13 +6017,12 @@ button.stats-tag-row:active { scale: 0.992; }
   .trash-select-button { animation: fade-in var(--t) var(--ease) both !important; }
   .crumb.is-leaving,
   .crumb-sep.is-leaving { animation: fade-out var(--t-fast) var(--ease) both !important; }
-  /* Feed swaps dissolve instead of moving: every group sits at its final box
-     (nothing glides or resizes) while the two states cross-fade in 150ms.
-     The cards carry no names under reduce (viewTransition.ts), so they
-     dissolve inside the page's own snapshot — captured here, for once, and
-     summed with plus-lighter so whatever did not change holds steady. While
-     it is captured, a press lands on <html> (see :root above) and is relayed
-     to the element drawn under it. */
+  /* The one morph that still runs here — checking → login, whose brand
+     mark carries no name under reduce — dissolves with the page: the root
+     is captured, for once, and the two states cross-fade in 150ms, summed
+     with plus-lighter so whatever did not change holds steady. (A send and
+     the photo viewer skip their morphs; the feed dissolves through its
+     motion layer.) */
   :root { view-transition-name: root; }
   ::view-transition-group(*) { animation: none !important; }
   ::view-transition-old(*) { animation: fade-out var(--t) var(--ease) both !important; }

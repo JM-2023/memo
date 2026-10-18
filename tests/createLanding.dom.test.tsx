@@ -139,13 +139,16 @@ afterEach(() => {
 });
 
 describe("sending a memo", () => {
-  it("lands the card and empties the composer in one view transition", async () => {
-    const seen: Array<{ composer: string; cards: number; marked: boolean }> = [];
+  it("lands the card in a morph around the feed's change, naming only the morph's parts", async () => {
+    const seen: Array<{ composer: string; cards: number; marked: boolean; field: string; slots: string[] }> = [];
     const field = () => screen.getByRole("combobox", { name: "Memo content" }) as HTMLTextAreaElement;
+    const nameOf = (element: Element | null) => (element as HTMLElement | null)?.style.viewTransitionName ?? "";
     const snapshot = () => ({
       composer: field().value,
       cards: screen.queryAllByRole("article").length,
-      marked: document.documentElement.dataset.vtCreate !== undefined
+      marked: document.documentElement.dataset.vtCreate !== undefined,
+      field: nameOf(document.querySelector(".composer .editor-field")),
+      slots: Array.from(document.querySelectorAll(".memo-slot"), nameOf).filter(Boolean)
     });
     document.startViewTransition = ((update: () => void) => {
       // The browser captures the old state, then runs the update.
@@ -169,19 +172,53 @@ describe("sending a memo", () => {
 
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(3));
     const [before, after] = seen.slice(-2);
-    // Old capture: the draft still in the composer, no new card yet.
-    expect(before).toMatchObject({ composer: "Fresh thought", cards: 2, marked: false });
-    // New state, in the same update: card in, composer empty, the drop-in
-    // entrance marked for the snapshot — and the feed's own entrance held
-    // back, so the card does not arrive a second time under it.
-    expect(after).toMatchObject({ composer: "", cards: 3, marked: true });
+    // Old capture: the draft still in the composer, carrying the new card's
+    // name; the root marked, so the composer and the bar are captured too;
+    // no card named.
+    expect(before).toEqual({ composer: "Fresh thought", cards: 2, marked: true, field: "memo-memo-9", slots: [] });
+    // New state, in the same update: card in and named — the morph's other
+    // half — the composer empty.
+    expect(after).toEqual({ composer: "", cards: 3, marked: true, field: "", slots: ["memo-memo-9"] });
     const landed = screen.getByText("Fresh thought").closest(".memo-slot");
     expect(landed).toBeTruthy();
+    // The morph plays its arrival; the feed's motion layer does not.
     expect(animate.mock.contexts).not.toContain(landed);
-    expect(screen.getByText("Fresh thought")).toBeTruthy();
     // The card says it to the eye; a screen reader hears it.
     expect(spoken()).toBe("Sent");
     await waitFor(() => expect(document.documentElement.dataset.vtCreate).toBeUndefined());
+    expect(nameOf(landed)).toBe("");
+  });
+
+  it("starts no morph under reduced motion: the card fades in as the composer hands over", async () => {
+    vi.mocked(window.matchMedia).mockImplementation(
+      (query: string) => ({ matches: query.includes("reduce"), media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList
+    );
+    const start = vi.fn();
+    document.startViewTransition = start as unknown as typeof document.startViewTransition;
+    mocks.createMemo.mockResolvedValue({ memo: memo(9, "Quiet thought") });
+    const field = () => screen.getByRole("combobox", { name: "Memo content" }) as HTMLTextAreaElement;
+
+    const user = userEvent.setup();
+    renderApp();
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
+    await user.type(field(), "Quiet thought");
+    const animate = vi.mocked(Element.prototype.animate);
+    animate.mockClear();
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(3));
+    expect(start).not.toHaveBeenCalled();
+    expect(document.documentElement.dataset.vtCreate).toBeUndefined();
+    const played = (target: Element | null) => animate.mock.calls.filter((_call, index) => animate.mock.contexts[index] === target);
+    const landed = Array.from(document.querySelectorAll(".memo-slot")).find((slot) => slot.textContent?.includes("Quiet thought")) ?? null;
+    const [arrival] = played(landed);
+    expect(arrival[0]).toEqual([{ opacity: 0 }, { opacity: 1 }]);
+    expect((arrival[1] as KeyframeAnimationOptions).duration).toBeLessThanOrEqual(150);
+    // The composer's typed look fades out over the emptied one fading in.
+    const [composerIn] = played(document.querySelector(".composer:not([data-motion-ghost])"));
+    expect(composerIn[0]).toEqual([{ opacity: 0 }, { opacity: 1 }]);
+    expect(document.querySelector("[data-motion-ghost] textarea")?.textContent).toBe("Quiet thought");
+    expect(field().value).toBe("");
   });
 
   it("stops a send on Esc, keeps the draft and says so", async () => {

@@ -1244,14 +1244,14 @@ export default function App() {
    * the list names its verb here — a lens, a pin, a trash: the layer
    * measures the painted feed, the change commits at once, and the cards
    * move from where the reader saw them — glides for the cards that shift,
-   * the verb's own exit for the ones that leave. Sends stay a view
-   * transition (landCreated), for the text that travels into its card.
+   * the verb's own exit for the ones that leave. A send runs here too, inside
+   * the view transition that carries its text into the card (landCreated).
    */
   const feedGhostsRef = useRef<HTMLDivElement | null>(null);
   const [feedMotion] = useState(() =>
     createFeedMotion({ feed: () => feedGhostsRef.current?.parentElement ?? null, ghosts: () => feedGhostsRef.current })
   );
-  useEffect(() => feedMotion.attach(), [feedMotion]);
+  useEffect(() => () => feedMotion.settle(), [feedMotion]);
   // The ghost layer is always the feed's last child: mounting it is the
   // feed's, and the motion layer starts watching for arrivals there.
   const attachFeedGhosts = useCallback(
@@ -3462,26 +3462,29 @@ export default function App() {
   }
 
   /**
-   * Land a confirmed create in one view transition: the cards below glide
-   * down to make room, the typed text travels out of the composer and
-   * becomes the new card, and the composer — cleared inside this same update
-   * through onCommitted — morphs shut instead of snapping a frame later
-   * (app.css `data-vt-create`). The slot skips its own entrance while the
-   * snapshot plays it. Resolves once the DOM holds the new state; under
-   * reduced motion the same transition is a dissolve.
+   * Land a confirmed create. The memo comes in at the head of the list as one
+   * change of the feed's motion layer — the cards below glide down to make
+   * room — and the typed text becomes the new card in a view transition
+   * around that change. The composer, cleared inside the same update through
+   * onCommitted, morphs shut instead of snapping a frame later, and the
+   * sticky bar is captured with it so the text passes under the bar (app.css
+   * names both through `data-vt-create`, for this morph only). The cards
+   * carry no names: they stay live, and move, under it. Resolves once the
+   * DOM holds the new state.
    *
    * The text's journey is a shared name: for the outgoing capture the
    * composer's field carries the new card's `memo-<id>`, and the update takes
    * it off again before the card mounts with it, so the name stays unique.
-   * A memo whose card is already in the feed (an idempotent retry that sync
-   * delivered first) keeps the plain drop-in.
+   * Under reduced motion, without the API, or for a memo whose card is
+   * already in the feed (an idempotent retry that sync delivered first)
+   * there is no morph: the card drops in — fades in, under reduced motion,
+   * as the composer's typed look hands over to the emptied one.
    *
    * The pictures ride along the same way: each composer tile going out
    * carries `sent-img-<id>` for the outgoing capture, and the update hands
    * the name to that picture's cell in the new card (as Lightbox hands its
    * photo's name over), so a tile grows into its cell instead of riding up
-   * with the composer's frame. They share the feed's morph budget: a tile
-   * takes a name only while the cards captured with it leave room.
+   * with the composer's frame.
    */
   function landCreated(saved: Memo, data: EditorSubmission): Promise<void> {
     // The card draws its pictures from memory (compressImage primed the
@@ -3516,10 +3519,37 @@ export default function App() {
       const root = document.documentElement;
       const name = `memo-${saved.id}`;
       const field = document.querySelector<HTMLElement>(".composer .editor-field");
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       const shared =
         field !== null &&
-        !window.matchMedia("(prefers-reduced-motion: reduce)").matches &&
+        typeof document.startViewTransition === "function" &&
+        !reduced &&
         !Array.from(document.querySelectorAll<HTMLElement>(".memo-slot[data-vt]")).some((slot) => slot.dataset.vt === name);
+      // The commit, as the motion layer's change. A morph closing the
+      // composer, or reduced motion's hand-over, wants the emptied field at
+      // its new height at once; otherwise it eases down on its own.
+      const land = (morphed: boolean, then?: () => void) =>
+        feedMotion.run(
+          "create",
+          [saved.id],
+          () => {
+            flushSync(() => {
+              commitMutation({ memos: [saved] });
+              data.onCommitted?.(morphed || reduced);
+            });
+            then?.();
+          },
+          { morphed: morphed ? saved.id : undefined }
+        );
+      if (!shared) {
+        try {
+          land(false);
+        } finally {
+          decoders.length = 0;
+          resolve();
+        }
+        return;
+      }
       // Where a box's first line of text starts, from its border box.
       const firstLine = (frame: HTMLElement, text: HTMLElement | null) => {
         if (!text) return null;
@@ -3533,31 +3563,40 @@ export default function App() {
           y: inner.top - outer.top + px(style.borderTopWidth) + px(style.paddingTop) + Math.max(0, leading) - text.scrollTop
         };
       };
-      const typed = shared ? firstLine(field, field.querySelector<HTMLElement>("textarea")) : null;
-      if (shared) field.style.viewTransitionName = name;
-      let landed: HTMLElement | null = null;
-      // Tiles named for the outgoing capture, and the card cells that took
-      // their names over.
-      let riders: HTMLElement[] = [];
-      const cells: HTMLElement[] = [];
-      const transition = withViewTransition((animated) => {
-        if (shared) field.style.viewTransitionName = "";
+      const typed = firstLine(field, field.querySelector<HTMLElement>("textarea"));
+      // Named for the outgoing capture: the field, the composer tiles going
+      // out with it, and — through the root's mark — the composer and the bar.
+      field.style.viewTransitionName = name;
+      root.dataset.vtCreate = saved.id;
+      const sent = new Set(saved.images.map((image) => image.id));
+      const riders = Array.from(document.querySelectorAll<HTMLElement>(".composer .attachment[data-image-id]:not(.is-removing)")).filter(
+        (tile) => sent.has(tile.dataset.imageId ?? "") && warm.has(tile.dataset.imageId ?? "")
+      );
+      for (const tile of riders) {
+        tile.style.viewTransitionName = `sent-img-${tile.dataset.imageId}`;
+        tile.style.setProperty("view-transition-class", "sent-img");
+      }
+      const unname = () => {
+        field.style.viewTransitionName = "";
         for (const tile of riders) {
           tile.style.viewTransitionName = "";
           tile.style.removeProperty("view-transition-class");
         }
-        if (animated) root.dataset.vtCreate = saved.id;
+      };
+      let landed: HTMLElement | null = null;
+      // The card cells that took the tiles' names over.
+      const cells: HTMLElement[] = [];
+      const transition = withViewTransition((animated) => {
+        unname();
         try {
-          flushSync(() => {
-            commitMutation({ memos: [saved] });
-            data.onCommitted?.(animated);
-          });
-          // The arriving half of the pair: classed so app.css can seat the
-          // composer's text on the card's own text as the two cross-fade,
-          // by the distance between the two first lines.
-          landed = shared ? document.querySelector<HTMLElement>(`.memo-slot[data-vt="${name}"]`) : null;
-          if (landed) {
-            landed.style.setProperty("view-transition-class", "memo-card sent");
+          land(animated, () => {
+            // The arriving half of the pair: named and classed so app.css
+            // can seat the composer's text on the card's own text as the two
+            // cross-fade, by the distance between the two first lines.
+            landed = animated ? document.querySelector<HTMLElement>(`.memo-slot[data-vt="${name}"]`) : null;
+            if (!landed) return;
+            landed.style.viewTransitionName = name;
+            landed.style.setProperty("view-transition-class", "sent");
             const card = firstLine(landed, landed.querySelector<HTMLElement>(".memo-content"));
             if (typed && card) {
               root.style.setProperty("--sent-dx", `${card.x - typed.x}px`);
@@ -3575,33 +3614,14 @@ export default function App() {
             // A slot's content-visibility leaves a just-mounted card's
             // insides unrendered at capture, and names in there unseen.
             if (cells.length > 0) landed.style.contentVisibility = "visible";
-          }
+          });
         } finally {
           resolve();
         }
       });
-      if (!transition) {
-        if (shared) field.style.viewTransitionName = "";
-        return;
-      }
-      // The outgoing capture waits for the next frame, so the tiles can still
-      // be named now — after withViewTransition has picked which cards morph,
-      // so the pictures only take the room those leave (the new card is one
-      // more). The 32 is tuneFeedTransitionNames' own (viewTransition.ts).
-      if (shared) {
-        const budget = 32;
-        const sent = new Set(saved.images.map((image) => image.id));
-        const named = Array.from(document.querySelectorAll<HTMLElement>(".memo-slot")).filter((slot) => slot.style.viewTransitionName).length;
-        riders = Array.from(document.querySelectorAll<HTMLElement>(".composer .attachment[data-image-id]:not(.is-removing)"))
-          .filter((tile) => sent.has(tile.dataset.imageId ?? "") && warm.has(tile.dataset.imageId ?? ""))
-          .slice(0, Math.max(0, budget - named - 1));
-        for (const tile of riders) {
-          tile.style.viewTransitionName = `sent-img-${tile.dataset.imageId}`;
-          tile.style.setProperty("view-transition-class", "sent-img");
-        }
-      }
       // The marks last exactly as long as the transition that reads them.
       const clear = () => {
+        unname();
         for (const cell of cells) {
           cell.style.viewTransitionName = "";
           cell.style.removeProperty("view-transition-class");
@@ -3609,13 +3629,17 @@ export default function App() {
         if (cells.length > 0) landed?.style.removeProperty("content-visibility");
         // The decoded pictures needed holding only until the card drew them.
         decoders.length = 0;
-        landed?.style.removeProperty("view-transition-class");
+        if (landed) {
+          landed.style.viewTransitionName = "";
+          landed.style.removeProperty("view-transition-class");
+        }
         if (root.dataset.vtCreate !== saved.id) return;
         delete root.dataset.vtCreate;
         root.style.removeProperty("--sent-dx");
         root.style.removeProperty("--sent-dy");
       };
-      void transition.finished.then(clear, clear);
+      if (transition) void transition.finished.then(clear, clear);
+      else clear();
     });
   }
 
@@ -4130,14 +4154,16 @@ export default function App() {
         setConfirmEmptyTrash(false);
         return;
       }
-      // Disarm inside the same transition that clears the cards: the red
-      // confirm pill holds through the request and leaves in one morph,
-      // never snapping back to a bare "Empty Trash" first.
-      withViewTransition(() =>
-        flushSync(() => {
+      // Disarm in the same change that clears the cards: the red confirm
+      // pill holds through the request and hands over as they fade, never
+      // snapping back to a bare "Empty Trash" first.
+      moveFeed(
+        "purge",
+        result.purged.map((memo) => memo.id),
+        () => {
           setConfirmEmptyTrash(false);
           applySyncChanges([], result.purged, []);
-        })
+        }
       );
       void runSync();
       notifyPeers();
@@ -4195,12 +4221,10 @@ export default function App() {
             setSelected(new Set(failedIds));
           }
         };
-        // From select mode the scene changes with the list — the selection
-        // toolbar folds back into the breadcrumb — so it stays one view
-        // transition, its departing cards in the verb's exit (a restore
-        // lifts out of Trash). A toast's Undo changes only the list: in place.
-        if (fromSelection) withViewTransition(() => flushSync(apply), { exit: op === "restore" ? "lift" : "sink" });
-        else moveFeed(op, changed.map((memo) => memo.id), apply);
+        // Departing cards take the verb's exit (a restore lifts out of
+        // Trash). From select mode the toolbar folds back into the
+        // breadcrumb in the same change.
+        moveFeed(op, changed.map((memo) => memo.id), apply);
         notifyPeers();
       }
       // Refusals (a version changed elsewhere) pull the server truth too.
@@ -4272,20 +4296,20 @@ export default function App() {
       const purged = result.purged;
       const failedIds = result.failed.map((failure) => failure.id);
       if (purged.length > 0) {
-        // Select mode ends with it, so the whole scene moves (one view
-        // transition); the cards fade where they stood — gone for good.
-        withViewTransition(
-          () =>
-            flushSync(() => {
-              applySyncChanges([], purged, []);
-              if (failedIds.length === 0) {
-                setSelectMode(false);
-                setSelected(new Set());
-              } else {
-                setSelected(new Set(failedIds));
-              }
-            }),
-          { exit: "fade" }
+        // The cards fade where they stood — gone for good — and select
+        // mode ends in the same change.
+        moveFeed(
+          "purge",
+          purged.map((memo) => memo.id),
+          () => {
+            applySyncChanges([], purged, []);
+            if (failedIds.length === 0) {
+              setSelectMode(false);
+              setSelected(new Set());
+            } else {
+              setSelected(new Set(failedIds));
+            }
+          }
         );
         notifyPeers();
       }
@@ -4384,8 +4408,11 @@ export default function App() {
 
     const fromSelection = result.scope === "selection";
     if (fromSelection && result.retryIds.length === 0) restoreLocationFocusRef.current = true;
-    withViewTransition(() =>
-      flushSync(() => {
+    // The tagged cards cross-fade to their new text as the dialog closes.
+    moveFeed(
+      "retag",
+      result.changed.map((memo) => memo.id),
+      () => {
         closeTagDialogs();
         if (result.changed.length > 0) applySyncChanges(result.changed, [], []);
         if (!fromSelection) return;
@@ -4396,7 +4423,7 @@ export default function App() {
           setSelected(new Set(result.retryIds));
         }
         setConfirmBatchDelete(false);
-      })
+      }
     );
 
     if (result.changed.length > 0 || result.failedCount > 0) {
@@ -4802,18 +4829,20 @@ export default function App() {
     try {
       const result = await guard(() => removeTag(path));
       if (!result) return;
-      // One view transition covers the whole blast radius: the tag row leaves
-      // the sidebar (its siblings FLIP up), memo bodies cross-fade to their
-      // tagless text, and a matching feed filter resets.
-      withViewTransition(() =>
-        flushSync(() => {
+      // One change covers the whole blast radius: the tag row leaves the
+      // sidebar (its siblings FLIP up), memo bodies cross-fade to their
+      // tagless text — or, when the feed was filtered by that tag, the
+      // filter resets and the whole list changes with it.
+      const resets = activeTag !== null && tagMatches(activeTag, path);
+      moveFeed(
+        resets ? "lens" : "retag",
+        result.memos.map((memo) => memo.id),
+        () => {
           applySyncChanges(result.memos, [], result.tags);
-          if (activeTag && tagMatches(activeTag, path)) {
-            setActiveTag(null);
-          }
+          if (resets) setActiveTag(null);
           setSavedFilters((current) => removeSavedFiltersForTag(current, path));
           setStatsDrilldown((current) => (current?.kind === "tag" && tagMatches(current.tag, path) ? null : current));
-        })
+        }
       );
       followTagChangeInReview(removeReviewSettingsTag(reviewSettings, path), false);
       void runSync();

@@ -88,7 +88,6 @@ afterEach(() => {
   motion.settle();
   document.body.innerHTML = "";
   delete (Element.prototype as Partial<Element>).animate;
-  delete document.documentElement.dataset.vtExit;
 });
 
 describe("feed motion", () => {
@@ -214,7 +213,7 @@ describe("feed motion", () => {
     expect(glideOf("3")).toBeUndefined();
   });
 
-  it("leaves a change inside a view transition's update to the snapshot", () => {
+  it("plays a send inside its morph: the cards below glide live, the sent card is the morph's", () => {
     build(5);
     const originalStart = document.startViewTransition;
     document.startViewTransition = ((update: () => void) => {
@@ -222,37 +221,65 @@ describe("feed motion", () => {
       return { ready: Promise.resolve(), finished: Promise.resolve() };
     }) as typeof document.startViewTransition;
     try {
-      const commit = vi.fn(() => slotOf("2").remove());
-      withViewTransition(() => motion.run("trash", ["2"], commit));
-      expect(commit).toHaveBeenCalledOnce();
-      expect(played).toEqual([]);
+      withViewTransition(() => motion.run("create", ["new"], () => feed.prepend(slot("new")), { morphed: "new" }));
     } finally {
       document.startViewTransition = originalStart;
     }
+
+    expect(translateOf(glideOf("0")!.keyframes)).toBe(`0px ${-STEP}px`);
+    expect(translateOf(glideOf("4")!.keyframes)).toBe(`0px ${-STEP}px`);
+    expect(played.filter((entry) => entry.target === slotOf("new"))).toEqual([]);
   });
 
-  it("settles everything in flight when a view transition captures the page", () => {
+  it("drops a sent memo in when no morph carries it, and leaves the page where it is", () => {
+    build(20, 1000);
+    motion.run("create", ["new"], () => feed.prepend(slot("new")));
+    // Nothing kept the place: a send lands at the head of the list.
+    expect(window.scrollY).toBe(1000);
+
+    played = [];
+    window.scrollY = 0;
     build(5);
-    const detach = motion.attach();
-    motion.run("trash", ["2"], () => slotOf("2").remove());
-    const glide = glideOf("3")!;
-    expect(ghosts.children).toHaveLength(1);
+    motion.run("create", ["sent"], () => feed.prepend(slot("sent")));
 
-    const originalStart = document.startViewTransition;
-    document.startViewTransition = ((update: () => void) => {
-      update();
-      return { ready: Promise.resolve(), finished: Promise.resolve() };
-    }) as typeof document.startViewTransition;
-    try {
-      withViewTransition(() => undefined);
-    } finally {
-      document.startViewTransition = originalStart;
-      detach();
-    }
+    const arrival = played.find((entry) => entry.target === slotOf("sent"))!;
+    expect(arrival.keyframes[0]).toMatchObject({ opacity: 0, transform: "translateY(-8px)" });
+    expect(translateOf(glideOf("0")!.keyframes)).toBe(`0px ${-STEP}px`);
+  });
 
-    expect(glide.cancel).toHaveBeenCalled();
-    expect(ghosts.children).toHaveLength(0);
-    expect(slotOf("3").style.zIndex).toBe("");
+  it("leaves a retagged card's new text to the card, moving it with its neighbours", () => {
+    build(5);
+
+    motion.run("retag", ["1", "3"], () => {
+      slotOf("1").remove();
+      slotOf("3").textContent = "Memo 3 #ideas";
+    });
+
+    // The card hands its own text over (MemoStage); here it only glides.
+    expect(translateOf(glideOf("3")!.keyframes)).toBe(`0px ${STEP}px`);
+    const stand = [...ghosts.querySelectorAll<HTMLElement>(".feed-ghost")].map((node) => node.textContent);
+    expect(stand).toEqual(["Memo 1"]);
+  });
+
+  it("exits each card of a batch in its verb", () => {
+    build(6);
+    motion.run("trash", ["1", "2"], () => {
+      slotOf("1").remove();
+      slotOf("2").remove();
+    });
+    const sinks = played.filter((entry) => entry.target.classList.contains("feed-ghost"));
+    expect(sinks).toHaveLength(2);
+    for (const sink of sinks) expect(sink.keyframes[1]).toMatchObject({ opacity: 0, transform: "scale(0.965)" });
+
+    motion.settle();
+    played = [];
+    motion.run("restore", ["3", "4"], () => {
+      slotOf("3").remove();
+      slotOf("4").remove();
+    });
+    const lifts = played.filter((entry) => entry.target.classList.contains("feed-ghost"));
+    expect(lifts).toHaveLength(2);
+    for (const lift of lifts) expect(lift.keyframes[1].transform).toBe("translateY(-18px) scale(0.995)");
   });
 
   it("just commits where Web Animations are missing", () => {
@@ -327,27 +354,6 @@ describe("card arrivals", () => {
     // One entrance, the change's own, in step with the glides it plays.
     expect(entrances().filter((entry) => entry.target === slotOf("new"))).toHaveLength(1);
     expect(glideOf("0")).toBeDefined();
-  });
-
-  it("leaves the cards a view transition's update mounts to its snapshot", async () => {
-    build(3);
-    motion.observe(feed);
-    const detach = motion.attach();
-    played = [];
-    const originalStart = document.startViewTransition;
-    document.startViewTransition = ((update: () => void) => {
-      update();
-      return { ready: Promise.resolve(), finished: Promise.resolve() };
-    }) as typeof document.startViewTransition;
-    try {
-      withViewTransition(() => feed.insertBefore(slot("new"), ghosts));
-      await delivered();
-    } finally {
-      document.startViewTransition = originalStart;
-      detach();
-    }
-
-    expect(played).toEqual([]);
   });
 
   it("fades the cards in under reduced motion, all at once", async () => {

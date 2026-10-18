@@ -198,6 +198,25 @@ function measure(el: Part, band: Element | null): { box: Box; at: { left: number
   return { box: { left, top, width: rect.width, height: rect.height }, at: { left: left + glide.x, top: top + glide.y } };
 }
 
+/**
+ * A copy that shows what the part shows. Cloning keeps markup, not what was
+ * typed since — a field's text lives in its value — so that is written into
+ * the copy, where a clone of it keeps it too.
+ */
+function copyOf(el: Part): Part {
+  const copy = el.cloneNode(true) as Part;
+  const fields = el.querySelectorAll<HTMLTextAreaElement | HTMLInputElement>("textarea, input");
+  if (fields.length === 0) return copy;
+  const twins = copy.querySelectorAll<HTMLTextAreaElement | HTMLInputElement>("textarea, input");
+  fields.forEach((field, index) => {
+    const twin = twins[index];
+    if (!twin) return;
+    if (twin instanceof HTMLTextAreaElement) twin.textContent = field.value;
+    else if (twin.type !== "file") twin.setAttribute("value", field.value);
+  });
+  return copy;
+}
+
 function ancestors(el: Element, root: HTMLElement): Element[] {
   const chain: Element[] = [];
   for (let up = el.parentElement; up; up = up.parentElement) {
@@ -224,7 +243,7 @@ export function captureChrome(root: HTMLElement, stage: Pick<ChromeStage, "owns"
       opacity: Number.isFinite(opacity) ? opacity : 1,
       className: el.getAttribute("class") ?? "",
       text: el.textContent ?? "",
-      copy: el.cloneNode(true) as Part,
+      copy: copyOf(el),
       hosts: ancestors(el, root),
       parent
     });
@@ -296,9 +315,10 @@ function stand(shot: Shot, band: Element | null, hidden: (el: Element) => boolea
 /**
  * The motions that take the chrome from `capture` to what the DOM holds now,
  * ready to play once the engine has stopped what was in flight. Empty when
- * nothing in the chrome changed.
+ * nothing in the chrome changed. Keys in `handover` hand their old look over
+ * to the new one even when they are containers.
  */
-export function chromeMotions(capture: ChromeCapture, stage: ChromeStage, reduced: boolean): Array<() => void> {
+export function chromeMotions(capture: ChromeCapture, stage: ChromeStage, reduced: boolean, handover?: ReadonlySet<string>): Array<() => void> {
   const motions: Array<() => void> = [];
   const after = find(capture.root);
   const before = capture.shots;
@@ -370,10 +390,11 @@ export function chromeMotions(capture: ChromeCapture, stage: ChromeStage, reduce
     const moved = Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5;
     const selfText = next.el.querySelector(SELF_TEXT) !== null;
     const changed =
-      !shot.spec.container &&
-      (next.el !== shot.el ||
-        (next.el.getAttribute("class") ?? "") !== shot.className ||
-        (!selfText && ((next.el.textContent ?? "") !== shot.text || Math.abs(now.box.width - shot.box.width) >= 0.5 || Math.abs(now.box.height - shot.box.height) >= 0.5)));
+      handover?.has(key) === true ||
+      (!shot.spec.container &&
+        (next.el !== shot.el ||
+          (next.el.getAttribute("class") ?? "") !== shot.className ||
+          (!selfText && ((next.el.textContent ?? "") !== shot.text || Math.abs(now.box.width - shot.box.width) >= 0.5 || Math.abs(now.box.height - shot.box.height) >= 0.5))));
     if (changed) {
       // The old look hands over to the new one: both glide the same way, at
       // their own sizes, while the copy fades out and the live part in. A

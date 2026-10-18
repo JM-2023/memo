@@ -1,15 +1,14 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { tuneFeedTransitionNames, withViewTransition } from "../src/lib/viewTransition";
+import { skipLiveTransition, transitionLive, withViewTransition } from "../src/lib/viewTransition";
 
 const VIEWPORT = 800;
 const SLOT_HEIGHT = 200;
 
 /**
- * Lay out `count` feed slots down a document, each already carrying its
- * view-transition-name, and scroll to `scrollY`. jsdom has no layout, so each
- * slot answers with the rect its position implies.
+ * Lay out `count` feed slots down a document and scroll to `scrollY`. jsdom
+ * has no layout, so each slot answers with the rect its position implies.
  */
 function feed(count: number, scrollY: number): HTMLElement[] {
   window.innerHeight = VIEWPORT;
@@ -19,7 +18,6 @@ function feed(count: number, scrollY: number): HTMLElement[] {
     const slot = document.createElement("div");
     slot.className = "memo-slot";
     slot.dataset.vt = `memo-${index}`;
-    slot.style.viewTransitionName = `memo-${index}`;
     const documentTop = index * SLOT_HEIGHT;
     slot.getBoundingClientRect = () =>
       ({ top: documentTop - window.scrollY, height: SLOT_HEIGHT }) as DOMRect;
@@ -29,148 +27,68 @@ function feed(count: number, scrollY: number): HTMLElement[] {
 }
 
 const named = (slots: HTMLElement[]): number[] =>
-  slots.flatMap((slot, index) => (slot.style.viewTransitionName === "" ? [] : [index]));
+  slots.flatMap((slot, index) => (slot.style.viewTransitionName ? [index] : []));
 
 afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("tuneFeedTransitionNames", () => {
-  it("keeps the names of slots within half a viewport of the capture", () => {
-    // Scrolled to slot 10; the band reaches half a viewport past both edges.
-    const slots = feed(30, 10 * SLOT_HEIGHT);
-    tuneFeedTransitionNames(window.scrollY);
-
-    // Slot 7 ends 400px above the fold, slot 16 starts 400px below it.
-    expect(named(slots)).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
-  });
-
-  it("measures against the top of the document when the swap rewinds there", () => {
-    // The outgoing pass runs before the scroll reset lands, so the incoming
-    // viewport — not the live one — is what decides.
-    const slots = feed(30, 10 * SLOT_HEIGHT);
-    tuneFeedTransitionNames(0);
-
-    expect(named(slots)).toEqual([0, 1, 2, 3, 4, 5, 6]);
-  });
-
-  it("gives a near slot its name back after an earlier capture dropped it", () => {
-    // The regression: a swap at the top strips everything below the first
-    // screen, React never rewrites an unchanged slot's style, and the reader
-    // then scrolls down to one of those slots and filters from there. Without
-    // the restore, the card they are looking at is missing from the outgoing
-    // capture and arrives as a first-time entrance instead of a glide.
-    const slots = feed(30, 0);
-    tuneFeedTransitionNames(0);
-    expect(slots[12].style.viewTransitionName).toBe("");
-
-    window.scrollY = 12 * SLOT_HEIGHT;
-    tuneFeedTransitionNames(window.scrollY);
-
-    expect(slots[12].style.viewTransitionName).toBe("memo-12");
-    // ...and the ones now pages away are the ones dropped instead.
-    expect(slots[0].style.viewTransitionName).toBe("");
-  });
-
-  it("leaves a slot unnamed when the feed never gave it a name", () => {
-    // Past the per-swap morph budget, App renders no data-vt at all.
-    const slots = feed(3, 0);
-    for (const slot of slots) delete slot.dataset.vt;
-
-    tuneFeedTransitionNames(0);
-
-    expect(named(slots)).toEqual([]);
-  });
-});
-
-it("names visible cards beyond the first 32 rows and bounds snapshot work", () => {
-  const slots = feed(100, 70 * SLOT_HEIGHT);
-  tuneFeedTransitionNames(window.scrollY);
-  expect(named(slots)).toContain(70);
-  expect(named(slots)).not.toContain(0);
-  window.innerHeight = 100_000;
-  tuneFeedTransitionNames(0);
-  expect(named(slots)).toHaveLength(32);
-});
-
-it("refreshes both captures for mutation callers without their own feed tuning", () => {
-  const slots = feed(100, 70 * SLOT_HEIGHT);
-  const originalStart = document.startViewTransition;
-  const originalMatch = window.matchMedia;
-  window.matchMedia = vi.fn(() => ({ matches: false }) as MediaQueryList);
-  document.startViewTransition = ((update: () => void) => {
-    expect(named(slots)).toContain(70);
-    update();
-    expect(named(slots)).toContain(0);
-    expect(named(slots)).not.toContain(70);
-    return { ready: Promise.resolve() };
-  }) as typeof document.startViewTransition;
-  try {
-    withViewTransition(() => { window.scrollY = 0; });
-  } finally {
-    document.startViewTransition = originalStart;
-    window.matchMedia = originalMatch;
-  }
-});
-
-describe("withViewTransition under each verb and motion setting", () => {
-  function startWith(onUpdate: () => void = () => undefined) {
-    let finish: () => void = () => undefined;
-    const finished = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
-    document.startViewTransition = ((update: () => void) => {
-      update();
-      onUpdate();
-      return { ready: Promise.resolve(), finished, skipTransition: () => undefined };
-    }) as typeof document.startViewTransition;
-    return () => finish();
-  }
-
+describe("withViewTransition", () => {
   const originalStart = document.startViewTransition;
   const originalMatch = window.matchMedia;
   afterEach(() => {
     document.startViewTransition = originalStart;
     window.matchMedia = originalMatch;
-    delete document.documentElement.dataset.vtExit;
   });
 
-  it("names no card under reduced motion, so the feed dissolves in place", () => {
+  function startWith(onUpdate: () => void = () => undefined) {
+    const skip = vi.fn();
+    document.startViewTransition = ((update: () => void) => {
+      update();
+      onUpdate();
+      return { ready: Promise.resolve(), finished: new Promise(() => undefined), skipTransition: skip };
+    }) as typeof document.startViewTransition;
+    return skip;
+  }
+
+  it("names none of the feed's cards: a morph captures only what its update names", () => {
     const slots = feed(10, 0);
-    window.matchMedia = vi.fn(() => ({ matches: true }) as MediaQueryList);
-    let namedDuringUpdate: number[] = [];
+    window.matchMedia = vi.fn(() => ({ matches: false }) as MediaQueryList);
+    let namedDuringUpdate: number[] = [-1];
     startWith(() => {
       namedDuringUpdate = named(slots);
     });
 
-    withViewTransition(() => undefined);
+    const update = vi.fn();
+    withViewTransition(update);
 
-    expect(named(slots)).toEqual([]);
+    expect(update).toHaveBeenCalledWith(true);
     expect(namedDuringUpdate).toEqual([]);
+    expect(named(slots)).toEqual([]);
   });
 
-  it("marks the root with the verb's exit for exactly as long as the transition runs", async () => {
-    feed(3, 0);
-    window.matchMedia = vi.fn(() => ({ matches: false }) as MediaQueryList);
-    const finish = startWith();
+  it("runs the update at once, unanimated, without the API", () => {
+    document.startViewTransition = undefined as unknown as typeof document.startViewTransition;
+    const update = vi.fn();
 
-    withViewTransition(() => undefined, { exit: "lift" });
-    expect(document.documentElement.dataset.vtExit).toBe("lift");
-
-    finish();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(document.documentElement.dataset.vtExit).toBeUndefined();
+    expect(withViewTransition(update)).toBeNull();
+    expect(update).toHaveBeenCalledWith(false);
   });
 
-  it("leaves the default sink unmarked, clearing an earlier verb", () => {
-    feed(3, 0);
+  it("is on screen once ready, until skipped", async () => {
     window.matchMedia = vi.fn(() => ({ matches: false }) as MediaQueryList);
-    startWith();
+    const skip = startWith();
 
-    withViewTransition(() => undefined, { exit: "fade" });
-    expect(document.documentElement.dataset.vtExit).toBe("fade");
     withViewTransition(() => undefined);
-    expect(document.documentElement.dataset.vtExit).toBeUndefined();
+    expect(transitionLive()).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(transitionLive()).toBe(true);
+
+    skipLiveTransition();
+    expect(skip).toHaveBeenCalledTimes(1);
+    expect(transitionLive()).toBe(false);
+    skipLiveTransition();
+    expect(skip).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -222,7 +140,8 @@ describe("a press while a transition is on screen", () => {
     window.scrollY = 0;
     document.body.innerHTML = '<section class="memo-feed"><div class="memo-slot" data-vt="memo-a"><button type="button">⋯</button></div></section>';
     const feedSection = document.querySelector("section")!;
-    boxed(feedSection.querySelector<HTMLElement>(".memo-slot")!, 100, 120);
+    // The card a send just landed: named for its morph.
+    boxed(feedSection.querySelector<HTMLElement>(".memo-slot")!, 100, 120).style.viewTransitionName = "memo-a";
     const trigger = feedSection.querySelector("button")!;
     const skip = await liveTransition(() => trigger);
     const heard: string[] = [];
