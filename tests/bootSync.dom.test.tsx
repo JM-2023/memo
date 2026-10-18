@@ -450,3 +450,100 @@ describe("Daily review over an empty notebook", () => {
     expect(storedIds()).toEqual(["memo-1"]);
   });
 });
+
+describe("the boot splash", () => {
+  const unreachable = () => new ApiError("NETWORK_ERROR", 0, "The server could not be reached. Check your connection and try again.");
+
+  function splash(): HTMLElement {
+    const element = document.querySelector<HTMLElement>(".splash");
+    if (!element) throw new Error("splash not rendered");
+    return element;
+  }
+
+  it("says it is opening the notebook while it checks", async () => {
+    mocks.bootstrap.mockReturnValue(new Promise(() => undefined));
+    renderApp();
+    await waitFor(() => expect(mocks.bootstrap).toHaveBeenCalled());
+    expect(splash().getAttribute("role")).toBe("status");
+    expect(splash().querySelector(".sr-only")?.textContent).toBe("Opening your notebook…");
+  });
+
+  it("retries in place: one splash, Retry busy for at least 600ms, and a repeat says so", async () => {
+    mocks.bootstrap.mockRejectedValue(unreachable());
+    renderApp();
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    const element = splash();
+    const line = element.querySelector(".splash-line")!;
+    expect(line.getAttribute("role")).toBe("alert");
+    expect(line.textContent).toBe("Couldn’t reach the server. Check your connection and try again.");
+    // A failed start is no longer a status: the alert line speaks for it.
+    expect(element.getAttribute("role")).toBeNull();
+
+    const pressed = performance.now();
+    fireEvent.click(retry);
+    // The same splash and the same button go busy; the line stays as it was.
+    expect(splash()).toBe(element);
+    expect(element.getAttribute("aria-busy")).toBe("true");
+    expect((retry as HTMLButtonElement).disabled).toBe(true);
+    const [idle, busy] = retry.querySelectorAll(".busy-swap > span");
+    expect(idle.getAttribute("aria-hidden")).toBe("true");
+    expect(busy.getAttribute("aria-hidden")).toBeNull();
+    expect(busy.textContent).toBe("Retrying…");
+    expect(line.textContent).toBe("Couldn’t reach the server. Check your connection and try again.");
+
+    // The second unreachable start in a row says "still", once the retry has
+    // read as one even though the answer was instant.
+    await waitFor(() => expect(element.querySelector(".splash-line")?.textContent).toBe("Still can’t reach the server. Check your connection and try again."), {
+      timeout: 2_000
+    });
+    expect(performance.now() - pressed).toBeGreaterThanOrEqual(590);
+    expect(splash()).toBe(element);
+    expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
+    expect(element.getAttribute("aria-busy")).toBeNull();
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("names an answer that was an error as it is, never as unreachable", async () => {
+    mocks.bootstrap.mockRejectedValue(new ApiError("INTERNAL_ERROR", 500, "boom"));
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(splash().getAttribute("aria-busy")).toBeNull(), { timeout: 2_000 });
+    expect(splash().querySelector(".splash-line")?.textContent).toBe("The server could not complete the request. Please try again.");
+  });
+
+  it("hands its mark to the gate inside a view transition, so the pad's mark doesn't pop in again", async () => {
+    const started: string[] = [];
+    const original = document.startViewTransition;
+    document.startViewTransition = ((update: () => void) => {
+      started.push(document.querySelector(".splash-logo") ? "from splash" : "elsewhere");
+      update();
+      const done = Promise.resolve();
+      return { ready: done, finished: done, updateCallbackDone: done, skipTransition: () => undefined };
+    }) as unknown as typeof document.startViewTransition;
+    try {
+      mocks.bootstrap.mockRejectedValue(new AuthRequiredError());
+      renderApp();
+      expect(await screen.findByText("Enter your passcode to unlock your memos.")).toBeTruthy();
+      expect(started).toEqual(["from splash"]);
+      expect(document.querySelector(".login-screen")?.classList.contains("carries-mark")).toBe(true);
+    } finally {
+      document.startViewTransition = original;
+    }
+  });
+
+  it("lets the pad's mark pop in where no transition carried it", async () => {
+    mocks.bootstrap.mockRejectedValue(new AuthRequiredError());
+    renderApp();
+    expect(await screen.findByText("Enter your passcode to unlock your memos.")).toBeTruthy();
+    expect(document.querySelector(".login-screen")?.classList.contains("carries-mark")).toBe(false);
+  });
+
+  it("tries again on its own when the connection comes back", async () => {
+    mocks.bootstrap.mockRejectedValueOnce(unreachable()).mockResolvedValueOnce(page([memo(1)]));
+    renderApp();
+    await screen.findByRole("button", { name: "Retry" });
+    fireEvent(window, new Event("online"));
+    expect(await screen.findByText("memo-1 original")).toBeTruthy();
+    expect(mocks.bootstrap).toHaveBeenCalledTimes(2);
+  });
+});

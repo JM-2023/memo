@@ -1507,6 +1507,23 @@ export default function App() {
     return () => window.removeEventListener("online", retryBootstrap);
   }, [bootstrapLoad?.failed, retryBootstrap]);
 
+  // The boot splash's own state. A retry runs in place on the error splash
+  // (its Retry goes busy), and a failure that repeats one before it says so.
+  /** A retry reads as one even when the answer is instant (SyncNotice's RETRY_MIN_MS). */
+  const BOOT_RETRY_MIN_MS = 600;
+  const [bootRetrying, setBootRetrying] = useState(false);
+  const bootRetryingRef = useRef(false);
+  // The second unreachable start in a row: the line says "still".
+  const [bootStill, setBootStill] = useState(false);
+  // Keys the line's swap, so a failure said again visibly arrives again.
+  const [bootFailures, setBootFailures] = useState(0);
+  const bootUnreachableRef = useRef(false);
+  const bootRetryButtonRef = useRef<HTMLButtonElement>(null);
+  const bootRefocusRef = useRef(false);
+  // The gate took the splash's mark over in a view transition (runInitialBoot),
+  // so the pad's own mark doesn't pop in a second time.
+  const [markCarried, setMarkCarried] = useState(false);
+
   const enterApp = useCallback(
     async (withReveal: boolean, start?: Promise<BootStart>) => {
       // Warm start: with a sealed local snapshot, one incremental sync
@@ -1571,6 +1588,9 @@ export default function App() {
         }
       }
       setBootError(null);
+      setBootStill(false);
+      bootUnreachableRef.current = false;
+      setMarkCarried(false);
       setPhase("ready");
       if (withReveal) {
         setReveal(true);
@@ -1617,46 +1637,96 @@ export default function App() {
     };
   }, [phase, snapshotCursor, snapshotSyncEpoch, syncState, memos, bootstrapLoad, snapshotWriter]);
 
-  const runInitialBoot = useCallback(async () => {
-    const attempt = ++bootAttemptRef.current;
-    setBootError(null);
-    setPhase("checking");
-
-    // Status, the local snapshot read and the first sync or bootstrap page all
-    // start together. A signed-in boot never waits on status: a successful
-    // authenticated pull already proves setup is done. Status only decides
-    // between setup and login once that pull comes back 401.
-    const status = getAuthStatus();
-    status.catch(() => undefined);
-    try {
-      await enterApp(false, startBoot());
-    } catch (cause) {
-      if (attempt !== bootAttemptRef.current) return;
-      if (!(cause instanceof AuthRequiredError)) {
-        setBootError(errorMessageRef.current(cause, "Couldn’t load your memos", "加载失败"));
-        setPhase("error");
-        return;
+  /**
+   * One start: the splash, then the notebook or the gate. A `retry` runs on
+   * the error splash as it stands — the line stays and Retry goes busy in
+   * place — and a failure waits out BOOT_RETRY_MIN_MS from the press, so an
+   * instant one still reads as a retry instead of a blink (SyncNotice's
+   * RETRY_MIN_MS). Success never waits.
+   */
+  const runInitialBoot = useCallback(
+    async (retry = false) => {
+      const attempt = ++bootAttemptRef.current;
+      const started = performance.now();
+      const settleRetry = () => {
+        bootRetryingRef.current = false;
+        setBootRetrying(false);
+      };
+      if (retry) {
+        bootRetryingRef.current = true;
+        setBootRetrying(true);
+      } else {
+        settleRetry();
+        setBootError(null);
+        setBootStill(false);
+        setPhase("checking");
       }
-      // A revoked cookie at boot is the lost-device case: wipe like mid-session.
-      if (isSessionRevoked(cause)) {
-        void clearLocalDeviceData();
-        resetLocalWorkspaceState();
-      }
-      let statusNow: Awaited<typeof status>;
-      try {
-        statusNow = await status;
-      } catch (statusCause) {
+      const fail = async (cause: unknown, fallbackEn: string, fallbackZh: string) => {
+        const rest = retry ? BOOT_RETRY_MIN_MS - (performance.now() - started) : 0;
+        if (rest > 0) await new Promise((resolve) => window.setTimeout(resolve, rest));
         if (attempt !== bootAttemptRef.current) return;
-        setBootError(errorMessageRef.current(statusCause, "Couldn’t connect to the server", "无法连接服务器"));
+        // No answer at all, as opposed to an answer that was an error: only
+        // the second of those in a row may say "still".
+        const unreachable =
+          (cause instanceof ApiError && cause.code === "NETWORK_ERROR") || cause instanceof TypeError || navigator.onLine === false;
+        setBootStill(retry && unreachable && bootUnreachableRef.current);
+        bootUnreachableRef.current = unreachable;
+        setBootError(errorMessageRef.current(cause, fallbackEn, fallbackZh));
+        setBootFailures((count) => count + 1);
+        settleRetry();
         setPhase("error");
-        return;
+      };
+
+      // Status, the local snapshot read and the first sync or bootstrap page all
+      // start together. A signed-in boot never waits on status: a successful
+      // authenticated pull already proves setup is done. Status only decides
+      // between setup and login once that pull comes back 401.
+      const status = getAuthStatus();
+      status.catch(() => undefined);
+      try {
+        await enterApp(false, startBoot());
+        if (attempt === bootAttemptRef.current) settleRetry();
+      } catch (cause) {
+        if (attempt !== bootAttemptRef.current) return;
+        if (!(cause instanceof AuthRequiredError)) {
+          await fail(cause, "Couldn’t load your memos", "加载失败");
+          return;
+        }
+        // A revoked cookie at boot is the lost-device case: wipe like mid-session.
+        if (isSessionRevoked(cause)) {
+          void clearLocalDeviceData();
+          resetLocalWorkspaceState();
+        }
+        let statusNow: Awaited<typeof status>;
+        try {
+          statusNow = await status;
+        } catch (statusCause) {
+          if (attempt !== bootAttemptRef.current) return;
+          await fail(statusCause, "Couldn’t connect to the server", "无法连接服务器");
+          return;
+        }
+        if (attempt !== bootAttemptRef.current) return;
+        // The brand mark arrives once: the splash's mark and the pad's share
+        // a view-transition name (app.css, "Splash + login gate"), so it
+        // glides from the middle of the screen into the pad's header while
+        // the pad scales in around it. Without a transition the pad's own
+        // mark pops in as before.
+        withViewTransition((animated) => {
+          if (attempt !== bootAttemptRef.current) return;
+          flushSync(() => {
+            setNeedsSetup(statusNow.needsSetup);
+            setSetupAllowed(statusNow.setupAllowed !== false);
+            setMarkCarried(animated);
+            setBootStill(false);
+            bootUnreachableRef.current = false;
+            settleRetry();
+            setPhase("login");
+          });
+        });
       }
-      if (attempt !== bootAttemptRef.current) return;
-      setNeedsSetup(statusNow.needsSetup);
-      setSetupAllowed(statusNow.setupAllowed !== false);
-      setPhase("login");
-    }
-  }, [enterApp, resetLocalWorkspaceState]);
+    },
+    [enterApp, resetLocalWorkspaceState]
+  );
 
   useEffect(() => {
     void runInitialBoot();
@@ -1664,6 +1734,28 @@ export default function App() {
       bootAttemptRef.current += 1;
     };
   }, [runInitialBoot]);
+
+  /** Retry on the error splash; a second press (or `online`) while one runs is the same retry. */
+  const retryBoot = useCallback(() => {
+    if (bootRetryingRef.current) return;
+    void runInitialBoot(true);
+  }, [runInitialBoot]);
+
+  // The connection coming back is the retry the reader would have pressed.
+  useEffect(() => {
+    if (phase !== "error") return;
+    window.addEventListener("online", retryBoot);
+    return () => window.removeEventListener("online", retryBoot);
+  }, [phase, retryBoot]);
+
+  // A busy Retry is disabled, which drops keyboard focus to the page. When
+  // the retry fails, focus returns to the button it left.
+  useEffect(() => {
+    if (phase !== "error" || bootRetrying) return;
+    const active = document.activeElement;
+    if (bootRefocusRef.current && (!active || active === document.body)) bootRetryButtonRef.current?.focus({ preventScroll: true });
+    bootRefocusRef.current = false;
+  }, [phase, bootRetrying]);
 
   /** Session-expiry aware wrapper: any 401 mid-use drops back to the gate. */
   const guard = useCallback(
@@ -4945,33 +5037,60 @@ export default function App() {
     </>
   );
 
-  if (phase === "checking") {
+  if (phase === "checking" || phase === "error") {
+    const failed = phase === "error";
+    const bootLine = bootStill
+      ? tr("Still can’t reach the server. Check your connection and try again.", "仍然无法连接服务器，请检查网络后重试")
+      : (bootError ?? tr("Couldn’t load your memos", "加载失败"));
+    // One element for the whole start, failed or not: the mark holds still at
+    // the centre and a retry runs in place, where a remount used to replay
+    // the mark's entrance and blank the line and button for the attempt.
     return withToasts(
-      <div className="splash" aria-label={tr("Loading", "加载中")}>
+      <div className="splash" role={failed ? undefined : "status"} aria-busy={bootRetrying || undefined}>
         <div className="splash-logo">
           <NotebookPen size={26} aria-hidden="true" />
         </div>
-        <Loader2 size={20} className="spin splash-spinner" aria-hidden="true" />
+        {failed ? (
+          <div className="splash-status">
+            {/* Keyed by the failure, so one said again arrives again. */}
+            <p className="splash-line" role="alert">
+              <span key={bootFailures}>{bootLine}</span>
+            </p>
+            <button
+              ref={bootRetryButtonRef}
+              type="button"
+              className={`ghost-button splash-retry${bootRetrying ? " is-busy" : ""}`}
+              onClick={() => {
+                bootRefocusRef.current = document.activeElement === bootRetryButtonRef.current;
+                retryBoot();
+              }}
+              disabled={bootRetrying}
+            >
+              {/* Both labels share one cell, so going busy never resizes it;
+                  the busy one shows after the hold (app.css, "busy-swap"). */}
+              <span className="busy-swap">
+                <span aria-hidden={bootRetrying || undefined}>{tr("Retry", "重试")}</span>
+                <span aria-hidden={!bootRetrying || undefined}>
+                  <Loader2 size={14} className="spin busy-spinner" aria-hidden="true" />
+                  {tr("Retrying…", "正在重试…")}
+                </span>
+              </span>
+            </button>
+          </div>
+        ) : (
+          <div className="splash-status">
+            <span className="sr-only">{tr("Opening your notebook…", "正在打开笔记本…")}</span>
+            <Loader2 size={20} className="spin splash-spinner" aria-hidden="true" />
+          </div>
+        )}
       </div>
     );
   }
 
-  if (phase === "error") {
-    return withToasts(
-      <section className="splash" role="alert" aria-label={tr("Startup failed", "启动失败") }>
-        <div className="splash-logo">
-          <NotebookPen size={26} aria-hidden="true" />
-        </div>
-        <p>{bootError ?? tr("Couldn’t load your memos", "加载失败")}</p>
-        <button type="button" className="ghost-button" onClick={() => void runInitialBoot()}>
-          {tr("Retry", "重试")}
-        </button>
-      </section>
-    );
-  }
-
   if (phase === "login") {
-    return withToasts(<LoginScreen needsSetup={needsSetup} setupAllowed={setupAllowed} onLogin={handleLogin} onSetup={handleSetup} />);
+    return withToasts(
+      <LoginScreen needsSetup={needsSetup} setupAllowed={setupAllowed} markCarried={markCarried} onLogin={handleLogin} onSetup={handleSetup} />
+    );
   }
 
   const visibleSelectedCount = visibleSelected.size;

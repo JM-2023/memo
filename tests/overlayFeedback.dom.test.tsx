@@ -401,9 +401,48 @@ describe("the prompt's note", () => {
     await user.type(input, "life{Enter}");
     expect(onConfirm).not.toHaveBeenCalled();
     expect(screen.getByText("#life already exists.")).toBeTruthy();
+    // The press that stopped is answered out loud, not only on screen: the
+    // warning is an alert, so the second press is an informed one.
+    expect(screen.getByRole("alert").textContent).toBe("#life already exists.");
     expect(screen.getByRole("button", { name: "Merge" })).toBeTruthy();
     await user.keyboard("{Enter}");
     expect(onConfirm).toHaveBeenCalledWith("life");
+  });
+
+  it("is a live region the field is described by, in a dialog labelled by its title and body", async () => {
+    const user = userEvent.setup();
+    render(
+      <LanguageProvider>
+        <PromptDialog
+          title="Rename tag #work"
+          body="Memos keep their place."
+          initialValue="work"
+          confirmLabel="Rename"
+          validate={() => null}
+          hint={(value) => (value === "job" ? "Its sub-tags move with it." : value === "life" ? { text: "#life already exists.", strong: true } : null)}
+          onCancel={vi.fn()}
+          onConfirm={vi.fn()}
+        />
+      </LanguageProvider>
+    );
+    const dialog = screen.getByRole("dialog", { name: "Rename tag #work" });
+    expect(dialog.getAttribute("aria-label")).toBeNull();
+    const body = screen.getByText("Memos keep their place.");
+    expect(dialog.getAttribute("aria-describedby")).toBe(body.id);
+    const note = document.querySelector<HTMLElement>(".prompt-note")!;
+    // Standing from the start, so a hint arriving in it is heard.
+    expect(note.getAttribute("aria-live")).toBe("polite");
+    const input = screen.getByRole("textbox");
+    expect(input.getAttribute("aria-describedby")).toBe(`${body.id} ${note.id}`);
+
+    // A plain hint is polite; only a strong one interrupts.
+    await user.clear(input);
+    await user.type(input, "job");
+    expect(await screen.findByText("Its sub-tags move with it.")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    await user.clear(input);
+    await user.type(input, "life");
+    expect((await screen.findByRole("alert")).textContent).toBe("#life already exists.");
   });
 });
 

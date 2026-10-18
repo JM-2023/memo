@@ -172,6 +172,33 @@ describe("the year against the one before", () => {
     expect(within(monthChart).getByRole("button", { name: `January ${year}: 1 memo, ${year - 1}: 2 memos` })).toBeTruthy();
   });
 
+  it("says last year had nothing by this date yet, rather than a gap against zero", () => {
+    const now = new Date();
+    // On Dec 31 last year's last day is inside the comparison.
+    if (now.getMonth() === 11 && now.getDate() === 31) return;
+    const year = now.getFullYear();
+    renderStats([memoAt("a", new Date(year, 0, 1, 9)), memoAt("b", new Date(year - 1, 11, 31, 9))]);
+    const note = document.querySelector(".stats-hero-note")?.textContent ?? "";
+    expect(note).toContain("Nothing by this date last year");
+    expect(note).not.toContain("more than this time last year");
+  });
+
+  it("says it in Chinese too", () => {
+    const now = new Date();
+    if (now.getMonth() === 11 && now.getDate() === 31) return;
+    localStorage.setItem("memo:language", "zh-CN");
+    const year = now.getFullYear();
+    renderStats([memoAt("a", new Date(year, 0, 1, 9)), memoAt("b", new Date(year - 1, 11, 31, 9))]);
+    expect(document.querySelector(".stats-hero-note")?.textContent).toContain("去年此时还没有笔记");
+  });
+
+  it("drops the comparison for an empty first year, leaving the one line that is true", () => {
+    renderStats([]);
+    const note = document.querySelector(".stats-hero-note")!;
+    expect(note.textContent).toBe("Nothing written this year");
+    expect(note.textContent).not.toContain("first year");
+  });
+
   it("finds the longest run of days, the later one on a tie", () => {
     expect(longestRun(["2026-03-02", "2026-03-01", "2026-03-05", "2026-03-06"])).toEqual({ length: 2, start: "2026-03-05", end: "2026-03-06" });
     expect(longestRun(["2025-12-31", "2026-01-01", "2026-01-03"])).toEqual({ length: 2, start: "2025-12-31", end: "2026-01-01" });

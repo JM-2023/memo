@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { useModalA11y } from "../hooks/useModalA11y";
@@ -78,6 +78,9 @@ export function PromptDialog({
   const [settled, setSettled] = useState(false);
   const reducedMotion = useReducedMotion();
   const inputRef = useRef<HTMLInputElement>(null);
+  const titleId = useId();
+  const bodyId = useId();
+  const noteId = useId();
   const mountedRef = useRef(true);
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
@@ -211,14 +214,15 @@ export function PromptDialog({
       className={`overlay${closing ? " is-closing" : ""}`}
       role="dialog"
       aria-modal="true"
-      aria-label={title}
+      aria-labelledby={titleId}
+      aria-describedby={body ? bodyId : undefined}
       aria-busy={busyLook || undefined}
       tabIndex={-1}
       {...backdrop}
     >
       <div className="confirm-card" onClick={(event) => event.stopPropagation()}>
-        <h2>{title}</h2>
-        {body ? <p>{body}</p> : null}
+        <h2 id={titleId}>{title}</h2>
+        {body ? <p id={bodyId}>{body}</p> : null}
         <form
           className="prompt-form"
           onSubmit={(event) => {
@@ -235,6 +239,7 @@ export function PromptDialog({
             autoComplete="off"
             disabled={busyLook}
             aria-invalid={note.error ? true : undefined}
+            aria-describedby={body ? `${bodyId} ${noteId}` : noteId}
             onChange={(event) => setValue(event.target.value)}
             onKeyDown={(event) => {
               // Enter's implicit submission skips a disabled button, so the
@@ -246,14 +251,20 @@ export function PromptDialog({
             }}
           />
           {/* The row is always there, so a note arriving or leaving never
-              changes the card's (or the sheet's) height. */}
-          <p className={`prompt-note${note.error ? " is-error" : notice?.strong ? " is-strong" : ""}`}>
+              changes the card's (or the sheet's) height — and, standing from
+              the start, it is a live region a screen reader hears a hint
+              arrive in. An error, or a strong notice (one that stops the
+              first press, see flushNote), is an alert: the press it answers
+              must not go by in silence, or the next one merges for good. */}
+          <p id={noteId} className={`prompt-note${note.error ? " is-error" : notice?.strong ? " is-strong" : ""}`} aria-live="polite">
             {note.error ? (
               <span key={noteKey} role="alert">
                 {note.error}
               </span>
             ) : notice ? (
-              <span key={noteKey}>{notice.text}</span>
+              <span key={noteKey} role={notice.strong ? "alert" : undefined}>
+                {notice.text}
+              </span>
             ) : null}
           </p>
           <div className="confirm-actions">

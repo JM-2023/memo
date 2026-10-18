@@ -59,6 +59,20 @@ import { ModelUnavailableError } from "../src/lib/modelLoader";
 
 const TOTAL_BYTES = modelTotalBytes();
 
+/** The line under the headline, as drawn. */
+function subline(): string {
+  return document.querySelector(".model-subline")?.textContent ?? "";
+}
+
+/** What the status region says: its text, less what is drawn aria-hidden. */
+function spokenStatus(): string {
+  const region = document.querySelector(".model-live");
+  if (!region) return "";
+  const copy = region.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll("[aria-hidden='true']").forEach((node) => node.remove());
+  return copy.textContent ?? "";
+}
+
 function panel(props: Partial<React.ComponentProps<typeof ModelSettingsModal>> = {}) {
   return (
     <LanguageProvider>
@@ -180,7 +194,10 @@ describe("semantic search settings", () => {
     );
 
     expect(await screen.findByText("Indexing your memos")).toBeTruthy();
-    expect(screen.getByText("3 of 10 memos · keyword search keeps working.")).toBeTruthy();
+    expect(subline()).toBe("3 of 10 memos · keyword search keeps working.");
+    // The count ticks per batch, so it stays out of the status region; the
+    // progressbar's value text carries it.
+    expect(spokenStatus()).toBe("Indexing your memoskeyword search keeps working.");
     const bars = screen.getAllByRole("progressbar");
     expect(bars).toHaveLength(1);
     expect(bars[0].getAttribute("aria-label")).toBe("Semantic index");
@@ -238,12 +255,15 @@ describe("semantic search settings", () => {
     };
     render(panel({ semanticStatus: "indexing", semanticLive: live }));
 
-    expect(await screen.findByText("3 of 10 memos · keyword search keeps working.")).toBeTruthy();
+    await waitFor(() => expect(subline()).toBe("3 of 10 memos · keyword search keeps working."));
+    const spokenBefore = spokenStatus();
     act(() => {
       snapshot = { ...snapshot, progress: { done: 7, total: 10, doneChunks: 40, totalChunks: 60 } };
       for (const listener of listeners) listener();
     });
-    expect(screen.getByText("7 of 10 memos · keyword search keeps working.")).toBeTruthy();
+    expect(subline()).toBe("7 of 10 memos · keyword search keeps working.");
+    // A batch landing changes nothing the status region says.
+    expect(spokenStatus()).toBe(spokenBefore);
     expect(screen.getByRole("progressbar", { name: "Semantic index" }).getAttribute("aria-valuenow")).toBe("70");
   });
 
@@ -391,6 +411,52 @@ describe("semantic search settings", () => {
     expect(screen.getByText("Model and semantic index cleared from this device.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Download model" })).toBeTruthy();
     expect(screen.getByText("About 123 MB · one time")).toBeTruthy();
+  });
+
+  it("asks to clear in a plain row, hands Cancel the focus, and brings what unfolds into view", async () => {
+    // Reduced motion: no fold to follow, so the reveal is one step a frame in.
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn((query: string) => ({
+        matches: query.includes("prefers-reduced-motion"),
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn()
+      }))
+    });
+    const user = userEvent.setup();
+    render(panel());
+    expect(await screen.findByText("Ready")).toBeTruthy();
+
+    // A short window: the scroll box ends at 400px, and whatever unfolds at
+    // the foot of the ledger reaches past it.
+    const box = document.querySelector<HTMLElement>(".model-panel-scroll")!;
+    let scrollTop = 0;
+    Object.defineProperty(box, "scrollTop", { configurable: true, get: () => scrollTop, set: (value: number) => (scrollTop = value) });
+    vi.spyOn(box, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 640, 400));
+    const advRegion = document.getElementById("model-advanced")!;
+    vi.spyOn(advRegion, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, 380 - scrollTop, 640, 220));
+
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
+    // Its bottom (600) is brought up to the box's (400), its top kept in view.
+    await waitFor(() => expect(scrollTop).toBe(200));
+
+    await user.click(screen.getByRole("button", { name: "Clear model" }));
+    const confirmation = screen.getByRole("group", { name: "Confirm clearing the model" });
+    // The affirmative deletes the model: Cancel takes the focus, as the
+    // rebuild's confirm does.
+    expect(document.activeElement).toBe(within(confirmation).getByRole("button", { name: "Cancel" }));
+    // One red: the danger button. No tinted card, no icon tile.
+    expect(confirmation.querySelector(".model-clear-confirm-icon, svg")).toBeNull();
+    expect(within(confirmation).getByRole("button", { name: "Clear model" }).className).toBe("danger-button");
+    expect(within(confirmation).getByRole("button", { name: "Cancel" }).className).toBe("ghost-button");
+
+    await user.click(within(confirmation).getByRole("button", { name: "Cancel" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Clear model" }));
   });
 
   it("runs the download at app level: Cancel pauses it, Close never ends it, and a reopen re-attaches", async () => {
