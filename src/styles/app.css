@@ -6069,6 +6069,13 @@ button.stats-tag-row:active { scale: 0.992; }
      "still working" signal should be (the boot splash has nothing else).
      Kept, slowed — the shorthand re-arms the three longhands forced above. */
   .spin { animation: spin 1.4s linear infinite !important; }
+  /* A swapped label (Show more / less, the heatmap title, the language row)
+     dissolves instead of cutting: the old copy fades where it stands over
+     the new one fading in. The shorthand replaces the directional names, so
+     nothing slides; the box still takes its new width at once (SwapText
+     skips the tween), and the old layer's animationend still removes it. */
+  .swap-cur.swap-anim { animation: fade-in var(--t) var(--ease) both !important; }
+  .swap-old { animation: fade-out var(--t-fast) var(--ease) both !important; }
   /* The sheen loop rides .pin-pad's animation list (see glass material). */
   .pin-pad,
   .pin-pad.shake { animation: none !important; }
