@@ -169,16 +169,42 @@ describe("feed motion", () => {
     expect(glideOf("4")).not.toBe(first);
   });
 
-  it("only commits under reduced motion, still keeping the reader's place", () => {
+  it("dissolves under reduced motion: opacity only, in place, still keeping the reader's place", () => {
     window.matchMedia = vi.fn(() => ({ matches: true }) as MediaQueryList);
     build(20, 1000);
 
     motion.run("remote", ["new"], () => feed.prepend(slot("new")));
+    expect(window.scrollY).toBe(1000 + STEP);
+
+    played = [];
     motion.run("trash", ["10"], () => slotOf("10").remove());
 
-    expect(played).toEqual([]);
-    expect(ghosts.children).toHaveLength(0);
-    expect(window.scrollY).toBe(1000 + STEP);
+    expect(played.length).toBeGreaterThan(0);
+    for (const entry of played) {
+      // Nothing travels: no translate, no transform, only opacity.
+      for (const frame of entry.keyframes) expect(Object.keys(frame).filter((key) => key !== "offset")).toEqual(["opacity"]);
+    }
+    const timings = vi.mocked(Element.prototype.animate).mock.calls.slice(-played.length).map((call) => call[1] as KeyframeAnimationOptions);
+    for (const timing of timings) expect(timing.duration).toBeLessThanOrEqual(150);
+    // The trashed card fades where it was drawn.
+    const gone = [...ghosts.querySelectorAll<HTMLElement>(".feed-ghost")].find((node) => node.textContent === "Memo 10");
+    expect(Number.parseFloat(gone?.style.top ?? "") - window.scrollY).toBe(10 * STEP - 1000);
+  });
+
+  it("cross-fades a neighbour closing the gap under reduced motion instead of gliding it", () => {
+    window.matchMedia = vi.fn(() => ({ matches: true }) as MediaQueryList);
+    build(5);
+
+    motion.run("trash", ["2"], () => slotOf("2").remove());
+
+    // The live card fades in at its new place…
+    const live = played.find((entry) => entry.target === slotOf("3"))!;
+    expect(live.keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
+    // …while its old look fades out where it was.
+    const old = [...ghosts.querySelectorAll<HTMLElement>(".feed-ghost")].find((node) => node.textContent === "Memo 3");
+    expect(old?.style.top).toBe(`${3 * STEP}px`);
+    expect(played.find((entry) => entry.target === old)!.keyframes).toEqual([{ opacity: 1 }, { opacity: 0 }]);
+    expect(glideOf("3")).toBeUndefined();
   });
 
   it("leaves a change inside a view transition's update to the snapshot", () => {

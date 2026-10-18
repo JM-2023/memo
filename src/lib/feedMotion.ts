@@ -1,5 +1,5 @@
 import { onTransitionUpdate, paintedTransitionOffsets, skipLiveTransition, transitionUpdating, type PaintedOffset } from "./viewTransition";
-import { EASE, EASE_OUT } from "./motion";
+import { EASE, EASE_OUT, T_BASE, T_ENTER, T_EXIT } from "./motion";
 
 /**
  * Why the feed is about to change. Two kinds of change exist, and they move
@@ -83,13 +83,14 @@ interface Capture {
 type Exit = "sink" | "lift" | "settle" | "fade";
 type Arrival = "rise" | "drop" | "fade";
 
-/* Durations and shapes follow app.css: glides match ::view-transition-group
-   (0.24s, --ease-out), exits card-depart (0.16s, --ease) — exits run faster
-   than entrances — and every keyframe set below is a named keyframe there or
-   its mirror. */
-const GLIDE_MS = 240;
-const EXIT_MS = 160;
-const ARRIVE_MS = 240;
+/* Durations and shapes follow app.css: glides and arrivals take --t-enter on
+   --ease-out, exits card-depart's --t-exit on --ease — exits run faster than
+   entrances — and every keyframe set below is a named keyframe there or its
+   mirror. Under reduced motion every one of them is a --t dissolve. */
+const GLIDE_MS = T_ENTER;
+const EXIT_MS = T_EXIT;
+const ARRIVE_MS = T_ENTER;
+const DISSOLVE_MS = T_BASE;
 /** How long the reader's place is held after a change: past the glides, and
     past the 220ms height tween a card plays when it leaves its editor. */
 const HOLD_MS = 400;
@@ -154,10 +155,6 @@ function arrivalOf(intent: InPlaceIntent, up: boolean): Arrival {
 const EMPTY: FeedMotionResult = { departed: new Map() };
 
 const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
-
-function canAnimate(): boolean {
-  return typeof Element !== "undefined" && typeof Element.prototype.animate === "function" && !reducedMotion();
-}
 
 function ease(token: "--ease" | "--ease-out"): string {
   const value = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
@@ -341,8 +338,8 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     void Promise.resolve(animation.finished).then(release, () => undefined);
   }
 
-  function arrive(el: HTMLElement, arrival: Arrival): void {
-    const animation = el.animate(ARRIVALS[arrival], { duration: arrival === "fade" ? 200 : ARRIVE_MS, easing: ease("--ease-out") });
+  function arrive(el: HTMLElement, arrival: Arrival, duration = arrival === "fade" ? 200 : ARRIVE_MS): void {
+    const animation = el.animate(ARRIVALS[arrival], { duration, easing: ease("--ease-out") });
     glides.set(el, animation);
     void Promise.resolve(animation.finished).then(
       () => {
@@ -358,7 +355,7 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
    * the change. It lives in the ghost layer, outside React's tree, at the
    * spot the reader last saw the card.
    */
-  function ghost(node: HTMLElement, shot: Shot, exit: Exit): void {
+  function ghost(node: HTMLElement, shot: Pick<Shot, "at" | "box" | "opacity">, exit: Exit, duration = EXIT_MS): void {
     const layer = options.ghosts();
     if (!layer) return;
     layer.inert = true;
@@ -376,12 +373,24 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     node.style.height = `${shot.box.height}px`;
     layer.appendChild(node);
     ghosts.add(node);
-    const animation = node.animate(EXITS[exit](shot.opacity), { duration: EXIT_MS, easing: ease("--ease"), fill: "forwards" });
+    const animation = node.animate(EXITS[exit](shot.opacity), { duration, easing: ease("--ease"), fill: "forwards" });
     const remove = () => {
       node.remove();
       ghosts.delete(node);
     };
     void Promise.resolve(animation.finished).then(remove, remove);
+  }
+
+  /**
+   * Reduced motion's stand-in for a glide: nothing travels. The card's old
+   * look stays where it was drawn and fades out while the card fades in at
+   * its new place — the same dissolve the reduce block gives a lens swap.
+   * Its node already shows the new state, but a card that only moved looks
+   * the same in both, so a copy of it now is a copy of then.
+   */
+  function dissolve(el: HTMLElement, from: Pick<Shot, "at" | "box" | "opacity">): void {
+    ghost(el.cloneNode(true) as HTMLElement, from, "fade", DISSOLVE_MS);
+    arrive(el, "fade", DISSOLVE_MS);
   }
 
   function play(capture: Capture): FeedMotionResult {
@@ -425,6 +434,9 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     }
 
     const height = window.innerHeight;
+    // Reduced motion keeps every decision below and changes only how each
+    // one plays: a dissolve in place, never a cut and never a journey.
+    const reduced = reducedMotion();
     const motions: Array<() => void> = [];
     let changed = false;
     // Whether an exit ghost plays: the glides (queued first, run after both
@@ -442,13 +454,18 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
       const shot = capture.shots.get(key);
       if (!shot) {
         if (!capture.known.has(key)) {
-          // A new card: its slot plays the feed's own entrance on mount.
+          // A new card: its slot plays the feed's own entrance on mount —
+          // which reduced motion cuts to nothing, so it fades in here.
           changed = true;
+          if (reduced && onScreen(box.top, box.height)) motions.push(() => arrive(slot, "fade", DISSOLVE_MS));
         } else if (Math.abs(shift) >= 0.5) {
           // It was in the feed, past the measured band: it moves with the
           // card above it.
           changed = true;
-          motions.push(() => glide(slot, 0, shift, 1, ghosted ? 1 : 0));
+          const moved = shift;
+          motions.push(() =>
+            reduced ? dissolve(slot, { box, at: { left: box.left, top: box.top + moved }, opacity: 1 }) : glide(slot, 0, moved, 1, ghosted ? 1 : 0)
+          );
         }
         continue;
       }
@@ -461,11 +478,13 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
         // A named card from far away: the long glide would streak across
         // the page, so it enters in its verb's direction instead — only if
         // it lands where it can be seen.
-        if (onScreen(box.top, box.height) && Math.abs(dy) >= 0.5) motions.push(() => arrive(slot, arrivalOf(capture.intent, dy > 0)));
+        if (onScreen(box.top, box.height) && Math.abs(dy) >= 0.5) {
+          motions.push(() => (reduced ? arrive(slot, "fade", DISSOLVE_MS) : arrive(slot, arrivalOf(capture.intent, dy > 0))));
+        }
         continue;
       }
       if (Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5 || shot.opacity < 0.99) {
-        motions.push(() => glide(slot, dx, dy, shot.opacity, target ? 2 : ghosted ? 1 : 0));
+        motions.push(() => (reduced ? dissolve(slot, shot) : glide(slot, dx, dy, shot.opacity, target ? 2 : ghosted ? 1 : 0)));
       }
     }
 
@@ -479,7 +498,7 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
         if (target && seen) result.departed.set(idOf(key), "removed");
         if (seen) {
           ghosted = true;
-          motions.push(() => ghost(shot.el, shot, exitOf(capture.intent)));
+          motions.push(() => (reduced ? ghost(shot.el, shot, "fade", DISSOLVE_MS) : ghost(shot.el, shot, exitOf(capture.intent))));
         }
         continue;
       }
@@ -491,7 +510,7 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
       const copy = shot.copy;
       if (copy && !(nearScreen(shot.at.top, shot.box.height) && nearScreen(box.top, box.height))) {
         ghosted = true;
-        motions.push(() => ghost(copy, shot, departureOf(capture.intent, up)));
+        motions.push(() => (reduced ? ghost(copy, shot, "fade", DISSOLVE_MS) : ghost(copy, shot, departureOf(capture.intent, up))));
       }
     }
 
@@ -503,7 +522,7 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     // Glides still running were captured where they were painted, and the
     // new ones start from there.
     stopGlides();
-    if (canAnimate()) for (const motion of motions) motion();
+    for (const motion of motions) motion();
     return result;
   }
 
