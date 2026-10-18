@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties
 import { createPortal } from "react-dom";
 import { afterExit, continueFrom, paintedFrameOf, type PaintedFrame } from "../hooks/useOverlayExit";
 import { useReducedMotion } from "../hooks/useReducedMotion";
+import { EXIT_MS, T_EXIT } from "../lib/motion";
 
 /** ARIA wiring for the trigger button — spread it onto the button. */
 export interface MenuTriggerProps {
@@ -67,8 +68,14 @@ interface PortalPos {
 
 /** Type-ahead keeps its letters this long between presses. */
 const TYPEAHEAD_RESET_MS = 500;
-/** The exit's length where the engine can't report it (menu-out runs 0.12s). */
-const MENU_EXIT_MS = 130;
+/** menu-out's duration (app.css, .action-menu.is-closing: 0.12s) — change the two together. */
+const MENU_OUT_MS = 120;
+/**
+ * The exit's length where the engine can't report it: menu-out plus the same
+ * frame of slack EXIT_MS adds to the shared --t-exit, so the panel unmounts
+ * after its last frame, never on it.
+ */
+const MENU_EXIT_MS = MENU_OUT_MS + (EXIT_MS - T_EXIT);
 
 function itemLabel(item: HTMLElement): string {
   return (item.textContent || item.getAttribute("aria-label") || "").trim().toLocaleLowerCase();
@@ -384,7 +391,10 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   // In-flow mode: same before-paint measurement, but the answer is only a
   // direction. The panel stays inside .menu-root (so scrolling keeps it open
   // and glued to its card); near the bottom edge it opens upward instead of
-  // hanging its last items — often Delete — below the fold.
+  // hanging its last items — often Delete — below the fold. The room above
+  // ends at the sticky topbar's bottom edge, not the viewport's top: a card
+  // menu sits under the band (app.css, .memo-slot's lift), so an upward panel
+  // measured to the viewport top would open behind it.
   useLayoutEffect(() => {
     if (!open || portal) return;
     const anchor = rootRef.current;
@@ -393,8 +403,12 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     const rect = anchor.getBoundingClientRect();
     const panelHeight = panel.offsetHeight;
     const viewportHeight = window.innerHeight;
+    // Only for menus in the page under the band (a card's, the composer's):
+    // the band's own menus and anything in an overlay stand above it.
+    const band = anchor.closest(".main-column") && !anchor.closest(".topbar, .overlay") ? document.querySelector(".topbar") : null;
+    const ceiling = band ? Math.max(0, band.getBoundingClientRect().bottom) : 0;
     const spaceBelow = viewportHeight - 8 - (rect.bottom + 6);
-    const spaceAbove = rect.top - 6 - 8;
+    const spaceAbove = rect.top - 6 - 8 - ceiling;
     setFlipUp(panelHeight > spaceBelow && (panelHeight <= spaceAbove || spaceAbove > spaceBelow));
   }, [open, portal]);
 

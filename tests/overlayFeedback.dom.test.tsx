@@ -484,11 +484,73 @@ describe("the sync line", () => {
     );
     await user.click(screen.getByRole("button", { name: "Retry" }));
     const running = screen.getByRole("button", { name: "Retrying…" }) as HTMLButtonElement;
-    expect(running.disabled).toBe(true);
+    // Locked by aria-disabled, not disabled: the press keeps its focus.
+    expect(running.getAttribute("aria-disabled")).toBe("true");
+    expect(running.disabled).toBe(false);
+    expect(document.activeElement).toBe(running);
     await sleep(300);
     expect(screen.getByRole("button", { name: "Retrying…" })).toBeTruthy();
     expect(await screen.findByText("Still can’t reach the server", {}, { timeout: 1_500 })).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(false);
+    const idle = screen.getByRole("button", { name: "Retry" });
+    expect(idle.hasAttribute("aria-disabled")).toBe(false);
+    expect(document.activeElement).toBe(idle);
+  });
+
+  it("ignores a second press while the retry runs", async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn(async () => false);
+    render(
+      <LanguageProvider>
+        <SyncNotice notice={unreachable(onRetry)} />
+      </LanguageProvider>
+    );
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(screen.getByRole("button", { name: "Retrying…" }));
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("parks focus on the main column when the line goes with Retry focused", async () => {
+    const user = userEvent.setup();
+    const main = document.createElement("main");
+    main.id = "main-content";
+    document.body.append(main);
+    try {
+      const view = render(
+        <LanguageProvider>
+          <SyncNotice notice={unreachable(async () => true)} />
+        </LanguageProvider>
+      );
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      // The connection comes back: "Back online" has no verb.
+      view.rerender(
+        <LanguageProvider>
+          <SyncNotice notice={null} />
+        </LanguageProvider>
+      );
+      expect(screen.getByText("Back online")).toBeTruthy();
+      expect(document.activeElement).toBe(main);
+      expect(main.getAttribute("tabindex")).toBe("-1");
+    } finally {
+      main.remove();
+    }
+  });
+
+  it("keeps its leave phase under reduced motion", async () => {
+    reducedMotion = true;
+    stubMatchMedia();
+    const view = render(
+      <LanguageProvider>
+        <SyncNotice notice={{ kind: "loading", text: "Loading memos · 1 of 3" }} />
+      </LanguageProvider>
+    );
+    view.rerender(
+      <LanguageProvider>
+        <SyncNotice notice={null} />
+      </LanguageProvider>
+    );
+    // Not a cut: the line stays for its fade, then goes.
+    expect(document.querySelector(".sync-notice-slot")?.className).toContain("is-leaving");
+    await waitFor(() => expect(document.querySelector(".sync-notice-slot")).toBeNull());
   });
 
   it("says Back online, then folds away", async () => {
@@ -563,6 +625,34 @@ describe("menus", () => {
     const share = screen.getByRole("menuitem", { name: "Share" });
     fireEvent.pointerMove(share, { pointerType: "mouse" });
     expect(document.activeElement).toBe(share);
+  });
+
+  it("measures a card menu's room above from the topbar's bottom, not the viewport's top", async () => {
+    // A 200px panel on a trigger 200px down a 400px window, under a band
+    // that ends at 120px: 156px below, 66px above the band (186px to the
+    // window's top). Up would open behind the frosted band.
+    const user = userEvent.setup();
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 400 });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("topbar")) return new DOMRect(0, 0, 400, 120);
+      if (this.classList.contains("menu-root")) return new DOMRect(0, 200, 30, 30);
+      return new DOMRect(0, 0, 0, 0);
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("action-menu") ? 200 : 0;
+    });
+    try {
+      render(
+        <main className="main-column">
+          <div className="topbar" />
+          <MenuFixture />
+        </main>
+      );
+      await user.click(screen.getByRole("button", { name: "Actions" }));
+      expect(document.querySelector(".action-menu")?.classList.contains("is-up")).toBe(false);
+    } finally {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+    }
   });
 });
 

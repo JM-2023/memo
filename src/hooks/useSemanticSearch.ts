@@ -58,9 +58,21 @@ export interface SemanticSearchState {
   /**
    * Ranked id → score for the current query; null while semantic ranking is
    * inactive or has no searchable rows yet. The feed always keeps keyword
-   * matching active and merges this map when it is available.
+   * matching active and merges this map when it is available. While a
+   * changed query is still on its way this is the previous query's ranking,
+   * held and flagged `stale`.
    */
   results: ReadonlyMap<string, number> | null;
+  /**
+   * `results` were ranked for an earlier query than the one passed in now.
+   * Held rather than dropped so the feed moves once per settled query (the
+   * new ranking, a failure or a clear replaces them in one publish) instead
+   * of cutting to keyword order on the first keystroke and reordering again
+   * when meaning lands. Their scores answer the old text: the caller may keep
+   * the rows in place, but must not count, announce or rank them as answers
+   * to this one.
+   */
+  stale: boolean;
   /** Actionable detail for activation, indexing, or query failures. */
   error: string | null;
   /** Memos with at least one vector row in the live index. */
@@ -150,18 +162,21 @@ export function useSemanticSearch(
   query: string,
   allowedMemoIds: ReadonlySet<string> | null = null,
   /**
-   * How a finished ranking reaches the feed. A landing reorders every visible
-   * row at once, so the caller gets to commit it inside whatever motion it
-   * wants; the default just applies it. Only the landing goes through here —
-   * dropping stale results (below) happens on the typing path, where a
-   * per-keystroke transition would be worse than the cut it replaces.
+   * How a ranking reaches the feed, or leaves it. A landing reorders every
+   * visible row at once, so the caller gets to commit it inside whatever
+   * motion it wants; the default just applies it. A failure or a clear that
+   * takes a showing ranking away goes through here too, so the rows held
+   * stale while the query was typed leave in that same one move. Dropping a
+   * ranking nobody can see (the feature switched off, the query emptied)
+   * just applies.
    */
   publish: (commit: () => void) => void = (commit) => commit()
 ): SemanticSearchState {
   const [status, setStatus] = useState<SemanticSearchStatus>("off");
   const [live] = useState(createProgressSource);
   const [queryBusy, setQueryBusy] = useState(false);
-  const [results, setResults] = useState<ReadonlyMap<string, number> | null>(null);
+  /** The published ranking and the (trimmed) query it was ranked for. */
+  const [ranked, setRankedState] = useState<{ query: string; scores: ReadonlyMap<string, number> } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retryEpoch, setRetryEpoch] = useState(0);
   const [rebuilding, setRebuilding] = useState(false);
@@ -201,8 +216,12 @@ export function useSemanticSearch(
   queryRef.current = query;
   const queryVectorsRef = useRef(new Map<string, Float32Array>());
   const queryTaskRef = useRef<{ query: string; promise: Promise<Float32Array> } | null>(null);
-  /** The query the published results were ranked for. */
-  const resultsQueryRef = useRef<string | null>(null);
+  /** The published ranking, for effects that must know whether one is showing. */
+  const rankedRef = useRef(ranked);
+  const setRanked = useCallback((next: typeof ranked) => {
+    rankedRef.current = next;
+    setRankedState(next);
+  }, []);
   const searchGenerationRef = useRef(0);
   const queryBusyRef = useRef(false);
   const memosRef = useRef(memos);
@@ -521,7 +540,7 @@ export function useSemanticSearch(
       setStatus("off");
       setProgress(null);
       setQueryProgress(null);
-      setResults(null);
+      setRanked(null);
       setError(null);
       setRebuilding(false);
       return;
@@ -539,7 +558,7 @@ export function useSemanticSearch(
         // Deleting the store also invalidates every write token handed out
         // before it, so an older pass still unwinding cannot write the
         // vectors we are discarding back into IndexedDB.
-        setResults(null);
+        setRanked(null);
         setProgress(null);
         indexRef.current = null;
         await deleteSemanticIndexDb();
@@ -577,7 +596,7 @@ export function useSemanticSearch(
         setRebuilding(false);
       }
     });
-  }, [enabled, retryEpoch, runPass, setProgress, setQueryProgress]);
+  }, [enabled, retryEpoch, runPass, setProgress, setQueryProgress, setRanked]);
 
   // Later syncs and edits: fold changes in quietly once the dust settles.
   useEffect(() => {
@@ -609,33 +628,45 @@ export function useSemanticSearch(
   useEffect(() => {
     const searchGeneration = (searchGenerationRef.current += 1);
     const current = () => searchGenerationRef.current === searchGeneration;
+    const trimmed = query.trim();
+    let timer = 0;
     const clear = () => {
       setQueryProgress(null);
-      resultsQueryRef.current = null;
-      setResults(null);
+      // Nothing showing (no ranking, or the query emptied, which hides it
+      // during render): drop it in place. A ranking still on screen — held
+      // stale under a changed query, or current when a failed pass takes the
+      // feature down — leaves through the caller's publish, one move. Not
+      // from inside this effect: the caller's commit may flush synchronously.
+      if (!rankedRef.current) return;
+      if (!enabled || !trimmed) {
+        setRanked(null);
+        return;
+      }
+      timer = window.setTimeout(() => {
+        if (current() && rankedRef.current) publishRef.current(() => setRanked(null));
+      }, 0);
+    };
+    const cleanup = () => {
+      if (timer) window.clearTimeout(timer);
     };
     if (!enabled || (status !== "ready" && status !== "indexing")) {
       clear();
-      return;
+      return cleanup;
     }
-    const trimmed = query.trim();
     if (!trimmed) {
       clear();
-      return;
+      return cleanup;
     }
     const index = indexRef.current;
     if (!index || index.rows.length === 0) {
       clear();
-      return;
+      return cleanup;
     }
     const vectors = queryVectorsRef.current;
     const cached = vectors.get(trimmed);
-    // A changed query must immediately fall back to keyword results rather
-    // than showing semantic scores calculated for the previous text.
-    if (resultsQueryRef.current !== trimmed) {
-      resultsQueryRef.current = null;
-      setResults(null);
-    }
+    // A changed query keeps the previous ranking on screen, flagged stale
+    // (derived below, during render, so even the first frame of the new
+    // query knows), until this one replaces it — never presented as its own.
     setQueryProgress({ stage: cached ? "ranking" : "waiting", done: 0, total: index.rows.length });
     // Typing is the intent: start the runtime now rather than after the
     // debounce, so a cold first query waits less.
@@ -651,23 +682,22 @@ export function useSemanticSearch(
           if (current()) setQueryProgress({ stage: "ranking", done, total });
         }
       });
-      if (current()) {
-        publishRef.current(() => {
-          resultsQueryRef.current = trimmed;
-          setResults(ranked);
-        });
-      }
+      if (current()) publishRef.current(() => setRanked({ query: trimmed, scores: ranked }));
     };
 
+    // The failure takes the held ranking with it in the same commit, so the
+    // stale rows leave in one move rather than a cut and then a status flip.
     const fail = (cause: unknown) => {
       if (!current()) return;
-      resultsQueryRef.current = null;
-      setResults(null);
-      setError(semanticErrorMessage(cause));
-      setStatus("error");
+      const settle = () => {
+        setRanked(null);
+        setError(semanticErrorMessage(cause));
+        setStatus("error");
+      };
+      if (rankedRef.current) publishRef.current(settle);
+      else settle();
     };
 
-    let timer = 0;
     const run = async () => {
       let task = queryTaskRef.current;
       try {
@@ -702,10 +732,8 @@ export function useSemanticSearch(
     } else {
       timer = window.setTimeout(() => void run(), QUERY_DEBOUNCE_MS);
     }
-    return () => {
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [enabled, status, query, indexEpoch, allowedMemoIds, ensureEmbedder, lazyEmbed, setQueryProgress]);
+    return cleanup;
+  }, [enabled, status, query, indexEpoch, allowedMemoIds, ensureEmbedder, lazyEmbed, setQueryProgress, setRanked]);
 
   // The index lives in a ref because it changes far more often than it is
   // rendered; indexEpoch is its render signal, so the headline figure the
@@ -718,5 +746,12 @@ export function useSemanticSearch(
     return memoIds.size;
   }, [indexEpoch, status]);
 
-  return { status, queryBusy, live, results, error, indexedMemos, rebuilding, retry, rebuild };
+  // Derived here rather than in an effect, so the render that carries a
+  // changed query already marks the old ranking stale, and an emptied query
+  // hides it in the same commit as the list it empties back to.
+  const trimmedQuery = query.trim();
+  const results = ranked && trimmedQuery ? ranked.scores : null;
+  const stale = results !== null && ranked!.query !== trimmedQuery;
+
+  return { status, queryBusy, live, results, stale, error, indexedMemos, rebuilding, retry, rebuild };
 }

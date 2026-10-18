@@ -80,7 +80,7 @@ import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, saveSn
 import { dateKey, formatDayLabel } from "./lib/dates";
 import { forgetFolds } from "./lib/foldMemory";
 import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow } from "./lib/feedSafety";
-import { EXIT_MS } from "./lib/motion";
+import { EXIT_MS, T_FAST } from "./lib/motion";
 import { useI18n } from "./lib/i18n";
 import { peekImage, pruneImageCache } from "./lib/imageCache";
 import { announce, mountLiveRegions } from "./lib/liveAnnouncer";
@@ -222,8 +222,12 @@ interface ToastStackProps {
   /** Names the stack's landmark ("Notifications"). */
   regionLabel: string;
   onDismiss: (id: number) => void;
-  onPause: () => void;
-  onResume: () => void;
+  /**
+   * Hold or release the clocks: the pointer resting on the stack and focus
+   * inside it are separate holds, so the pointer leaving never restarts the
+   * clock while the keyboard still sits on an Undo.
+   */
+  onHold: (reason: "pointer" | "focus", held: boolean) => void;
 }
 
 /**
@@ -239,7 +243,7 @@ interface ToastStackProps {
  * F6 or Escape inside the stack hands focus back to where it came from, as
  * does using one of its buttons.
  */
-function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onResume }: ToastStackProps) {
+function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onHold }: ToastStackProps) {
   const stackRef = useRef<HTMLDivElement>(null);
   // Where focus stood before it entered the stack.
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -256,6 +260,23 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onR
     if (target?.isConnected && !target.inert) target.focus({ preventScroll: true });
     else if (stackRef.current?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
   }
+
+  // A toast dismissed from elsewhere (the cap, a notice replacing itself, a
+  // finished export) can be the one holding focus: hand it back as it starts
+  // to leave, before its buttons go and drop focus to <body> — and with it a
+  // focus hold no blur would ever release.
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (active instanceof Element && active.closest(".toast.is-leaving") && stackRef.current?.contains(active)) handBackFocus();
+  }, [toasts]);
+  // The stack unmounts with its last toast, under a resting pointer that
+  // never sees a pointerleave: its holds go with it.
+  const empty = toasts.length === 0;
+  useEffect(() => {
+    if (!empty) return;
+    onHold("pointer", false);
+    onHold("focus", false);
+  }, [empty, onHold]);
 
   useEffect(() => {
     if (!hasAction) return;
@@ -297,14 +318,18 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onR
       {...{ [MODAL_EXEMPT_ATTR]: "" }}
       role="region"
       aria-label={regionLabel}
-      onPointerEnter={onPause}
-      onPointerLeave={onResume}
+      onPointerEnter={() => onHold("pointer", true)}
+      onPointerLeave={() => onHold("pointer", false)}
       onFocus={(event) => {
         const from = event.relatedTarget;
         if (from instanceof HTMLElement && !event.currentTarget.contains(from)) returnFocusRef.current = from;
-        onPause();
+        onHold("focus", true);
       }}
-      onBlur={onResume}
+      onBlur={(event) => {
+        // Undo → × is still inside: the hold stays.
+        if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+        onHold("focus", false);
+      }}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();
@@ -363,6 +388,34 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onR
   );
 }
 
+/**
+ * Focus that a commit took away: still on <body>, on a node the commit
+ * removed, or on one it made inert (a card's controls under its select
+ * overlay) or disabled.
+ */
+function focusStranded(was: Element | null): boolean {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || active === document.body) return true;
+  if (active !== was) return false;
+  return !active.isConnected || active.closest("[inert]") !== null || active.matches(":disabled");
+}
+
+/**
+ * Where focus goes when the select toolbar leaves from under it: the control
+ * the mode is entered from, in order — the location pill (memos), Trash's
+ * Select, else Trash's ⌂ (the Select went with the last trashed memo).
+ */
+const LOCATION_FOCUS = [".loc-trigger", ".trash-select-button", ".view-trail .crumb-home"];
+
+function focusLocation(): void {
+  for (const selector of LOCATION_FOCUS) {
+    const target = document.querySelector<HTMLElement>(selector);
+    if (!target) continue;
+    target.focus({ preventScroll: true });
+    return;
+  }
+}
+
 interface PendingBatchTag {
   /** Which entry point armed it — the selection toolbar or one card's menu. */
   scope: "selection" | "memo";
@@ -395,6 +448,8 @@ interface MemoSlotProps {
   vtName: string | undefined;
   entering: boolean;
   delay: number;
+  /** A semantic-only row held from the previous query's ranking (data-stale). */
+  stale?: boolean;
   children: ReactNode;
 }
 
@@ -416,7 +471,7 @@ interface MemoSlotProps {
  * bails out of re-rendering unchanged slots, so the stripped style would
  * otherwise leak into the new state's capture.
  */
-function MemoSlot({ vtName, entering, delay, children }: MemoSlotProps) {
+function MemoSlot({ vtName, entering, delay, stale, children }: MemoSlotProps) {
   const [intro] = useState(() => (entering ? { animationDelay: `${delay}s` } : null));
   const [entered, setEntered] = useState(false);
   return (
@@ -424,6 +479,7 @@ function MemoSlot({ vtName, entering, delay, children }: MemoSlotProps) {
       className={`memo-slot${intro && !entered ? "" : " no-enter"}`}
       style={intro ?? undefined}
       data-vt={vtName}
+      data-stale={stale ? "" : undefined}
       onAnimationEnd={
         intro && !entered
           ? (event) => {
@@ -590,6 +646,8 @@ interface FeedItemProps {
   resumeContent: string | undefined;
   /** A pin / trash / restore of this memo is in flight. */
   busy: boolean;
+  /** Only here by the previous query's (stale) semantic ranking. */
+  stale: boolean;
   vtName: string | undefined;
   /** Read once at mount; a stable getter keeps the memo comparison clean. */
   getEntering: () => boolean;
@@ -605,9 +663,9 @@ interface FeedItemProps {
  * deliberately left out of the equality check.
  */
 const FeedItem = reactMemo(
-  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, editDraft, selecting, selected, canSelect, taskFlips, resumeContent, busy, vtName, getEntering, delay, handlers }: FeedItemProps) {
+  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, editDraft, selecting, selected, canSelect, taskFlips, resumeContent, busy, stale, vtName, getEntering, delay, handlers }: FeedItemProps) {
     return (
-      <MemoSlot vtName={vtName} entering={getEntering()} delay={delay}>
+      <MemoSlot vtName={vtName} entering={getEntering()} delay={delay} stale={stale}>
         <MemoCard
           memo={memo}
           variant={variant}
@@ -657,6 +715,7 @@ const FeedItem = reactMemo(
     prev.taskFlips === next.taskFlips &&
     prev.resumeContent === next.resumeContent &&
     prev.busy === next.busy &&
+    prev.stale === next.stale &&
     prev.vtName === next.vtName &&
     prev.handlers === next.handlers
 );
@@ -931,7 +990,7 @@ export default function App() {
   const toastTimersRef = useRef(new Map<number, { timer: number; expiresAt: number; remaining: number }>());
   const toastSeqRef = useRef(0);
   const toastsPausedRef = useRef(false);
-  const toastHoldsRef = useRef(new Set<"stack" | "hidden">());
+  const toastHoldsRef = useRef(new Set<"pointer" | "focus" | "hidden">());
   // The gate's "session expired" toast, dismissed once the passcode unlocks.
   const authToastRef = useRef(0);
   const toastsRef = useRef(toasts);
@@ -1009,7 +1068,7 @@ export default function App() {
    * rests on it; the clocks run again only once neither holds them.
    */
   const holdToasts = useCallback(
-    (reason: "stack" | "hidden", held: boolean) => {
+    (reason: "pointer" | "focus" | "hidden", held: boolean) => {
       const holds = toastHoldsRef.current;
       if (held === holds.has(reason)) return;
       if (held) holds.add(reason);
@@ -1031,8 +1090,6 @@ export default function App() {
     },
     [armToast]
   );
-  const pauseToasts = useCallback(() => holdToasts("stack", true), [holdToasts]);
-  const resumeToasts = useCallback(() => holdToasts("stack", false), [holdToasts]);
 
   useEffect(() => {
     const onVisibility = () => holdToasts("hidden", document.visibilityState === "hidden");
@@ -1044,8 +1101,9 @@ export default function App() {
   const clearToasts = useCallback(() => {
     for (const entry of toastTimersRef.current.values()) window.clearTimeout(entry.timer);
     toastTimersRef.current.clear();
-    // The stack's own hold goes with its toasts; a background tab still holds.
-    toastHoldsRef.current.delete("stack");
+    // The stack's own holds go with its toasts; a background tab still holds.
+    toastHoldsRef.current.delete("pointer");
+    toastHoldsRef.current.delete("focus");
     toastsPausedRef.current = toastHoldsRef.current.size > 0;
     selectionNoticeRef.current = 0;
     authToastRef.current = 0;
@@ -1772,6 +1830,10 @@ export default function App() {
   // switch, and the swap animating that click has to see the keyword-only
   // list it is switching back to.
   const semanticResults = semanticOn && view === "memos" ? semantic.results : null;
+  // The previous query's ranking, held while this one is on its way: its
+  // rows keep their places (the feed moves once, when the answer lands), but
+  // nothing counts, announces or marks them as answers to the current text.
+  const semanticStale = semanticResults !== null && semantic.stale;
   // The model download lives at app level (it outlives the settings panel),
   // so the Brain shows it as unfinished work too: closing the panel never
   // hides a running download.
@@ -1807,7 +1869,7 @@ export default function App() {
   const semanticPending =
     semanticOn &&
     view === "memos" &&
-    semanticResults === null &&
+    (semanticResults === null || semanticStale) &&
     !queryIsEmpty(parsedQuery) &&
     semantic.indexedMemos > 0 &&
     (semantic.status === "ready" || semantic.status === "indexing");
@@ -1842,7 +1904,10 @@ export default function App() {
       // Hybrid retrieval is a union: an exact keyword/phrase match can never
       // disappear behind the semantic threshold, and meaning adds results
       // that share no literal text. The keyword tier stays first; semantic
-      // score ranks within it and then ranks semantic-only matches.
+      // score ranks within it and then ranks semantic-only matches. A stale
+      // ranking (the previous query's) orders the same way, so keyword hits
+      // keep their places and its semantic-only rows stay put, dimmed, until
+      // the new ranking replaces them in one move.
       const hybridScores = new Map<string, number>();
       list = filterPreservingId(list, editingId, (memo) => {
         const score = hybridSearchScore(memoMatchesQuery(memo, parsedQuery), semanticResults.get(memo.id));
@@ -1940,9 +2005,14 @@ export default function App() {
     for (const memo of visibleMemos) if (memoMatchesQuery(memo, parsedQuery)) ids.add(memo.id);
     return ids;
   }, [searching, visibleMemos, parsedQuery]);
+  // Held stale, the semantic-only rows answer the previous text: they are
+  // no one's "related" count until this query's ranking lands.
   const relatedCount = useMemo(
-    () => (keywordHitIds && semanticResults ? visibleMemos.filter((memo) => !keywordHitIds.has(memo.id) && semanticResults.has(memo.id)).length : 0),
-    [keywordHitIds, semanticResults, visibleMemos]
+    () =>
+      keywordHitIds && semanticResults && !semanticStale
+        ? visibleMemos.filter((memo) => !keywordHitIds.has(memo.id) && semanticResults.has(memo.id)).length
+        : 0,
+    [keywordHitIds, semanticResults, semanticStale, visibleMemos]
   );
   const searchNeedleList = useMemo(
     () => (searching ? searchNeedles(parsedQuery) : trashSearching ? searchNeedles(trashParsedQuery) : []),
@@ -2160,7 +2230,9 @@ export default function App() {
     if (drawerClosing) return;
     setDrawerClosing(true);
     window.clearTimeout(drawerCloseTimerRef.current);
-    const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : EXIT_MS;
+    // Under reduced motion the drawer fades out on --t-fast instead of
+    // sliding on --t-exit (app.css); either way it is gone when this fires.
+    const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? T_FAST : EXIT_MS;
     drawerCloseTimerRef.current = window.setTimeout(finishDrawerClose, delay);
   }
 
@@ -2677,9 +2749,30 @@ export default function App() {
     [changeFeed, swapQuery]
   );
 
-  /** A preset restores the whole feed context in one morph. */
+  /** The checked preset as of the latest render (set below its memo). */
+  const activeSavedIdRef = useRef<string | null>(null);
+
+  /**
+   * A preset restores the whole feed context in one morph. Pressed again
+   * while it is the one in force (its row is checked), it lifts what it
+   * set, as a second press on a tag, a day or a facet does: back to All
+   * memos, at the card the reader left it at.
+   */
   const applySavedFilter = useCallback(
     (item: SavedFilter) => {
+      if (item.id === activeSavedIdRef.current) {
+        changeFeed(
+          () => {
+            setActiveTag(null);
+            setActiveDay(null);
+            setStatsDrilldown(null);
+            swapQuery("");
+            setFilters(EMPTY_FILTERS);
+          },
+          (lens) => ({ ...lens, view: "memos", tag: null, day: null, drilldown: null, query: "", filters: EMPTY_FILTERS })
+        );
+        return;
+      }
       // A preset aimed at a tag that is gone (renamed or removed on another
       // device) would be cleared by the missing-tag effect the moment it
       // applied — silently widening the lens to every memo. Say so instead.
@@ -2749,6 +2842,7 @@ export default function App() {
     );
     return match?.id ?? null;
   }, [savedFilters, activeTag, activeDay, statsDrilldown, trimmedQuery, filters]);
+  activeSavedIdRef.current = activeSavedId;
 
   // Breadcrumb chip text for the date range; reversed ends still read as the
   // span between them (the predicate normalizes the same way).
@@ -3157,7 +3251,8 @@ export default function App() {
    */
   const enterSelectMode = useCallback((firstId?: string) => {
     if (holdForOpenEdit("select memos", "多选笔记")) return;
-    withViewTransition(() =>
+    withViewTransition(() => {
+      const active = document.activeElement;
       flushSync(() => {
         setSelectMode(true);
         setSelected(new Set(firstId ? [firstId] : []));
@@ -3165,12 +3260,29 @@ export default function App() {
         setBulkTagOpen(false);
         setTagMemoId(null);
         pendingBatchTagRef.current = null;
-      })
-    );
+      });
+      // The control that asked has gone from under focus — the location
+      // pill (its menu handed focus back to it) or Trash's Select are
+      // replaced by the toolbar, and a card's ⋯ turns inert under its
+      // select overlay. Focus moves with the reader instead of falling to
+      // <body>: onto the card they picked from, else Select all.
+      if (!focusStranded(active)) return;
+      const picked = firstId
+        ? Array.from(document.querySelectorAll<HTMLElement>(".memo-slot[data-vt]")).find((slot) => slot.dataset.vt === `memo-${firstId}`)
+        : null;
+      const target =
+        picked?.querySelector<HTMLElement>(".memo-select-overlay") ??
+        document.querySelector<HTMLElement>(".select-all:not(:disabled)") ??
+        document.querySelector<HTMLElement>(".select-exit");
+      target?.focus({ preventScroll: true });
+    });
   }, [holdForOpenEdit]);
 
   const exitSelectMode = useCallback(() => {
-    withViewTransition(() =>
+    withViewTransition(() => {
+      const active = document.activeElement;
+      // Read before the commit: a card's select overlay leaves the tree with it.
+      const slot = active instanceof Element ? active.closest(".memo-slot") : null;
       flushSync(() => {
         setSelectMode(false);
         setSelected(new Set());
@@ -3178,8 +3290,15 @@ export default function App() {
         setBulkTagOpen(false);
         setTagMemoId(null);
         pendingBatchTagRef.current = null;
-      })
-    );
+      });
+      // Cancel, Escape on a pill or on a card: what held focus is gone. A
+      // card hands it to its own ⋯ again; the toolbar, to the control the
+      // mode was entered from.
+      if (!focusStranded(active)) return;
+      const card = slot?.isConnected ? slot.querySelector<HTMLElement>(".memo-menu-trigger:not([tabindex='-1'])") : null;
+      if (card) card.focus({ preventScroll: true });
+      else focusLocation();
+    });
   }, []);
 
   /**
@@ -4505,7 +4624,7 @@ export default function App() {
   useLayoutEffect(() => {
     if (selectMode || !restoreLocationFocusRef.current) return;
     restoreLocationFocusRef.current = false;
-    document.querySelector<HTMLButtonElement>(".loc-trigger")?.focus({ preventScroll: true });
+    focusLocation();
   }, [selectMode]);
 
   // The same floor for the controls a lens change removes from under the
@@ -4822,7 +4941,7 @@ export default function App() {
   const withToasts = (page: ReactNode) => (
     <>
       {page}
-      <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} regionLabel={tr("Notifications", "通知")} onDismiss={dismissToast} onPause={pauseToasts} onResume={resumeToasts} />
+      <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} regionLabel={tr("Notifications", "通知")} onDismiss={dismissToast} onHold={holdToasts} />
     </>
   );
 
@@ -5003,13 +5122,20 @@ export default function App() {
                     </SwapText>
                   </span>
                 </button>
+                {/* A batch in flight locks the verbs with aria-disabled, not
+                    disabled: the pill just pressed keeps its focus (a
+                    disabled one drops it to <body>), and the handlers guard
+                    on batchBusy themselves. */}
                 {selectingTrash ? (
                   <button
                     type="button"
                     className="select-pill select-tag select-restore"
-                    disabled={visibleSelectedCount === 0 || batchBusy}
+                    disabled={visibleSelectedCount === 0}
+                    aria-disabled={batchBusy || undefined}
                     aria-label={tr("Restore selected memos", "恢复所选笔记")}
-                    onClick={() => void restoreMany(selectedMemos(true), true)}
+                    onClick={() => {
+                      if (!batchBusy) void restoreMany(selectedMemos(true), true);
+                    }}
                   >
                     <RotateCcw size={14} aria-hidden="true" />
                     <span>{tr("Restore", "恢复")}</span>
@@ -5018,10 +5144,12 @@ export default function App() {
                   <button
                     type="button"
                     className="select-pill select-tag"
-                    disabled={visibleSelectedCount === 0 || batchBusy}
+                    disabled={visibleSelectedCount === 0}
+                    aria-disabled={batchBusy || undefined}
                     aria-haspopup="dialog"
                     aria-label={tr("Add a tag to selected memos", "为所选笔记添加标签")}
                     onClick={() => {
+                      if (batchBusy) return;
                       setConfirmBatchDelete(false);
                       pendingBatchTagRef.current = null;
                       setBulkTagOpen(true);
@@ -5034,7 +5162,8 @@ export default function App() {
                 <button
                   type="button"
                   className={`select-delete${confirmBatchDelete ? " is-confirm" : ""}`}
-                  disabled={visibleSelectedCount === 0 || batchBusy}
+                  disabled={visibleSelectedCount === 0}
+                  aria-disabled={batchBusy || undefined}
                   aria-label={
                     batchBusy
                       ? batchBusyLabel
@@ -5827,6 +5956,7 @@ export default function App() {
                 taskFlips={pendingTaskFlips.get(memo.id)}
                 resumeContent={editSeed?.memoId === memo.id ? editSeed.content : undefined}
                 busy={optimisticMemos.has(memo.id)}
+                stale={semanticStale && keywordHitIds !== null && !keywordHitIds.has(memo.id) && memo.id !== editingId}
                 vtName={`memo-${memo.id}`}
                 getEntering={getEntering}
                 delay={Math.min(index, 6) * 0.008}

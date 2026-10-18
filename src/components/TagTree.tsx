@@ -5,7 +5,7 @@ import type { TagNode } from "../lib/tags";
 import { Menu } from "./Menu";
 import { RollingText } from "./RollingText";
 import { bindTruncationTip, useOptionalTip } from "./truncationTip";
-import { EASE_OUT } from "../lib/motion";
+import { EASE, EASE_OUT, T_BASE, T_EXIT, T_FAST, T_SLOW } from "../lib/motion";
 
 /** Every path under `node`, depth-first — what a removal takes with it. */
 function descendantPaths(node: TagNode): string[] {
@@ -416,11 +416,15 @@ function TagTreeView({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenam
   // doesn't double-animate. A render that starts or settles a track skips the
   // glides (the layout is doing the moving) but still records where rows
   // ended up, so the next glide starts from the truth.
+  //
+  // Reduced motion: no height and no glides — a subtree's rows take their
+  // room at once and fade in (T_BASE), or fade out (T_FAST) in the room they
+  // hold until the fold settles; reordered rows land in place.
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const canAnimate = !reduced && typeof list.animate === "function";
+    const canAnimate = typeof list.animate === "function";
     // Rows are measured before any track starts moving: this is the layout the
     // tracks animate towards, and what the next glide must start from.
     const rows = [...list.querySelectorAll<HTMLElement>("[data-flip]")];
@@ -457,9 +461,11 @@ function TagTreeView({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenam
       track.dataset.state = closing ? "closing" : "open";
       if (firstPass && !closing) continue;
       const running = track.getAnimations().find((animation) => animation.id === "track");
-      // Height as currently painted (mid-flight if reversing), before the
-      // running animation is cancelled and the track snaps to full height.
+      // Height (and, for a fade, opacity) as currently painted — mid-flight
+      // if reversing — before the running animation is cancelled and the
+      // track snaps to its full self.
       const fromHeight = running ? track.getBoundingClientRect().height : closing ? track.offsetHeight : 0;
+      const fromOpacity = running ? Number(getComputedStyle(track).opacity) : closing ? 1 : 0;
       running?.cancel();
       if (!canAnimate) {
         if (closing) {
@@ -470,19 +476,26 @@ function TagTreeView({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenam
       }
       const fullHeight = track.offsetHeight;
       const toHeight = closing ? 0 : fullHeight;
-      track.style.overflow = "hidden";
-      const animation = track.animate(
-        [
-          { height: `${fromHeight}px`, opacity: closing ? String(Math.max(0.2, fromHeight / Math.max(fullHeight, 1))) : String(fromHeight / Math.max(fullHeight, 1)) },
-          { height: `${toHeight}px`, opacity: closing ? 0 : 1 }
-        ],
-        // fill: both — a closed track must hold at 0 until React removes it,
-        // or it springs back to full height for the frame in between (the
-        // folded rows flashed over the row below). An opened track's end
-        // state is its natural one, so that animation is dropped on finish
-        // rather than left pinning the height.
-        { id: "track", duration: closing ? 180 : 220, easing: TRACK_EASING, fill: "both" }
-      );
+      if (!reduced) track.style.overflow = "hidden";
+      const animation = reduced
+        ? track.animate([{ opacity: String(fromOpacity) }, { opacity: closing ? "0" : "1" }], {
+            id: "track",
+            duration: closing ? T_FAST : T_BASE,
+            easing: EASE,
+            fill: "both"
+          })
+        : track.animate(
+            [
+              { height: `${fromHeight}px`, opacity: closing ? String(Math.max(0.2, fromHeight / Math.max(fullHeight, 1))) : String(fromHeight / Math.max(fullHeight, 1)) },
+              { height: `${toHeight}px`, opacity: closing ? 0 : 1 }
+            ],
+            // fill: both — a closed track must hold at 0 until React removes it,
+            // or it springs back to full height for the frame in between (the
+            // folded rows flashed over the row below). An opened track's end
+            // state is its natural one, so that animation is dropped on finish
+            // rather than left pinning the height.
+            { id: "track", duration: closing ? T_EXIT : T_SLOW, easing: TRACK_EASING, fill: "both" }
+          );
       void animation.finished.then(
         () => {
           if (closing) {
@@ -497,14 +510,14 @@ function TagTreeView({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenam
       );
     }
 
-    if (trackMoved || !canAnimate) return;
+    if (trackMoved || !canAnimate || reduced) return;
     for (const row of rows) {
       const parentFlip = row.parentElement?.closest<HTMLElement>("[data-flip]") ?? null;
       const delta = (deltas.get(row) ?? 0) - (parentFlip ? deltas.get(parentFlip) ?? 0 : 0);
       if (Math.abs(delta) > 1) {
         row.animate([{ transform: `translateY(${delta}px)` }, { transform: "none" }], {
           id: "flip",
-          duration: 220,
+          duration: T_SLOW,
           easing: TRACK_EASING
         });
       }

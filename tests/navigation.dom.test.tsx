@@ -468,7 +468,12 @@ describe("mobile chrome", () => {
       expect(bar.dataset.tuck).toBe("in");
       expect(bar.style.getPropertyValue("--topbar-tuck")).toBe("48px");
       scrollTo(380);
-      // Reduced motion: the reveal lands at once instead of animating.
+      // Reduced motion plays the reveal too, as a fade (app.css); its end
+      // clears the state as the full reveal's does.
+      expect(bar.dataset.tuck).toBe("out");
+      act(() => {
+        bar.dispatchEvent(new Event("animationend"));
+      });
       expect(bar.dataset.tuck).toBeUndefined();
 
       scrollTo(600);
@@ -476,7 +481,7 @@ describe("mobile chrome", () => {
       act(() => {
         tools.querySelector("input")!.focus();
       });
-      expect(bar.dataset.tuck).toBeUndefined();
+      expect(bar.dataset.tuck).toBe("out");
     } finally {
       vi.useRealTimers();
       Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });

@@ -530,6 +530,7 @@ a:hover { text-decoration: underline; }
 }
 @keyframes lightbox-zoom { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
 @keyframes drawer-in { from { transform: translateX(-102%); } to { transform: none; } }
+@keyframes drawer-out { from { transform: none; } to { transform: translateX(-102%); } }
 /* Chart bars grow out of the baseline (the column clips the overflow). */
 @keyframes bar-rise { from { transform: translateY(101%); } to { transform: none; } }
 /* Breadcrumb segments cascade in from the left, resolving out of a soft
@@ -715,7 +716,7 @@ a:hover { text-decoration: underline; }
   text-align: left;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  transition: background 0.16s ease, color 0.16s ease, transform var(--t-fast) var(--ease);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
 /* Every row (buttons, group rows, separators) joins the entrance cascade. */
 .action-menu > * { animation: menu-item 0.12s var(--ease) both; }
@@ -729,7 +730,7 @@ a:hover { text-decoration: underline; }
 .action-menu > :nth-child(8) { animation-delay: 0.16s; }
 /* Longer panels (search filters): the tail arrives as one settled beat. */
 .action-menu > :nth-child(n+9) { animation-delay: 0.16s; }
-.action-menu > button svg { flex: none; color: var(--muted); stroke-width: 1.75; transition: color 0.16s ease; }
+.action-menu > button svg { flex: none; color: var(--muted); stroke-width: 1.75; transition: color var(--t) var(--ease); }
 @media (hover: hover) {
   .action-menu > button:hover { background: var(--wash-strong); color: var(--ink); }
   .action-menu > button:hover svg { color: var(--ink); }
@@ -1154,7 +1155,7 @@ a:hover { text-decoration: underline; }
 }
 @media (hover: hover) { .stat-cell:hover { background: var(--wash); } }
 .stat-cell:active { transform: scale(0.94); }
-.stat-number { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -0.02em; animation: fade-up 0.2s var(--ease) both; }
+.stat-number { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -0.02em; animation: fade-up var(--t-slow) var(--ease-out) both; }
 .stat-label { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; white-space: nowrap; }
 @container (max-width: 260px) {
   .stat-label { font-size: var(--fs-2xs); }
@@ -1206,7 +1207,7 @@ a:hover { text-decoration: underline; }
   gap: 10px;
   color: var(--muted);
   font-size: var(--fs-sm);
-  animation: fade-up 0.18s var(--ease) both;
+  animation: fade-up var(--t-slow) var(--ease-out) both;
 }
 /* The breakpoint depends only on available space, so changing counts cannot
    flip the row layout halfway through a drum animation. */
@@ -1367,6 +1368,18 @@ a:hover { text-decoration: underline; }
 .heatmap .slide-left { animation: heat-slide-left var(--t-slow) var(--ease-out) both; }
 .heatmap .slide-right { animation: heat-slide-right var(--t-slow) var(--ease-out) both; }
 .heat-current.heat-arrive { animation: heat-arrive 0.2s var(--ease-out) both; }
+/* Reduced motion: a page turn or period switch is a dissolve — the old grid
+   fades out where it is (--t-fast) over the new one fading in (--t); nothing
+   slides or scales. Heatmap holds a shrinking viewport's height until the
+   old grid is gone, then closes up at once. */
+@media (prefers-reduced-motion: reduce) {
+  .heatmap .slide-left,
+  .heatmap .slide-right,
+  .heat-current.heat-arrive { animation: fade-in var(--t) var(--ease) both !important; }
+  .heat-leaving.leave-left,
+  .heat-leaving.leave-right,
+  .heat-leaving.leave-fade { animation: fade-out var(--t-fast) var(--ease) both !important; }
+}
 .heat-colhead {
   display: grid;
   place-items: center;
@@ -1756,7 +1769,7 @@ button.heat-cell[aria-disabled="true"]:active { filter: none; }
   overflow: hidden;
   text-overflow: ellipsis;
   border-radius: var(--r-sm);
-  animation: crumb-in 0.18s var(--ease-out) both;
+  animation: crumb-in var(--t-slow) var(--ease-out) both;
   transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
 .crumb.is-current { color: var(--ink); font-weight: 600; }
@@ -1771,7 +1784,7 @@ button.heat-cell[aria-disabled="true"]:active { filter: none; }
   button.crumb:hover { background: var(--wash); color: var(--ink); }
 }
 button.crumb:active { background: var(--wash-strong); }
-.crumb-sep { flex: none; color: var(--line-strong); animation: crumb-in 0.18s var(--ease-out) both; }
+.crumb-sep { flex: none; color: var(--line-strong); animation: crumb-in var(--t-slow) var(--ease-out) both; }
 /* Going up a level: the dropped segments fold back toward their parent. */
 .crumb.is-leaving, .crumb-sep.is-leaving { animation: crumb-out 0.14s var(--ease) both; pointer-events: none; }
 /* Drilled one level in: the crumb the pill just vacated resolves in place,
@@ -1894,8 +1907,11 @@ button.crumb:active { background: var(--wash-strong); }
   animation: crumb-in var(--t-slow) var(--ease-out) backwards;
   transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
-@media (hover: hover) { .select-pill:hover:not(:disabled) { background: var(--wash); color: var(--ink); } }
-.select-pill:active:not(:disabled) { transform: scale(0.95); }
+@media (hover: hover) { .select-pill:hover:not(:disabled, [aria-disabled="true"]) { background: var(--wash); color: var(--ink); } }
+.select-pill:active:not(:disabled, [aria-disabled="true"]) { transform: scale(0.95); }
+/* A batch in flight: the verbs look as disabled ones do but keep the focus
+   resting on them (App: aria-disabled, the handlers guard). */
+:is(.select-pill, .select-delete)[aria-disabled="true"] { cursor: default; opacity: 0.5; }
 .select-all { display: inline-flex; align-items: center; gap: 5px; }
 .select-all-icon { display: none; }
 .select-exit { display: inline-flex; align-items: center; justify-content: center; }
@@ -1907,7 +1923,7 @@ button.crumb:active { background: var(--wash-strong); }
   color: var(--primary-dark);
 }
 .select-tag svg { transition: transform var(--t) var(--ease-pop); }
-@media (hover: hover) { .select-tag:hover:not(:disabled) svg { transform: rotate(-7deg) scale(1.08); } }
+@media (hover: hover) { .select-tag:hover:not(:disabled, [aria-disabled="true"]) svg { transform: rotate(-7deg) scale(1.08); } }
 /* Batch delete — the select-mode twin of Empty Trash: same ghost pill, same
    two-step arm, its own view-transition-name so arming morphs the width. */
 .select-delete {
@@ -1922,13 +1938,15 @@ button.crumb:active { background: var(--wash-strong); }
   white-space: nowrap;
   border-radius: var(--r-sm);
   animation: crumb-in var(--t-slow) var(--ease-out) backwards;
-  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), filter var(--t) var(--ease);
   view-transition-name: select-delete;
 }
-@media (hover: hover) { .select-delete:hover:not(:disabled) { background: var(--danger-tint); } }
-.select-delete:active:not(:disabled) { transform: scale(0.95); }
+@media (hover: hover) { .select-delete:hover:not(:disabled, [aria-disabled="true"]) { background: var(--danger-tint); } }
+.select-delete:active:not(:disabled, [aria-disabled="true"]) { transform: scale(0.95); }
 .select-delete.is-confirm { color: var(--danger-ink); background: var(--danger); box-shadow: var(--shadow-sm); }
-@media (hover: hover) { .select-delete.is-confirm:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 88%, black); } }
+/* Armed, it is a filled button and hovers like one (.danger-button's
+   brighten): mixing in black would sink the pale dark-theme fill. */
+@media (hover: hover) { .select-delete.is-confirm:hover:not(:disabled, [aria-disabled="true"]) { background: var(--danger); filter: brightness(1.08); box-shadow: var(--shadow); } }
 /* The pills trail in behind the morphing counter, breadcrumb-style. */
 .select-bar > :nth-child(2) { animation-delay: 0.025s; }
 .select-bar > :nth-child(3) { animation-delay: 0.05s; }
@@ -2047,15 +2065,22 @@ button.crumb:active { background: var(--wash-strong); }
    inset grows to clear the × only once there is a query — and a query keeps
    the box open — so the closed width no longer reserves 30px for a control
    that cannot be there, which is what used to cut the placeholder to
-   "Search mem". */
+   "Search mem". With semantic search on the placeholder says "Search by
+   meaning" (131px), so the closed box widens to 180px — the width
+   transition carries the change as the Brain is switched — and the longer
+   "Search #tag by meaning" forms end in an ellipsis rather than mid-word;
+   the field's aria-label always carries the whole text. Opening never
+   narrows it (the max(): 40vw is under 180px just above the phone layout). */
 .searchbox {
+  --searchbox-closed: 160px;
   position: relative;
   display: flex;
   align-items: center;
-  width: 160px;
+  width: var(--searchbox-closed);
   transition: width 0.18s var(--ease-out);
 }
-.searchbox.is-open { width: min(240px, 40vw); }
+.searchbox:has(+ .semantic-toggle.is-active) { --searchbox-closed: 180px; }
+.searchbox.is-open { width: max(var(--searchbox-closed), min(240px, 40vw)); }
 /* Its own snapshot: memos ↔ Trash drops the Brain and the funnel, and the
    box glides to its new place rather than cross-fading with itself ~76px
    away inside the topbar's group. Natural-size snapshots, as the pills: an
@@ -2077,6 +2102,7 @@ button.crumb:active { background: var(--wash-strong); }
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   font-size: var(--fs-md);
+  text-overflow: ellipsis;
   outline: none;
   box-shadow: var(--shadow-xs);
   transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), padding-right var(--t) var(--ease);
@@ -2209,6 +2235,11 @@ button.crumb:active { background: var(--wash-strong); }
 .range-cal-days { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; }
 .range-cal-days.slide-left { animation: heat-slide-left var(--t-slow) var(--ease-out) both; }
 .range-cal-days.slide-right { animation: heat-slide-right var(--t-slow) var(--ease-out) both; }
+/* Reduced motion: the new month fades in where it stands instead. */
+@media (prefers-reduced-motion: reduce) {
+  .range-cal-days.slide-left,
+  .range-cal-days.slide-right { animation: fade-in var(--t) var(--ease) both !important; }
+}
 .range-cal-weekday { padding: 2px 0 4px; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; text-align: center; }
 .range-cal-day {
   position: relative;
@@ -2255,9 +2286,9 @@ button.crumb:active { background: var(--wash-strong); }
   text-align: left;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  transition: background 0.16s ease, color 0.16s ease, transform var(--t-fast) var(--ease);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
-.saved-row > button:first-child svg { flex: none; color: var(--muted); stroke-width: 1.75; transition: color 0.16s ease; }
+.saved-row > button:first-child svg { flex: none; color: var(--muted); stroke-width: 1.75; transition: color var(--t) var(--ease); }
 @media (hover: hover) {
   .saved-row > button:first-child:hover { background: var(--wash-strong); color: var(--ink); }
   .saved-row > button:first-child:hover svg { color: var(--ink); }
@@ -2310,7 +2341,7 @@ button.crumb:active { background: var(--wash-strong); }
   font-weight: 600;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), filter var(--t) var(--ease);
   view-transition-name: topbar-action;
 }
 @media (hover: hover) { .trash-empty-button:hover:not(:disabled) { background: var(--danger-tint); } }
@@ -2321,7 +2352,7 @@ button.crumb:active { background: var(--wash-strong); }
   background: var(--danger);
   box-shadow: var(--shadow-sm);
 }
-@media (hover: hover) { .trash-empty-button.is-confirm:hover { background: color-mix(in srgb, var(--danger) 88%, black); } }
+@media (hover: hover) { .trash-empty-button.is-confirm:hover:not(:disabled) { background: var(--danger); filter: brightness(1.08); box-shadow: var(--shadow); } }
 
 /* Select — Trash's way into multi-select, beside Empty Trash: the same ghost
    pill, neutral, since it destroys nothing by itself. */
@@ -2958,7 +2989,7 @@ button.crumb:active { background: var(--wash-strong); }
   margin-top: 0;
   opacity: 0;
   pointer-events: none;
-  transition: grid-template-rows 0.16s var(--ease), margin-top 0.16s var(--ease), opacity 0.16s var(--ease);
+  transition: grid-template-rows var(--t-exit) var(--ease), margin-top var(--t-exit) var(--ease), opacity var(--t-exit) var(--ease);
 }
 .sync-notice-clip { min-height: 0; overflow: hidden; }
 .sync-notice {
@@ -2988,15 +3019,24 @@ button.crumb:active { background: var(--wash-strong); }
   border-radius: var(--r-xs);
   transition: background var(--t) var(--ease), transform var(--t-fast) var(--ease);
 }
-@media (hover: hover) { .sync-notice-retry:hover:not(:disabled) { background: var(--primary-tint); } }
-.sync-notice-retry:active { transform: scale(0.96); }
-.sync-notice-retry:disabled { opacity: 1; color: var(--muted); }
+@media (hover: hover) { .sync-notice-retry:hover:not([aria-disabled="true"]) { background: var(--primary-tint); } }
+.sync-notice-retry:active:not([aria-disabled="true"]) { transform: scale(0.96); }
+/* Busy (aria-disabled, so a press keeps its focus): muted, not dimmed. */
+.sync-notice-retry[aria-disabled="true"] { cursor: default; color: var(--muted); }
 /* The composer's own top margin follows; the notice keeps the 16px beat.
    It eases on the slot's beats both ways (20 → 12 as the line opens, back
    as it folds), so nothing below the line snaps by 8px. */
 .composer { transition: margin-top var(--t-slow) var(--ease-out); }
 .sync-notice-slot + .composer { margin-top: 12px; }
-.sync-notice-slot.is-leaving + .composer { margin-top: 20px; transition: margin-top 0.16s var(--ease); }
+.sync-notice-slot.is-leaving + .composer { margin-top: 20px; transition: margin-top var(--t-exit) var(--ease); }
+/* Reduced motion keeps both phases as a dissolve: the line fades in and out
+   where it stands, its room opening at once on arrival and closing at once
+   once the fade is done (step-end, as a toast's slot), so nothing glides. */
+@media (prefers-reduced-motion: reduce) {
+  .sync-notice-slot { transition: opacity var(--t) var(--ease) !important; }
+  .sync-notice-slot.is-leaving { transition: opacity var(--t-fast) var(--ease), grid-template-rows var(--t-fast) step-end, margin-top var(--t-fast) step-end !important; }
+  .sync-notice-slot.is-leaving + .composer { transition: margin-top var(--t-fast) step-end !important; }
+}
 
 /* Daily-review masthead: the day's date and batch size, quiet type above the
    cards. Its view-transition-name keeps it steady while a settings change
@@ -3079,11 +3119,16 @@ button.crumb:active { background: var(--wash-strong); }
      the selection, since the ring keeps fading for --t after the card is
      deselected and a shadow follows its box's corners. */
   border-radius: var(--r-lg);
-  transition: box-shadow var(--t) var(--ease);
+  transition: box-shadow var(--t) var(--ease), opacity var(--t) var(--ease);
   /* Tags card snapshots so arrivals can rise instead of the generic calm
      fade (see the view-transition section). */
   view-transition-class: memo-card;
 }
+/* A semantic-only row held from the previous query's ranking while the new
+   one is on its way (App: semanticStale). It stays where it was, so the feed
+   moves once per settled query, but reads as not-yet-current; the summary's
+   "· looking for related…" says why, and the landing replaces it. */
+.memo-slot[data-stale] { opacity: 0.5; }
 /* Slots mounted by a filter swap (the view transition owns the motion) and
    slots whose entrance already played — a slot that kept `animation:
    rise-in` replays the whole entrance whenever React reorders kept rows,
@@ -3092,8 +3137,13 @@ button.crumb:active { background: var(--wash-strong); }
 /* While a card menu or tag suggestion list is mounted, lift the slot's
    containment so the popover can spill past the card and above its siblings. Keyed
    to .action-menu rather than .is-open: the panel outlives the open state
-   through its closing morph, and re-clipping mid-close would cut it off. */
-.memo-slot:has(.action-menu, .tag-suggest) { z-index: 66; content-visibility: visible; }
+   through its closing morph, and re-clipping mid-close would cut it off.
+   The lift is 35: over the composer (30, which an upward menu or a
+   suggestion list near the top of the feed has to clear) and every sibling
+   card, but under the sticky topbar (40) in the same stacking context — a
+   card scrolled up under the frosted band keeps its open menu beneath it
+   (Menu flips against the band's bottom edge, not the viewport's top). */
+.memo-slot:has(.action-menu, .tag-suggest) { z-index: 35; content-visibility: visible; }
 /* A small feed (App marks ≤ SMALL_FEED rows) renders every card for real:
    the page's height is then exact, not an estimate — a tag holding a few
    memos must not offer more scroll than it has content. */
@@ -5236,6 +5286,12 @@ button.stats-tag-row:active { scale: 0.992; }
     transition-timing-function: var(--ease-out);
   }
 }
+/* Reduced motion: the disc dissolves where it rests — in on --t, out on
+   --t-fast — with no drop and no swell. */
+@media (prefers-reduced-motion: reduce) {
+  .scroll-top-slot { translate: none; scale: none; transition: opacity var(--t-fast) var(--ease) !important; }
+  .scroll-top-slot.is-shown { transition: opacity var(--t) var(--ease) !important; }
+}
 /* The demo disc verbatim: 1px hairline outside 32px, 65% surface over a
    bare 2px blur, the two-layer soft drop. Surface tokens keep the same
    recipe honest in dark; only the hairline needs a flip there. */
@@ -5568,7 +5624,7 @@ button.stats-tag-row:active { scale: 0.992; }
     transform: translateX(-102%);
     visibility: hidden;
   }
-  .sidebar.is-open { transform: none; visibility: visible; animation: drawer-in var(--t-slow) var(--ease-out) both; }
+  .sidebar.is-open { transform: none; visibility: visible; animation: drawer-in var(--t-enter) var(--ease-out) both; }
   /* The drawer is fixed to the visible viewport, so its scroller takes that
      height rather than a viewport unit: on iOS Safari 100vh overhangs the
      toolbars, and with the page locked behind the drawer the last tags could
@@ -5599,7 +5655,11 @@ button.stats-tag-row:active { scale: 0.992; }
     background: inherit;
     pointer-events: none;
   }
-  .sidebar.is-open.is-closing { transform: translateX(-102%); transition: transform 0.16s var(--ease); animation: none; }
+  /* The exit is an animation, not a transition: dropping the entrance's
+     fill in the same style change left a transition nothing to start
+     from, and the drawer cut away. A swipe's own exit (useDrawerSwipe)
+     is a script animation and outranks this one. */
+  .sidebar.is-open.is-closing { transform: translateX(-102%); animation: drawer-out var(--t-exit) var(--ease) both; }
   .drawer-backdrop {
     position: fixed;
     inset: 0;
@@ -5611,6 +5671,15 @@ button.stats-tag-row:active { scale: 0.992; }
   }
   .drawer-backdrop.is-closing { animation: fade-out var(--t-exit) var(--ease) both; }
   .drawer-toggle { display: inline-grid; }
+}
+/* Reduced motion: the drawer and its scrim dissolve in place — in on --t,
+   out on --t-fast (closeDrawer and the swipe wait T_FAST for it) — and the
+   drawer never slides. */
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .sidebar.is-open { animation: fade-in var(--t) var(--ease) both !important; }
+  .sidebar.is-open.is-closing { transform: none; animation: fade-out var(--t-fast) var(--ease) both !important; }
+  .drawer-backdrop { animation: fade-in var(--t) var(--ease) both !important; }
+  .drawer-backdrop.is-closing { animation: fade-out var(--t-fast) var(--ease) both !important; }
 }
 
 @media (max-width: 720px) {
@@ -5793,6 +5862,17 @@ button.stats-tag-row:active { scale: 0.992; }
   /* In step with the clip's tuck and untuck. */
   .topbar[data-tuck="in"]::after { transition: opacity var(--t) var(--ease), translate 0.2s var(--ease); }
   .topbar[data-tuck="out"]::after { transition: opacity var(--t) var(--ease), translate var(--t-slow) var(--ease-out); }
+}
+/* Reduced motion: the row fades instead of tucking. Out on --t-fast, the
+   band (and its hairline) closing up at once when the fade is done; back on
+   --t, the band whole from the start (step-start), the row fading in. The
+   untuck's animation still ends, which is what clears data-tuck. */
+@media (max-width: 440px) and (prefers-reduced-motion: reduce) {
+  .topbar[data-tuck="in"] { animation: topbar-tuck var(--t-fast) step-end both !important; }
+  .topbar[data-tuck="in"] .search-tools { transition: opacity var(--t-fast) var(--ease), visibility 0s linear var(--t-fast) !important; }
+  .topbar[data-tuck="in"]::after { transition: opacity var(--t) var(--ease), translate var(--t-fast) step-end !important; }
+  .topbar[data-tuck="out"] { animation: topbar-untuck var(--t) step-start both !important; }
+  .topbar[data-tuck="out"] .search-tools { transition: opacity var(--t) var(--ease) !important; }
 }
 @keyframes topbar-tuck {
   from { clip-path: inset(0 0 0 0); }

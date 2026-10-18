@@ -22,7 +22,9 @@ const JUMP_HOLD = 300;
  * rubber-band past either end is not a scroll in any direction.
  *
  * State lives on the element (data-tuck) rather than in React: scroll never
- * re-renders App. "in" is tucked; "out" plays the reveal, then clears.
+ * re-renders App. "in" is tucked; "out" plays the reveal, then clears. Under
+ * reduced motion both are fades: the row fades out and the band closes up
+ * behind it at once, and back.
  */
 export function useTopbarTuck(ref: RefObject<HTMLElement>, enabled: boolean): void {
   useEffect(() => {
@@ -49,9 +51,10 @@ export function useTopbarTuck(ref: RefObject<HTMLElement>, enabled: boolean): vo
         if (distance <= 0) return;
         bar!.style.setProperty("--topbar-tuck", `${distance}px`);
         bar!.dataset.tuck = "in";
-      } else if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        delete bar!.dataset.tuck;
       } else {
+        // Reduced motion plays "out" too, as a fade (app.css): its band
+        // opens at once and the row fades back in, and the same animationend
+        // clears it.
         bar!.dataset.tuck = "out";
       }
       tucked = next;

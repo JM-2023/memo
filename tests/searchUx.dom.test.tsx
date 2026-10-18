@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   createMemo: vi.fn(),
   // The ranked map a semantic query would hand back (null: no ranking).
   semanticResults: null as ReadonlyMap<string, number> | null,
+  // The ranking was made for an earlier query (held while this one ranks).
+  semanticStale: false,
   syncApi: {
     setCursor: vi.fn(),
     setSyncEpoch: vi.fn(),
@@ -57,6 +59,7 @@ vi.mock("../src/hooks/useSemanticSearch", () => ({
     progress: null,
     queryProgress: null,
     results: enabled && query.trim() ? mocks.semanticResults : null,
+    stale: enabled && query.trim() && mocks.semanticResults ? mocks.semanticStale : false,
     error: null,
     indexedMemos: enabled ? 4 : 0,
     rebuilding: false,
@@ -106,6 +109,7 @@ beforeEach(() => {
   sessionStorage.clear();
   window.history.replaceState(null, "");
   mocks.semanticResults = null;
+  mocks.semanticStale = false;
   mocks.getAuthStatus.mockResolvedValue({ needsSetup: false });
   mocks.bootstrap.mockResolvedValue({
     memos: NOTEBOOK,
@@ -310,6 +314,30 @@ describe("search with meaning", () => {
     expect(line?.querySelector(".search-summary-pending")?.textContent).toBe(" · looking for related…");
     expect(line?.querySelector(".roll")).toBeTruthy();
     // The live region waits for the settled answer.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(document.querySelector(".search-sr[role='status']")?.textContent).toBe("");
+  });
+
+  it("keeps the previous ranking's rows in place, dimmed and uncounted, until the new one lands", async () => {
+    localStorage.setItem("memo:semantic-search", "1");
+    // Ranked for the text before this one: memo-2 is only there by meaning.
+    mocks.semanticResults = new Map([
+      ["memo-0", 0.9],
+      ["memo-2", 0.8]
+    ]);
+    mocks.semanticStale = true;
+    const user = userEvent.setup();
+    renderApp();
+    await user.type(await screen.findByRole("searchbox", { name: "Search by meaning" }), "fruit");
+    expect(await screen.findByText("Found 2 memos · looking for related…", { selector: ".search-summary > .sr-only" })).toBeTruthy();
+    const slotOf = (text: string) => screen.getByText(text, { exact: false }).closest(".memo-slot");
+    expect(slotOf("Window seat")?.hasAttribute("data-stale")).toBe(true);
+    expect(slotOf("Fruit salad")?.hasAttribute("data-stale")).toBe(false);
+    expect(slotOf("Green apple")?.hasAttribute("data-stale")).toBe(false);
+    // The keyword tier keeps the held order: memo-0's old score still leads.
+    const order = [...document.querySelectorAll<HTMLElement>(".memo-feed > .memo-slot")].map((slot) => slot.dataset.vt);
+    expect(order).toEqual(["memo-memo-0", "memo-memo-1", "memo-memo-2"]);
+    // Nothing is announced until the answer settles.
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(document.querySelector(".search-sr[role='status']")?.textContent).toBe("");
   });

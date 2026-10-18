@@ -206,7 +206,8 @@ describe("cold start", () => {
 
     await act(async () => rest.resolve(page([memo(2), memo(1)])));
     expect(await screen.findByText("memo-1 original")).toBeTruthy();
-    expect(screen.queryByText(/Loading memos/)).toBeNull();
+    // The finished line leaves through its fade (a dissolve under reduced motion), not a cut.
+    await waitFor(() => expect(screen.queryByText(/Loading memos/)).toBeNull());
     await waitFor(() => expect(mocks.saveSnapshot).toHaveBeenCalledTimes(1), { timeout: 2_000 });
     const saved = mocks.saveSnapshot.mock.calls[0] as unknown as [Snapshot];
     expect(saved[0].memos.map((item) => item.id).sort()).toEqual(["memo-1", "memo-2", "memo-3"]);
@@ -326,7 +327,7 @@ describe("while older pages are still loading", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(await screen.findByText("memo-1 original")).toBeTruthy();
     expect(mocks.bootstrap.mock.calls).toEqual([[], ["cursor-1", 10], ["cursor-1", 10]]);
-    expect(screen.queryByText(/Loading memos/)).toBeNull();
+    await waitFor(() => expect(screen.queryByText(/Loading memos/)).toBeNull());
   });
 
   it("sends no retry with the old cookie while the passcode changes, then resumes from the same cursor", async () => {

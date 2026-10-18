@@ -12,7 +12,7 @@ import { RollingText } from "./RollingText";
 import { SwapText } from "./SwapText";
 import { TagTree } from "./TagTree";
 import { useTip } from "./Tip";
-import { EASE_OUT } from "../lib/motion";
+import { EASE_OUT, T_BASE, T_FAST, T_SLOW } from "../lib/motion";
 
 interface SidebarProps {
   memos: Memo[];
@@ -72,7 +72,9 @@ const GLIDE_EASING = EASE_OUT;
  * second pick carries on from the painted frame). The glow rides inside its
  * row, so a tag-tree fold or reorder that moves the row carries it along.
  * With no row to land on (a search, a facet), the old mark fades where it
- * was; arriving from none, the new one fades in. Reduced motion: it moves.
+ * was; arriving from none, the new one fades in. Reduced motion does both
+ * at once instead of the glide: the old mark fades where it was while the
+ * new one fades in on its row, and nothing travels.
  */
 function useSelectionGlide(rootRef: RefObject<HTMLElement>, place: string | null) {
   const placeRef = useRef(place);
@@ -94,17 +96,24 @@ function useSelectionGlide(rootRef: RefObject<HTMLElement>, place: string | null
     // A new place ends the glide before it: that row comes back up.
     sunkRef.current?.style.removeProperty("z-index");
     sunkRef.current = null;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const from = move.from;
     const glow = root.querySelector<HTMLElement>(".sel-glow:not(.is-ghost)");
     if (glow && typeof glow.animate !== "function") return;
     if (!from || from.height === 0) {
-      glow?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: GLIDE_EASING });
+      glow?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: T_BASE, easing: GLIDE_EASING });
       return;
     }
-    if (!glow) {
-      // Nothing to land on: the old mark recedes in place. The ghost sits in
-      // the scroller's own coordinates, so a scroll mid-fade carries it.
+    if (reduced && glow) {
+      for (const animation of glow.getAnimations()) animation.cancel();
+      const to = glow.getBoundingClientRect();
+      if (Math.abs(from.left - to.left) < 1 && Math.abs(from.top - to.top) < 1 && Math.abs(from.height - to.height) < 1) return;
+      glow.animate([{ opacity: 0 }, { opacity: 1 }], { duration: T_BASE, easing: GLIDE_EASING });
+    }
+    if (!glow || reduced) {
+      // Nothing to land on (or no glide, under reduced motion): the old mark
+      // recedes in place. The ghost sits in the scroller's own coordinates,
+      // so a scroll mid-fade carries it.
       const origin = root.getBoundingClientRect();
       const ghost = document.createElement("span");
       ghost.className = "sel-glow is-ghost";
@@ -123,7 +132,7 @@ function useSelectionGlide(rootRef: RefObject<HTMLElement>, place: string | null
         ghost.remove();
         return;
       }
-      const fade = ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 120, easing: GLIDE_EASING, fill: "forwards" });
+      const fade = ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: T_FAST, easing: GLIDE_EASING, fill: "forwards" });
       const drop = () => ghost.remove();
       void fade.finished.then(drop, drop);
       return;
@@ -150,7 +159,7 @@ function useSelectionGlide(rootRef: RefObject<HTMLElement>, place: string | null
         { transform: `translate(${dx}px, ${dy}px)`, width: `${from.width}px`, height: `${from.height}px` },
         { transform: "none", width: `${to.width}px`, height: `${to.height}px` }
       ],
-      { duration: 220, easing: GLIDE_EASING }
+      { duration: T_SLOW, easing: GLIDE_EASING }
     );
     const land = () => {
       if (!row || sunkRef.current !== row) return;

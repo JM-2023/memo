@@ -1,9 +1,9 @@
 import { Check, CloudOff, Loader2, WifiOff } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useReducedMotion } from "../hooks/useReducedMotion";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../lib/i18n";
 import { announce } from "../lib/liveAnnouncer";
 import { EXIT_MS } from "../lib/motion";
+import { parkFocusOnMain } from "./ScrollTopButton";
 
 export interface SyncNoticeContent {
   /** What the line is about; a new kind starts its retry state afresh. */
@@ -27,6 +27,7 @@ type Shown = SyncNoticeContent | { kind: "restored"; text: string; line?: undefi
 const RETRY_MIN_MS = 600;
 /** How long "Back online" stays before the line folds away. */
 const RESTORED_MS = 1_400;
+/** The fold away (a fade alone under reduced motion, app.css), plus a frame. */
 const LEAVE_MS = EXIT_MS;
 
 function wait(ms: number) {
@@ -42,13 +43,16 @@ function wait(ms: number) {
  * same way, unfolding from nothing (app.css, @starting-style), so the page
  * under it glides down instead of being pushed.
  *
+ * Under reduced motion it keeps the same phases: the line fades in and out
+ * where it stands and its room opens and closes at once (app.css), never a
+ * cut.
+ *
  * Not a live region: it mounts with its text, so the app's standing regions
  * speak it (App announces the notice itself; the retry outcome and "Back
  * online" are announced here).
  */
 export function SyncNotice({ notice }: { notice: SyncNoticeContent | null }) {
   const { tr } = useI18n();
-  const reducedMotion = useReducedMotion();
   const kind = notice?.kind ?? null;
   const [shownKind, setShownKind] = useState(kind);
   const [exit, setExit] = useState<{ content: Shown; phase: "restored" | "leaving" } | null>(null);
@@ -63,7 +67,7 @@ export function SyncNotice({ notice }: { notice: SyncNoticeContent | null }) {
     setRetry(null);
     if (notice) setExit(null);
     else if (shownKind === "offline" || shownKind === "unreachable") setExit({ content: { kind: "restored", text: restoredText }, phase: "restored" });
-    else setExit(reducedMotion || !lastRef.current ? null : { content: lastRef.current, phase: "leaving" });
+    else setExit(!lastRef.current ? null : { content: lastRef.current, phase: "leaving" });
   }
   if (notice) lastRef.current = notice;
 
@@ -83,12 +87,12 @@ export function SyncNotice({ notice }: { notice: SyncNoticeContent | null }) {
     if (!exit) return;
     if (exit.phase === "restored") {
       announce(exit.content.text);
-      const timer = window.setTimeout(() => setExit(reducedMotion ? null : { content: exit.content, phase: "leaving" }), RESTORED_MS);
+      const timer = window.setTimeout(() => setExit({ content: exit.content, phase: "leaving" }), RESTORED_MS);
       return () => window.clearTimeout(timer);
     }
     const timer = window.setTimeout(() => setExit(null), LEAVE_MS);
     return () => window.clearTimeout(timer);
-  }, [exit, reducedMotion]);
+  }, [exit]);
 
   const shown: Shown | null = notice ?? exit?.content ?? null;
   if (!shown) return null;
@@ -98,7 +102,7 @@ export function SyncNotice({ notice }: { notice: SyncNoticeContent | null }) {
 
   async function runRetry() {
     const current = notice;
-    if (!current?.onRetry || retrying) return;
+    if (!current?.onRetry || retrying || leaving) return;
     const token = ++retryTokenRef.current;
     setRetry({ kind: current.kind, phase: "running" });
     const started = performance.now();
@@ -144,16 +148,41 @@ export function SyncNotice({ notice }: { notice: SyncNoticeContent | null }) {
             <span className="sync-notice-text">{text}</span>
           )}
           {shown.onRetry ? (
-            <button type="button" className="sync-notice-retry" onClick={() => void runRetry()} disabled={retrying || leaving}>
+            <RetryButton busy={retrying || leaving} onRetry={() => void runRetry()}>
               {/* Both words share one cell, so the button keeps its width. */}
               <span className="busy-swap">
                 <span aria-hidden={retrying || undefined}>{tr("Retry", "重试")}</span>
                 <span aria-hidden={!retrying || undefined}>{tr("Retrying…", "正在重试…")}</span>
               </span>
-            </button>
+            </RetryButton>
           ) : null}
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The line's one verb. Busy (retrying, or the line folding away) it is
+ * aria-disabled rather than disabled: the press that started a retry keeps
+ * its focus instead of dropping it to <body>, and runRetry guards itself.
+ * The button can still go while focused — the connection came back, or the
+ * line folded — so focus is parked on the main column first, the way the
+ * back-to-top disc hands it over.
+ */
+function RetryButton({ busy, onRetry, children }: { busy: boolean; onRetry: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  // A layout cleanup runs before React takes the node out, while it still
+  // holds focus.
+  useLayoutEffect(() => {
+    const button = ref.current;
+    return () => {
+      if (button && document.activeElement === button) parkFocusOnMain();
+    };
+  }, []);
+  return (
+    <button ref={ref} type="button" className="sync-notice-retry" aria-disabled={busy || undefined} onClick={onRetry}>
+      {children}
+    </button>
   );
 }

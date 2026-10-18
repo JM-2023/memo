@@ -419,9 +419,30 @@ describe("tab title", () => {
 });
 
 describe("saved filters", () => {
+  const empty = { noTags: false, hasImage: false, hasLink: false, hasOpenTask: false, dateFrom: null, dateTo: null };
+
+  it("lifts the preset in force on a second press, as every other lens does", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("memo-saved-filters", JSON.stringify([{ id: "s1", name: "First", query: "alpha", tag: null, day: null, filters: empty }]));
+    renderApp();
+    await screen.findByText(/beta note/);
+    await user.click(screen.getByRole("button", { name: "Filter memos" }));
+    await user.click(screen.getByRole("button", { name: "First" }));
+    await waitFor(() => expect(screen.queryByText(/beta note/)).toBeNull());
+    expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("alpha");
+
+    await user.click(screen.getByRole("button", { name: "Filter memos" }));
+    const active = await screen.findByRole("button", { name: "First" });
+    expect(active.getAttribute("aria-pressed")).toBe("true");
+    await user.click(active);
+    expect(await screen.findByText(/beta note/)).toBeTruthy();
+    expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("");
+    // The panel closes as it does for any preset.
+    expect(document.querySelector(".saved-name")).toBeNull();
+  });
+
   it("puts a deleted preset back where it stood on Undo", async () => {
     const user = userEvent.setup();
-    const empty = { noTags: false, hasImage: false, hasLink: false, hasOpenTask: false, dateFrom: null, dateTo: null };
     localStorage.setItem(
       "memo-saved-filters",
       JSON.stringify([
@@ -439,5 +460,78 @@ describe("saved filters", () => {
     // The toast sits outside the panel, so pressing it closed the panel.
     if (!document.querySelector(".saved-name")) await user.click(screen.getByRole("button", { name: "Filter memos" }));
     await waitFor(() => expect([...document.querySelectorAll(".saved-name")].map((node) => node.textContent)).toEqual(["First", "Second", "Third"]));
+  });
+});
+
+describe("select mode focus", () => {
+  it("lands on Select all from the location menu, and back on the location pill on Cancel", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByText(/beta note/);
+    await user.click(screen.getByRole("button", { name: /All memos/, expanded: false }));
+    await user.click(await screen.findByRole("menuitem", { name: "Select memos" }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Select all memos" })));
+    await user.click(screen.getByRole("button", { name: "Cancel selection" }));
+    await waitFor(() => expect(document.activeElement?.classList.contains("loc-trigger")).toBe(true));
+  });
+
+  it("hands Escape on a picked card back to that card's ⋯", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByText(/beta note/);
+    await user.click(screen.getByRole("button", { name: /All memos/, expanded: false }));
+    await user.click(await screen.findByRole("menuitem", { name: "Select memos" }));
+    const overlay = (await screen.findAllByRole("button", { name: "Select this memo" }))[0];
+    overlay.focus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(document.activeElement?.classList.contains("memo-menu-trigger")).toBe(true));
+    expect(document.activeElement?.closest(".memo-slot")).toBe(document.querySelector(".memo-feed > .memo-slot"));
+  });
+
+  it("does the same inside Trash with its own Select button", async () => {
+    const user = userEvent.setup();
+    serve([memo("a", "alpha note #alpha"), memo("t", "trashed note", { deletedAt: now.toISOString() })]);
+    renderApp();
+    await screen.findByText(/alpha note/);
+    await user.click(screen.getByRole("button", { name: "Open sidebar" }));
+    await user.click(await screen.findByRole("button", { name: /^Trash/ }));
+    await user.click(await screen.findByRole("button", { name: "Select memos" }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Select all memos" })));
+    await user.click(screen.getByRole("button", { name: "Cancel selection" }));
+    await waitFor(() => expect(document.activeElement?.classList.contains("trash-select-button")).toBe(true));
+  });
+});
+
+describe("toast holds", () => {
+  it("keeps the clock held while focus sits on Undo, whatever the pointer does", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      localStorage.setItem(
+        "memo-saved-filters",
+        JSON.stringify([{ id: "s1", name: "First", query: "alpha", tag: null, day: null, filters: { noTags: false, hasImage: false, hasLink: false, hasOpenTask: false, dateFrom: null, dateTo: null } }])
+      );
+      renderApp();
+      await screen.findByText(/beta note/);
+      fireEvent.click(screen.getByRole("button", { name: "Filter memos" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Delete saved filter “First”" }));
+      const undo = await screen.findByRole("button", { name: "Undo" });
+      act(() => undo.focus());
+      const stack = undo.closest(".toast-stack")!;
+      // The pointer passing over and away must not restart the clock under focus.
+      fireEvent.pointerEnter(stack);
+      fireEvent.pointerLeave(stack);
+      await act(async () => {
+        vi.advanceTimersByTime(12_000);
+      });
+      expect(screen.getByRole("button", { name: "Undo" })).toBeTruthy();
+      // Focus leaving lets it run out.
+      act(() => (document.querySelector(".loc-trigger") as HTMLElement).focus());
+      await act(async () => {
+        vi.advanceTimersByTime(12_000);
+      });
+      expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
