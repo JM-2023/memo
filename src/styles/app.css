@@ -3233,7 +3233,7 @@ button.crumb:active { background: var(--wash-strong); }
   inset: -13px -15px -14px;
   z-index: 3;
   border-radius: calc(var(--r-lg) - 1px);
-  animation: fade-in 0.2s var(--ease) both;
+  animation: fade-in var(--t-slow) var(--ease) both;
   -webkit-tap-highlight-color: transparent;
   transition: background var(--t) var(--ease);
 }
@@ -3258,16 +3258,18 @@ button.crumb:active { background: var(--wash-strong); }
     opacity var(--t) var(--ease), transform var(--t) var(--ease),
     background var(--t) var(--ease), border-color var(--t) var(--ease);
 }
-/* Enter: pop on the overshoot curve (delayed per row, see stagger below);
-   the fill/tick react instantly through the base transition. */
+/* Enter: pop on the overshoot curve, rippling down the cards on screen (the
+   slot's --sbd: MemoCard's SelectRingStagger counts them from the top of
+   the view, 15ms a card up to 90ms); the fill/tick react instantly through
+   the base transition. */
 .memo-card.is-selecting .memo-select-box {
   opacity: 1;
   transform: none;
-  animation: select-box-in 0.2s var(--ease-pop) backwards;
+  animation: select-box-in var(--t-slow) var(--ease-pop) backwards;
   animation-delay: var(--sbd, 0s);
 }
 .memo-card.is-selected .memo-select-box { background: var(--primary); border-color: var(--primary); }
-.memo-select-box svg { transform: scale(0); transition: transform 0.14s var(--ease-pop); }
+.memo-select-box svg { transform: scale(0); transition: transform var(--t) var(--ease-pop); }
 .memo-card.is-selected .memo-select-box svg { transform: none; }
 /* The ⋯ menu retires while selecting; visibility waits for the fade so the
    swap reads as a cross-morph, and focus can never land on the hidden button. */
@@ -3277,22 +3279,18 @@ button.crumb:active { background: var(--wash-strong); }
   visibility: hidden;
   transition: opacity var(--t) var(--ease), transform var(--t) var(--ease), visibility 0s var(--t);
 }
-/* Checkbox entrance ripples down the first screenful of cards. */
-.memo-feed.is-select .memo-slot:nth-child(2) { --sbd: 0.015s; }
-.memo-feed.is-select .memo-slot:nth-child(3) { --sbd: 0.03s; }
-.memo-feed.is-select .memo-slot:nth-child(4) { --sbd: 0.045s; }
-.memo-feed.is-select .memo-slot:nth-child(5) { --sbd: 0.06s; }
-.memo-feed.is-select .memo-slot:nth-child(6) { --sbd: 0.075s; }
-.memo-feed.is-select .memo-slot:nth-child(7) { --sbd: 0.09s; }
-.memo-feed.is-select .memo-slot:nth-child(n + 8) { --sbd: 0.09s; }
 
 .memo-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; }
 .memo-time { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
 .memo-head-right { display: flex; align-items: center; gap: 4px; }
 /* The mark pops only when the memo is pinned in front of the reader
-   (MemoCard adds .is-new for that one mount), not each time it mounts. */
+   (MemoCard adds .is-new for that one mount), not each time it mounts.
+   Unpinning plays the pop backwards, without the overshoot, while MemoCard
+   holds the mark for the exit beat. */
 .memo-pin-mark { color: var(--primary); }
-.memo-pin-mark.is-new { animation: pop-in 0.18s var(--ease-pop) both; }
+.memo-pin-mark.is-new { animation: pop-in var(--t) var(--ease-pop) both; }
+.memo-pin-mark.is-leaving { animation: pop-out var(--t-exit) var(--ease) both; }
+@keyframes pop-out { to { opacity: 0; transform: scale(0.9); } }
 .memo-menu-trigger { width: 26px; height: 26px; opacity: 0; }
 .memo-menu-trigger.is-open { opacity: 1; background: var(--wash); color: var(--ink); }
 .memo-card:hover .memo-menu-trigger, .memo-menu-trigger:focus-visible { opacity: 1; }
@@ -3322,7 +3320,7 @@ button.crumb:active { background: var(--wash-strong); }
 .memo-restore:disabled { opacity: 0.55; }
 .memo-card.is-selecting .memo-restore { opacity: 0; visibility: hidden; transition: opacity var(--t) var(--ease), visibility 0s var(--t); }
 /* Tags stay buttons while selecting (the surface is inert); they dim like
-   the static pills they used to be re-rendered as. */
+   the static pills they used to be re-rendered as, easing (see .memo-tag). */
 .memo-card.is-selecting .memo-tag { opacity: 0.8; }
 
 /* ---- Long-memo fold ----
@@ -3446,7 +3444,7 @@ button.crumb:active { background: var(--wash-strong); }
 .md-task.is-done .md-task-box::after {
   opacity: 1;
   transform: scale(1);
-  transition: opacity var(--t) var(--ease), transform 0.2s var(--ease-pop);
+  transition: opacity var(--t) var(--ease), transform var(--t-slow) var(--ease-pop);
 }
 button.md-task-box { cursor: pointer; }
 /* Hover only where there is one: a tap's sticky hover left a sage edge on
@@ -3534,7 +3532,7 @@ button.md-task-box:active { transform: scale(0.88); }
   font-weight: 500;
   line-height: 1.5;
   box-shadow: inset 0 0 0 1px transparent;
-  transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease), color var(--t) var(--ease);
+  transition: background var(--t) var(--ease), box-shadow var(--t) var(--ease), color var(--t) var(--ease), opacity var(--t) var(--ease);
 }
 /* Hover/press feedback only on the clickable form (tint deepens, a hairline
    ring surfaces — no movement); trash view renders tags as inert spans
@@ -3665,12 +3663,61 @@ button.memo-tag:active {
    the actions that destroy). */
 .memo-time-state { font-weight: 600; }
 
-.feed-empty { display: grid; justify-items: center; gap: 6px; padding: 56px 20px; color: var(--muted); text-align: center; animation: rise-in 0.26s var(--ease-out) both; view-transition-name: feed-empty; }
+.feed-empty { display: grid; justify-items: center; gap: 6px; padding: 56px 20px; color: var(--muted); text-align: center; animation: rise-in var(--t-enter) var(--ease-out) both; view-transition-name: feed-empty; }
 /* Empty review day: the settings shortcut sits under the explanation. */
 .feed-empty-action { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; border: 1px solid var(--line-strong); }
 .feed-empty-action svg { color: var(--muted); }
 .feed-empty p { margin: 0; }
 .feed-empty-title { color: var(--ink-soft); font-size: var(--fs-lg); font-weight: 600; }
+
+/* The foot of a list that ran out while a cold start still loads older
+   pages (FeedEnd): one quiet line in the sync notice's voice, without its
+   surface — size, weight and the muted ink carry it. It opens its own room
+   the way the notice's slot does (@starting-style, rows 0fr → 1fr with the
+   fade), and its spinner waits out the busy hold before it shows. */
+.feed-end-slot {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--t-slow) var(--ease-out), opacity var(--t-slow) var(--ease-out);
+}
+@starting-style {
+  .feed-end-slot { grid-template-rows: 0fr; opacity: 0; }
+}
+.feed-end-clip { min-height: 0; overflow: hidden; }
+.feed-end {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px 18px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.feed-end > svg,
+.feed-end-spinner { flex: none; color: var(--muted); }
+.feed-end-spinner { display: inline-grid; animation: fade-in var(--t) var(--ease) var(--t-hold) both; }
+.feed-end-text { min-width: 0; }
+
+/* Reduced motion on the reading surface: the blanket rule (end of file)
+   would cut these, so they dissolve in place instead — nothing pops,
+   scales or folds open. The holds are timing, not motion, and stay. */
+@media (prefers-reduced-motion: reduce) {
+  .memo-pin-mark.is-new { animation: fade-in var(--t) var(--ease) both !important; }
+  .memo-pin-mark.is-leaving { animation: fade-out var(--t-fast) var(--ease) both !important; }
+  /* Select mode: the ring and the ⋯ trade places as a cross-fade, and the
+     tick fades in rather than popping. */
+  .memo-select-box,
+  .memo-card.is-selecting .memo-menu-trigger { transform: none; }
+  .memo-select-box { transition: opacity var(--t) var(--ease), background var(--t) var(--ease), border-color var(--t) var(--ease) !important; }
+  .memo-card.is-selecting .memo-select-box { animation: none !important; }
+  .memo-select-box svg { opacity: 0; transform: none; transition: opacity var(--t) var(--ease) !important; }
+  .memo-card.is-selected .memo-select-box svg { opacity: 1; }
+  .memo-card.is-selecting .memo-menu-trigger { transition: opacity var(--t-fast) var(--ease), visibility 0s var(--t-fast) !important; }
+  .feed-empty { animation: fade-in var(--t) var(--ease) both !important; }
+  .feed-end-slot { transition: opacity var(--t) var(--ease) !important; }
+  .feed-end-spinner { animation: fade-in var(--t) var(--ease) var(--t-hold) both !important; }
+}
 
 /* =========================================================================
    Overlays: confirm dialog + lightbox
@@ -4032,8 +4079,12 @@ button.is-busy:disabled { opacity: 1; }
   font-weight: 500;
   pointer-events: none;
 }
-/* A fast load never flashes the spinner. */
-.lightbox-status.is-loading { animation: fade-in 0.2s var(--ease) 0.15s both; }
+/* A fast load never flashes the spinner. The hold is timing, not motion:
+   reduced motion keeps it (the blanket rule would drop the delay). */
+.lightbox-status.is-loading { animation: fade-in var(--t-slow) var(--ease) var(--t-hold) both; }
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-status.is-loading { animation: fade-in var(--t) var(--ease) var(--t-hold) both !important; }
+}
 /* A failed picture says so, with a way to try again under the words — the
    feed tile's retry, in the viewer's ghost material. */
 .lightbox-status.is-failed { flex-direction: column; gap: 12px; }

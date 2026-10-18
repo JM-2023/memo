@@ -677,7 +677,7 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
         <div className="lightbox-status is-failed">
           <p role="alert">
             <ImageOff size={20} aria-hidden="true" />
-            {tr("Couldn't load this image", "这张图片加载失败")}
+            {tr("Couldn’t load image", "图片加载失败")}
           </p>
           <button
             type="button"

@@ -1,6 +1,7 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { adoptCacheKey, openSnapshot, readSealedSnapshot, saveSnapshot, type Snapshot } from "../src/lib/cache";
+import { isUnfolded, rememberFold } from "../src/lib/foldMemory";
 import { clearLocalDeviceData } from "../src/lib/logoutCleanup";
 import { readStoredModelFile, writeStoredModelFile } from "../src/lib/modelStore";
 
@@ -103,5 +104,11 @@ describe("logout cleanup", () => {
     });
 
     await expect(clearLocalDeviceData()).resolves.toBeUndefined();
+  });
+
+  it("forgets which memos the reader unfolded", async () => {
+    rememberFold("memo-a", true);
+    await clearLocalDeviceData();
+    expect(isUnfolded("memo-a")).toBe(false);
   });
 });

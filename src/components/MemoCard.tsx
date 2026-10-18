@@ -1,10 +1,12 @@
 import { Check, Copy, ImageOff, ListChecks, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Share, Tags, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { externalImagesOf } from "../lib/content";
 import { formatTime } from "../lib/dates";
+import { isUnfolded, rememberFold } from "../lib/foldMemory";
 import { useI18n } from "../lib/i18n";
 import { externalImageSize, mediaGridProps } from "../lib/imageLayout";
 import { visualLinesOf } from "../lib/lineDiff";
+import { EXIT_MS } from "../lib/motion";
 import { wordCountOf } from "../lib/stats";
 import type { LightboxItem, Memo, MemoImage, NewImagePayload } from "../lib/types";
 import { Editor, type EditDraft } from "./Editor";
@@ -293,6 +295,41 @@ function revealCard(card: HTMLElement) {
   window.scrollTo({ top: target, behavior: reduced ? "instant" : "smooth" });
 }
 
+/** The select rings' ripple: one step per card, and where it stops. */
+const SELECT_RING_STEP_MS = 15;
+const SELECT_RING_MAX_MS = 90;
+
+/**
+ * Entering select mode pops each card's ring in turn down the screen. The
+ * order is counted among the cards the reader can see, from the top of the
+ * view — not from the top of the feed, where a reader deep in it saw every
+ * ring land at once on the cap, and a review masthead above the list
+ * shifted the count by one. Rendered inside the feed; draws nothing.
+ */
+export function SelectRingStagger({ active, feedRef }: { active: boolean; feedRef: RefObject<HTMLElement> }) {
+  useLayoutEffect(() => {
+    const feed = feedRef.current;
+    if (!active || !feed) return;
+    // Under the sticky topbar is out of view too.
+    const top = Math.max(0, document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0);
+    const bottom = window.innerHeight;
+    const staggered: HTMLElement[] = [];
+    for (const slot of Array.from(feed.children)) {
+      if (!(slot instanceof HTMLElement) || !slot.classList.contains("memo-slot")) continue;
+      const box = slot.getBoundingClientRect();
+      if (box.bottom <= top) continue;
+      if (box.top >= bottom) break;
+      // Before the rings' first frame: the delay is read as they start.
+      slot.style.setProperty("--sbd", `${Math.min(staggered.length * SELECT_RING_STEP_MS, SELECT_RING_MAX_MS)}ms`);
+      staggered.push(slot);
+    }
+    return () => {
+      for (const slot of staggered) slot.style.removeProperty("--sbd");
+    };
+  }, [active, feedRef]);
+  return null;
+}
+
 export function MemoCard(props: MemoCardProps) {
   const { locale, tr } = useI18n();
   const { memo, variant, editing, selecting, selected } = props;
@@ -308,8 +345,21 @@ export function MemoCard(props: MemoCardProps) {
   // Where a double-click asked the editor to put its caret; null = the end.
   const editCaretRef = useRef<{ offset: number; viewportY: number } | null>(null);
   // Long bodies fold to a fixed height; this card's reader can unfold it.
-  const [expanded, setExpanded] = useState(false);
+  // The choice outlives the card (lib/foldMemory): a card remounted by a
+  // lens change or a trip to Trash comes back open if it was left open, so
+  // the reading place restored around it still lands where it was taken.
+  const [expanded, setExpanded] = useState(() => isUnfolded(memo.id));
+  const memoId = memo.id;
+  const changeExpanded = useCallback(
+    (next: boolean) => {
+      rememberFold(memoId, next);
+      setExpanded(next);
+    },
+    [memoId]
+  );
   const foldId = useId();
+  // The card is named by its time, as its ⋯ is (see menuLabel).
+  const timeId = useId();
 
   // One stable task callback for every row (rows pass their own lineKey), so
   // memoized MemoLines don't re-render just because the card did.
@@ -371,14 +421,24 @@ export function MemoCard(props: MemoCardProps) {
 
   // The pin mark pops when this card sees its memo become pinned — not on
   // every mount of the mark (first load, a lens bringing the card in, the
-  // view scene coming back when an edit closes).
+  // view scene coming back when an edit closes). Unpinning plays the same
+  // pop backwards: the mark stays for the exit beat, then goes.
   const pinned = Boolean(memo.pinnedAt);
   const [pinSeen, setPinSeen] = useState(pinned);
   const [pinPop, setPinPop] = useState(false);
+  const [pinLeaving, setPinLeaving] = useState(false);
   if (pinSeen !== pinned) {
     setPinSeen(pinned);
     setPinPop(pinned);
+    setPinLeaving(!pinned);
   }
+  // A timer, not animationend: an off-screen slot (content-visibility)
+  // never runs the animation, and its mark must still go.
+  useEffect(() => {
+    if (!pinLeaving) return;
+    const timer = window.setTimeout(() => setPinLeaving(false), EXIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [pinLeaving]);
 
   // A lone linked picture is drawn square until the browser knows its
   // shape; learning it re-renders the card, and a shape learned from a load
@@ -521,7 +581,7 @@ export function MemoCard(props: MemoCardProps) {
     );
     if (!(live ? foldable : mightFold(content))) return body;
     return (
-      <MemoFold content={content} expanded={expanded} onExpandedChange={live ? setExpanded : undefined} regionId={live ? foldId : undefined}>
+      <MemoFold content={content} expanded={expanded} onExpandedChange={live ? changeExpanded : undefined} regionId={live ? foldId : undefined}>
         {body}
       </MemoFold>
     );
@@ -594,7 +654,7 @@ export function MemoCard(props: MemoCardProps) {
     <>
       <div ref={viewSurfaceRef} className="memo-view-surface" aria-hidden={selecting || undefined}>
         <header className="memo-head">
-          <time className="memo-time" dateTime={inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt}>
+          <time id={timeId} className="memo-time" dateTime={inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt}>
             {timeLabel}
           </time>
           <div className="memo-head-right">
@@ -605,6 +665,9 @@ export function MemoCard(props: MemoCardProps) {
                 aria-label={tr("Pinned", "已置顶")}
                 onAnimationEnd={() => setPinPop(false)}
               />
+            ) : pinLeaving && !inTrash ? (
+              // Already unpinned: the leaving mark says nothing.
+              <Pin key="leaving" size={13} className="memo-pin-mark is-leaving" aria-hidden="true" />
             ) : null}
             {/* Restore is the one thing a trashed memo is for: it sits on the
                 card, always visible, instead of behind a hover-only ⋯. */}
@@ -746,6 +809,7 @@ export function MemoCard(props: MemoCardProps) {
   return (
     <article
       ref={articleRef}
+      aria-labelledby={timeId}
       className={`memo-card${pinned && !inTrash ? " is-pinned" : ""}${inTrash ? " is-trash" : ""}${selecting ? " is-selecting" : ""}${
         selected ? " is-selected" : ""
       }`}

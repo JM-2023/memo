@@ -31,10 +31,11 @@ import { Editor, type EditDraft, type EditorSubmission } from "./components/Edit
 import { FilterChip } from "./components/FilterChip";
 import { Lightbox } from "./components/Lightbox";
 import { LoginScreen } from "./components/LoginScreen";
-import { MemoCard } from "./components/MemoCard";
+import { MemoCard, SelectRingStagger } from "./components/MemoCard";
 import { Menu } from "./components/Menu";
 import { PromptDialog } from "./components/PromptDialog";
 import { RollingCount, RollingText } from "./components/RollingText";
+import { FeedEnd } from "./components/FeedEnd";
 import { ScrollTopButton } from "./components/ScrollTopButton";
 import { FACET_ROWS, SearchFilter, type FilterOpenTarget } from "./components/SearchFilter";
 import { Sidebar } from "./components/Sidebar";
@@ -77,6 +78,7 @@ import { BackupFormatError, inspectBackup, readBackupItems } from "./lib/backupF
 import { startBoot, type BootStart } from "./lib/boot";
 import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, saveSnapshot } from "./lib/cache";
 import { dateKey, formatDayLabel } from "./lib/dates";
+import { forgetFolds } from "./lib/foldMemory";
 import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow } from "./lib/feedSafety";
 import { EXIT_MS } from "./lib/motion";
 import { useI18n } from "./lib/i18n";
@@ -140,7 +142,7 @@ import { startToastSwipe } from "./lib/toastSwipe";
 import { applyTheme, loadTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
-import { createFeedMotion, type InPlaceIntent } from "./lib/feedMotion";
+import { createFeedMotion, type Departure, type InPlaceIntent } from "./lib/feedMotion";
 import { withViewTransition } from "./lib/viewTransition";
 
 type Phase = "checking" | "error" | "login" | "ready";
@@ -442,9 +444,14 @@ function MemoSlot({ vtName, entering, delay, children }: MemoSlotProps) {
  * DOM holds the new state, moves focus to the next surviving card's ⋯ (else
  * the previous one's; else, for a keyboard reader, the composer; else the
  * location pill). A no-op when focus was not inside a card or survived the
- * change.
+ * change — unless the card itself survived far away: name the memo the
+ * change is about, pass where it went (lib/feedMotion's departure, "up" or
+ * "down"), and focus inside that card stays at the reader's place, on the
+ * card that took the moved one's, as a save that re-sorts a card does
+ * (handleSaveEdit). Left on the moved card, the next Tab would scroll the
+ * reader off to it.
  */
-function holdFeedFocus(): () => void {
+function holdFeedFocus(memoId?: string): (departed?: Departure) => void {
   const active = document.activeElement;
   const slot = active instanceof HTMLElement ? active.closest<HTMLElement>(".memo-slot") : null;
   if (!active || !slot) return () => undefined;
@@ -458,8 +465,10 @@ function holdFeedFocus(): () => void {
   const neighbours: Element[] = [];
   for (let next = slot.nextElementSibling; next; next = next.nextElementSibling) neighbours.push(next);
   for (let previous = slot.previousElementSibling; previous; previous = previous.previousElementSibling) neighbours.push(previous);
-  return () => {
-    if (active.isConnected && document.activeElement === active) return;
+  const own = memoId !== undefined && slot.dataset.vt === `memo-${memoId}`;
+  return (departed) => {
+    const moved = own && (departed === "up" || departed === "down") && slot.contains(document.activeElement);
+    if (!moved && active.isConnected && document.activeElement === active) return;
     const survivor = neighbours.find((element) => element.isConnected && element.classList.contains("memo-slot"));
     const target =
       survivor?.querySelector<HTMLElement>(".memo-menu-trigger:not([tabindex='-1'])") ??
@@ -1194,6 +1203,8 @@ export default function App() {
 
   const applySyncChanges = useCallback((changed: readonly Memo[], purged: readonly PurgedMemo[], tags: readonly TagMeta[], cursor?: number) => {
     setSyncState((current) => applySyncDelta(current, { memos: changed, purged, tags }));
+    // A purged memo never comes back, so its unfolded state goes with it.
+    if (purged.length > 0) forgetFolds(purged.map((memo) => memo.id));
     if (cursor !== undefined) setSnapshotCursor((current) => Math.max(current, cursor));
   }, []);
 
@@ -2058,16 +2069,35 @@ export default function App() {
       action: tr(`Clear “${row.en}”`, `清除「${row.zh}」`)
     };
   })();
+  // A cold start renders its first page while older ones load behind it.
+  // Until they are all in, an empty list must not speak for the whole
+  // notebook — "Trash is empty", "No memos in #tag" and its way out: it says
+  // the load is under way and how far it has got, as the meaning search's
+  // pending line does, and offers no exit from a list that may yet fill. A
+  // day's review is drawn from what is loaded (drawReviewDay) and keeps its
+  // own words.
+  const coldLoadEmpty = ((): { title: string; body: string } | null => {
+    if (!bootstrapLoad || view === "review") return null;
+    const loaded = formatNumber(loadedMemoCount);
+    const soFar =
+      bootstrapLoad.total === null
+        ? tr(`${loaded} loaded so far`, `已载入 ${loaded} 条`)
+        : tr(`${loaded} of ${formatNumber(bootstrapLoad.total)} loaded so far`, `已载入 ${loaded} / ${formatNumber(bootstrapLoad.total)} 条`);
+    return {
+      title: tr("Still loading your memos…", "仍在载入笔记…"),
+      body: view === "trash" ? tr(`${soFar}, and none are in Trash yet.`, `${soFar}，回收站里暂时还没有`) : tr(`${soFar}, and none match yet.`, `${soFar}，暂时还没有相关笔记`)
+    };
+  })();
   // What the polite live region reads: the settled answer, not every
   // keystroke's (or the "still looking" state's) intermediate one.
   const searchSettled =
     searching && !semanticPending
       ? feedMemos.length === 0
-        ? searchEmptyTitle
+        ? coldLoadEmpty?.title ?? searchEmptyTitle
         : searchSummary
       : trashSearching
         ? trashFeedMemos.length === 0
-          ? tr("No matching memos in Trash", "回收站里没有相关笔记")
+          ? coldLoadEmpty?.title ?? tr("No matching memos in Trash", "回收站里没有相关笔记")
           : trashSummary
         : "";
   const [searchAnnouncement, setSearchAnnouncement] = useState("");
@@ -2536,6 +2566,18 @@ export default function App() {
       (lens) => ({ ...lens, tag: null, day: null, drilldown: null, filters: EMPTY_FILTERS })
     );
   }, [changeFeed]);
+
+  /**
+   * Lifts the search, as the home pill restores a list: one press, and the
+   * list the search was typed over glides back — to the card it was left at.
+   * The search box's ×, its Esc and an empty result's way out all run it.
+   */
+  const clearSearch = useCallback(() => {
+    changeFeed(
+      () => swapQuery(""),
+      (lens) => ({ ...lens, query: "" })
+    );
+  }, [changeFeed, swapQuery]);
 
   /** Facet on/off is a discrete choice — it rides the same feed morph as a
       tag or sort change, whether it comes from the panel or a chip's ×. */
@@ -3661,7 +3703,12 @@ export default function App() {
    * the caller's toast. Resolves to null when the memo already has an action
    * in flight (or the session went away) — nothing to report then.
    */
-  async function runOptimisticMemoAction(memo: Memo, patch: OptimisticPatch, request: () => Promise<Memo | null>): Promise<Memo | null> {
+  async function runOptimisticMemoAction(
+    memo: Memo,
+    patch: OptimisticPatch,
+    request: () => Promise<Memo | null>,
+    onDeparted?: (departed: Departure | undefined) => void
+  ): Promise<Memo | null> {
     const tokens = memoActionTokensRef.current;
     if (tokens.has(memo.id)) return null;
     const token = {};
@@ -3669,19 +3716,26 @@ export default function App() {
     const intent = "deletedAt" in patch ? (patch.deletedAt ? "trash" : "restore") : patch.pinnedAt ? "pin" : "unpin";
     const undone = { pin: "unpin", unpin: "pin", trash: "restore", restore: "trash" } as const;
     // A card the guess removes (trash, restore) must not drop keyboard focus
-    // to <body>: hand it on to a neighbour, as applyRemoval does.
-    const refocus = holdFeedFocus();
-    moveFeed(intent, [memo.id], () => setOptimisticMemos((current) => withPatch(current, memo.id, patch)));
-    refocus();
+    // to <body>: hand it on to a neighbour, as applyRemoval does. One the
+    // guess carries off screen (a pin lifting it to the top, an unpin
+    // sinking it) leaves focus at the reader's place the same way.
+    const refocus = holdFeedFocus(memo.id);
+    const departed = moveFeed(intent, [memo.id], () => setOptimisticMemos((current) => withPatch(current, memo.id, patch))).departed.get(memo.id);
+    refocus(departed);
+    onDeparted?.(departed);
     let settled: Memo | null = null;
     try {
       settled = await request();
     } finally {
       tokens.delete(memo.id);
-      moveFeed(settled ? intent : undone[intent], [memo.id], () => {
+      // The answer lands in place; a failure carries the card back, maybe
+      // off screen again — focus that went with it stays here too.
+      const refocusSettled = holdFeedFocus(memo.id);
+      const back = moveFeed(settled ? intent : undone[intent], [memo.id], () => {
         if (settled) applySyncChanges([settled], [], []);
         setOptimisticMemos((current) => withoutPatch(current, memo.id));
-      });
+      }).departed.get(memo.id);
+      refocusSettled(back);
     }
     if (settled) {
       void runSync();
@@ -3692,17 +3746,37 @@ export default function App() {
 
   async function handleTogglePin(memo: Memo) {
     const pinning = !memo.pinnedAt;
+    // Where the guess carried the card, if it left the screen.
+    let went: Departure | undefined;
     try {
-      const nextMemo = await runOptimisticMemoAction(memo, { pinnedAt: pinning ? new Date().toISOString() : null }, async () => {
-        const result = await guard(() => updateMemo(memo.id, { expectedSeq: memo.seq, pinned: pinning }));
-        return result?.memo ?? (result?.memoPatch ? { ...memo, ...result.memoPatch } : null);
-      });
+      const nextMemo = await runOptimisticMemoAction(
+        memo,
+        { pinnedAt: pinning ? new Date().toISOString() : null },
+        async () => {
+          const result = await guard(() => updateMemo(memo.id, { expectedSeq: memo.seq, pinned: pinning }));
+          return result?.memo ?? (result?.memoPatch ? { ...memo, ...result.memoPatch } : null);
+        },
+        (departed) => {
+          went = departed;
+        }
+      );
       if (!nextMemo) return;
       // Pinning lifts a card from deep in the feed out of view, so the
-      // reverse rides on the toast.
-      showToast(nextMemo.pinnedAt ? tr("Pinned", "已置顶") : tr("Unpinned", "已取消置顶"), "info", {
-        action: { label: tr("Undo", "撤销"), run: () => void handleTogglePin(nextMemo) }
-      });
+      // reverse rides on the toast. When the card left the screen, the
+      // toast says where it went, as a save that moves one does: a pin can
+      // only lift it to the pinned memos at the top, an unpin only sink it.
+      const moved = went === "up" || went === "down";
+      showToast(
+        nextMemo.pinnedAt
+          ? moved
+            ? tr("Pinned — the memo moved to the top", "已置顶，这条笔记移到了顶部")
+            : tr("Pinned", "已置顶")
+          : moved
+            ? tr("Unpinned — the memo moved further down this list", "已取消置顶，这条笔记移到了列表靠后")
+            : tr("Unpinned", "已取消置顶"),
+        "info",
+        { action: { label: tr("Undo", "撤销"), run: () => void handleTogglePin(nextMemo) } }
+      );
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
       showToast(errorMessage(cause, "Couldn’t update the memo.", "更新笔记失败"), "error");
@@ -5298,10 +5372,7 @@ export default function App() {
                         // also back out on the same press.
                         event.preventDefault();
                         event.stopPropagation();
-                        changeFeed(
-                          () => swapQuery(""),
-                          (lens) => ({ ...lens, query: "" })
-                        );
+                        clearSearch();
                       } else event.currentTarget.blur();
                     } else if (event.key === "Enter" && window.matchMedia("(pointer: coarse)").matches) {
                       // The feed already follows each keystroke; on a phone
@@ -5337,10 +5408,7 @@ export default function App() {
                     // The same restoration the home pill performs, so it
                     // reads the same: one click, the full list glides back
                     // (to the reading place, when it was there before).
-                    changeFeed(
-                      () => swapQuery(""),
-                      (lens) => ({ ...lens, query: "" })
-                    );
+                    clearSearch();
                     searchRef.current?.focus();
                   }}
                 >
@@ -5623,6 +5691,8 @@ export default function App() {
           ref={feedRef}
           className={`memo-feed${selectingFeed ? " is-select" : ""}${renderedFeedMemos.length <= SMALL_FEED ? " is-small" : ""}`}
           aria-label={view === "trash" ? tr("Trash", "回收站") : view === "review" ? tr("Daily review", "每日回顾") : tr("Memo list", "笔记列表")}
+          // Older pages of a cold start are still arriving into this list.
+          aria-busy={bootstrapLoad ? true : undefined}
         >
           {view === "review" && reviewDay && feedMemos.length > 0 ? (
             // The day's masthead: date and batch size, fixed all day. Its own
@@ -5638,7 +5708,12 @@ export default function App() {
           ) : null}
           {feedMemos.length === 0 ? (
             <div className="feed-empty">
-              {view === "trash" && trashedMemos.length > 0 ? (
+              {coldLoadEmpty ? (
+                <>
+                  <p className="feed-empty-title">{coldLoadEmpty.title}</p>
+                  <p>{coldLoadEmpty.body}</p>
+                </>
+              ) : view === "trash" && trashedMemos.length > 0 ? (
                 <>
                   <p className="feed-empty-title">{tr("No matching memos in Trash", "回收站里没有相关笔记")}</p>
                   <p>{tr("Try a different search.", "换个关键词试试")}</p>
@@ -5716,6 +5791,22 @@ export default function App() {
                 <>
                   <p className="feed-empty-title">{searching ? searchEmptyTitle : tr("No matching memos", "没有找到相关笔记")}</p>
                   <p>{tr("Try a different search or filter.", "换个筛选条件试试")}</p>
+                  {/* The way out every other empty list has: the search box's
+                      own ×, which brings back the list the search was typed
+                      over, at its reading place. */}
+                  {searching ? (
+                    <button
+                      type="button"
+                      className="ghost-button feed-empty-action"
+                      onClick={() => {
+                        armFocusFloor();
+                        clearSearch();
+                      }}
+                    >
+                      <X size={15} aria-hidden="true" />
+                      {tr("Clear search", "清空搜索")}
+                    </button>
+                  ) : null}
                 </>
               )}
             </div>
@@ -5744,6 +5835,12 @@ export default function App() {
             ))
           )}
           {hasMoreFeed ? <div ref={feedSentinelRef} className="feed-sentinel" aria-hidden="true" /> : null}
+          {/* The list ran out, but a cold start is still loading older
+              pages: its last card is not the notebook's oldest. */}
+          {bootstrapLoad && !hasMoreFeed && feedMemos.length > 0 && view !== "review" ? (
+            <FeedEnd loaded={loadedMemoCount} total={bootstrapLoad.total} failed={bootstrapLoad.failed} />
+          ) : null}
+          <SelectRingStagger active={selectingFeed} feedRef={feedRef} />
           {/* Exit ghosts (lib/feedMotion.ts): cards that just left the list
               play their exit here, outside React's tree. Always empty to React. */}
           <div ref={feedGhostsRef} className="feed-ghosts" aria-hidden="true" />

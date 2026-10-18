@@ -2,18 +2,22 @@
 
 // Feed card behaviour: the long-memo fold, the ⋯ menu's flip and ARIA
 // wiring, one-step trash with a confirmed permanent delete, the trash card's
-// visible Restore, and the off-screen replay skip.
+// visible Restore, the off-screen replay skip, and the card's motion under
+// reduced motion.
 
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { createRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoCard } from "../src/components/MemoCard";
+import { MemoCard, SelectRingStagger } from "../src/components/MemoCard";
 import { mightFold } from "../src/components/MemoFold";
 import { Menu } from "../src/components/Menu";
 import { TagTree } from "../src/components/TagTree";
+import { TipProvider } from "../src/components/Tip";
 import { formatTime } from "../src/lib/dates";
+import { forgetAllFolds, forgetFolds, isUnfolded } from "../src/lib/foldMemory";
 import { LanguageProvider } from "../src/lib/i18n";
+import { EXIT_MS, T_BASE, T_ENTER, T_EXIT, T_FAST } from "../src/lib/motion";
 import { SCROLL_JUMP_EVENT } from "../src/lib/navHistory";
 import type { TagNode } from "../src/lib/tags";
 import type { Memo } from "../src/lib/types";
@@ -99,6 +103,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // Unfolded memos are remembered feed-wide (lib/foldMemory), and every
+  // test's card shares one id.
+  forgetAllFolds();
   delete (Element.prototype as Element & { animate?: unknown }).animate;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -197,7 +204,7 @@ describe("long-memo fold", () => {
         { height: "320px", "--fold-fade": "56px" },
         { height: "900px", "--fold-fade": "0px" }
       ]);
-      expect(unfold.options).toMatchObject({ duration: 260, fill: "forwards" });
+      expect(unfold.options).toMatchObject({ duration: T_ENTER, fill: "forwards" });
       await act(async () => unfold.finish());
       expect(fold.classList.contains("is-unfolding")).toBe(false);
       expect(unfold.cancel).toHaveBeenCalled();
@@ -209,7 +216,8 @@ describe("long-memo fold", () => {
         { maxHeight: "900px", "--fold-fade": "0px" },
         { maxHeight: "320px", "--fold-fade": "56px" }
       ]);
-      expect(fold2.options).toMatchObject({ duration: 220 });
+      // Closing is an exit: its beat and curve.
+      expect(fold2.options).toMatchObject({ duration: T_EXIT });
       expect(scrollBy).not.toHaveBeenCalled();
     });
 
@@ -316,7 +324,7 @@ describe("long-memo fold", () => {
       expect(page.frames).toHaveLength(0);
     });
 
-    it("snaps shut under reduced motion, still keeping the toggle under the pointer", async () => {
+    it("snaps shut under reduced motion, keeping the toggle under the pointer, and fades the edge back in", async () => {
       const user = userEvent.setup();
       const { container, scrollBy } = setup(-700);
       await user.click(screen.getByRole("button", { name: "Show more" }));
@@ -331,9 +339,53 @@ describe("long-memo fold", () => {
 
       await user.click(screen.getByRole("button", { name: "Show less" }));
       expect(container.querySelector(".memo-fold")?.classList.contains("is-expanded")).toBe(false);
-      expect(foldAnimations()).toHaveLength(1);
       expect(scrollBy).toHaveBeenCalledWith({ top: -580, behavior: "instant" });
+      // The box does not travel: only the fade pours back, over --t.
+      expect(foldAnimations()).toHaveLength(2);
+      const fade = foldAnimations()[1];
+      expect(fade.keyframes).toEqual([{ "--fold-fade": "0px" }, { "--fold-fade": "56px" }]);
+      expect(fade.options).toMatchObject({ duration: T_BASE });
     });
+
+    it("opens at once under reduced motion and drains only the fade", async () => {
+      const user = userEvent.setup();
+      const { container } = setup(40);
+      stubMatchMedia(true);
+      await user.click(screen.getByRole("button", { name: "Show more" }));
+      const fold = container.querySelector<HTMLElement>(".memo-fold")!;
+      expect(fold.classList.contains("is-expanded")).toBe(true);
+      // The mask holds while the fade drains, so the end of the text
+      // dissolves in instead of appearing with a hard edge.
+      expect(fold.classList.contains("is-unfolding")).toBe(true);
+      const [unfold] = foldAnimations();
+      expect(unfold.keyframes).toEqual([{ "--fold-fade": "56px" }, { "--fold-fade": "0px" }]);
+      expect(unfold.options).toMatchObject({ duration: T_BASE, fill: "forwards" });
+      await act(async () => unfold.finish());
+      expect(fold.classList.contains("is-unfolding")).toBe(false);
+    });
+  });
+
+  it("comes back open after a remount when the reader left it open, and forgets it on purge", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("memo-content") ? 900 : 0;
+    });
+    const long = { ...baseMemo, content: LONG };
+    const first = renderCard({ memo: long });
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+    expect(isUnfolded(long.id)).toBe(true);
+    // A lens change (or a trip to Trash) unmounts the card…
+    first.unmount();
+    // …and the card that comes back is still open, so a reading place
+    // measured inside the open body still lands where it was taken.
+    const { container } = renderCard({ memo: long });
+    expect(container.querySelector(".memo-fold")?.classList.contains("is-expanded")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Show less" }));
+    expect(isUnfolded(long.id)).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+    forgetFolds([long.id]);
+    expect(isUnfolded(long.id)).toBe(false);
   });
 
   it("leaves a body that fits alone: no clamp, no toggle", () => {
@@ -443,7 +495,8 @@ describe("pin mark", () => {
     expect(mark(container)?.classList.contains("is-new")).toBe(false);
 
     rerenderCard({ memo: { ...baseMemo, pinnedAt: null } });
-    expect(mark(container)).toBeNull();
+    // Unpinning plays the pop backwards rather than cutting the mark.
+    expect(mark(container)?.classList.contains("is-leaving")).toBe(true);
     rerenderCard({ memo: { ...baseMemo, pinnedAt: PINNED_AT } });
     expect(mark(container)?.classList.contains("is-new")).toBe(true);
 
@@ -454,6 +507,41 @@ describe("pin mark", () => {
     expect(mark(container)?.classList.contains("is-new")).toBe(false);
     rerenderCard({ memo: { ...baseMemo, pinnedAt: PINNED_AT, content: "hello again" } });
     expect(mark(container)?.classList.contains("is-new")).toBe(false);
+  });
+
+  it("holds the unpinned mark for the exit beat, unnamed, then lets it go", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerenderCard } = renderCard({ memo: { ...baseMemo, pinnedAt: PINNED_AT } });
+      expect(within(container).getByLabelText("Pinned")).not.toBeNull();
+      rerenderCard({ memo: { ...baseMemo, pinnedAt: null } });
+      const leaving = mark(container);
+      expect(leaving?.classList.contains("is-leaving")).toBe(true);
+      // Already unpinned: the leaving mark says nothing.
+      expect(leaving?.getAttribute("aria-hidden")).toBe("true");
+      expect(within(container).queryByLabelText("Pinned")).toBeNull();
+      act(() => vi.advanceTimersByTime(EXIT_MS - 1));
+      expect(mark(container)).not.toBeNull();
+      act(() => vi.advanceTimersByTime(1));
+      expect(mark(container)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("card name", () => {
+  it("names each card by its time, as its ⋯ is", () => {
+    renderCard();
+    const card = screen.getByRole("article", { name: formatTime(baseMemo.createdAt, "en-US") });
+    const time = card.querySelector("time.memo-time");
+    expect(card.getAttribute("aria-labelledby")).toBe(time?.id);
+  });
+
+  it("names a trashed card by its deletion", () => {
+    const trashed: Memo = { ...baseMemo, deletedAt: "2026-07-17T09:30:00.000Z" };
+    renderCard({ memo: trashed, variant: "trash" });
+    expect(screen.getByRole("article", { name: `Deleted ${formatTime(trashed.deletedAt!, "en-US")}` })).not.toBeNull();
   });
 });
 
@@ -607,5 +695,117 @@ describe("off-screen replay", () => {
     expect(container.querySelector(".stage-overlay")).toBeNull();
     expect(container.querySelector(".stage-ghost")).toBeNull();
     expect(container.textContent).toContain("second");
+  });
+});
+
+describe("stage under reduced motion", () => {
+  interface Played {
+    el: Element;
+    keyframes: Keyframe[];
+    options: KeyframeAnimationOptions;
+  }
+  let played: Played[];
+
+  function setupReduced() {
+    stubMatchMedia(true);
+    played = [];
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(320);
+    Object.defineProperty(Element.prototype, "animate", {
+      configurable: true,
+      value: vi.fn(function (this: Element, keyframes: Keyframe[], options: KeyframeAnimationOptions) {
+        played.push({ el: this, keyframes, options });
+        return { cancel: vi.fn(), finished: new Promise<Animation>(() => {}) } as unknown as Animation;
+      })
+    });
+  }
+
+  const travels = (keyframes: Keyframe[]) => keyframes.some((frame) => "transform" in frame || "height" in frame || "clipPath" in frame);
+
+  it("dissolves into the editor in place: the outgoing view fades, the editor fades in, nothing travels", () => {
+    setupReduced();
+    // The editor's toolbar needs the app's tip bubble.
+    const props = cardProps();
+    const card = (next: Partial<CardProps>) => (
+      <Providers>
+        <TipProvider>
+          <MemoCard {...props} {...next} />
+        </TipProvider>
+      </Providers>
+    );
+    const { container, rerender } = render(card({}));
+    rerender(card({ editing: true }));
+    const stage = container.querySelector<HTMLElement>(".card-stage")!;
+    expect(stage.classList.contains("is-morphing")).toBe(true);
+    // No height tween: the stage stands at the editor's height at once.
+    expect(stage.style.height).toBe("");
+    expect(played).toHaveLength(2);
+    const [out, enter] = played;
+    expect((out.el as HTMLElement).classList.contains("is-view")).toBe(true);
+    expect(out.keyframes).toEqual([{ opacity: 1 }, { opacity: 0 }]);
+    expect(out.options).toMatchObject({ duration: T_FAST });
+    expect((enter.el as HTMLElement).classList.contains("is-edit")).toBe(true);
+    expect(enter.keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
+    expect(enter.options).toMatchObject({ duration: T_BASE });
+    expect(played.some((track) => travels(track.keyframes))).toBe(false);
+  });
+
+  it("cross-fades a changed memo instead of replaying its lines", () => {
+    setupReduced();
+    const { container, rerenderCard } = renderCard({ memo: { ...baseMemo, content: "first" } });
+    rerenderCard({ memo: { ...baseMemo, content: "first\nsecond", seq: 2 } });
+    // No line clones: the old body (the ghost) fades over the new one.
+    expect(container.querySelector(".stage-overlay")).toBeNull();
+    expect(container.querySelector(".stage-ghost.is-out")).not.toBeNull();
+    expect(container.querySelector(".stage-hold")).toBeNull();
+    expect(played.map((track) => track.keyframes)).toEqual([
+      [{ opacity: 1 }, { opacity: 0 }],
+      [{ opacity: 0 }, { opacity: 1 }]
+    ]);
+  });
+});
+
+describe("select ring stagger", () => {
+  it("counts the ripple among the cards on screen, from the top of the view", () => {
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
+    const feed = document.createElement("section");
+    const tops = [-900, -300, 40, 240, 440, 640, 840];
+    const slots = tops.map((top) => {
+      const slot = document.createElement("div");
+      slot.className = "memo-slot";
+      slot.getBoundingClientRect = () => new DOMRect(0, top, 300, 180);
+      feed.appendChild(slot);
+      return slot;
+    });
+    // A masthead above the list is not a card.
+    const banner = document.createElement("div");
+    banner.className = "review-banner";
+    feed.prepend(banner);
+    document.body.appendChild(feed);
+    const feedRef = createRef<HTMLElement>() as { current: HTMLElement | null };
+    feedRef.current = feed;
+
+    const { rerender } = render(<SelectRingStagger active feedRef={feedRef as React.RefObject<HTMLElement>} />);
+    expect(slots.map((slot) => slot.style.getPropertyValue("--sbd"))).toEqual(["", "", "0ms", "15ms", "30ms", "", ""]);
+
+    rerender(<SelectRingStagger active={false} feedRef={feedRef as React.RefObject<HTMLElement>} />);
+    expect(slots.every((slot) => slot.style.getPropertyValue("--sbd") === "")).toBe(true);
+    feed.remove();
+  });
+
+  it("stops the ripple at 90ms", () => {
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 2000 });
+    const feed = document.createElement("section");
+    const slots = Array.from({ length: 9 }, (_, index) => {
+      const slot = document.createElement("div");
+      slot.className = "memo-slot";
+      slot.getBoundingClientRect = () => new DOMRect(0, index * 200, 300, 180);
+      feed.appendChild(slot);
+      return slot;
+    });
+    document.body.appendChild(feed);
+    const feedRef = { current: feed };
+    render(<SelectRingStagger active feedRef={feedRef} />);
+    expect(slots.map((slot) => slot.style.getPropertyValue("--sbd"))).toEqual(["0ms", "15ms", "30ms", "45ms", "60ms", "75ms", "90ms", "90ms", "90ms"]);
+    feed.remove();
   });
 });

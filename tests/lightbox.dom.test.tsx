@@ -178,7 +178,7 @@ describe("Lightbox loading", () => {
     const second = screen.getByRole("img", { name: "Image 2 of 3" });
     expect(second.classList.contains("is-pending")).toBe(true);
     fireEvent.error(second);
-    expect(screen.getByRole("alert").textContent).toBe("Couldn't load this image");
+    expect(screen.getByRole("alert").textContent).toBe("Couldn’t load image");
     expect(document.querySelector(".lightbox-status.is-loading")).toBeNull();
   });
 
@@ -264,7 +264,7 @@ describe("Lightbox over the image cache", () => {
   it("says when a stored picture cannot be fetched", async () => {
     renderLocalized(<Lightbox items={STORED} index={0} onClose={vi.fn()} />);
     await act(async () => finish.get("/api/images/a")!(new Response("{}", { status: 503 })));
-    expect((await screen.findByRole("alert")).textContent).toBe("Couldn't load this image");
+    expect((await screen.findByRole("alert")).textContent).toBe("Couldn’t load image");
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 });
@@ -406,7 +406,7 @@ describe("Lightbox closing and failure", () => {
     renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
     const first = screen.getByRole("img", { name: "Image 1 of 3" });
     fireEvent.error(first);
-    expect(screen.getByRole("alert").textContent).toBe("Couldn't load this image");
+    expect(screen.getByRole("alert").textContent).toBe("Couldn’t load image");
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(screen.queryByRole("alert")).toBeNull();
