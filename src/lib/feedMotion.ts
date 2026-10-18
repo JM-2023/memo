@@ -1,5 +1,5 @@
-import { onTransitionUpdate, paintedTransitionOffsets, skipLiveTransition, transitionUpdating, type PaintedOffset } from "./viewTransition";
-import { motionOffset, type Box } from "./feedBoxes";
+import { onTransitionCommitted, onTransitionUpdate, paintedTransitionOffsets, skipLiveTransition, transitionUpdating, type PaintedOffset } from "./viewTransition";
+import { layoutRect, motionOffset, type Box } from "./feedBoxes";
 import { EASE, EASE_OUT, T_BASE, T_ENTER, T_EXIT } from "./motion";
 
 /**
@@ -14,6 +14,9 @@ import { EASE, EASE_OUT, T_BASE, T_ENTER, T_EXIT } from "./motion";
  *    another tab or device sends. Those play here, as FLIP: the cards are
  *    measured before the change, the change commits, and each card is moved
  *    back to where it was painted and released.
+ *
+ * Cards that simply mount — the first page, the next one, a typed search's
+ * results — get the feed's entrance here as well (`observe`).
  */
 export type FeedIntent = "create" | "lens" | "pin" | "unpin" | "trash" | "restore" | "purge" | "edit-save" | "task" | "remote";
 export type InPlaceIntent = Exclude<FeedIntent, "create" | "lens">;
@@ -36,9 +39,22 @@ export interface FeedMotion {
   /** Stop everything in flight: running glides land, exit ghosts go. */
   settle(): void;
   /**
+   * Watch a feed for cards mounted outside any run — the first page, the next
+   * page, a typed search's results — and play their entrance: a rise, ≤48ms
+   * apart, for the ones on screen. The cards it already holds arrive with it.
+   */
+  observe(feed: HTMLElement | null): void;
+  /**
+   * The cards mounted since the last look have arrived already: a commit
+   * whose motion is owned elsewhere (a view transition's snapshot, the
+   * browser's own Back slide) must not replay their entrance.
+   */
+  claim(): void;
+  /**
    * Start settling whenever a view transition's update runs (the capture has
-   * just frozen the frame; motion left running would play under it). The
-   * returned detach settles and stops listening — an effect's cleanup.
+   * just frozen the frame; motion left running would play under it), and
+   * leave the cards its update mounts to the snapshot. The returned detach
+   * settles and stops listening — an effect's cleanup.
    */
   attach(): () => void;
 }
@@ -85,6 +101,9 @@ const GLIDE_MS = T_ENTER;
 const EXIT_MS = T_EXIT;
 const ARRIVE_MS = T_ENTER;
 const DISSOLVE_MS = T_BASE;
+/** Cards arriving together enter this far apart, the seventh and later at once with the sixth. */
+const STAGGER_MS = 8;
+const STAGGER_CAP = 6;
 /** How long the reader's place is held after a change: past the glides, and
     past the 220ms height tween a card plays when it leaves its editor. */
 const HOLD_MS = 400;
@@ -157,17 +176,19 @@ function ease(token: "--ease" | "--ease-out"): string {
 
 /**
  * A card's layout box and where it is painted. The box leaves out every
- * transform (the slot's own entrance, a glide still running); `at` keeps the
- * glide — ours to continue — but not the entrance, which keeps playing by
- * itself on the CSS animation and would otherwise be counted twice.
+ * transform (an entrance, a glide still running). `at` and `opacity` are the
+ * reader's frame when the motion carrying the card is ours (`ours`) — the
+ * next change continues from it — and the plain box otherwise.
  */
-function measure(el: HTMLElement, offsets: Map<string, PaintedOffset>): Omit<Shot, "el" | "copy"> {
+function measure(el: HTMLElement, offsets: Map<string, PaintedOffset>, ours = false): Omit<Shot, "el" | "copy"> {
   const rect = el.getBoundingClientRect();
   const { glide, own } = motionOffset(el);
   const box = { left: rect.left - glide.x - own.x, top: rect.top - glide.y - own.y, width: rect.width, height: rect.height };
   const painted = el.style.viewTransitionName ? offsets.get(el.style.viewTransitionName) : undefined;
   if (painted) return { box, at: { left: box.left + painted.dx, top: box.top + painted.dy }, opacity: painted.opacity };
-  return { box, at: { left: box.left + glide.x, top: box.top + glide.y }, opacity: 1 };
+  if (!ours) return { box, at: { left: box.left, top: box.top }, opacity: 1 };
+  const opacity = Number.parseFloat(getComputedStyle(el).opacity);
+  return { box, at: { left: rect.left, top: rect.top }, opacity: Number.isFinite(opacity) ? opacity : 1 };
 }
 
 function boxOf(el: HTMLElement): Box {
@@ -191,6 +212,11 @@ function firstFrom(slots: HTMLElement[], edge: number): number {
 }
 
 const idOf = (key: string) => key.slice("memo-".length);
+
+const hasAnimations = () => typeof Element !== "undefined" && typeof Element.prototype.animate === "function";
+
+/** Below this a card is not seen yet — an arrival still waiting out its stagger. */
+const UNSEEN = 0.05;
 
 /**
  * The feed's motion layer for in-place changes. One instance per feed; App
@@ -257,7 +283,7 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
       const slot = slots[index];
       const key = slot.dataset.vt;
       if (!key) continue;
-      const shot = { el: slot, copy: null, ...measure(slot, offsets) };
+      const shot = { el: slot, copy: null, ...measure(slot, offsets, glides.has(slot)) };
       shots.set(key, shot);
       if (shot.box.top > 2 * height) break;
       if (shot.box.top < 0 && !targets.has(key)) anchor = { el: slot, top: shot.box.top };
@@ -265,7 +291,7 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     for (const key of targets) {
       if (shots.has(key)) continue;
       const slot = slots.find((candidate) => candidate.dataset.vt === key);
-      if (slot) shots.set(key, { el: slot, copy: null, ...measure(slot, offsets) });
+      if (slot) shots.set(key, { el: slot, copy: null, ...measure(slot, offsets, glides.has(slot)) });
     }
     // A named card that may move far away leaves a copy of itself behind,
     // taken now: after the change its node is somewhere else, already
@@ -273,7 +299,7 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     if (RELOCATING.has(intent)) {
       for (const key of targets) {
         const shot = shots.get(key);
-        if (shot && onScreen(shot.at.top, shot.box.height)) shot.copy = shot.el.cloneNode(true) as HTMLElement;
+        if (shot && seenAt(shot)) shot.copy = shot.el.cloneNode(true) as HTMLElement;
       }
     }
     return { intent, targets, known, shots, anchor, overTransition: offsets.size > 0 };
@@ -281,6 +307,11 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
 
   function onScreen(top: number, height: number): boolean {
     return top < window.innerHeight && top + height > 0;
+  }
+
+  /** The reader could see the card when it was measured: on screen, and not still waiting to arrive. */
+  function seenAt(shot: Pick<Shot, "at" | "box" | "opacity">): boolean {
+    return onScreen(shot.at.top, shot.box.height) && shot.opacity >= UNSEEN;
   }
 
   /** Near enough to the screen that a glide between two such places reads as one move. */
@@ -313,8 +344,9 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     void Promise.resolve(animation.finished).then(release, () => undefined);
   }
 
-  function arrive(el: HTMLElement, arrival: Arrival, duration = arrival === "fade" ? 200 : ARRIVE_MS): void {
-    const animation = el.animate(ARRIVALS[arrival], { duration, easing: ease("--ease-out") });
+  /** `delay` holds the card at its first frame (unseen) until its turn in a cascade. */
+  function arrive(el: HTMLElement, arrival: Arrival, duration = arrival === "fade" ? 200 : ARRIVE_MS, delay = 0, easing = ease("--ease-out")): Animation {
+    const animation = el.animate(ARRIVALS[arrival], { duration, delay, easing, fill: "backwards" });
     glides.set(el, animation);
     void Promise.resolve(animation.finished).then(
       () => {
@@ -322,6 +354,7 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
       },
       () => undefined
     );
+    return animation;
   }
 
   /**
@@ -366,6 +399,91 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
   function dissolve(el: HTMLElement, from: Pick<Shot, "at" | "box" | "opacity">): void {
     ghost(el.cloneNode(true) as HTMLElement, from, "fade", DISSOLVE_MS);
     arrive(el, "fade", DISSOLVE_MS);
+  }
+
+  // Cards that have had their entrance, or had it under someone else's
+  // motion. React moving a kept card re-inserts its node; it does not
+  // arrive again.
+  const seen = new WeakSet<HTMLElement>();
+  let watched: HTMLElement | null = null;
+  let observer: MutationObserver | null = null;
+
+  /** The slots among `nodes` that have not arrived yet, now marked as arrived. */
+  function unseen(nodes: Iterable<Node>): HTMLElement[] {
+    const fresh: HTMLElement[] = [];
+    for (const node of nodes) {
+      if (!(node instanceof HTMLElement) || !node.classList.contains("memo-slot") || seen.has(node)) continue;
+      seen.add(node);
+      fresh.push(node);
+    }
+    return fresh;
+  }
+
+  function added(records: MutationRecord[]): HTMLElement[] {
+    return unseen(records.flatMap((record) => Array.from(record.addedNodes)));
+  }
+
+  /**
+   * The feed's own entrance for cards mounted outside any change it plays:
+   * each rises into place, the ones arriving together ≤48ms apart down the
+   * page; reduced motion fades them in, all at once. It is for the cards the
+   * reader sees arrive. Until the browser renders a new card it stands at
+   * the feed's height estimate, so the entrance starts on everything within
+   * a viewport and a half; a frame later the cards have their real heights,
+   * and the ones that turned out below the fold — a page appended under the
+   * reader — land at once rather than rise as they are scrolled into.
+   */
+  function enter(fresh: HTMLElement[]): void {
+    const feed = watched;
+    if (!feed || fresh.length === 0 || !hasAnimations()) return;
+    const arriving = new Set(fresh);
+    const reach = window.innerHeight * 1.5;
+    const reduced = reducedMotion();
+    const easing = ease("--ease-out");
+    const started: Array<[HTMLElement, Animation]> = [];
+    let order = 0;
+    for (const slot of slotsOf(feed)) {
+      if (!arriving.has(slot)) continue;
+      const rect = slot.getBoundingClientRect();
+      if (rect.top >= reach) break;
+      if (rect.bottom <= 0) continue;
+      const animation = reduced ? arrive(slot, "fade", DISSOLVE_MS) : arrive(slot, "rise", ARRIVE_MS, Math.min(order++, STAGGER_CAP) * STAGGER_MS, easing);
+      started.push([slot, animation]);
+    }
+    if (started.length === 0) return;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        for (const [slot, animation] of started) {
+          if (glides.get(slot) !== animation || !slot.isConnected) continue;
+          const { top, bottom } = layoutRect(slot);
+          if (top >= window.innerHeight || bottom <= 0) animation.finish();
+        }
+      })
+    );
+  }
+
+  /** Cards mounted since the last look that are still waiting for an entrance get it now. */
+  function flush(): void {
+    const records = observer?.takeRecords();
+    if (records?.length) enter(added(records));
+  }
+
+  function claim(): void {
+    const records = observer?.takeRecords();
+    if (records?.length) added(records);
+  }
+
+  function observe(feed: HTMLElement | null): void {
+    if (feed === watched) return;
+    observer?.disconnect();
+    observer = null;
+    watched = feed;
+    if (!feed || typeof MutationObserver !== "function") return;
+    observer = new MutationObserver((records) => enter(added(records)));
+    observer.observe(feed, { childList: true });
+    const fresh = unseen(slotsOf(feed));
+    // A feed mounted by a view transition's update is the snapshot's to show.
+    if (!transitionUpdating()) enter(fresh);
   }
 
   function play(capture: Capture): FeedMotionResult {
@@ -420,6 +538,8 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     const slots = slotsOf(feed);
     // How far the last measured card moved, for its unmeasured followers.
     let shift = 0;
+    // New cards entering so far, for their cascade.
+    let arrivals = 0;
     for (let index = firstFrom(slots, -height); index < slots.length; index += 1) {
       const slot = slots[index];
       const key = slot.dataset.vt;
@@ -429,10 +549,13 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
       const shot = capture.shots.get(key);
       if (!shot) {
         if (!capture.known.has(key)) {
-          // A new card: its slot plays the feed's own entrance on mount —
-          // which reduced motion cuts to nothing, so it fades in here.
+          // A new card — another device's, or one the change brought into
+          // the lens: the feed's own entrance, where it can be seen.
           changed = true;
-          if (reduced && onScreen(box.top, box.height)) motions.push(() => arrive(slot, "fade", DISSOLVE_MS));
+          if (onScreen(box.top, box.height)) {
+            const delay = Math.min(arrivals++, STAGGER_CAP) * STAGGER_MS;
+            motions.push(() => (reduced ? arrive(slot, "fade", DISSOLVE_MS) : arrive(slot, "rise", ARRIVE_MS, delay)));
+          }
         } else if (Math.abs(shift) >= 0.5) {
           // It was in the feed, past the measured band: it moves with the
           // card above it.
@@ -469,7 +592,7 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
         // (A fresh node under the same key is the same card, remounted.)
         if (slots.some((slot) => slot.dataset.vt === key)) continue;
         changed = true;
-        const seen = onScreen(shot.at.top, shot.box.height);
+        const seen = seenAt(shot);
         if (target && seen) result.departed.set(idOf(key), "removed");
         if (seen) {
           ghosted = true;
@@ -477,7 +600,7 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
         }
         continue;
       }
-      if (!target || !onScreen(shot.at.top, shot.box.height)) continue;
+      if (!target || !seenAt(shot)) continue;
       const box = boxOf(shot.el);
       if (onScreen(box.top, box.height)) continue;
       const up = box.top < shot.box.top;
@@ -503,19 +626,26 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
 
   return {
     run(intent, ids, commit) {
-      // Inside a view transition's update the snapshot owns the motion; and
-      // with no Web Animations there is nothing to play.
-      if (transitionUpdating() || typeof Element.prototype.animate !== "function") {
+      // Inside a view transition's update the snapshot owns the motion (and
+      // the update's end claims the cards it mounted); with no Web
+      // Animations there is nothing to play.
+      if (transitionUpdating() || !hasAnimations()) {
         commit();
+        claim();
         return EMPTY;
       }
       let taken: Capture | null = null;
       try {
+        // Cards mounted just before this change enter first, so it starts
+        // from the frame their entrance paints.
+        flush();
         taken = capture(intent, ids);
       } catch {
         taken = null;
       }
       commit();
+      // The change's own new cards are play's to move.
+      claim();
       if (!taken) return EMPTY;
       try {
         return play(taken);
@@ -526,10 +656,12 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
       }
     },
     settle,
+    observe,
+    claim,
     attach() {
-      const unsubscribe = onTransitionUpdate(settle);
+      const unsubscribe = [onTransitionUpdate(settle), onTransitionCommitted(claim)];
       return () => {
-        unsubscribe();
+        for (const stop of unsubscribe) stop();
         settle();
       };
     }

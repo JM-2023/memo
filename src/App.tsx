@@ -390,45 +390,23 @@ function loadSortKey(): SortKey {
 interface MemoSlotProps {
   /** Per-memo view-transition-name; undefined past the morph budget. */
   vtName: string | undefined;
-  entering: boolean;
-  delay: number;
   children: ReactNode;
 }
 
 /**
- * Feed slot that locks its entrance decision at mount: slots mounted by a
- * filter swap skip the rise-in (the view transition owns that motion), while
- * organic mounts — initial load, a freshly created memo — cascade in. The
- * per-memo view-transition-name is what lets a filter change glide shared
- * cards to their new positions instead of replaying an entrance; identical
- * result lists therefore produce no motion at all.
+ * Feed slot. It plays no motion of its own: the feed's motion layer
+ * (lib/feedMotion.ts) watches the feed and gives a slot its entrance when it
+ * mounts outside a change that moves it some other way.
  *
- * The entrance is unhooked once it finishes: a slot that kept `animation:
- * rise-in` replays the whole entrance whenever React moves the node while
- * reordering kept rows (insertBefore restarts CSS animations), stacking a
- * second entrance on top of the view transition's glide.
- *
- * data-vt mirrors the view-transition-name so changeFeed can restore the
- * inline name it strips from far-from-viewport slots before a swap: React
- * bails out of re-rendering unchanged slots, so the stripped style would
- * otherwise leak into the new state's capture.
+ * data-vt holds the card's key — `memo-<id>` — for the motion layer, and the
+ * view-transition-name that changeFeed restores after stripping it from
+ * far-from-viewport slots before a swap: React bails out of re-rendering
+ * unchanged slots, so the stripped style would otherwise leak into the new
+ * state's capture.
  */
-function MemoSlot({ vtName, entering, delay, children }: MemoSlotProps) {
-  const [intro] = useState(() => (entering ? { animationDelay: `${delay}s` } : null));
-  const [entered, setEntered] = useState(false);
+function MemoSlot({ vtName, children }: MemoSlotProps) {
   return (
-    <div
-      className={`memo-slot${intro && !entered ? "" : " no-enter"}`}
-      style={intro ?? undefined}
-      data-vt={vtName}
-      onAnimationEnd={
-        intro && !entered
-          ? (event) => {
-              if (event.target === event.currentTarget && event.animationName === "rise-in") setEntered(true);
-            }
-          : undefined
-      }
-    >
+    <div className="memo-slot" data-vt={vtName}>
       {children}
     </div>
   );
@@ -581,9 +559,6 @@ interface FeedItemProps {
   /** A pin / trash / restore of this memo is in flight. */
   busy: boolean;
   vtName: string | undefined;
-  /** Read once at mount; a stable getter keeps the memo comparison clean. */
-  getEntering: () => boolean;
-  delay: number;
   handlers: FeedHandlers;
 }
 
@@ -591,13 +566,12 @@ interface FeedItemProps {
  * One memoized feed row. With `handlers` and `knownTags` held stable by App,
  * unrelated state changes (search keystrokes, toasts, dialogs, heartbeat
  * syncs) skip the entire feed — only rows whose memo or flags changed
- * re-render. `delay`/`getEntering` are mount-time-only inputs and are
- * deliberately left out of the equality check.
+ * re-render.
  */
 const FeedItem = reactMemo(
-  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, editDraft, selecting, selected, canSelect, taskFlips, resumeContent, busy, vtName, getEntering, delay, handlers }: FeedItemProps) {
+  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, editDraft, selecting, selected, canSelect, taskFlips, resumeContent, busy, vtName, handlers }: FeedItemProps) {
     return (
-      <MemoSlot vtName={vtName} entering={getEntering()} delay={delay}>
+      <MemoSlot vtName={vtName}>
         <MemoCard
           memo={memo}
           variant={variant}
@@ -1204,6 +1178,15 @@ export default function App() {
     createFeedMotion({ feed: () => feedGhostsRef.current?.parentElement ?? null, ghosts: () => feedGhostsRef.current })
   );
   useEffect(() => feedMotion.attach(), [feedMotion]);
+  // The ghost layer is always the feed's last child: mounting it is the
+  // feed's, and the motion layer starts watching for arrivals there.
+  const attachFeedGhosts = useCallback(
+    (node: HTMLDivElement | null) => {
+      feedGhostsRef.current = node;
+      feedMotion.observe(node?.parentElement ?? null);
+    },
+    [feedMotion]
+  );
   const moveFeed = useCallback(
     (intent: InPlaceIntent, ids: Iterable<string>, apply: () => void) => feedMotion.run(intent, ids, () => flushSync(apply)),
     [feedMotion]
@@ -2168,10 +2151,6 @@ export default function App() {
     []
   );
 
-  // While true, slots mounting in the current (flushed) render skip their
-  // entrance animation — the view transition owns the motion instead.
-  const enterSuppressRef = useRef(false);
-
   /**
    * Feed reorders run inside a view transition: shared cards glide to their
    * new positions, departures fade back, arrivals rise. Skipped while the
@@ -2189,14 +2168,15 @@ export default function App() {
   const swapFeed = useCallback(
     (apply: () => void, { rewind, morph = true }: { rewind: boolean; morph?: boolean }) => {
       const update = (animated = false) => {
-        enterSuppressRef.current = true;
         try {
           flushSync(() => {
             if (rewind) setRenderWindow((current) => ({ ...current, cap: FEED_PAGE }));
             apply();
           });
         } finally {
-          enterSuppressRef.current = false;
+          // The swap's cards arrive with the swap — its snapshot, or the
+          // browser's own Back slide — not with the feed's entrance.
+          feedMotion.claim();
           // The swap's lens change has been recorded (or there was none).
           navIntentRef.current = "replace";
         }
@@ -2217,7 +2197,7 @@ export default function App() {
         withViewTransition(update);
       }
     },
-    [drawerOpen]
+    [drawerOpen, feedMotion]
   );
 
   const navLens = useMemo<NavLens>(
@@ -3265,7 +3245,6 @@ export default function App() {
       const transition = withViewTransition((animated) => {
         if (shared) field.style.viewTransitionName = "";
         if (animated) root.dataset.vtCreate = saved.id;
-        enterSuppressRef.current = animated;
         try {
           flushSync(() => {
             commitMutation({ memos: [saved] });
@@ -3284,7 +3263,6 @@ export default function App() {
             }
           }
         } finally {
-          enterSuppressRef.current = false;
           resolve();
         }
       });
@@ -4113,7 +4091,6 @@ export default function App() {
     selectFrom: (memo: Memo) => enterSelectMode(memo.id),
     notice: (text: string, action?: ToastAction) => showToast(text, "info", action ? { action } : {})
   };
-  const getEntering = useCallback(() => !enterSuppressRef.current, []);
   const feedHandlers = useMemo<FeedHandlers>(
     () => ({
       startEdit: (id) => feedActionsRef.current.startEdit(id),
@@ -5547,7 +5524,7 @@ export default function App() {
               )}
             </div>
           ) : (
-            renderedFeedMemos.map((memo, index) => (
+            renderedFeedMemos.map((memo) => (
               <FeedItem
                 key={memo.id}
                 memo={memo}
@@ -5564,8 +5541,6 @@ export default function App() {
                 resumeContent={editSeed?.memoId === memo.id ? editSeed.content : undefined}
                 busy={optimisticMemos.has(memo.id)}
                 vtName={`memo-${memo.id}`}
-                getEntering={getEntering}
-                delay={Math.min(index, 6) * 0.008}
                 handlers={feedHandlers}
               />
             ))
@@ -5573,7 +5548,7 @@ export default function App() {
           {hasMoreFeed ? <div ref={feedSentinelRef} className="feed-sentinel" aria-hidden="true" /> : null}
           {/* Exit ghosts (lib/feedMotion.ts): cards that just left the list
               play their exit here, outside React's tree. Always empty to React. */}
-          <div ref={feedGhostsRef} className="feed-ghosts" aria-hidden="true" />
+          <div ref={attachFeedGhosts} className="feed-ghosts" aria-hidden="true" />
         </section>
 
         <ScrollTopButton />

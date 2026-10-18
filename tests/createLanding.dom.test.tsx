@@ -92,6 +92,17 @@ beforeEach(() => {
   });
   Object.defineProperty(window, "scrollTo", { configurable: true, value: vi.fn() });
   Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: vi.fn(() => []) });
+  // The feed's motion layer plays entrances through Web Animations, to the
+  // cards it finds on screen.
+  Object.defineProperty(Element.prototype, "animate", {
+    configurable: true,
+    value: vi.fn(() => ({ finished: new Promise(() => undefined), cancel: () => undefined }))
+  });
+  const rect = Element.prototype.getBoundingClientRect;
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    if (!this.classList.contains("memo-slot")) return rect.call(this);
+    return { top: 0, bottom: 100, left: 0, right: 600, width: 600, height: 100, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+  });
   vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([new DOMRect(0, 0, 20, 20)] as unknown as DOMRectList);
   vi.stubGlobal(
     "IntersectionObserver",
@@ -116,19 +127,20 @@ afterEach(() => {
   document.startViewTransition = startViewTransition;
   delete document.documentElement.dataset.vtCreate;
   delete (Element.prototype as Element & { getAnimations?: () => Animation[] }).getAnimations;
+  delete (Element.prototype as Partial<Element>).animate;
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
 describe("sending a memo", () => {
   it("lands the card and empties the composer in one view transition", async () => {
-    const seen: Array<{ composer: string; cards: number; marked: boolean; slotClass: string | null }> = [];
+    const seen: Array<{ composer: string; cards: number; marked: boolean }> = [];
     const field = () => screen.getByRole("combobox", { name: "Memo content" }) as HTMLTextAreaElement;
     const snapshot = () => ({
       composer: field().value,
       cards: screen.queryAllByRole("article").length,
-      marked: document.documentElement.dataset.vtCreate !== undefined,
-      slotClass: document.querySelector(".memo-slot")?.className ?? null
+      marked: document.documentElement.dataset.vtCreate !== undefined
     });
     document.startViewTransition = ((update: () => void) => {
       // The browser captures the old state, then runs the update.
@@ -146,6 +158,8 @@ describe("sending a memo", () => {
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
     await user.type(field(), "Fresh thought");
     seen.length = 0;
+    const animate = vi.mocked(Element.prototype.animate);
+    animate.mockClear();
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(3));
@@ -153,9 +167,12 @@ describe("sending a memo", () => {
     // Old capture: the draft still in the composer, no new card yet.
     expect(before).toMatchObject({ composer: "Fresh thought", cards: 2, marked: false });
     // New state, in the same update: card in, composer empty, the drop-in
-    // entrance marked for the snapshot and the slot's own rise-in held back.
+    // entrance marked for the snapshot — and the feed's own entrance held
+    // back, so the card does not arrive a second time under it.
     expect(after).toMatchObject({ composer: "", cards: 3, marked: true });
-    expect(after.slotClass).toContain("no-enter");
+    const landed = screen.getByText("Fresh thought").closest(".memo-slot");
+    expect(landed).toBeTruthy();
+    expect(animate.mock.contexts).not.toContain(landed);
     expect(screen.getByText("Fresh thought")).toBeTruthy();
     await waitFor(() => expect(document.documentElement.dataset.vtCreate).toBeUndefined());
   });

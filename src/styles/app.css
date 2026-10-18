@@ -3023,10 +3023,10 @@ button.crumb:active { background: var(--wash-strong); }
 @media (forced-colors: active) {
   ::highlight(search-hit) { background-color: Mark; color: MarkText; }
 }
-/* Each slot's entrance animation leaves a stacking context (fill-mode both
-   keeps the animated opacity applied), and content-visibility's paint
-   containment clips descendants at the slot's edge — either alone hides an
-   open card menu behind or under the next card. */
+/* A slot's entrance (lib/feedMotion.ts) makes it a stacking context while it
+   plays, and content-visibility's paint containment clips descendants at the
+   slot's edge — either alone hides an open card menu behind or under the
+   next card. */
 .memo-slot {
   position: relative;
   content-visibility: auto;
@@ -3037,7 +3037,6 @@ button.crumb:active { background: var(--wash-strong); }
      the measured median text card (~115px; p90 128px) — the old 240px was
      double that, so every fresh below-fold slot inflated the page 2×. */
   contain-intrinsic-size: auto 120px;
-  animation: rise-in var(--t-enter) var(--ease-out) both;
   /* Carries the selection ring (see the multi-select section). The radius
      is the card's, and it lives here at rest rather than with the ring: it
      shapes the ring and the containment clip alike, and it has to outlast
@@ -3049,11 +3048,6 @@ button.crumb:active { background: var(--wash-strong); }
      fade (see the view-transition section). */
   view-transition-class: memo-card;
 }
-/* Slots mounted by a filter swap (the view transition owns the motion) and
-   slots whose entrance already played — a slot that kept `animation:
-   rise-in` replays the whole entrance whenever React reorders kept rows,
-   because insertBefore restarts CSS animations. */
-.memo-slot.no-enter { animation: none; }
 /* While a card menu or tag suggestion list is mounted, lift the slot's
    containment so the popover can spill past the card and above its siblings. Keyed
    to .action-menu rather than .is-open: the panel outlives the open state

@@ -12,7 +12,9 @@ const STEP = CARD + GAP;
 interface Played {
   target: Element;
   keyframes: Keyframe[];
+  timing: KeyframeAnimationOptions;
   cancel: ReturnType<typeof vi.fn>;
+  finish: ReturnType<typeof vi.fn>;
 }
 
 let played: Played[] = [];
@@ -52,6 +54,10 @@ function build(count: number, scrollY = 0): void {
 }
 
 const translateOf = (keyframes: Keyframe[]) => keyframes[0]?.translate;
+/** MutationObserver records are delivered in a microtask. */
+const delivered = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** The entrances played on cards, by memo key. */
+const entrances = () => played.filter((entry) => entry.target.classList.contains("memo-slot") && !("translate" in entry.keyframes[0]));
 /** The latest glide played on a card. */
 const glideOf = (id: string) => [...played].reverse().find((entry) => entry.target === slotOf(id) && "translate" in entry.keyframes[0]);
 
@@ -63,10 +69,10 @@ beforeEach(() => {
   window.scrollTo = vi.fn((options?: ScrollToOptions | number) => {
     if (typeof options === "object" && typeof options.top === "number") window.scrollY = options.top;
   }) as typeof window.scrollTo;
-  Element.prototype.animate = vi.fn(function (this: Element, keyframes: Keyframe[] | PropertyIndexedKeyframes | null) {
-    const entry: Played = { target: this, keyframes: keyframes as Keyframe[], cancel: vi.fn() };
+  Element.prototype.animate = vi.fn(function (this: Element, keyframes: Keyframe[] | PropertyIndexedKeyframes | null, timing?: number | KeyframeAnimationOptions) {
+    const entry: Played = { target: this, keyframes: keyframes as Keyframe[], timing: typeof timing === "object" ? timing : {}, cancel: vi.fn(), finish: vi.fn() };
     played.push(entry);
-    return { finished: new Promise(() => undefined), cancel: entry.cancel } as unknown as Animation;
+    return { finished: new Promise(() => undefined), cancel: entry.cancel, finish: entry.finish } as unknown as Animation;
   }) as typeof Element.prototype.animate;
   feed = document.createElement("div");
   feed.className = "memo-feed";
@@ -78,6 +84,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  motion.observe(null);
   motion.settle();
   document.body.innerHTML = "";
   delete (Element.prototype as Partial<Element>).animate;
@@ -258,5 +265,148 @@ describe("feed motion", () => {
     expect(commit).toHaveBeenCalledOnce();
     expect(result.departed.size).toBe(0);
     expect(ghosts.children).toHaveLength(0);
+  });
+});
+
+describe("card arrivals", () => {
+  it("cascades the cards a page brings in, near the screen only", async () => {
+    build(0);
+    motion.observe(feed);
+
+    feed.insertBefore(slot("0"), ghosts);
+    for (let index = 1; index < 14; index += 1) feed.insertBefore(slot(String(index)), ghosts);
+    await delivered();
+
+    // A viewport and a half (1200px) is near: cards 0–10, ≤48ms apart.
+    const played = entrances();
+    expect(played.map((entry) => (entry.target as HTMLElement).dataset.vt)).toEqual(Array.from({ length: 11 }, (_unused, index) => `memo-${index}`));
+    expect(played.map((entry) => entry.timing.delay)).toEqual([0, 8, 16, 24, 32, 40, 48, 48, 48, 48, 48]);
+    expect(played[0].keyframes[0]).toMatchObject({ opacity: 0, transform: "translateY(18px) scale(0.995)" });
+    // Held at its first frame through its turn in the cascade.
+    expect(played[3].timing.fill).toBe("backwards");
+  });
+
+  it("lands at once the cards their first frame shows below the fold", async () => {
+    build(0);
+    motion.observe(feed);
+    for (let index = 0; index < 12; index += 1) feed.insertBefore(slot(String(index)), ghosts);
+    await delivered();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    const byCard = new Map(entrances().map((entry) => [(entry.target as HTMLElement).dataset.vt, entry]));
+    // Card 7 starts at 798px, the last on screen; 8–10 were near, not seen.
+    expect(byCard.get("memo-7")!.finish).not.toHaveBeenCalled();
+    for (const key of ["memo-8", "memo-9", "memo-10"]) expect(byCard.get(key)!.finish).toHaveBeenCalled();
+  });
+
+  it("brings in the cards the feed already holds when it is first watched", () => {
+    build(3);
+    motion.observe(feed);
+    expect(entrances()).toHaveLength(3);
+  });
+
+  it("does not replay an entrance for a kept card React moves", async () => {
+    build(4);
+    motion.observe(feed);
+    played = [];
+
+    feed.prepend(slotOf("2"));
+    await delivered();
+
+    expect(played).toEqual([]);
+  });
+
+  it("leaves the cards a change mounts to that change", async () => {
+    build(4);
+    motion.observe(feed);
+    played = [];
+
+    motion.run("remote", ["new"], () => feed.prepend(slot("new")));
+    await delivered();
+
+    // One entrance, the change's own, in step with the glides it plays.
+    expect(entrances().filter((entry) => entry.target === slotOf("new"))).toHaveLength(1);
+    expect(glideOf("0")).toBeDefined();
+  });
+
+  it("leaves the cards a view transition's update mounts to its snapshot", async () => {
+    build(3);
+    motion.observe(feed);
+    const detach = motion.attach();
+    played = [];
+    const originalStart = document.startViewTransition;
+    document.startViewTransition = ((update: () => void) => {
+      update();
+      return { ready: Promise.resolve(), finished: Promise.resolve() };
+    }) as typeof document.startViewTransition;
+    try {
+      withViewTransition(() => feed.insertBefore(slot("new"), ghosts));
+      await delivered();
+    } finally {
+      document.startViewTransition = originalStart;
+      detach();
+    }
+
+    expect(played).toEqual([]);
+  });
+
+  it("fades the cards in under reduced motion, all at once", async () => {
+    window.matchMedia = vi.fn(() => ({ matches: true }) as MediaQueryList);
+    build(0);
+    motion.observe(feed);
+
+    for (let index = 0; index < 3; index += 1) feed.insertBefore(slot(String(index)), ghosts);
+    await delivered();
+
+    const played = entrances();
+    expect(played).toHaveLength(3);
+    for (const entry of played) {
+      expect(entry.keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
+      expect(entry.timing).toMatchObject({ duration: 150, delay: 0 });
+    }
+  });
+
+  it("starts a change on a card still arriving from the frame its entrance paints", () => {
+    build(4);
+    motion.observe(feed);
+    // Half-way through its rise: 9px low, half faded in. (jsdom reads no
+    // matrices; the rise's is a plain translation.)
+    vi.stubGlobal(
+      "DOMMatrixReadOnly",
+      class {
+        m41: number;
+        m42: number;
+        constructor(value: string) {
+          const [, , , , x = 0, y = 0] = /matrix\((.*)\)/.exec(value)?.[1].split(",").map(Number) ?? [];
+          this.m41 = x;
+          this.m42 = y;
+        }
+      }
+    );
+    const style = vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element: Element) =>
+        ({
+          translate: "none",
+          transform: element === slotOf("3") ? "matrix(1, 0, 0, 1, 0, 9)" : "none",
+          opacity: element === slotOf("3") ? "0.5" : "1",
+          getPropertyValue: () => ""
+        }) as unknown as CSSStyleDeclaration
+    );
+    const box = slotOf("3").getBoundingClientRect;
+    slotOf("3").getBoundingClientRect = () => {
+      const rest = box();
+      return { ...rest, top: rest.top + 9, bottom: rest.bottom + 9, y: rest.y + 9 } as DOMRect;
+    };
+    try {
+      motion.run("trash", ["1"], () => slotOf("1").remove());
+    } finally {
+      style.mockRestore();
+      vi.unstubAllGlobals();
+    }
+
+    // The rise is cut, and the glide picks it up where it was painted.
+    const rise = played.find((entry) => entry.target === slotOf("3") && !("translate" in entry.keyframes[0]))!;
+    expect(rise.cancel).toHaveBeenCalled();
+    expect(glideOf("3")!.keyframes[0]).toEqual({ translate: `0px ${STEP + 9}px`, opacity: 0.5 });
   });
 });

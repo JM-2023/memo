@@ -25,6 +25,7 @@ interface ActiveTransition {
 let active: ActiveTransition | null = null;
 let updating = false;
 const updateHooks = new Set<() => void>();
+const committedHooks = new Set<() => void>();
 
 const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 
@@ -73,6 +74,8 @@ export function withViewTransition(update: (animated: boolean) => void, options:
       for (const hook of updateHooks) hook();
       update(true);
       tuneFeedTransitionNames(window.scrollY, reduced);
+      // What the update mounted enters in the snapshot, not again under it.
+      for (const hook of committedHooks) hook();
     } finally {
       updating = false;
     }
@@ -107,6 +110,12 @@ export function transitionUpdating(): boolean {
 export function onTransitionUpdate(hook: () => void): () => void {
   updateHooks.add(hook);
   return () => updateHooks.delete(hook);
+}
+
+/** Called inside every transition's update, once the DOM holds its new state. */
+export function onTransitionCommitted(hook: () => void): () => void {
+  committedHooks.add(hook);
+  return () => committedHooks.delete(hook);
 }
 
 /** Is a transition's pseudo-element tree on screen right now? */
