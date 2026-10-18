@@ -11,6 +11,7 @@
 // mirrored to sessionStorage under the memo: prefix, so an ordinary logout's
 // clearLocalDeviceData wipes it with the rest of the workspace furniture.
 
+import { layoutRect } from "./feedBoxes";
 import type { FeedFilters } from "./search";
 import { filtersEqual, hasActiveFilters } from "./search";
 import type { StatsDrilldown } from "./statsDrilldown";
@@ -320,7 +321,8 @@ function slotMemoId(slot: HTMLElement): string | null {
 /**
  * Measure the reading place: the first card whose bottom clears the sticky
  * topbar. Slots are in visual order, so a binary search keeps this cheap on
- * a feed with hundreds of rendered rows.
+ * a feed with hundreds of rendered rows. Cards are read where they rest, not
+ * where a glide is drawing them: the place is put back with nothing moving.
  */
 export function captureFeedPlace(pageSize: number): NavPlace {
   const scrollY = window.scrollY;
@@ -332,7 +334,7 @@ export function captureFeedPlace(pageSize: number): NavPlace {
   let found = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (slots[mid].getBoundingClientRect().bottom > top) {
+    if (layoutRect(slots[mid]).bottom > top) {
       found = mid;
       hi = mid - 1;
     } else {
@@ -342,7 +344,7 @@ export function captureFeedPlace(pageSize: number): NavPlace {
   if (found < 0) return { anchorId: null, offset: 0, scrollY, cap: Math.max(pageSize, slots.length) };
   return {
     anchorId: slotMemoId(slots[found]),
-    offset: slots[found].getBoundingClientRect().top,
+    offset: layoutRect(slots[found]).top,
     scrollY,
     // Render a little past the anchor so the screen under it is filled too.
     cap: Math.max(pageSize, found + Math.ceil(pageSize / 2))
@@ -372,7 +374,7 @@ export function restoreFeedPlace(place: NavPlace): void {
     window.scrollTo(0, place.scrollY);
     return;
   }
-  window.scrollTo(0, window.scrollY + slot.getBoundingClientRect().top - place.offset);
+  window.scrollTo(0, window.scrollY + layoutRect(slot).top - place.offset);
   let frames = 0;
   let readerTookOver = false;
   const stop = () => {
@@ -381,7 +383,8 @@ export function restoreFeedPlace(place: NavPlace): void {
   for (const type of READER_INPUT) window.addEventListener(type, stop, { once: true, passive: true });
   const settle = () => {
     if (!readerTookOver && slot.isConnected) {
-      const drift = slot.getBoundingClientRect().top - place.offset;
+      // Against the rest box: a glide carrying the card is not drift.
+      const drift = layoutRect(slot).top - place.offset;
       if (Math.abs(drift) > 1) window.scrollTo(0, window.scrollY + drift);
       if (++frames < SETTLE_FRAMES) {
         window.requestAnimationFrame(settle);

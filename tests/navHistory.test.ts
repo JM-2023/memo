@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNavStore, isRootLens, lensesEqual, navIdOf, parseNavLens, ROOT_LENS, type NavLens } from "../src/lib/navHistory";
+import { captureFeedPlace, createNavStore, isRootLens, lensesEqual, navIdOf, parseNavLens, restoreFeedPlace, ROOT_LENS, type NavLens } from "../src/lib/navHistory";
 
 const tagLens: NavLens = { ...ROOT_LENS, tag: "life/cooking", query: "soup" };
 
@@ -98,5 +98,73 @@ describe("nav store", () => {
     vi.runAllTimers();
     expect(store.get(id)).toBeNull();
     expect(sessionStorage.getItem("memo:nav")).toBeNull();
+  });
+});
+
+describe("reading place", () => {
+  const CARD = 100;
+  /** Glides the feed's motion layer is running, by slot: how far down each card is drawn. */
+  const glides = new Map<Element, number>();
+
+  /**
+   * jsdom has no layout: each slot rests one CARD below the last, measured
+   * against the live scroll, and is drawn wherever its glide carries it.
+   */
+  function buildFeed(count: number): HTMLElement[] {
+    const feed = document.createElement("section");
+    feed.className = "memo-feed";
+    const slots = Array.from({ length: count }, (_unused, index) => {
+      const slot = document.createElement("div");
+      slot.className = "memo-slot";
+      slot.dataset.vt = `memo-${index}`;
+      slot.getBoundingClientRect = () => {
+        const top = index * CARD - window.scrollY + (glides.get(slot) ?? 0);
+        return { top, bottom: top + CARD, left: 0, right: 600, width: 600, height: CARD, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+      };
+      return slot;
+    });
+    feed.append(...slots);
+    document.body.append(feed);
+    return slots;
+  }
+
+  beforeEach(() => {
+    glides.clear();
+    window.scrollY = 500;
+    window.scrollTo = vi.fn((x?: ScrollToOptions | number, y?: number) => {
+      window.scrollY = typeof x === "object" ? (x.top ?? window.scrollY) : (y ?? window.scrollY);
+    }) as typeof window.scrollTo;
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((element: Element) => {
+      const glide = glides.get(element);
+      if (glide === undefined) return real(element);
+      return { translate: `0px ${glide}px`, transform: "none" } as CSSStyleDeclaration;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+  });
+
+  it("notes a card mid-glide at the place it will rest, not where it is drawn", () => {
+    const slots = buildFeed(12);
+    // Card 4 rests just above the top edge but is drawn 50px lower; card 5
+    // rests at the top edge, drawn 60px lower.
+    glides.set(slots[4], 50);
+    glides.set(slots[5], 60);
+
+    expect(captureFeedPlace(80)).toEqual({ anchorId: "5", offset: 0, scrollY: 500, cap: 80 });
+  });
+
+  it("puts a place back against the rest box, and leaves a running glide alone", () => {
+    const slots = buildFeed(12);
+    glides.set(slots[5], 60);
+
+    restoreFeedPlace({ anchorId: "5", offset: 0, scrollY: 500, cap: 80 });
+    vi.advanceTimersByTime(200);
+
+    // The card already rests at its offset: the glide is not drift to chase.
+    expect(window.scrollY).toBe(500);
   });
 });

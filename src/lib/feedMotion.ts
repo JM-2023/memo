@@ -1,4 +1,5 @@
 import { onTransitionUpdate, paintedTransitionOffsets, skipLiveTransition, transitionUpdating, type PaintedOffset } from "./viewTransition";
+import { motionOffset, type Box } from "./feedBoxes";
 import { EASE, EASE_OUT, T_BASE, T_ENTER, T_EXIT } from "./motion";
 
 /**
@@ -47,13 +48,6 @@ interface FeedMotionOptions {
   feed: () => HTMLElement | null;
   /** An empty, absolutely positioned layer inside the feed for exit ghosts. */
   ghosts: () => HTMLElement | null;
-}
-
-interface Box {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
 }
 
 interface Shot {
@@ -161,23 +155,6 @@ function ease(token: "--ease" | "--ease-out"): string {
   return value || FALLBACK_EASE[token];
 }
 
-function translationOf(transform: string): { x: number; y: number } {
-  if (!transform || transform === "none" || typeof DOMMatrixReadOnly !== "function") return { x: 0, y: 0 };
-  try {
-    const matrix = new DOMMatrixReadOnly(transform);
-    return { x: matrix.m41, y: matrix.m42 };
-  } catch {
-    return { x: 0, y: 0 };
-  }
-}
-
-/** The computed `translate` property ("12px 30px", "12px", "none"). */
-function translateOf(value: string): { x: number; y: number } {
-  if (!value || value === "none") return { x: 0, y: 0 };
-  const [x = "0", y = "0"] = value.trim().split(/\s+/);
-  return { x: Number.parseFloat(x) || 0, y: Number.parseFloat(y) || 0 };
-}
-
 /**
  * A card's layout box and where it is painted. The box leaves out every
  * transform (the slot's own entrance, a glide still running); `at` keeps the
@@ -186,9 +163,7 @@ function translateOf(value: string): { x: number; y: number } {
  */
 function measure(el: HTMLElement, offsets: Map<string, PaintedOffset>): Omit<Shot, "el" | "copy"> {
   const rect = el.getBoundingClientRect();
-  const style = getComputedStyle(el);
-  const glide = translateOf(style.translate);
-  const own = translationOf(style.transform);
+  const { glide, own } = motionOffset(el);
   const box = { left: rect.left - glide.x - own.x, top: rect.top - glide.y - own.y, width: rect.width, height: rect.height };
   const painted = el.style.viewTransitionName ? offsets.get(el.style.viewTransitionName) : undefined;
   if (painted) return { box, at: { left: box.left + painted.dx, top: box.top + painted.dy }, opacity: painted.opacity };
