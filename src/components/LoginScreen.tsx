@@ -7,6 +7,11 @@ interface LoginScreenProps {
   needsSetup: boolean;
   /** False on a public host, where the first passcode comes from the deployment. */
   setupAllowed?: boolean;
+  /**
+   * The mark glided in from the boot splash (a view transition, App's
+   * runInitialBoot), so the pad's own mark doesn't pop in a second time.
+   */
+  markCarried?: boolean;
   onLogin: (pin: string) => Promise<void>;
   onSetup: (pin: string) => Promise<void>;
 }
@@ -17,7 +22,7 @@ type SetupStep = "enter" | "confirm";
  * Passcode gate. Login mode asks once; first-run setup asks twice (enter +
  * confirm). Nothing behind the gate is fetched until a session cookie exists.
  */
-export function LoginScreen({ needsSetup, setupAllowed = true, onLogin, onSetup }: LoginScreenProps) {
+export function LoginScreen({ needsSetup, setupAllowed = true, markCarried = false, onLogin, onSetup }: LoginScreenProps) {
   const { errorMessage, tr } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -81,11 +86,13 @@ export function LoginScreen({ needsSetup, setupAllowed = true, onLogin, onSetup 
         : tr("Enter the passcode one more time.", "请再输入一次刚才的密码")
       : tr("Enter your passcode to unlock your memos.", "输入密码解锁你的笔记"));
 
+  const screenClass = `login-screen${markCarried ? " carries-mark" : ""}`;
+
   if (needsSetup && !setupAllowed) {
     // No keypad: setup on a public host can only fail, so say where the
     // passcode comes from instead.
     return (
-      <div className="login-screen">
+      <div className={screenClass}>
         <section className="pin-pad setup-blocked" aria-labelledby="setup-blocked-title">
           <div className="pin-brand">
             <div className="pin-logo">
@@ -116,7 +123,7 @@ export function LoginScreen({ needsSetup, setupAllowed = true, onLogin, onSetup 
   }
 
   return (
-    <div className="login-screen">
+    <div className={screenClass}>
       <PasscodePad
         autoComplete={needsSetup ? "new-password" : "current-password"}
         icon={<NotebookPen size={26} aria-hidden="true" />}

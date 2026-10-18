@@ -5,7 +5,7 @@ import { useI18n } from "../lib/i18n";
 import { buildHeatWeeks, type HeatCell, type PeriodKind } from "../lib/stats";
 import { SwapText } from "./SwapText";
 import { DATA_TIP_DELAY, useTip, withFocus } from "./Tip";
-import { EASE_OUT } from "../lib/motion";
+import { EASE_OUT, T_FAST, T_SLOW } from "../lib/motion";
 
 interface HeatmapProps {
   countsByDay: Map<string, number>;
@@ -393,14 +393,18 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay, onPage
     const el = viewportRef.current;
     const from = leaveHeightRef.current;
     leaveHeightRef.current = null;
-    if (!el || from === null) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!el || from === null || typeof el.animate !== "function") return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const to = el.getBoundingClientRect().height;
     if (Math.abs(to - from) < 1) return;
-    const animation = el.animate([{ height: `${from}px` }, { height: `${to}px` }], {
-      duration: 220,
-      easing: EASE_OUT
-    });
+    // Reduced motion: nothing below glides. A taller page takes its room at
+    // once; a shorter one keeps the old height while the old grid fades
+    // (--t-fast, app.css), then closes up in one step, as a toast's slot.
+    if (reduced && to > from) return;
+    const animation = el.animate(
+      [{ height: `${from}px` }, { height: `${to}px` }],
+      reduced ? { duration: T_FAST, easing: "step-end" } : { duration: T_SLOW, easing: EASE_OUT }
+    );
     // Render captures the current painted height before this cleanup runs.
     // Cancel before the next effect measures the new grid's natural height.
     return () => animation.cancel();

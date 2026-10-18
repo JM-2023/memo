@@ -1,4 +1,5 @@
 import { invalidateSnapshot } from "./cache";
+import { forgetAllFolds } from "./foldMemory";
 import { deleteImageCacheDb } from "./imageCache";
 import { resetModelRuntime } from "./modelRuntime";
 import { deleteSemanticIndexDb } from "./semanticIndex";
@@ -82,10 +83,11 @@ async function clearCacheStorage(): Promise<void> {
  * (Semantic Search settings still offer an explicit removal). The runtime
  * pipeline is disposed so no notebook-derived state lingers in memory.
  * Sealed feed previews (`memo-image-cache`) and the in-memory image blobs
- * are deleted too.
+ * are deleted too, and so is the in-memory list of unfolded memos.
  */
 export async function clearLocalDeviceData(): Promise<void> {
   const snapshotInvalidation = invalidateSnapshot();
+  forgetAllFolds();
 
   try {
     if (typeof localStorage !== "undefined") clearAppStorage(localStorage);

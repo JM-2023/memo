@@ -224,7 +224,7 @@ describe("losing the session mid-use", () => {
     });
     await signInAgain(user);
 
-    expect(await screen.findByText(/This memo changed elsewhere\. Your draft is preserved/)).not.toBeNull();
+    expect(await screen.findByText(/This memo changed elsewhere\. Your draft is preserved/, { selector: ".editor-conflict p" })).not.toBeNull();
     const resumed = document.querySelector<HTMLTextAreaElement>(".editor-edit textarea")!;
     expect(resumed.value).toBe("half-finished edit");
 

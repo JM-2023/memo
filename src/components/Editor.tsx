@@ -7,6 +7,7 @@ import { ImageSlotLedger } from "../lib/imageSlots";
 import { compressImage } from "../lib/images";
 import { useI18n } from "../lib/i18n";
 import { announce } from "../lib/liveAnnouncer";
+import { BUSY_HOLD_MS } from "../lib/motion";
 import { inheritTagContext } from "../lib/tags";
 import {
   backspaceListMarker,
@@ -59,8 +60,9 @@ export interface EditDraft {
 const APPLE_KEYS = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 const MOD = APPLE_KEYS ? "⌘" : "Ctrl+";
 const SHIFT = APPLE_KEYS ? "⇧" : "Shift+";
-/** A fast send never shows the spinner: the Send glyph holds this long first. */
-const SPINNER_DELAY_MS = 150;
+/** How long the tag list outlives a blur of the field: a press on one of its
+ * options still lands, wherever focus went first. */
+const SUGGEST_BLUR_MS = 120;
 
 /** Characters a tag can hold (TAG_PATTERN in lib/tags). */
 const TAG_CHAR = /[\p{L}\p{N}_\-/·]/u;
@@ -294,6 +296,11 @@ export interface EditorSubmission {
   removeImageIds: string[];
   /** Set when the save carries new images: reports the sent fraction (0..1). */
   onUploadProgress?: (fraction: number) => void;
+  /** Aborted when Esc stops the send in flight. The owner hands it to the
+   * request and, once it has fired, resolves false (or rejects) without
+   * landing anything; the draft keeps its clientId, so sending it again is
+   * still idempotent if the first request got through after all. */
+  signal?: AbortSignal;
   /** Create mode: the owner calls this inside the update that lands the new
    * memo, so the composer clears in that same commit (and the same view
    * transition, `animated`) instead of a frame later. Optional: a create
@@ -384,11 +391,12 @@ export function Editor({
   // `cause` lets an error leave once what raised it is gone: the link
   // complaint with the link row, the image cap once an image is removed,
   // anything else (a refused file, a failed send) once the text is edited.
-  // `seq` gives each complaint its own alert element, so the same words a
-  // second time (a retry that fails again) are still announced.
+  // `seq` gives each complaint its own line, so the same words a second time
+  // (a retry that fails again) still arrive as news; fail() speaks them.
   const [error, setError] = useState<{ text: string; cause: "link" | "limit" | "other"; seq: number } | null>(null);
   const errorSeqRef = useRef(0);
   const lastErrorRef = useRef("");
+  const errorLineRef = useRef<{ key: string | null; replacing: boolean }>({ key: null, replacing: false });
   const lastConflictRef = useRef("");
   // Counter, not boolean: dragenter/leave fire per child element.
   const [dragDepth, setDragDepth] = useState(0);
@@ -436,10 +444,14 @@ export function Editor({
   const quietSelectRef = useRef<{ start: number; end: number } | null>(null);
   const suggestionListId = useId();
   const contextTagDescriptionId = useId();
+  const countId = useId();
   // Stable across ambiguous network failures; rotate only after a confirmed
   // create so retrying the same draft remains idempotent.
   const draftIdRef = useRef(crypto.randomUUID());
   const submittingRef = useRef(false);
+  // The send in flight, until the owner lands it (onCommitted) or it settles:
+  // Esc aborts it through this.
+  const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
   const [imageSlots] = useState(() => new ImageSlotLedger(MAX_IMAGES, existingImages.length));
 
@@ -514,6 +526,9 @@ export function Editor({
   function fail(text: string, cause: "link" | "limit" | "other" = "other") {
     errorSeqRef.current += 1;
     setError({ text, cause, seq: errorSeqRef.current });
+    // Spoken through the standing region: a line mounted already filled
+    // (the note below) is often skipped by screen readers.
+    announce(text, "assertive");
   }
   function clearError(cause: "link" | "limit" | "other") {
     setError((current) => (current?.cause === cause ? null : current));
@@ -543,6 +558,20 @@ export function Editor({
   useLayoutEffect(() => {
     imageSlots.syncCommitted(totalImages);
   }, [imageSlots, totalImages]);
+
+  // Too many images (an accepted remote base can bring more) is said like any
+  // complaint; fail() speaks the others.
+  const imageLimitText = tr(`Remove images until no more than ${MAX_IMAGES} remain`, `请移除图片，最多保留 ${MAX_IMAGES} 张`);
+  useEffect(() => {
+    if (imageLimitExceeded) announce(imageLimitText, "assertive");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageLimitExceeded]);
+
+  // A save conflict is said once, calmly, by its note: the draft is safe, and
+  // the note carries the way on.
+  useEffect(() => {
+    if (conflictMessage) announce(conflictMessage);
+  }, [conflictMessage]);
 
   // Never split a surrogate pair at the highlight boundary — the mirror would
   // render two replacement glyphs at a different width and the red region
@@ -650,14 +679,14 @@ export function Editor({
     setSuggestion(null);
   }, [locked]);
 
-  // Sending reads the same as resting for a beat: a fast send never flashes
-  // the spinner, a slow one fades it in.
+  // Sending reads the same as resting for a beat (the busy hold, --t-hold):
+  // a fast send never flashes the spinner, a slow one fades it in.
   useEffect(() => {
     if (!sending) {
       setSpinnerShown(false);
       return;
     }
-    const timer = window.setTimeout(() => setSpinnerShown(true), SPINNER_DELAY_MS);
+    const timer = window.setTimeout(() => setSpinnerShown(true), BUSY_HOLD_MS);
     return () => window.clearTimeout(timer);
   }, [sending]);
 
@@ -1183,18 +1212,19 @@ export function Editor({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (busy || submittingRef.current) return;
     // Candidate navigation and confirmation belong to the IME while text is
     // composing. Some WebKit versions clear isComposing on the final Enter
     // keydown but retain the conventional 229 keyCode, so honor both signals
     // before tag suggestions or markdown shortcuts see the event.
     if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-    if (sendQueued) {
-      // Held for a compressing image: Esc takes the press back; nothing
-      // else may change the draft before it goes.
+    if (busy || submittingRef.current || sendQueued) {
+      // A send is under way — held for a compressing image, or out on the
+      // wire: Esc takes it back (the draft stays as it was); nothing else
+      // may change the draft before it goes.
       if (event.key === "Escape") {
         event.preventDefault();
-        setSendQueued(false);
+        if (sendQueued) setSendQueued(false);
+        else abortRef.current?.abort();
       }
       return;
     }
@@ -1217,11 +1247,14 @@ export function Editor({
         setSuggestion({ ...active, index: (active.index + delta + active.items.length) % active.items.length });
         return;
       }
-      if (event.key === "Enter" && active.exact) {
+      const modified = event.shiftKey || event.metaKey || event.ctrlKey || event.altKey;
+      if ((event.key === "Enter" && active.exact) || ((event.key === "Enter" || event.key === "Tab") && modified)) {
         // The run is already a tag: Enter keeps its ordinary meaning (a new
         // line, a continued list) and only puts the list away. It used to
         // take the first child instead — `#life` became `#life/cooking` and
         // the line never broke. Tab still accepts the highlighted one.
+        // A held modifier means the key's own job — ⌘↩ sends, Shift+↩
+        // breaks the line, Shift+Tab steps back — so it too only closes.
         setSuggestion(null);
       } else if (event.key === "Enter" || event.key === "Tab") {
         event.preventDefault();
@@ -1363,12 +1396,28 @@ export function Editor({
     submittingRef.current = true;
     setSubmitting(true);
     setError(null);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    // Where the caret was when Send went: a stopped send hands the field
+    // back exactly so (text and images never left it).
+    const area = areaRef.current;
+    const held = area ? { start: area.selectionStart, end: area.selectionEnd, scrollTop: area.scrollTop } : null;
+    const restoreField = () => {
+      const field = areaRef.current;
+      if (!field || !held || !mountedRef.current) return;
+      field.focus({ preventScroll: true });
+      field.setSelectionRange(held.start, held.end);
+      field.scrollTop = held.scrollTop;
+      quietSelectRef.current = { start: held.start, end: held.end };
+    };
     // Set once the composer is cleared — by the owner through onCommitted,
     // inside the update that lands the memo, or else right after.
     let cleared = false;
     const clearComposer = (animated: boolean) => {
       if (cleared || !mountedRef.current) return;
       cleared = true;
+      // Landed: from here Esc has nothing left to stop.
+      if (abortRef.current === controller) abortRef.current = null;
       draftIdRef.current = crypto.randomUUID();
       imageSlots.syncCommitted(existingImages.length);
       for (const image of newImages) URL.revokeObjectURL(image.previewUrl);
@@ -1402,13 +1451,21 @@ export function Editor({
                 if (mountedRef.current) setUploadPercent(Math.min(99, Math.round(fraction * 100)));
               }
             : undefined,
+        signal: controller.signal,
         onCommitted: mode === "create" ? clearComposer : undefined
       });
       if (ok && mode === "create") {
         clearComposer(false);
         returnFocusToField();
+      } else if (!ok && controller.signal.aborted) {
+        restoreField();
       }
     } catch (cause) {
+      // Stopped with Esc: the owner says so; the draft is as it was.
+      if (controller.signal.aborted && !cleared) {
+        restoreField();
+        return;
+      }
       // The draft is still here to fix and send again.
       returnFocusToField();
       const rotateCreateId =
@@ -1428,6 +1485,7 @@ export function Editor({
       fail(errorMessage(cause, "Couldn’t save the memo", "保存失败"));
     } finally {
       submittingRef.current = false;
+      if (abortRef.current === controller) abortRef.current = null;
       if (mountedRef.current) {
         setSubmitting(false);
         setUploadPercent(null);
@@ -1469,11 +1527,15 @@ export function Editor({
   const attachmentsOpen = removable.length > 0 || compressing > 0;
   // The note rows fold open and shut (see .editor-note); a closing one keeps
   // its last words while it folds, as an aria-hidden copy.
-  const errorText = imageLimitExceeded
-    ? tr(`Remove images until no more than ${MAX_IMAGES} remain`, `请移除图片，最多保留 ${MAX_IMAGES} 张`)
-    : (error?.text ?? null);
+  const errorText = imageLimitExceeded ? imageLimitText : (error?.text ?? null);
   if (errorText) lastErrorRef.current = errorText;
   if (conflictMessage) lastConflictRef.current = conflictMessage;
+  // The line arrives once. Opening, the row's fold and fade are its entrance;
+  // only a new complaint replacing one already showing rises in on its own
+  // (decided once per line, as its key first renders).
+  const errorKey = errorText ? (imageLimitExceeded ? "limit" : `error-${error?.seq ?? 0}`) : null;
+  if (errorKey !== errorLineRef.current.key) errorLineRef.current = { key: errorKey, replacing: errorLineRef.current.key !== null };
+  const errorReplacing = errorLineRef.current.replacing;
   // The tag list: open, stepped aside for an IME, or playing its exit.
   const list = suggestion ?? leavingSuggestion;
   const listOpen = suggestion !== null && !composing;
@@ -1505,7 +1567,9 @@ export function Editor({
           ref={areaRef}
           role="combobox"
           aria-label={tr("Memo content", "笔记内容")}
-          aria-describedby={mode === "create" && contextTag ? contextTagDescriptionId : undefined}
+          aria-describedby={[mode === "create" && contextTag ? contextTagDescriptionId : "", overLimit ? countId : ""].filter(Boolean).join(" ") || undefined}
+          // Past the cap the text cannot be sent; the count says by how much.
+          aria-invalid={overLimit || undefined}
           aria-autocomplete="list"
           aria-expanded={listOpen}
           aria-controls={listOpen ? suggestionListId : undefined}
@@ -1544,7 +1608,7 @@ export function Editor({
           onClick={onCaretMove}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
-          onBlur={() => window.setTimeout(() => setSuggestion(null), 120)}
+          onBlur={() => window.setTimeout(() => setSuggestion(null), SUGGEST_BLUR_MS)}
         />
         {overLimit ? (
           <div ref={overflowRef} className="editor-overflow" aria-hidden="true">
@@ -1563,7 +1627,9 @@ export function Editor({
           aria-label={tr("Tag suggestions", "标签建议")}
           aria-hidden={listOpen ? undefined : true}
           onAnimationEnd={(event) => {
-            if (event.target === event.currentTarget && event.animationName.startsWith("menu-out")) setLeavingSuggestion(null);
+            // menu-out, or the dissolve that stands in for it under reduced motion.
+            if (event.target !== event.currentTarget) return;
+            if (event.animationName.startsWith("menu-out") || event.animationName === "fade-out") setLeavingSuggestion(null);
           }}
         >
           {list.items.map((tag, index) => (
@@ -1618,9 +1684,13 @@ export function Editor({
                   <div
                     key={tile.key}
                     className={`attachment${removing ? " is-removing" : ""}${settledTiles.has(image.id) ? " is-settled" : ""}`}
+                    // A send names the tile after this id, so the picture
+                    // rides into the new card (App, landCreated).
+                    data-image-id={image.id}
                     aria-hidden={removing || undefined}
                     onAnimationEnd={(event) => {
-                      if (event.animationName !== "attach-out") return;
+                      // The exit, or its reduced-motion dissolve (app.css).
+                      if (event.animationName !== "attach-out" && event.animationName !== "attach-dissolve") return;
                       if (tile.kind === "stored") {
                         settleRemove(image.id, () => {
                           imageSlots.releaseCommitted();
@@ -1662,6 +1732,7 @@ export function Editor({
                           : tr("Remove image", "移除图片")
                       }
                       tabIndex={removing ? -1 : undefined}
+                      onMouseDown={keepFieldFocus}
                       onClick={(event) => beginRemove(image.id, event.currentTarget)}
                       disabled={locked}
                     >
@@ -1721,11 +1792,11 @@ export function Editor({
         <div className={`editor-note${errorText ? " is-open" : ""}`}>
           <div className="editor-note-inner">
             {errorText ? (
-              <p key={imageLimitExceeded ? "limit" : `error-${error?.seq ?? 0}`} className="editor-error" role="alert">
+              <p key={errorKey} className={`editor-error${errorReplacing ? " is-replacing" : ""}`}>
                 {errorText}
               </p>
             ) : (
-              <p key="leaving" className="editor-error is-leaving" aria-hidden="true">
+              <p key="leaving" className="editor-error" aria-hidden="true">
                 {lastErrorRef.current}
               </p>
             )}
@@ -1735,7 +1806,7 @@ export function Editor({
         <div className={`editor-note${conflictMessage ? " is-open" : ""}`}>
           <div className="editor-note-inner">
             {conflictMessage ? (
-              <div key="conflict" className="editor-conflict" role="alert">
+              <div key="conflict" className="editor-conflict">
                 <p>{conflictMessage}</p>
                 {onAcceptRemoteBase ? (
                   <button type="button" className="ghost-button" onClick={onAcceptRemoteBase} disabled={locked}>
@@ -1868,6 +1939,7 @@ export function Editor({
             overLimit ? (
               // Over the cap the count says so in words; the bubble names the cap.
               <span
+                id={countId}
                 className="editor-count is-over"
                 {...tip.bind({ text: tr(`A memo holds up to ${formatNumber(MAX_CONTENT_CHARS)} characters`, `单条笔记最多 ${formatNumber(MAX_CONTENT_CHARS)} 字`) })}
               >

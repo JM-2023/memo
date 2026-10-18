@@ -21,6 +21,21 @@ const INTERRUPTS: (keyof WindowEventMap)[] = ["wheel", "touchstart", "mousedown"
  * screens of a glide anyway, so capping the swept distance looks identical. */
 const MAX_GLIDE_VIEWPORTS = 3;
 
+/**
+ * Lend focus to the top of the main column (where the reader now is) for a
+ * control about to vanish under it: tabindex −1 only for the stay, removed
+ * again on blur, so <main> never becomes a Tab stop of its own.
+ */
+export function parkFocusOnMain(): void {
+  const main = document.getElementById("main-content");
+  if (!main) return;
+  if (!main.hasAttribute("tabindex")) {
+    main.setAttribute("tabindex", "-1");
+    main.addEventListener("blur", () => main.removeAttribute("tabindex"), { once: true });
+  }
+  main.focus({ preventScroll: true });
+}
+
 /** Nominal settle time: grows with the log of the distance, capped so even a
  * mile-long feed still lands within the UI timing budget. */
 const flightMs = (distance: number) =>
@@ -165,14 +180,7 @@ export function ScrollTopButton() {
   const onActivate = (event: ReactMouseEvent<HTMLButtonElement>) => {
     const viaKeyboard = event.detail === 0;
     scrollToTop();
-    if (!viaKeyboard) return;
-    const main = document.getElementById("main-content");
-    if (!main) return;
-    if (!main.hasAttribute("tabindex")) {
-      main.setAttribute("tabindex", "-1");
-      main.addEventListener("blur", () => main.removeAttribute("tabindex"), { once: true });
-    }
-    main.focus({ preventScroll: true });
+    if (viaKeyboard) parkFocusOnMain();
   };
 
   return (

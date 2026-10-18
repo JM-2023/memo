@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { EASE_OUT } from "../lib/motion";
+import { EASE_OUT, T_SLOW } from "../lib/motion";
 
 interface SwapTextProps {
   /** Identity of the content; a change triggers the swap animation. */
@@ -131,7 +131,7 @@ export function SwapText({ id, dir = 0, className, tweenWidth = true, children }
       if (cur) cur.style.width = "";
     };
     const animation = el.animate([start, end], {
-      duration: 220,
+      duration: T_SLOW,
       easing: EASE_OUT
     });
     sizeAnimationRef.current = animation;

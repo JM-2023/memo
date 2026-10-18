@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ import { Heatmap } from "../src/components/Heatmap";
 import { PasscodePad } from "../src/components/PasscodePad";
 import { TipProvider } from "../src/components/Tip";
 import { LanguageProvider } from "../src/lib/i18n";
+import { LIVE_REGION_ATTR, mountLiveRegions } from "../src/lib/liveAnnouncer";
 
 function Providers({ children }: { children: ReactNode }) {
   return (
@@ -83,6 +84,7 @@ describe("Editor accessibility and composition", () => {
   });
 
   it("announces a save failure", async () => {
+    const unmountRegions = mountLiveRegions();
     const user = userEvent.setup();
     render(
       <Providers>
@@ -100,7 +102,12 @@ describe("Editor accessibility and composition", () => {
     await user.type(screen.getByRole("combobox", { name: "Memo content" }), "draft");
     await user.click(screen.getByRole("button", { name: "Send" }));
 
-    expect((await screen.findByRole("alert")).textContent).toBe("Save failed");
+    // Spoken assertively through the standing region; the visible line is
+    // plain text (a live region mounted already filled is often skipped).
+    await waitFor(() => expect(document.querySelector(`[${LIVE_REGION_ATTR}] [role="alert"]`)?.textContent).toBe("Save failed"));
+    expect(document.querySelector(".editor-error")?.textContent).toBe("Save failed");
+    expect(document.querySelector(".editor-error")?.getAttribute("role")).toBeNull();
+    unmountRegions();
   });
 
   it("counts an inherited context tag before allowing a near-limit create", () => {

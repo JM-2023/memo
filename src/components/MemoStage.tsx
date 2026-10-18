@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { diffLines, isTaskMarkFlipOnly, visualLinesOf, type DiffOp } from "../lib/lineDiff";
 import type { MemoImage } from "../lib/types";
-import { EASE, EASE_OUT } from "../lib/motion";
+import { EASE, EASE_OUT, T_BASE, T_ENTER, T_EXIT, T_FAST, T_SLOW } from "../lib/motion";
 
 /**
  * Scene-morph stage for a memo card. The card swaps between two scenes —
@@ -24,10 +24,32 @@ import { EASE, EASE_OUT } from "../lib/motion";
  * editor's DOM — including the user's typed pixels — survives its role
  * flip to "outgoing"). A layout effect then measures, pins the stage
  * height, and drives everything through WAAPI before first paint.
+ *
+ * Reduced motion keeps the plan but nothing travels: the stage takes the
+ * incoming scene's height at once and the two scenes dissolve in place (a
+ * saved edit cross-fades instead of replaying its lines).
  */
 
-const SWAP_HEIGHT_MS = 220;
-const REPLAY_HEIGHT_MS = 260;
+/** The stage's height tween: a scene swap on the slow step, a replay — new
+    lines arriving — on the entrance role. */
+const SWAP_HEIGHT_MS = T_SLOW;
+const REPLAY_HEIGHT_MS = T_ENTER;
+/**
+ * The replay's beats, in ms after the change lands. Deleted lines start
+ * closing first; the surviving lines set off a moment later and glide in
+ * step with the box, landing as it does; added lines rise into the room
+ * it makes, a few ms apart, the last of them landing with the box too.
+ */
+const DEL_AT = 10;
+const KEEP_AT = REPLAY_HEIGHT_MS - T_SLOW;
+const ADD_STEP = 8;
+const ADD_STEPS = 5;
+const ADD_AT = REPLAY_HEIGHT_MS - T_BASE - ADD_STEP * ADD_STEPS;
+const MEDIA_NEW_AT = REPLAY_HEIGHT_MS - T_BASE;
+/** The incoming scene (and a saved card's header) fades in a beat after the outgoing one starts to go. */
+const ENTER_AT = 25;
+/** Past every track's landing: the settle's insurance (see below). */
+const SETTLE_SLACK_MS = 260;
 /** Above this many combined visual lines the replay downgrades to a plain
     cross-fade — hundreds of clone layers would tax the compositor without
     telling a legible story. */
@@ -98,7 +120,11 @@ interface MemoStageProps {
   renderLine: (raw: string, nextRaw?: string) => ReactNode;
 }
 
-function buildPlan(prev: Snap, next: Snap): MorphPlan | null {
+function prefersReducedMotion(): boolean {
+  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function buildPlan(prev: Snap, next: Snap, reduced: boolean): MorphPlan | null {
   if (!prev.editing && next.editing) return { kind: "toEdit", prev, ops: null };
   const contentChanged = prev.content !== next.content || prev.mediaKey !== next.mediaKey;
   if (prev.editing && !next.editing && !contentChanged) return { kind: "swap", prev, ops: null };
@@ -112,6 +138,8 @@ function buildPlan(prev: Snap, next: Snap): MorphPlan | null {
   // transition tells the story — for the local toggle's confirmation the view
   // already shows the flipped state, and a replay would re-narrate it.
   if (!prev.editing && !next.editing && prev.mediaKey === next.mediaKey && isTaskMarkFlipOnly(ops)) return null;
+  // Line clones travel; under reduced motion the change cross-fades instead.
+  if (reduced) return { kind: "swap", prev, ops: null };
   return { kind: "replay", prev, ops };
 }
 
@@ -143,7 +171,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
     // content update far from the viewport lands with no morph at all.
     const stage = stageRef.current;
     const offscreen = !sceneChanged && stage !== null && nearCards.get(watchTargetOf(stage)) === false;
-    setMorph(offscreen ? null : buildPlan(prev, { editing, content, mediaKey, images }));
+    setMorph(offscreen ? null : buildPlan(prev, { editing, content, mediaKey, images }, prefersReducedMotion()));
   }
 
   useEffect(() => {
@@ -172,9 +200,35 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
       if (stage) stage.style.height = "";
       if (morphRef.current === plan) setMorph(null);
     };
-    if (!stage || !target || !outgoing || stage.offsetWidth === 0 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (!stage || !target || !outgoing || stage.offsetWidth === 0 || typeof stage.animate !== "function") {
       finishNow();
       return;
+    }
+
+    // Settle when every track lands — with a hard deadline as insurance: if
+    // a finished promise never resolves (devtools animation pausing, a
+    // stalled timeline), the stage must not stay pinned forever. The
+    // plan-identity guard makes whichever fires second a no-op.
+    const settleWhen = (anims: Animation[], landsBy: number) => {
+      const settle = () => {
+        if (morphRef.current === plan) setMorph(null);
+      };
+      Promise.allSettled(anims.map((anim) => anim.finished)).then(settle);
+      const deadline = window.setTimeout(settle, landsBy + SETTLE_SLACK_MS);
+      return () => window.clearTimeout(deadline);
+    };
+
+    if (prefersReducedMotion()) {
+      // A dissolve in place: no height tween, no translate. The outgoing
+      // scene floats out of flow (.is-out), so the stage already stands at
+      // the incoming one's height.
+      for (const anim of animsRef.current) anim.cancel();
+      stage.style.height = "";
+      animsRef.current = [
+        outgoing.animate([{ opacity: 1 }, { opacity: 0 }], { duration: T_FAST, easing: EASE, fill: "both" }),
+        target.animate([{ opacity: 0 }, { opacity: 1 }], { duration: T_BASE, easing: EASE, fill: "both" })
+      ];
+      return settleWhen(animsRef.current, T_BASE);
     }
 
     // ---- Measure everything first (one layout pass), then write. ----
@@ -245,7 +299,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
               { transform: `translateY(${y + 1}px)`, opacity: 1, clipPath: "inset(-2px 0px -2px 0px)", offset: 0.22 },
               { transform: `translateY(${y + 4}px)`, opacity: 0, clipPath: "inset(48% 0px 52% 0px)" }
             ],
-            options: { duration: 180, delay: 30, easing: EASE, fill: "both" }
+            options: { duration: T_EXIT, delay: DEL_AT, easing: EASE, fill: "both" }
           });
         } else if (op.type === "keep") {
           const from = oldTops[op.oldIndex];
@@ -257,7 +311,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
               { transform: `translateY(${from}px)`, opacity: 1 },
               { transform: `translateY(${to}px)`, opacity: 1 }
             ],
-            options: { duration: 220, delay: 40, easing: EASE_OUT, fill: "both" }
+            options: { duration: T_SLOW, delay: KEEP_AT, easing: EASE_OUT, fill: "both" }
           });
         } else {
           const to = newTops[op.newIndex];
@@ -268,7 +322,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
               { transform: `translateY(${to + 8}px)`, opacity: 0, clipPath: "inset(28% 0px 28% 0px)" },
               { transform: `translateY(${to}px)`, opacity: 1, clipPath: "inset(-2px 0px -2px 0px)" }
             ],
-            options: { duration: 180, delay: 70 + Math.min(addOrder, 5) * 8, easing: EASE_OUT, fill: "both" }
+            options: { duration: T_BASE, delay: ADD_AT + Math.min(addOrder, ADD_STEPS) * ADD_STEP, easing: EASE_OUT, fill: "both" }
           });
           addOrder += 1;
         }
@@ -282,7 +336,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
               { transform: `translateY(${oldMediaTop}px)`, opacity: 1 },
               { transform: `translateY(${newMediaTop}px)`, opacity: 1 }
             ],
-            options: { duration: 220, delay: 40, easing: EASE_OUT, fill: "both" }
+            options: { duration: T_SLOW, delay: KEEP_AT, easing: EASE_OUT, fill: "both" }
           });
         } else if (el.classList.contains("is-media-old") && oldMediaTop !== null) {
           cloneTracks.push({
@@ -291,7 +345,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
               { transform: `translateY(${oldMediaTop}px) scale(1)`, opacity: 1 },
               { transform: `translateY(${oldMediaTop + 3}px) scale(0.99)`, opacity: 0 }
             ],
-            options: { duration: 170, delay: 35, easing: EASE, fill: "both" }
+            options: { duration: T_EXIT, delay: DEL_AT, easing: EASE, fill: "both" }
           });
         } else if (el.classList.contains("is-media-new") && newMediaTop !== null) {
           cloneTracks.push({
@@ -300,7 +354,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
               { transform: `translateY(${newMediaTop + 10}px)`, opacity: 0 },
               { transform: `translateY(${newMediaTop}px)`, opacity: 1 }
             ],
-            options: { duration: 190, delay: 80, easing: EASE_OUT, fill: "both" }
+            options: { duration: T_BASE, delay: MEDIA_NEW_AT, easing: EASE_OUT, fill: "both" }
           });
         }
       }
@@ -325,7 +379,7 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
           { opacity: 1, transform: "translateY(0)" },
           { opacity: 0, transform: plan.kind === "toEdit" ? "translateY(0)" : "translateY(-5px)" }
         ],
-        { duration: plan.kind === "replay" ? 130 : 120, easing: EASE, fill: "both" }
+        { duration: T_FAST, easing: EASE, fill: "both" }
       )
     );
     if (plan.kind === "toEdit" || plan.kind === "swap") {
@@ -335,25 +389,16 @@ export function MemoStage({ editing, content, mediaKey, images, view, editor, re
             { opacity: 0, transform: `translateY(${plan.kind === "toEdit" ? 6 : 4}px)` },
             { opacity: 1, transform: "translateY(0)" }
           ],
-          { duration: 180, delay: 25, easing: EASE_OUT, fill: "both" }
+          { duration: T_BASE, delay: ENTER_AT, easing: EASE_OUT, fill: "both" }
         )
       );
     }
     if (headerEl) {
-      anims.push(headerEl.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, delay: 25, easing: EASE, fill: "both" }));
+      anims.push(headerEl.animate([{ opacity: 0 }, { opacity: 1 }], { duration: T_BASE, delay: ENTER_AT, easing: EASE, fill: "both" }));
     }
     for (const track of cloneTracks) anims.push(track.el.animate(track.keyframes, track.options));
-
-    // Settle when every track lands — with a hard deadline as insurance: if
-    // a finished promise never resolves (devtools animation pausing, a
-    // stalled timeline), the stage must not stay pinned forever. The
-    // plan-identity guard makes whichever fires second a no-op.
-    const settle = () => {
-      if (morphRef.current === plan) setMorph(null);
-    };
-    Promise.allSettled(anims.map((anim) => anim.finished)).then(settle);
-    const deadline = window.setTimeout(settle, (plan.kind === "replay" ? 340 : SWAP_HEIGHT_MS) + 260);
-    return () => window.clearTimeout(deadline);
+    // Every track lands by the time the box does (see the beats above).
+    return settleWhen(anims, plan.kind === "replay" ? REPLAY_HEIGHT_MS : SWAP_HEIGHT_MS);
   }, [morph]);
 
   useEffect(

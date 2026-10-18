@@ -3,7 +3,7 @@ import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode
 import { flushSync } from "react-dom";
 import { useI18n } from "../lib/i18n";
 import { SwapText } from "./SwapText";
-import { EASE, EASE_OUT } from "../lib/motion";
+import { EASE, EASE_OUT, T_BASE, T_ENTER, T_EXIT } from "../lib/motion";
 import { SCROLL_JUMP_EVENT } from "../lib/navHistory";
 
 /** Visible body height of a folded memo — keep in step with .memo-fold's max-height. */
@@ -40,7 +40,8 @@ const FOLD_FADE = "56px";
 /**
  * Show less with the card's top above the viewport: how long the roll back to
  * the memo's start takes. A short base, plus 10ms per 100px travelled, so
- * a very long memo does not streak past in a blur; capped.
+ * a very long memo does not streak past in a blur; capped. Off the motion
+ * steps on purpose: the pace follows the distance.
  */
 function rollDuration(distance: number): number {
   return Math.min(560, 280 + distance / 10);
@@ -108,7 +109,8 @@ export function MemoFold({ content, expanded, onExpandedChange, regionId, childr
     const button = toggleRef.current;
     if (!fold || !button || !onExpandedChange) return;
     const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const canAnimate = !reduced && typeof fold.animate === "function";
+    const canFade = typeof fold.animate === "function";
+    const canAnimate = !reduced && canFade;
     // A reversal mid-flight starts from wherever the box is now.
     const running = motionRef.current;
     motionRef.current = null;
@@ -117,23 +119,27 @@ export function MemoFold({ content, expanded, onExpandedChange, regionId, childr
       running?.cancel();
       flushSync(() => {
         onExpandedChange(true);
-        setUnfolding(canAnimate);
+        setUnfolding(canFade);
       });
       const to = fold.getBoundingClientRect().height;
-      if (!canAnimate || to <= from) {
-        if (canAnimate) setUnfolding(false);
+      if (!canFade || to <= from) {
+        if (canFade) setUnfolding(false);
         return;
       }
       // Unfold on one curve instead of a jump. The fade drains on the same
       // curve, so the edge dissolves as the text arrives instead of a hard
       // cut sliding down the card. Held at its end state until the class
       // that keeps the mask on is gone, so the fade never flashes back.
+      // Under reduced motion the box opens at once and only the fade
+      // drains, over --t: nothing travels, and nothing cuts either.
       const animation = fold.animate(
-        [
-          { height: `${from}px`, "--fold-fade": FOLD_FADE },
-          { height: `${to}px`, "--fold-fade": "0px" }
-        ],
-        { duration: 260, easing: EASE_OUT, fill: "forwards" }
+        reduced
+          ? [{ "--fold-fade": FOLD_FADE }, { "--fold-fade": "0px" }]
+          : [
+              { height: `${from}px`, "--fold-fade": FOLD_FADE },
+              { height: `${to}px`, "--fold-fade": "0px" }
+            ],
+        reduced ? { duration: T_BASE, easing: EASE, fill: "forwards" } : { duration: T_ENTER, easing: EASE_OUT, fill: "forwards" }
       );
       motionRef.current = animation;
       const release = () => {
@@ -165,17 +171,22 @@ export function MemoFold({ content, expanded, onExpandedChange, regionId, childr
     if (!canAnimate || from <= to) {
       const after = button.getBoundingClientRect().top;
       if (after < before) window.scrollBy({ top: after - before, behavior: "instant" });
+      // Reduced motion: the box snapped shut, and the fade pours back in
+      // place over --t rather than appearing as a hard edge.
+      if (reduced && canFade && from > to) {
+        motionRef.current = fold.animate([{ "--fold-fade": "0px" }, { "--fold-fade": FOLD_FADE }], { duration: T_BASE, easing: EASE });
+      }
       return;
     }
     if (cardTop >= 0) {
       // max-height rather than height: the folded rule's own cap takes over
-      // exactly where the animation lands.
+      // exactly where the animation lands. Closing is an exit: its beat.
       motionRef.current = fold.animate(
         [
           { maxHeight: `${from}px`, "--fold-fade": "0px" },
           { maxHeight: `${to}px`, "--fold-fade": FOLD_FADE }
         ],
-        { duration: 220, easing: EASE_OUT }
+        { duration: T_EXIT, easing: EASE }
       );
       return;
     }

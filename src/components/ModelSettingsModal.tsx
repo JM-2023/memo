@@ -1,7 +1,8 @@
-import { ChevronDown, Download, FileDown, HardDrive, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import { ChevronDown, Download, FileDown, RefreshCw, Trash2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import {
   useSemanticProgress,
@@ -10,6 +11,7 @@ import {
   type SemanticSearchStatus
 } from "../hooks/useSemanticSearch";
 import { useI18n } from "../lib/i18n";
+import { T_SLOW } from "../lib/motion";
 import {
   cancelModelDownload,
   classifyModelFailure,
@@ -149,6 +151,16 @@ interface ProgressView {
 
 const EMPTY_PROGRESS: ProgressView = { label: "", value: "", meta: "", percent: 0, stages: [] };
 
+/** The line under the headline. Only `text` is live (the status region);
+    `lead` and `tail` are the figures that tick inside one state — the index
+    count per batch, the download's time left — so they are drawn but kept
+    out of it, and the progressbar's value text carries them instead. */
+interface Subline {
+  lead?: string;
+  text: string;
+  tail?: string;
+}
+
 /**
  * The Semantic Search panel, redesigned: a 640px surface split into the
  * present tense (left — the orb, one true progress bar, an expandable stage
@@ -213,6 +225,7 @@ export function ModelSettingsModal({
   const advRegionRef = useRef<HTMLDivElement>(null);
   const clearRegionRef = useRef<HTMLDivElement>(null);
   const clearButtonRef = useRef<HTMLButtonElement>(null);
+  const clearCancelRef = useRef<HTMLButtonElement>(null);
   // An inline confirm that folds away under keyboard focus hands it back
   // to the button that asked (see the effects beside the inert ones).
   const returnFocusRef = useRef<"clear" | "rebuild" | null>(null);
@@ -460,18 +473,20 @@ export function ModelSettingsModal({
     }
   };
 
-  const indexLine = (rebuilding: boolean): string => {
+  const indexLine = (rebuilding: boolean): Subline => {
     const done = semanticProgress?.done ?? 0;
     const total = semanticProgress?.total ?? 0;
     if (total > 0) {
-      return tr(
-        `${formatNumber(done)} of ${formatNumber(total)} memos · keyword search keeps working.`,
-        `已处理 ${formatNumber(done)} / ${formatNumber(total)} 条笔记 · 关键词搜索不受影响。`
-      );
+      return {
+        lead: tr(`${formatNumber(done)} of ${formatNumber(total)} memos · `, `已处理 ${formatNumber(done)} / ${formatNumber(total)} 条笔记 · `),
+        text: tr("keyword search keeps working.", "关键词搜索不受影响。")
+      };
     }
-    return rebuilding
-      ? tr("Keyword search keeps working while the index rebuilds.", "重建索引期间，关键词搜索不受影响。")
-      : tr("Keyword search keeps working while the index builds.", "建立索引期间，关键词搜索不受影响。");
+    return {
+      text: rebuilding
+        ? tr("Keyword search keeps working while the index rebuilds.", "重建索引期间，关键词搜索不受影响。")
+        : tr("Keyword search keeps working while the index builds.", "建立索引期间，关键词搜索不受影响。")
+    };
   };
 
   const headline =
@@ -507,7 +522,7 @@ export function ModelSettingsModal({
 
   /* The second line answers "what can I do now, and how long": the work
      that is on, what it costs, and what keeps working meanwhile. */
-  const subline =
+  const sublineParts: Subline | string =
     stateId === "checking"
       ? tr("Looking for model files already on this device.", "正在查找此设备上已有的模型文件。")
       : stateId === "idle"
@@ -517,7 +532,7 @@ export function ModelSettingsModal({
         : stateId === "paused"
           ? keptLine
           : stateId === "downloading"
-            ? tr(`Keyword search keeps working.${etaLine ? ` ${etaLine}` : ""}`, `关键词搜索不受影响。${etaLine}`)
+            ? { text: tr("Keyword search keeps working.", "关键词搜索不受影响。"), tail: etaLine ? tr(` ${etaLine}`, etaLine) : undefined }
             : stateId === "loading"
               ? tr("Almost ready.", "马上就好。")
               : stateId === "ready"
@@ -535,6 +550,7 @@ export function ModelSettingsModal({
                           : failureCause
                             ? failureLine(failureCause)
                             : "";
+  const subline: Subline = typeof sublineParts === "string" ? { text: sublineParts } : sublineParts;
 
   /* One true progress surface per working state, every figure real. */
   const progress: ProgressView = (() => {
@@ -775,6 +791,35 @@ export function ModelSettingsModal({
   }
   lastHeadRef.current = { id: stateId, text: headline };
 
+  /* ---- reveal: a block that unfolds below the fold is brought into view ---- */
+
+  const reducedMotion = useReducedMotion();
+  /* The block grows on the grid-rows track (--t-slow), so one scroll to it
+     a frame in would stop short: the box can't yet scroll as far as the
+     block will reach, and a smooth scroll's target is clamped where it
+     starts. Instead the box follows the fold for its run, frame by frame —
+     the bottom edge is kept in view as it grows, the top is never pushed
+     out — so the block opens upward into sight on the fold's own curve.
+     Reduced motion has no fold to follow: one step, the frame after. */
+  const revealUnfolding = useCallback(
+    (region: HTMLElement | null) => {
+      const box = scrollRef.current;
+      if (!region || !box) return;
+      const until = performance.now() + (reducedMotion ? 0 : T_SLOW + 40);
+      let frame = 0;
+      const step = () => {
+        const room = box.getBoundingClientRect();
+        const rect = region.getBoundingClientRect();
+        const by = Math.min(rect.bottom - room.bottom, rect.top - room.top);
+        if (by > 0.5) box.scrollTop += by;
+        if (performance.now() < until) frame = requestAnimationFrame(step);
+      };
+      frame = requestAnimationFrame(step);
+      return () => cancelAnimationFrame(frame);
+    },
+    [reducedMotion]
+  );
+
   /* ---- attend: the Brain opened us to show this — wash and reveal it ---- */
 
   useEffect(() => {
@@ -842,6 +887,19 @@ export function ModelSettingsModal({
   useEffect(() => {
     if (confirmingRebuild) rebuildConfirmRef.current?.focus();
   }, [confirmingRebuild]);
+  /* The Clear confirm asks the same way, so it takes the same care: Cancel
+     takes focus (the affirmative deletes 123 MB this device fetched) and the
+     row is brought into view as it unfolds at the foot of the ledger. */
+  useEffect(() => {
+    if (!confirmingClear) return;
+    clearCancelRef.current?.focus({ preventScroll: true });
+    return revealUnfolding(clearRegionRef.current);
+  }, [confirmingClear, revealUnfolding]);
+  /* "Advanced" unfolds below everything else, past the bottom of the scroll
+     box on a short window; open, it is brought into view. */
+  useEffect(() => {
+    if (advOpen) return revealUnfolding(advRegionRef.current);
+  }, [advOpen, revealUnfolding]);
 
   return (
     <div
@@ -871,8 +929,12 @@ export function ModelSettingsModal({
           <div className="model-panel-columns">
             <div className="model-stage-col">
               <ThinkingOrb state={ORB[stateId]} size={112} mute={orbMute} />
-              {/* The live region is the two lines that name the state — a bar
-                  ticking every frame never re-announces the whole panel. */}
+              {/* The live region holds only the words that name the state:
+                  the headline and the subline's words, which change with the
+                  state. The figures that tick inside one — the index count per
+                  batch, the time left — are drawn aria-hidden here and read
+                  from the progressbar's value text, so neither the bar nor a
+                  batch re-announces the panel. */}
               <div className="model-live" role="status" aria-live="polite">
                 <span className="model-headline-swap">
                   <span key={stateId} className="model-headline">
@@ -890,7 +952,9 @@ export function ModelSettingsModal({
                   ) : null}
                 </span>
                 <p key={`sub-${stateId}`} className="model-subline">
-                  {subline}
+                  {subline.lead ? <span aria-hidden="true">{subline.lead}</span> : null}
+                  {subline.text}
+                  {subline.tail ? <span aria-hidden="true">{subline.tail}</span> : null}
                 </p>
               </div>
 
@@ -918,7 +982,9 @@ export function ModelSettingsModal({
                               "aria-valuemin": 0,
                               "aria-valuemax": 100,
                               "aria-valuenow": Math.max(0, Math.min(100, Math.round(progress.percent))),
-                              "aria-valuetext": progress.value,
+                              // The time left is said here, out of the live line.
+                              "aria-valuetext":
+                                stateId === "downloading" && etaLine ? tr(`${progress.value}, ${etaLine}`, `${progress.value}，${etaLine}`) : progress.value,
                               "aria-label": progress.label
                             }
                           : {})}
@@ -1181,10 +1247,10 @@ export function ModelSettingsModal({
                   aria-hidden={!confirmingClear || undefined}
                 >
                   <div>
+                    {/* A plain row, as the rebuild's ask is: the question in ink,
+                        what it costs in grey, and the one red on the button
+                        that does it. */}
                     <div className="model-clear-confirm" role="group" aria-label={tr("Confirm clearing the model", "确认清除模型")}>
-                      <span className="model-clear-confirm-icon" aria-hidden="true">
-                        <HardDrive size={17} />
-                      </span>
                       <span className="model-clear-confirm-copy">
                         <strong>{tr("Clear model from this device?", "从此设备清除模型？")}</strong>
                         <span>
@@ -1196,6 +1262,7 @@ export function ModelSettingsModal({
                       </span>
                       <span className="model-clear-confirm-actions">
                         <button
+                          ref={clearCancelRef}
                           type="button"
                           className="ghost-button"
                           onClick={() => {

@@ -31,10 +31,11 @@ import { Editor, type EditDraft, type EditorSubmission } from "./components/Edit
 import { FilterChip } from "./components/FilterChip";
 import { Lightbox } from "./components/Lightbox";
 import { LoginScreen } from "./components/LoginScreen";
-import { MemoCard } from "./components/MemoCard";
+import { MemoCard, SelectRingStagger } from "./components/MemoCard";
 import { Menu } from "./components/Menu";
 import { PromptDialog } from "./components/PromptDialog";
 import { RollingCount, RollingText } from "./components/RollingText";
+import { FeedEnd } from "./components/FeedEnd";
 import { ScrollTopButton } from "./components/ScrollTopButton";
 import { FACET_ROWS, SearchFilter, type FilterOpenTarget } from "./components/SearchFilter";
 import { Sidebar } from "./components/Sidebar";
@@ -77,10 +78,11 @@ import { BackupFormatError, inspectBackup, readBackupItems } from "./lib/backupF
 import { startBoot, type BootStart } from "./lib/boot";
 import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, saveSnapshot } from "./lib/cache";
 import { dateKey, formatDayLabel } from "./lib/dates";
+import { forgetFolds } from "./lib/foldMemory";
 import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow } from "./lib/feedSafety";
-import { EXIT_MS } from "./lib/motion";
+import { EXIT_MS, T_FAST } from "./lib/motion";
 import { useI18n } from "./lib/i18n";
-import { pruneImageCache } from "./lib/imageCache";
+import { peekImage, pruneImageCache } from "./lib/imageCache";
 import { announce, mountLiveRegions } from "./lib/liveAnnouncer";
 import { clearLocalDeviceData } from "./lib/logoutCleanup";
 import { splitTaskLine } from "./lib/markdown";
@@ -98,6 +100,7 @@ import {
   persistReviewSettings,
   removeReviewSettingsTag,
   renameReviewSettingsTag,
+  reviewDayStarved,
   reviewDayValid,
   reviewFingerprint,
   SETTINGS_KEY as REVIEW_SETTINGS_KEY,
@@ -139,7 +142,7 @@ import { startToastSwipe } from "./lib/toastSwipe";
 import { applyTheme, loadTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
-import { createFeedMotion, type FeedIntent } from "./lib/feedMotion";
+import { createFeedMotion, type Departure, type FeedIntent } from "./lib/feedMotion";
 import { withViewTransition } from "./lib/viewTransition";
 
 type Phase = "checking" | "error" | "login" | "ready";
@@ -219,8 +222,12 @@ interface ToastStackProps {
   /** Names the stack's landmark ("Notifications"). */
   regionLabel: string;
   onDismiss: (id: number) => void;
-  onPause: () => void;
-  onResume: () => void;
+  /**
+   * Hold or release the clocks: the pointer resting on the stack and focus
+   * inside it are separate holds, so the pointer leaving never restarts the
+   * clock while the keyboard still sits on an Undo.
+   */
+  onHold: (reason: "pointer" | "focus", held: boolean) => void;
 }
 
 /**
@@ -236,7 +243,7 @@ interface ToastStackProps {
  * F6 or Escape inside the stack hands focus back to where it came from, as
  * does using one of its buttons.
  */
-function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onResume }: ToastStackProps) {
+function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onHold }: ToastStackProps) {
   const stackRef = useRef<HTMLDivElement>(null);
   // Where focus stood before it entered the stack.
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -253,6 +260,23 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onR
     if (target?.isConnected && !target.inert) target.focus({ preventScroll: true });
     else if (stackRef.current?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
   }
+
+  // A toast dismissed from elsewhere (the cap, a notice replacing itself, a
+  // finished export) can be the one holding focus: hand it back as it starts
+  // to leave, before its buttons go and drop focus to <body> — and with it a
+  // focus hold no blur would ever release.
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (active instanceof Element && active.closest(".toast.is-leaving") && stackRef.current?.contains(active)) handBackFocus();
+  }, [toasts]);
+  // The stack unmounts with its last toast, under a resting pointer that
+  // never sees a pointerleave: its holds go with it.
+  const empty = toasts.length === 0;
+  useEffect(() => {
+    if (!empty) return;
+    onHold("pointer", false);
+    onHold("focus", false);
+  }, [empty, onHold]);
 
   useEffect(() => {
     if (!hasAction) return;
@@ -294,14 +318,18 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onR
       {...{ [MODAL_EXEMPT_ATTR]: "" }}
       role="region"
       aria-label={regionLabel}
-      onPointerEnter={onPause}
-      onPointerLeave={onResume}
+      onPointerEnter={() => onHold("pointer", true)}
+      onPointerLeave={() => onHold("pointer", false)}
       onFocus={(event) => {
         const from = event.relatedTarget;
         if (from instanceof HTMLElement && !event.currentTarget.contains(from)) returnFocusRef.current = from;
-        onPause();
+        onHold("focus", true);
       }}
-      onBlur={onResume}
+      onBlur={(event) => {
+        // Undo → × is still inside: the hold stays.
+        if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+        onHold("focus", false);
+      }}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();
@@ -360,6 +388,34 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onPause, onR
   );
 }
 
+/**
+ * Focus that a commit took away: still on <body>, on a node the commit
+ * removed, or on one it made inert (a card's controls under its select
+ * overlay) or disabled.
+ */
+function focusStranded(was: Element | null): boolean {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || active === document.body) return true;
+  if (active !== was) return false;
+  return !active.isConnected || active.closest("[inert]") !== null || active.matches(":disabled");
+}
+
+/**
+ * Where focus goes when the select toolbar leaves from under it: the control
+ * the mode is entered from, in order — the location pill (memos), Trash's
+ * Select, else Trash's ⌂ (the Select went with the last trashed memo).
+ */
+const LOCATION_FOCUS = [".loc-trigger", ".trash-select-button", ".view-trail .crumb-home"];
+
+function focusLocation(): void {
+  for (const selector of LOCATION_FOCUS) {
+    const target = document.querySelector<HTMLElement>(selector);
+    if (!target) continue;
+    target.focus({ preventScroll: true });
+    return;
+  }
+}
+
 interface PendingBatchTag {
   /** Which entry point armed it — the selection toolbar or one card's menu. */
   scope: "selection" | "memo";
@@ -390,6 +446,8 @@ function loadSortKey(): SortKey {
 interface MemoSlotProps {
   /** Per-memo view-transition-name; undefined past the morph budget. */
   vtName: string | undefined;
+  /** A semantic-only row held from the previous query's ranking (data-stale). */
+  stale?: boolean;
   children: ReactNode;
 }
 
@@ -404,9 +462,9 @@ interface MemoSlotProps {
  * unchanged slots, so the stripped style would otherwise leak into the new
  * state's capture.
  */
-function MemoSlot({ vtName, children }: MemoSlotProps) {
+function MemoSlot({ vtName, stale, children }: MemoSlotProps) {
   return (
-    <div className="memo-slot" data-vt={vtName}>
+    <div className="memo-slot" data-vt={vtName} data-stale={stale ? "" : undefined}>
       {children}
     </div>
   );
@@ -419,9 +477,14 @@ function MemoSlot({ vtName, children }: MemoSlotProps) {
  * DOM holds the new state, moves focus to the next surviving card's ⋯ (else
  * the previous one's; else, for a keyboard reader, the composer; else the
  * location pill). A no-op when focus was not inside a card or survived the
- * change.
+ * change — unless the card itself survived far away: name the memo the
+ * change is about, pass where it went (lib/feedMotion's departure, "up" or
+ * "down"), and focus inside that card stays at the reader's place, on the
+ * card that took the moved one's, as a save that re-sorts a card does
+ * (handleSaveEdit). Left on the moved card, the next Tab would scroll the
+ * reader off to it.
  */
-function holdFeedFocus(): () => void {
+function holdFeedFocus(memoId?: string): (departed?: Departure) => void {
   const active = document.activeElement;
   const slot = active instanceof HTMLElement ? active.closest<HTMLElement>(".memo-slot") : null;
   if (!active || !slot) return () => undefined;
@@ -435,8 +498,10 @@ function holdFeedFocus(): () => void {
   const neighbours: Element[] = [];
   for (let next = slot.nextElementSibling; next; next = next.nextElementSibling) neighbours.push(next);
   for (let previous = slot.previousElementSibling; previous; previous = previous.previousElementSibling) neighbours.push(previous);
-  return () => {
-    if (active.isConnected && document.activeElement === active) return;
+  const own = memoId !== undefined && slot.dataset.vt === `memo-${memoId}`;
+  return (departed) => {
+    const moved = own && (departed === "up" || departed === "down") && slot.contains(document.activeElement);
+    if (!moved && active.isConnected && document.activeElement === active) return;
     const survivor = neighbours.find((element) => element.isConnected && element.classList.contains("memo-slot"));
     const target =
       survivor?.querySelector<HTMLElement>(".memo-menu-trigger:not([tabindex='-1'])") ??
@@ -558,6 +623,8 @@ interface FeedItemProps {
   resumeContent: string | undefined;
   /** A pin / trash / restore of this memo is in flight. */
   busy: boolean;
+  /** Only here by the previous query's (stale) semantic ranking. */
+  stale: boolean;
   vtName: string | undefined;
   handlers: FeedHandlers;
 }
@@ -569,9 +636,9 @@ interface FeedItemProps {
  * re-render.
  */
 const FeedItem = reactMemo(
-  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, editDraft, selecting, selected, canSelect, taskFlips, resumeContent, busy, vtName, handlers }: FeedItemProps) {
+  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, editDraft, selecting, selected, canSelect, taskFlips, resumeContent, busy, stale, vtName, handlers }: FeedItemProps) {
     return (
-      <MemoSlot vtName={vtName}>
+      <MemoSlot vtName={vtName} stale={stale}>
         <MemoCard
           memo={memo}
           variant={variant}
@@ -621,6 +688,7 @@ const FeedItem = reactMemo(
     prev.taskFlips === next.taskFlips &&
     prev.resumeContent === next.resumeContent &&
     prev.busy === next.busy &&
+    prev.stale === next.stale &&
     prev.vtName === next.vtName &&
     prev.handlers === next.handlers
 );
@@ -689,7 +757,10 @@ export default function App() {
   const [searchComposition, setSearchComposition] = useState<string | null>(null);
   const searchComposingRef = useRef(false);
   // Trash's own keyword search: never carried into the memos feed or back.
+  // It waits out an IME composition the same way (see searchComposition).
   const [trashQuery, setTrashQuery] = useState("");
+  const [trashComposition, setTrashComposition] = useState<string | null>(null);
+  const trashComposingRef = useRef(false);
   // A device preference like theme and language: it survives logout and
   // session expiry (the hook itself only runs in the ready phase).
   const [semanticOn, setSemanticOn] = useState(() => {
@@ -892,7 +963,7 @@ export default function App() {
   const toastTimersRef = useRef(new Map<number, { timer: number; expiresAt: number; remaining: number }>());
   const toastSeqRef = useRef(0);
   const toastsPausedRef = useRef(false);
-  const toastHoldsRef = useRef(new Set<"stack" | "hidden">());
+  const toastHoldsRef = useRef(new Set<"pointer" | "focus" | "hidden">());
   // The gate's "session expired" toast, dismissed once the passcode unlocks.
   const authToastRef = useRef(0);
   const toastsRef = useRef(toasts);
@@ -970,7 +1041,7 @@ export default function App() {
    * rests on it; the clocks run again only once neither holds them.
    */
   const holdToasts = useCallback(
-    (reason: "stack" | "hidden", held: boolean) => {
+    (reason: "pointer" | "focus" | "hidden", held: boolean) => {
       const holds = toastHoldsRef.current;
       if (held === holds.has(reason)) return;
       if (held) holds.add(reason);
@@ -992,8 +1063,6 @@ export default function App() {
     },
     [armToast]
   );
-  const pauseToasts = useCallback(() => holdToasts("stack", true), [holdToasts]);
-  const resumeToasts = useCallback(() => holdToasts("stack", false), [holdToasts]);
 
   useEffect(() => {
     const onVisibility = () => holdToasts("hidden", document.visibilityState === "hidden");
@@ -1005,8 +1074,9 @@ export default function App() {
   const clearToasts = useCallback(() => {
     for (const entry of toastTimersRef.current.values()) window.clearTimeout(entry.timer);
     toastTimersRef.current.clear();
-    // The stack's own hold goes with its toasts; a background tab still holds.
-    toastHoldsRef.current.delete("stack");
+    // The stack's own holds go with its toasts; a background tab still holds.
+    toastHoldsRef.current.delete("pointer");
+    toastHoldsRef.current.delete("focus");
     toastsPausedRef.current = toastHoldsRef.current.size > 0;
     selectionNoticeRef.current = 0;
     authToastRef.current = 0;
@@ -1051,6 +1121,8 @@ export default function App() {
     setSearchComposition(null);
     searchComposingRef.current = false;
     setTrashQuery("");
+    setTrashComposition(null);
+    trashComposingRef.current = false;
     setSearchOpen(false);
     setFilters(EMPTY_FILTERS);
     setStatsDrilldown(null);
@@ -1162,6 +1234,8 @@ export default function App() {
 
   const applySyncChanges = useCallback((changed: readonly Memo[], purged: readonly PurgedMemo[], tags: readonly TagMeta[], cursor?: number) => {
     setSyncState((current) => applySyncDelta(current, { memos: changed, purged, tags }));
+    // A purged memo never comes back, so its unfolded state goes with it.
+    if (purged.length > 0) forgetFolds(purged.map((memo) => memo.id));
     if (cursor !== undefined) setSnapshotCursor((current) => Math.max(current, cursor));
   }, []);
 
@@ -1415,6 +1489,23 @@ export default function App() {
     return () => window.removeEventListener("online", retryBootstrap);
   }, [bootstrapLoad?.failed, retryBootstrap]);
 
+  // The boot splash's own state. A retry runs in place on the error splash
+  // (its Retry goes busy), and a failure that repeats one before it says so.
+  /** A retry reads as one even when the answer is instant (SyncNotice's RETRY_MIN_MS). */
+  const BOOT_RETRY_MIN_MS = 600;
+  const [bootRetrying, setBootRetrying] = useState(false);
+  const bootRetryingRef = useRef(false);
+  // The second unreachable start in a row: the line says "still".
+  const [bootStill, setBootStill] = useState(false);
+  // Keys the line's swap, so a failure said again visibly arrives again.
+  const [bootFailures, setBootFailures] = useState(0);
+  const bootUnreachableRef = useRef(false);
+  const bootRetryButtonRef = useRef<HTMLButtonElement>(null);
+  const bootRefocusRef = useRef(false);
+  // The gate took the splash's mark over in a view transition (runInitialBoot),
+  // so the pad's own mark doesn't pop in a second time.
+  const [markCarried, setMarkCarried] = useState(false);
+
   const enterApp = useCallback(
     async (withReveal: boolean, start?: Promise<BootStart>) => {
       // Warm start: with a sealed local snapshot, one incremental sync
@@ -1479,6 +1570,9 @@ export default function App() {
         }
       }
       setBootError(null);
+      setBootStill(false);
+      bootUnreachableRef.current = false;
+      setMarkCarried(false);
       setPhase("ready");
       if (withReveal) {
         setReveal(true);
@@ -1525,46 +1619,96 @@ export default function App() {
     };
   }, [phase, snapshotCursor, snapshotSyncEpoch, syncState, memos, bootstrapLoad, snapshotWriter]);
 
-  const runInitialBoot = useCallback(async () => {
-    const attempt = ++bootAttemptRef.current;
-    setBootError(null);
-    setPhase("checking");
-
-    // Status, the local snapshot read and the first sync or bootstrap page all
-    // start together. A signed-in boot never waits on status: a successful
-    // authenticated pull already proves setup is done. Status only decides
-    // between setup and login once that pull comes back 401.
-    const status = getAuthStatus();
-    status.catch(() => undefined);
-    try {
-      await enterApp(false, startBoot());
-    } catch (cause) {
-      if (attempt !== bootAttemptRef.current) return;
-      if (!(cause instanceof AuthRequiredError)) {
-        setBootError(errorMessageRef.current(cause, "Couldn’t load your memos", "加载失败"));
-        setPhase("error");
-        return;
+  /**
+   * One start: the splash, then the notebook or the gate. A `retry` runs on
+   * the error splash as it stands — the line stays and Retry goes busy in
+   * place — and a failure waits out BOOT_RETRY_MIN_MS from the press, so an
+   * instant one still reads as a retry instead of a blink (SyncNotice's
+   * RETRY_MIN_MS). Success never waits.
+   */
+  const runInitialBoot = useCallback(
+    async (retry = false) => {
+      const attempt = ++bootAttemptRef.current;
+      const started = performance.now();
+      const settleRetry = () => {
+        bootRetryingRef.current = false;
+        setBootRetrying(false);
+      };
+      if (retry) {
+        bootRetryingRef.current = true;
+        setBootRetrying(true);
+      } else {
+        settleRetry();
+        setBootError(null);
+        setBootStill(false);
+        setPhase("checking");
       }
-      // A revoked cookie at boot is the lost-device case: wipe like mid-session.
-      if (isSessionRevoked(cause)) {
-        void clearLocalDeviceData();
-        resetLocalWorkspaceState();
-      }
-      let statusNow: Awaited<typeof status>;
-      try {
-        statusNow = await status;
-      } catch (statusCause) {
+      const fail = async (cause: unknown, fallbackEn: string, fallbackZh: string) => {
+        const rest = retry ? BOOT_RETRY_MIN_MS - (performance.now() - started) : 0;
+        if (rest > 0) await new Promise((resolve) => window.setTimeout(resolve, rest));
         if (attempt !== bootAttemptRef.current) return;
-        setBootError(errorMessageRef.current(statusCause, "Couldn’t connect to the server", "无法连接服务器"));
+        // No answer at all, as opposed to an answer that was an error: only
+        // the second of those in a row may say "still".
+        const unreachable =
+          (cause instanceof ApiError && cause.code === "NETWORK_ERROR") || cause instanceof TypeError || navigator.onLine === false;
+        setBootStill(retry && unreachable && bootUnreachableRef.current);
+        bootUnreachableRef.current = unreachable;
+        setBootError(errorMessageRef.current(cause, fallbackEn, fallbackZh));
+        setBootFailures((count) => count + 1);
+        settleRetry();
         setPhase("error");
-        return;
+      };
+
+      // Status, the local snapshot read and the first sync or bootstrap page all
+      // start together. A signed-in boot never waits on status: a successful
+      // authenticated pull already proves setup is done. Status only decides
+      // between setup and login once that pull comes back 401.
+      const status = getAuthStatus();
+      status.catch(() => undefined);
+      try {
+        await enterApp(false, startBoot());
+        if (attempt === bootAttemptRef.current) settleRetry();
+      } catch (cause) {
+        if (attempt !== bootAttemptRef.current) return;
+        if (!(cause instanceof AuthRequiredError)) {
+          await fail(cause, "Couldn’t load your memos", "加载失败");
+          return;
+        }
+        // A revoked cookie at boot is the lost-device case: wipe like mid-session.
+        if (isSessionRevoked(cause)) {
+          void clearLocalDeviceData();
+          resetLocalWorkspaceState();
+        }
+        let statusNow: Awaited<typeof status>;
+        try {
+          statusNow = await status;
+        } catch (statusCause) {
+          if (attempt !== bootAttemptRef.current) return;
+          await fail(statusCause, "Couldn’t connect to the server", "无法连接服务器");
+          return;
+        }
+        if (attempt !== bootAttemptRef.current) return;
+        // The brand mark arrives once: the splash's mark and the pad's share
+        // a view-transition name (app.css, "Splash + login gate"), so it
+        // glides from the middle of the screen into the pad's header while
+        // the pad scales in around it. Without a transition the pad's own
+        // mark pops in as before.
+        withViewTransition((animated) => {
+          if (attempt !== bootAttemptRef.current) return;
+          flushSync(() => {
+            setNeedsSetup(statusNow.needsSetup);
+            setSetupAllowed(statusNow.setupAllowed !== false);
+            setMarkCarried(animated);
+            setBootStill(false);
+            bootUnreachableRef.current = false;
+            settleRetry();
+            setPhase("login");
+          });
+        });
       }
-      if (attempt !== bootAttemptRef.current) return;
-      setNeedsSetup(statusNow.needsSetup);
-      setSetupAllowed(statusNow.setupAllowed !== false);
-      setPhase("login");
-    }
-  }, [enterApp, resetLocalWorkspaceState]);
+    },
+    [enterApp, resetLocalWorkspaceState]
+  );
 
   useEffect(() => {
     void runInitialBoot();
@@ -1572,6 +1716,28 @@ export default function App() {
       bootAttemptRef.current += 1;
     };
   }, [runInitialBoot]);
+
+  /** Retry on the error splash; a second press (or `online`) while one runs is the same retry. */
+  const retryBoot = useCallback(() => {
+    if (bootRetryingRef.current) return;
+    void runInitialBoot(true);
+  }, [runInitialBoot]);
+
+  // The connection coming back is the retry the reader would have pressed.
+  useEffect(() => {
+    if (phase !== "error") return;
+    window.addEventListener("online", retryBoot);
+    return () => window.removeEventListener("online", retryBoot);
+  }, [phase, retryBoot]);
+
+  // A busy Retry is disabled, which drops keyboard focus to the page. When
+  // the retry fails, focus returns to the button it left.
+  useEffect(() => {
+    if (phase !== "error" || bootRetrying) return;
+    const active = document.activeElement;
+    if (bootRefocusRef.current && (!active || active === document.body)) bootRetryButtonRef.current?.focus({ preventScroll: true });
+    bootRefocusRef.current = false;
+  }, [phase, bootRetrying]);
 
   /** Session-expiry aware wrapper: any 401 mid-use drops back to the gate. */
   const guard = useCallback(
@@ -1738,6 +1904,10 @@ export default function App() {
   // switch, and the swap animating that click has to see the keyword-only
   // list it is switching back to.
   const semanticResults = semanticOn && view === "memos" ? semantic.results : null;
+  // The previous query's ranking, held while this one is on its way: its
+  // rows keep their places (the feed moves once, when the answer lands), but
+  // nothing counts, announces or marks them as answers to the current text.
+  const semanticStale = semanticResults !== null && semantic.stale;
   // The model download lives at app level (it outlives the settings panel),
   // so the Brain shows it as unfinished work too: closing the panel never
   // hides a running download.
@@ -1773,7 +1943,7 @@ export default function App() {
   const semanticPending =
     semanticOn &&
     view === "memos" &&
-    semanticResults === null &&
+    (semanticResults === null || semanticStale) &&
     !queryIsEmpty(parsedQuery) &&
     semantic.indexedMemos > 0 &&
     (semantic.status === "ready" || semantic.status === "indexing");
@@ -1808,7 +1978,10 @@ export default function App() {
       // Hybrid retrieval is a union: an exact keyword/phrase match can never
       // disappear behind the semantic threshold, and meaning adds results
       // that share no literal text. The keyword tier stays first; semantic
-      // score ranks within it and then ranks semantic-only matches.
+      // score ranks within it and then ranks semantic-only matches. A stale
+      // ranking (the previous query's) orders the same way, so keyword hits
+      // keep their places and its semantic-only rows stay put, dimmed, until
+      // the new ranking replaces them in one move.
       const hybridScores = new Map<string, number>();
       list = filterPreservingId(list, editingId, (memo) => {
         const score = hybridSearchScore(memoMatchesQuery(memo, parsedQuery), semanticResults.get(memo.id));
@@ -1906,9 +2079,14 @@ export default function App() {
     for (const memo of visibleMemos) if (memoMatchesQuery(memo, parsedQuery)) ids.add(memo.id);
     return ids;
   }, [searching, visibleMemos, parsedQuery]);
+  // Held stale, the semantic-only rows answer the previous text: they are
+  // no one's "related" count until this query's ranking lands.
   const relatedCount = useMemo(
-    () => (keywordHitIds && semanticResults ? visibleMemos.filter((memo) => !keywordHitIds.has(memo.id) && semanticResults.has(memo.id)).length : 0),
-    [keywordHitIds, semanticResults, visibleMemos]
+    () =>
+      keywordHitIds && semanticResults && !semanticStale
+        ? visibleMemos.filter((memo) => !keywordHitIds.has(memo.id) && semanticResults.has(memo.id)).length
+        : 0,
+    [keywordHitIds, semanticResults, semanticStale, visibleMemos]
   );
   const searchNeedleList = useMemo(
     () => (searching ? searchNeedles(parsedQuery) : trashSearching ? searchNeedles(trashParsedQuery) : []),
@@ -2035,16 +2213,35 @@ export default function App() {
       action: tr(`Clear “${row.en}”`, `清除「${row.zh}」`)
     };
   })();
+  // A cold start renders its first page while older ones load behind it.
+  // Until they are all in, an empty list must not speak for the whole
+  // notebook — "Trash is empty", "No memos in #tag" and its way out: it says
+  // the load is under way and how far it has got, as the meaning search's
+  // pending line does, and offers no exit from a list that may yet fill. A
+  // day's review is drawn from what is loaded (drawReviewDay) and keeps its
+  // own words.
+  const coldLoadEmpty = ((): { title: string; body: string } | null => {
+    if (!bootstrapLoad || view === "review") return null;
+    const loaded = formatNumber(loadedMemoCount);
+    const soFar =
+      bootstrapLoad.total === null
+        ? tr(`${loaded} loaded so far`, `已载入 ${loaded} 条`)
+        : tr(`${loaded} of ${formatNumber(bootstrapLoad.total)} loaded so far`, `已载入 ${loaded} / ${formatNumber(bootstrapLoad.total)} 条`);
+    return {
+      title: tr("Still loading your memos…", "仍在载入笔记…"),
+      body: view === "trash" ? tr(`${soFar}, and none are in Trash yet.`, `${soFar}，回收站里暂时还没有`) : tr(`${soFar}, and none match yet.`, `${soFar}，暂时还没有相关笔记`)
+    };
+  })();
   // What the polite live region reads: the settled answer, not every
   // keystroke's (or the "still looking" state's) intermediate one.
   const searchSettled =
     searching && !semanticPending
       ? feedMemos.length === 0
-        ? searchEmptyTitle
+        ? coldLoadEmpty?.title ?? searchEmptyTitle
         : searchSummary
       : trashSearching
         ? trashFeedMemos.length === 0
-          ? tr("No matching memos in Trash", "回收站里没有相关笔记")
+          ? coldLoadEmpty?.title ?? tr("No matching memos in Trash", "回收站里没有相关笔记")
           : trashSummary
         : "";
   const [searchAnnouncement, setSearchAnnouncement] = useState("");
@@ -2053,6 +2250,7 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [searchSettled]);
   const searchText = searchComposition ?? query;
+  const trashText = trashComposition ?? trashQuery;
   const searchPlaceholder = activeTag
     ? semanticOn
       ? tr(`Search #${activeTag} by meaning`, `在 #${activeTag} 中按意思搜索`)
@@ -2106,7 +2304,9 @@ export default function App() {
     if (drawerClosing) return;
     setDrawerClosing(true);
     window.clearTimeout(drawerCloseTimerRef.current);
-    const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : EXIT_MS;
+    // Under reduced motion the drawer fades out on --t-fast instead of
+    // sliding on --t-exit (app.css); either way it is gone when this fires.
+    const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? T_FAST : EXIT_MS;
     drawerCloseTimerRef.current = window.setTimeout(finishDrawerClose, delay);
   }
 
@@ -2499,6 +2699,18 @@ export default function App() {
     );
   }, [changeFeed]);
 
+  /**
+   * Lifts the search, as the home pill restores a list: one press, and the
+   * list the search was typed over glides back — to the card it was left at.
+   * The search box's ×, its Esc and an empty result's way out all run it.
+   */
+  const clearSearch = useCallback(() => {
+    changeFeed(
+      () => swapQuery(""),
+      (lens) => ({ ...lens, query: "" })
+    );
+  }, [changeFeed, swapQuery]);
+
   /** Facet on/off is a discrete choice — it rides the same feed morph as a
       tag or sort change, whether it comes from the panel or a chip's ×. */
   const toggleFacet = useCallback(
@@ -2597,9 +2809,30 @@ export default function App() {
     [changeFeed, swapQuery]
   );
 
-  /** A preset restores the whole feed context in one morph. */
+  /** The checked preset as of the latest render (set below its memo). */
+  const activeSavedIdRef = useRef<string | null>(null);
+
+  /**
+   * A preset restores the whole feed context in one morph. Pressed again
+   * while it is the one in force (its row is checked), it lifts what it
+   * set, as a second press on a tag, a day or a facet does: back to All
+   * memos, at the card the reader left it at.
+   */
   const applySavedFilter = useCallback(
     (item: SavedFilter) => {
+      if (item.id === activeSavedIdRef.current) {
+        changeFeed(
+          () => {
+            setActiveTag(null);
+            setActiveDay(null);
+            setStatsDrilldown(null);
+            swapQuery("");
+            setFilters(EMPTY_FILTERS);
+          },
+          (lens) => ({ ...lens, view: "memos", tag: null, day: null, drilldown: null, query: "", filters: EMPTY_FILTERS })
+        );
+        return;
+      }
       // A preset aimed at a tag that is gone (renamed or removed on another
       // device) would be cleared by the missing-tag effect the moment it
       // applied — silently widening the lens to every memo. Say so instead.
@@ -2669,6 +2902,7 @@ export default function App() {
     );
     return match?.id ?? null;
   }, [savedFilters, activeTag, activeDay, statsDrilldown, trimmedQuery, filters]);
+  activeSavedIdRef.current = activeSavedId;
 
   // Breadcrumb chip text for the date range; reversed ends still read as the
   // span between them (the predicate normalizes the same way).
@@ -2714,6 +2948,8 @@ export default function App() {
       () => {
         setView("trash");
         setTrashQuery("");
+        setTrashComposition(null);
+        trashComposingRef.current = false;
         setStatsDrilldown(null);
         // Same flush: the "已选 N 条" pill hands topbar-action to the Empty
         // Trash pill inside one morph instead of two competing transitions.
@@ -2736,7 +2972,7 @@ export default function App() {
     if (view !== "review" && holdForOpenEdit("open Daily review", "打开每日回顾")) return;
     let next = reviewDay;
     const provisionalStale = next !== null && next === provisionalReviewRef.current && !bootstrapJobRef.current;
-    if (!reviewDayValid(next, reviewSettings) || provisionalStale) {
+    if (!reviewDayValid(next, reviewSettings) || provisionalStale || reviewDayStarved(next, activeMemos, reviewSettings)) {
       next = drawReviewDay(activeMemos, reviewSettings);
     }
     // Re-clicking the nav item on a still-valid day is a no-op; on a rolled-
@@ -2774,11 +3010,24 @@ export default function App() {
     };
   }, [phase, view, reviewDay, reviewSettings, drawReviewDay, moveFeed]);
 
+  // An empty batch frozen before anything qualified (the notebook was empty
+  // when Review first opened) gives way once memos do — a sync bringing them
+  // in while Review is up deals the real batch, as a new list.
+  useEffect(() => {
+    if (phase !== "ready" || view !== "review" || !reviewDayValid(reviewDay, reviewSettings)) return;
+    if (!reviewDayStarved(reviewDay, activeMemos, reviewSettings)) return;
+    const frame = window.requestAnimationFrame(() => {
+      const next = drawReviewDay(activeMemos, reviewSettings);
+      moveFeed("lens", [], () => setReviewDay(next));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [phase, view, reviewDay, reviewSettings, activeMemos, drawReviewDay, moveFeed]);
+
   /** Put a remembered lens on screen (Back/Forward, or a reload). */
   function applyNavLens(lens: NavLens) {
     // Review replays the day's frozen batch, drawing it first if the day
     // rolled over — what openReview does.
-    if (lens.view === "review" && !reviewDayValid(reviewDay, reviewSettings)) {
+    if (lens.view === "review" && (!reviewDayValid(reviewDay, reviewSettings) || reviewDayStarved(reviewDay, activeMemos, reviewSettings))) {
       const next = buildReviewDay(activeMemos, reviewSettings);
       persistReviewDay(next);
       setReviewDay(next);
@@ -2789,6 +3038,7 @@ export default function App() {
       setSelected(new Set());
       setConfirmBatchDelete(false);
       setTrashQuery("");
+      setTrashComposition(null);
     }
     setView(lens.view);
     setActiveTag(lens.tag);
@@ -3062,6 +3312,7 @@ export default function App() {
    */
   const enterSelectMode = useCallback((firstId?: string) => {
     if (holdForOpenEdit("select memos", "多选笔记")) return;
+    const active = document.activeElement;
     moveFeed("select", [], () => {
       setSelectMode(true);
       setSelected(new Set(firstId ? [firstId] : []));
@@ -3070,9 +3321,26 @@ export default function App() {
       setTagMemoId(null);
       pendingBatchTagRef.current = null;
     });
+    // The control that asked has gone from under focus — the location
+    // pill (its menu handed focus back to it) or Trash's Select are
+    // replaced by the toolbar, and a card's ⋯ turns inert under its
+    // select overlay. Focus moves with the reader instead of falling to
+    // <body>: onto the card they picked from, else Select all.
+    if (!focusStranded(active)) return;
+    const picked = firstId
+      ? Array.from(document.querySelectorAll<HTMLElement>(".memo-slot[data-vt]")).find((slot) => slot.dataset.vt === `memo-${firstId}`)
+      : null;
+    const target =
+      picked?.querySelector<HTMLElement>(".memo-select-overlay") ??
+      document.querySelector<HTMLElement>(".select-all:not(:disabled)") ??
+      document.querySelector<HTMLElement>(".select-exit");
+    target?.focus({ preventScroll: true });
   }, [holdForOpenEdit, moveFeed]);
 
   const exitSelectMode = useCallback(() => {
+    const active = document.activeElement;
+    // Read before the commit: a card's select overlay leaves the tree with it.
+    const slot = active instanceof Element ? active.closest(".memo-slot") : null;
     moveFeed("select", [], () => {
       setSelectMode(false);
       setSelected(new Set());
@@ -3081,6 +3349,13 @@ export default function App() {
       setTagMemoId(null);
       pendingBatchTagRef.current = null;
     });
+    // Cancel, Escape on a pill or on a card: what held focus is gone. A
+    // card hands it to its own ⋯ again; the toolbar, to the control the
+    // mode was entered from.
+    if (!focusStranded(active)) return;
+    const card = slot?.isConnected ? slot.querySelector<HTMLElement>(".memo-menu-trigger:not([tabindex='-1'])") : null;
+    if (card) card.focus({ preventScroll: true });
+    else focusLocation();
   }, [moveFeed]);
 
   /**
@@ -3200,8 +3475,43 @@ export default function App() {
    * it off again before the card mounts with it, so the name stays unique.
    * A memo whose card is already in the feed (an idempotent retry that sync
    * delivered first) keeps the plain drop-in.
+   *
+   * The pictures ride along the same way: each composer tile going out
+   * carries `sent-img-<id>` for the outgoing capture, and the update hands
+   * the name to that picture's cell in the new card (as Lightbox hands its
+   * photo's name over), so a tile grows into its cell instead of riding up
+   * with the composer's frame. They share the feed's morph budget: a tile
+   * takes a name only while the cards captured with it leave room.
    */
   function landCreated(saved: Memo, data: EditorSubmission): Promise<void> {
+    // The card draws its pictures from memory (compressImage primed the
+    // cache), but decoding is still async, and one not yet decoded when the
+    // card is captured would grow into a blank cell. So they are decoded
+    // first, for a beat at most; one that misses it stays with the composer.
+    const decodeWait = 120;
+    const morphs = typeof document.startViewTransition === "function" && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const decoders: HTMLImageElement[] = [];
+    const decoding = saved.images.map((image) => {
+      // The variant the card's first render takes: a lone picture the
+      // original, a grid the preview (StoredImage, cachedVariant).
+      const url = morphs ? peekImage(image.id, saved.images.length === 1 ? "full" : "thumb") : null;
+      if (!url || typeof HTMLImageElement.prototype.decode !== "function") return Promise.resolve(null);
+      const decoder = new Image();
+      decoder.src = url;
+      decoders.push(decoder);
+      return decoder.decode().then(
+        () => image.id,
+        () => null
+      );
+    });
+    const warm = new Set<string>();
+    for (const task of decoding) void task.then((id) => id && warm.add(id));
+    const ready = decoders.length > 0 ? Promise.race([Promise.allSettled(decoding), new Promise((done) => window.setTimeout(done, decodeWait))]) : Promise.resolve();
+    return ready.then(() => landCreatedNow(saved, data, new Set(warm), decoders));
+  }
+
+  /** landCreated once its pictures are decoded (`warm`: the ones that are). */
+  function landCreatedNow(saved: Memo, data: EditorSubmission, warm: ReadonlySet<string>, decoders: HTMLImageElement[]): Promise<void> {
     return new Promise((resolve) => {
       const root = document.documentElement;
       const name = `memo-${saved.id}`;
@@ -3226,8 +3536,16 @@ export default function App() {
       const typed = shared ? firstLine(field, field.querySelector<HTMLElement>("textarea")) : null;
       if (shared) field.style.viewTransitionName = name;
       let landed: HTMLElement | null = null;
+      // Tiles named for the outgoing capture, and the card cells that took
+      // their names over.
+      let riders: HTMLElement[] = [];
+      const cells: HTMLElement[] = [];
       const transition = withViewTransition((animated) => {
         if (shared) field.style.viewTransitionName = "";
+        for (const tile of riders) {
+          tile.style.viewTransitionName = "";
+          tile.style.removeProperty("view-transition-class");
+        }
         if (animated) root.dataset.vtCreate = saved.id;
         try {
           flushSync(() => {
@@ -3245,6 +3563,18 @@ export default function App() {
               root.style.setProperty("--sent-dx", `${card.x - typed.x}px`);
               root.style.setProperty("--sent-dy", `${card.y - typed.y}px`);
             }
+            for (const tile of riders) {
+              const id = tile.dataset.imageId ?? "";
+              const index = saved.images.findIndex((image) => image.id === id);
+              const cell = landed.querySelector<HTMLElement>(`.memo-images > [data-lightbox-index="${index}"]`);
+              if (index < 0 || !cell) continue;
+              cell.style.viewTransitionName = `sent-img-${id}`;
+              cell.style.setProperty("view-transition-class", "sent-img");
+              cells.push(cell);
+            }
+            // A slot's content-visibility leaves a just-mounted card's
+            // insides unrendered at capture, and names in there unseen.
+            if (cells.length > 0) landed.style.contentVisibility = "visible";
           }
         } finally {
           resolve();
@@ -3254,8 +3584,31 @@ export default function App() {
         if (shared) field.style.viewTransitionName = "";
         return;
       }
+      // The outgoing capture waits for the next frame, so the tiles can still
+      // be named now — after withViewTransition has picked which cards morph,
+      // so the pictures only take the room those leave (the new card is one
+      // more). The 32 is tuneFeedTransitionNames' own (viewTransition.ts).
+      if (shared) {
+        const budget = 32;
+        const sent = new Set(saved.images.map((image) => image.id));
+        const named = Array.from(document.querySelectorAll<HTMLElement>(".memo-slot")).filter((slot) => slot.style.viewTransitionName).length;
+        riders = Array.from(document.querySelectorAll<HTMLElement>(".composer .attachment[data-image-id]:not(.is-removing)"))
+          .filter((tile) => sent.has(tile.dataset.imageId ?? "") && warm.has(tile.dataset.imageId ?? ""))
+          .slice(0, Math.max(0, budget - named - 1));
+        for (const tile of riders) {
+          tile.style.viewTransitionName = `sent-img-${tile.dataset.imageId}`;
+          tile.style.setProperty("view-transition-class", "sent-img");
+        }
+      }
       // The marks last exactly as long as the transition that reads them.
       const clear = () => {
+        for (const cell of cells) {
+          cell.style.viewTransitionName = "";
+          cell.style.removeProperty("view-transition-class");
+        }
+        if (cells.length > 0) landed?.style.removeProperty("content-visibility");
+        // The decoded pictures needed holding only until the card drew them.
+        decoders.length = 0;
         landed?.style.removeProperty("view-transition-class");
         if (root.dataset.vtCreate !== saved.id) return;
         delete root.dataset.vtCreate;
@@ -3270,7 +3623,9 @@ export default function App() {
     const content = activeTag ? inheritTagContext(data.content, activeTag) : data.content;
     setCreating(true);
     try {
-      const result = await guard(() => createMemo(data.clientId, content, data.newImages, { onUploadProgress: data.onUploadProgress }));
+      const result = await guard(() =>
+        createMemo(data.clientId, content, data.newImages, { onUploadProgress: data.onUploadProgress, signal: data.signal })
+      );
       if (!result) return false;
       let saved = result.memo;
       if (result.idempotent) {
@@ -3280,12 +3635,16 @@ export default function App() {
         const draftImageIds = new Set(data.newImages.map((image) => image.id));
         const storedImageIds = new Set(saved.images.map((image) => image.id));
         const resumed = await guard(() =>
-          updateMemo(saved.id, {
-            expectedSeq: saved.seq,
-            content,
-            addImages: data.newImages.filter((image) => !storedImageIds.has(image.id)),
-            removeImageIds: saved.images.filter((image) => !draftImageIds.has(image.id)).map((image) => image.id)
-          })
+          updateMemo(
+            saved.id,
+            {
+              expectedSeq: saved.seq,
+              content,
+              addImages: data.newImages.filter((image) => !storedImageIds.has(image.id)),
+              removeImageIds: saved.images.filter((image) => !draftImageIds.has(image.id)).map((image) => image.id)
+            },
+            { signal: data.signal }
+          )
         );
         if (!resumed?.memo) return false;
         saved = resumed.memo;
@@ -3310,9 +3669,19 @@ export default function App() {
         showToast(tr("Saved the memo — this view hides it", "已保存这条笔记，当前视图下看不到它"), "info", {
           action: { label: tr("Show", "显示"), run: () => revealMemo(savedId) }
         });
+      } else {
+        // The card says it to the eye; this says it to a screen reader.
+        announce(tr("Sent", "已发送"));
       }
       return true;
     } catch (cause) {
+      // Esc stopped it (Editor). Nothing landed here, and the draft is still
+      // in the composer under its clientId: if the request got through after
+      // all, sending again finds that memo instead of making a second.
+      if (data.signal?.aborted) {
+        showToast(tr("Stopped sending the memo", "已停止发送这条笔记"));
+        return false;
+      }
       if (cause instanceof ApiError && cause.code === "VERSION_CONFLICT") {
         if (cause.current) {
           if (memoMatchesSubmittedDraft(cause.current, content, data.newImages.map((image) => image.id))) {
@@ -3321,6 +3690,7 @@ export default function App() {
             // draft avoids rotating the id and creating a duplicate memo.
             await landCreated(cause.current, data);
             for (const image of data.newImages) URL.revokeObjectURL(image.previewUrl);
+            announce(tr("Sent", "已发送"));
             return true;
           }
           applySyncChanges([cause.current], [], []);
@@ -3338,7 +3708,12 @@ export default function App() {
     if (!(cause instanceof ApiError) || cause.code !== "VERSION_CONFLICT") return false;
     if (cause.current) applySyncChanges([cause.current], [], []);
     void runSync();
-    if (preserveDraft && editingId) setEditConflictId(editingId);
+    if (preserveDraft && editingId) {
+      // The open edit's own note says it, once, with the way on (Editor
+      // speaks it politely): the draft is safe, so no error toast on top.
+      setEditConflictId(editingId);
+      return true;
+    }
     showToast(
       preserveDraft
         ? tr("A newer version arrived. Your draft is safe — review it before saving again.", "远端已有新版本，草稿已保留，请确认后再次保存")
@@ -3413,9 +3788,24 @@ export default function App() {
             addImages: data.newImages,
             removeImageIds: data.removeImageIds
           },
-          { onUploadProgress: data.onUploadProgress }
+          { onUploadProgress: data.onUploadProgress, signal: data.signal }
         )
-      );
+      ).catch((cause: unknown) => {
+        // A save that got through but whose answer never came back (a lost
+        // response, or Esc once the request had left) meets its own version
+        // on the next try: that is this edit, saved — not a change made
+        // elsewhere. The same recovery as a create's (handleCreate).
+        const kept = memo.images.filter((image) => !data.removeImageIds.includes(image.id)).map((image) => image.id);
+        if (
+          cause instanceof ApiError &&
+          cause.code === "VERSION_CONFLICT" &&
+          cause.current &&
+          memoMatchesSubmittedDraft(cause.current, data.content, [...new Set([...kept, ...data.newImages.map((image) => image.id)])])
+        ) {
+          return { memo: cause.current };
+        }
+        throw cause;
+      });
       if (!result?.memo) return false;
       const saved = result.memo;
       const land = () => {
@@ -3462,6 +3852,13 @@ export default function App() {
       );
       return true;
     } catch (cause) {
+      // Esc stopped it (Editor): the edit stays open as it was. A save that
+      // reached the server anyway meets its own version on the next try,
+      // which lands as saved (above).
+      if (data.signal?.aborted) {
+        showToast(tr("Stopped saving your edits", "已停止保存这次修改"));
+        return false;
+      }
       if (reconcileVersionConflict(cause, true)) return false;
       throw cause;
     } finally {
@@ -3478,7 +3875,12 @@ export default function App() {
    * the caller's toast. Resolves to null when the memo already has an action
    * in flight (or the session went away) — nothing to report then.
    */
-  async function runOptimisticMemoAction(memo: Memo, patch: OptimisticPatch, request: () => Promise<Memo | null>): Promise<Memo | null> {
+  async function runOptimisticMemoAction(
+    memo: Memo,
+    patch: OptimisticPatch,
+    request: () => Promise<Memo | null>,
+    onDeparted?: (departed: Departure | undefined) => void
+  ): Promise<Memo | null> {
     const tokens = memoActionTokensRef.current;
     if (tokens.has(memo.id)) return null;
     const token = {};
@@ -3486,19 +3888,26 @@ export default function App() {
     const intent = "deletedAt" in patch ? (patch.deletedAt ? "trash" : "restore") : patch.pinnedAt ? "pin" : "unpin";
     const undone = { pin: "unpin", unpin: "pin", trash: "restore", restore: "trash" } as const;
     // A card the guess removes (trash, restore) must not drop keyboard focus
-    // to <body>: hand it on to a neighbour, as applyRemoval does.
-    const refocus = holdFeedFocus();
-    moveFeed(intent, [memo.id], () => setOptimisticMemos((current) => withPatch(current, memo.id, patch)));
-    refocus();
+    // to <body>: hand it on to a neighbour, as applyRemoval does. One the
+    // guess carries off screen (a pin lifting it to the top, an unpin
+    // sinking it) leaves focus at the reader's place the same way.
+    const refocus = holdFeedFocus(memo.id);
+    const departed = moveFeed(intent, [memo.id], () => setOptimisticMemos((current) => withPatch(current, memo.id, patch))).departed.get(memo.id);
+    refocus(departed);
+    onDeparted?.(departed);
     let settled: Memo | null = null;
     try {
       settled = await request();
     } finally {
       tokens.delete(memo.id);
-      moveFeed(settled ? intent : undone[intent], [memo.id], () => {
+      // The answer lands in place; a failure carries the card back, maybe
+      // off screen again — focus that went with it stays here too.
+      const refocusSettled = holdFeedFocus(memo.id);
+      const back = moveFeed(settled ? intent : undone[intent], [memo.id], () => {
         if (settled) applySyncChanges([settled], [], []);
         setOptimisticMemos((current) => withoutPatch(current, memo.id));
-      });
+      }).departed.get(memo.id);
+      refocusSettled(back);
     }
     if (settled) {
       void runSync();
@@ -3509,17 +3918,37 @@ export default function App() {
 
   async function handleTogglePin(memo: Memo) {
     const pinning = !memo.pinnedAt;
+    // Where the guess carried the card, if it left the screen.
+    let went: Departure | undefined;
     try {
-      const nextMemo = await runOptimisticMemoAction(memo, { pinnedAt: pinning ? new Date().toISOString() : null }, async () => {
-        const result = await guard(() => updateMemo(memo.id, { expectedSeq: memo.seq, pinned: pinning }));
-        return result?.memo ?? (result?.memoPatch ? { ...memo, ...result.memoPatch } : null);
-      });
+      const nextMemo = await runOptimisticMemoAction(
+        memo,
+        { pinnedAt: pinning ? new Date().toISOString() : null },
+        async () => {
+          const result = await guard(() => updateMemo(memo.id, { expectedSeq: memo.seq, pinned: pinning }));
+          return result?.memo ?? (result?.memoPatch ? { ...memo, ...result.memoPatch } : null);
+        },
+        (departed) => {
+          went = departed;
+        }
+      );
       if (!nextMemo) return;
       // Pinning lifts a card from deep in the feed out of view, so the
-      // reverse rides on the toast.
-      showToast(nextMemo.pinnedAt ? tr("Pinned", "已置顶") : tr("Unpinned", "已取消置顶"), "info", {
-        action: { label: tr("Undo", "撤销"), run: () => void handleTogglePin(nextMemo) }
-      });
+      // reverse rides on the toast. When the card left the screen, the
+      // toast says where it went, as a save that moves one does: a pin can
+      // only lift it to the pinned memos at the top, an unpin only sink it.
+      const moved = went === "up" || went === "down";
+      showToast(
+        nextMemo.pinnedAt
+          ? moved
+            ? tr("Pinned — the memo moved to the top", "已置顶，这条笔记移到了顶部")
+            : tr("Pinned", "已置顶")
+          : moved
+            ? tr("Unpinned — the memo moved further down this list", "已取消置顶，这条笔记移到了列表靠后")
+            : tr("Unpinned", "已取消置顶"),
+        "info",
+        { action: { label: tr("Undo", "撤销"), run: () => void handleTogglePin(nextMemo) } }
+      );
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
       showToast(errorMessage(cause, "Couldn’t update the memo.", "更新笔记失败"), "error");
@@ -4248,7 +4677,7 @@ export default function App() {
   useLayoutEffect(() => {
     if (selectMode || !restoreLocationFocusRef.current) return;
     restoreLocationFocusRef.current = false;
-    document.querySelector<HTMLButtonElement>(".loc-trigger")?.focus({ preventScroll: true });
+    focusLocation();
   }, [selectMode]);
 
   // The same floor for the controls a lens change removes from under the
@@ -4565,37 +4994,64 @@ export default function App() {
   const withToasts = (page: ReactNode) => (
     <>
       {page}
-      <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} regionLabel={tr("Notifications", "通知")} onDismiss={dismissToast} onPause={pauseToasts} onResume={resumeToasts} />
+      <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} regionLabel={tr("Notifications", "通知")} onDismiss={dismissToast} onHold={holdToasts} />
     </>
   );
 
-  if (phase === "checking") {
+  if (phase === "checking" || phase === "error") {
+    const failed = phase === "error";
+    const bootLine = bootStill
+      ? tr("Still can’t reach the server. Check your connection and try again.", "仍然无法连接服务器，请检查网络后重试")
+      : (bootError ?? tr("Couldn’t load your memos", "加载失败"));
+    // One element for the whole start, failed or not: the mark holds still at
+    // the centre and a retry runs in place, where a remount used to replay
+    // the mark's entrance and blank the line and button for the attempt.
     return withToasts(
-      <div className="splash" aria-label={tr("Loading", "加载中")}>
+      <div className="splash" role={failed ? undefined : "status"} aria-busy={bootRetrying || undefined}>
         <div className="splash-logo">
           <NotebookPen size={26} aria-hidden="true" />
         </div>
-        <Loader2 size={20} className="spin splash-spinner" aria-hidden="true" />
+        {failed ? (
+          <div className="splash-status">
+            {/* Keyed by the failure, so one said again arrives again. */}
+            <p className="splash-line" role="alert">
+              <span key={bootFailures}>{bootLine}</span>
+            </p>
+            <button
+              ref={bootRetryButtonRef}
+              type="button"
+              className={`ghost-button splash-retry${bootRetrying ? " is-busy" : ""}`}
+              onClick={() => {
+                bootRefocusRef.current = document.activeElement === bootRetryButtonRef.current;
+                retryBoot();
+              }}
+              disabled={bootRetrying}
+            >
+              {/* Both labels share one cell, so going busy never resizes it;
+                  the busy one shows after the hold (app.css, "busy-swap"). */}
+              <span className="busy-swap">
+                <span aria-hidden={bootRetrying || undefined}>{tr("Retry", "重试")}</span>
+                <span aria-hidden={!bootRetrying || undefined}>
+                  <Loader2 size={14} className="spin busy-spinner" aria-hidden="true" />
+                  {tr("Retrying…", "正在重试…")}
+                </span>
+              </span>
+            </button>
+          </div>
+        ) : (
+          <div className="splash-status">
+            <span className="sr-only">{tr("Opening your notebook…", "正在打开笔记本…")}</span>
+            <Loader2 size={20} className="spin splash-spinner" aria-hidden="true" />
+          </div>
+        )}
       </div>
     );
   }
 
-  if (phase === "error") {
-    return withToasts(
-      <section className="splash" role="alert" aria-label={tr("Startup failed", "启动失败") }>
-        <div className="splash-logo">
-          <NotebookPen size={26} aria-hidden="true" />
-        </div>
-        <p>{bootError ?? tr("Couldn’t load your memos", "加载失败")}</p>
-        <button type="button" className="ghost-button" onClick={() => void runInitialBoot()}>
-          {tr("Retry", "重试")}
-        </button>
-      </section>
-    );
-  }
-
   if (phase === "login") {
-    return withToasts(<LoginScreen needsSetup={needsSetup} setupAllowed={setupAllowed} onLogin={handleLogin} onSetup={handleSetup} />);
+    return withToasts(
+      <LoginScreen needsSetup={needsSetup} setupAllowed={setupAllowed} markCarried={markCarried} onLogin={handleLogin} onSetup={handleSetup} />
+    );
   }
 
   const visibleSelectedCount = visibleSelected.size;
@@ -4746,13 +5202,20 @@ export default function App() {
                     </SwapText>
                   </span>
                 </button>
+                {/* A batch in flight locks the verbs with aria-disabled, not
+                    disabled: the pill just pressed keeps its focus (a
+                    disabled one drops it to <body>), and the handlers guard
+                    on batchBusy themselves. */}
                 {selectingTrash ? (
                   <button
                     type="button"
                     className="select-pill select-tag select-restore"
-                    disabled={visibleSelectedCount === 0 || batchBusy}
+                    disabled={visibleSelectedCount === 0}
+                    aria-disabled={batchBusy || undefined}
                     aria-label={tr("Restore selected memos", "恢复所选笔记")}
-                    onClick={() => void restoreMany(selectedMemos(true), true)}
+                    onClick={() => {
+                      if (!batchBusy) void restoreMany(selectedMemos(true), true);
+                    }}
                   >
                     <RotateCcw size={14} aria-hidden="true" />
                     <span>{tr("Restore", "恢复")}</span>
@@ -4761,10 +5224,12 @@ export default function App() {
                   <button
                     type="button"
                     className="select-pill select-tag"
-                    disabled={visibleSelectedCount === 0 || batchBusy}
+                    disabled={visibleSelectedCount === 0}
+                    aria-disabled={batchBusy || undefined}
                     aria-haspopup="dialog"
                     aria-label={tr("Add a tag to selected memos", "为所选笔记添加标签")}
                     onClick={() => {
+                      if (batchBusy) return;
                       setConfirmBatchDelete(false);
                       pendingBatchTagRef.current = null;
                       setBulkTagOpen(true);
@@ -4777,7 +5242,8 @@ export default function App() {
                 <button
                   type="button"
                   className={`select-delete${confirmBatchDelete ? " is-confirm" : ""}`}
-                  disabled={visibleSelectedCount === 0 || batchBusy}
+                  disabled={visibleSelectedCount === 0}
+                  aria-disabled={batchBusy || undefined}
                   aria-label={
                     batchBusy
                       ? batchBusyLabel
@@ -5115,10 +5581,7 @@ export default function App() {
                         // also back out on the same press.
                         event.preventDefault();
                         event.stopPropagation();
-                        changeFeed(
-                          () => swapQuery(""),
-                          (lens) => ({ ...lens, query: "" })
-                        );
+                        clearSearch();
                       } else event.currentTarget.blur();
                     } else if (event.key === "Enter" && window.matchMedia("(pointer: coarse)").matches) {
                       // The feed already follows each keystroke; on a phone
@@ -5154,10 +5617,7 @@ export default function App() {
                     // The same restoration the home pill performs, so it
                     // reads the same: one click, the full list glides back
                     // (to the reading place, when it was there before).
-                    changeFeed(
-                      () => swapQuery(""),
-                      (lens) => ({ ...lens, query: "" })
-                    );
+                    clearSearch();
                     searchRef.current?.focus();
                   }}
                 >
@@ -5260,11 +5720,11 @@ export default function App() {
             // Trash's search: the same box, keywords only — no Brain, no
             // funnel. Its text never follows the reader out of Trash.
             <div className="search-tools" role="search">
-              <div className={`searchbox${searchOpen || trashQuery ? " is-open" : ""}`}>
+              <div className={`searchbox${searchOpen || trashText ? " is-open" : ""}`}>
                 <Search size={15} className="searchbox-icon" aria-hidden="true" />
                 <input
                   type="search"
-                  value={trashQuery}
+                  value={trashText}
                   placeholder={tr("Search Trash", "搜索回收站")}
                   aria-label={tr("Search Trash", "搜索回收站")}
                   enterKeyHint="search"
@@ -5272,7 +5732,26 @@ export default function App() {
                   autoCorrect="off"
                   autoCapitalize="none"
                   spellCheck={false}
-                  onChange={(event) => setTrashQuery(event.target.value)}
+                  onChange={(event) => {
+                    // As in the memo search: mid-composition the box shows
+                    // the IME's text, and the list (and its scroll) waits
+                    // for the composed word.
+                    if (trashComposingRef.current || (event.nativeEvent as InputEvent).isComposing) {
+                      setTrashComposition(event.target.value);
+                      return;
+                    }
+                    setTrashComposition(null);
+                    setTrashQuery(event.target.value);
+                  }}
+                  onCompositionStart={(event) => {
+                    trashComposingRef.current = true;
+                    setTrashComposition(event.currentTarget.value);
+                  }}
+                  onCompositionEnd={(event) => {
+                    trashComposingRef.current = false;
+                    setTrashComposition(null);
+                    setTrashQuery(event.currentTarget.value);
+                  }}
                   onKeyDown={(event) => {
                     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
                     if (event.key === "Escape") {
@@ -5291,15 +5770,18 @@ export default function App() {
                 />
                 <button
                   type="button"
-                  className={`searchbox-clear${trashQuery ? " is-shown" : ""}`}
+                  className={`searchbox-clear${trashText ? " is-shown" : ""}`}
                   aria-label={tr("Clear search", "清空搜索")}
-                  aria-hidden={trashQuery ? undefined : true}
-                  tabIndex={trashQuery ? undefined : -1}
+                  aria-hidden={trashText ? undefined : true}
+                  tabIndex={trashText ? undefined : -1}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={(event) => {
-                    if (!trashQuery) return;
+                    if (!trashText) return;
                     const input = event.currentTarget.parentElement?.querySelector("input");
-                    changeFeed(() => setTrashQuery(""));
+                    changeFeed(() => {
+                      setTrashComposition(null);
+                      setTrashQuery("");
+                    });
                     input?.focus();
                   }}
                 >
@@ -5418,6 +5900,8 @@ export default function App() {
           ref={feedRef}
           className={`memo-feed${selectingFeed ? " is-select" : ""}${renderedFeedMemos.length <= SMALL_FEED ? " is-small" : ""}`}
           aria-label={view === "trash" ? tr("Trash", "回收站") : view === "review" ? tr("Daily review", "每日回顾") : tr("Memo list", "笔记列表")}
+          // Older pages of a cold start are still arriving into this list.
+          aria-busy={bootstrapLoad ? true : undefined}
         >
           {view === "review" && reviewDay && feedMemos.length > 0 ? (
             // The day's masthead: date and batch size, fixed all day. Its own
@@ -5433,7 +5917,12 @@ export default function App() {
           ) : null}
           {feedMemos.length === 0 ? (
             <div className="feed-empty">
-              {view === "trash" && trashedMemos.length > 0 ? (
+              {coldLoadEmpty ? (
+                <>
+                  <p className="feed-empty-title">{coldLoadEmpty.title}</p>
+                  <p>{coldLoadEmpty.body}</p>
+                </>
+              ) : view === "trash" && trashedMemos.length > 0 ? (
                 <>
                   <p className="feed-empty-title">{tr("No matching memos in Trash", "回收站里没有相关笔记")}</p>
                   <p>{tr("Try a different search.", "换个关键词试试")}</p>
@@ -5442,6 +5931,12 @@ export default function App() {
                 <>
                   <p className="feed-empty-title">{tr("Trash is empty", "回收站是空的")}</p>
                   <p>{tr("Deleted memos appear here before you restore or permanently delete them.", "删除的笔记会先到这里，可以恢复或彻底删除")}</p>
+                </>
+              ) : view === "review" && activeMemos.length === 0 ? (
+                // No memos at all: no scope or range would draw more.
+                <>
+                  <p className="feed-empty-title">{tr("Nothing to review yet", "还没有可回顾的笔记")}</p>
+                  <p>{tr("Write a few memos and some will come back here each day.", "写下几条笔记后，每天都会有几条回到这里")}</p>
                 </>
               ) : view === "review" ? (
                 <>
@@ -5505,6 +6000,22 @@ export default function App() {
                 <>
                   <p className="feed-empty-title">{searching ? searchEmptyTitle : tr("No matching memos", "没有找到相关笔记")}</p>
                   <p>{tr("Try a different search or filter.", "换个筛选条件试试")}</p>
+                  {/* The way out every other empty list has: the search box's
+                      own ×, which brings back the list the search was typed
+                      over, at its reading place. */}
+                  {searching ? (
+                    <button
+                      type="button"
+                      className="ghost-button feed-empty-action"
+                      onClick={() => {
+                        armFocusFloor();
+                        clearSearch();
+                      }}
+                    >
+                      <X size={15} aria-hidden="true" />
+                      {tr("Clear search", "清空搜索")}
+                    </button>
+                  ) : null}
                 </>
               )}
             </div>
@@ -5525,12 +6036,19 @@ export default function App() {
                 taskFlips={pendingTaskFlips.get(memo.id)}
                 resumeContent={editSeed?.memoId === memo.id ? editSeed.content : undefined}
                 busy={optimisticMemos.has(memo.id)}
+                stale={semanticStale && keywordHitIds !== null && !keywordHitIds.has(memo.id) && memo.id !== editingId}
                 vtName={`memo-${memo.id}`}
                 handlers={feedHandlers}
               />
             ))
           )}
           {hasMoreFeed ? <div ref={feedSentinelRef} className="feed-sentinel" aria-hidden="true" /> : null}
+          {/* The list ran out, but a cold start is still loading older
+              pages: its last card is not the notebook's oldest. */}
+          {bootstrapLoad && !hasMoreFeed && feedMemos.length > 0 && view !== "review" ? (
+            <FeedEnd loaded={loadedMemoCount} total={bootstrapLoad.total} failed={bootstrapLoad.failed} />
+          ) : null}
+          <SelectRingStagger active={selectingFeed} feedRef={feedRef} />
           {/* Exit ghosts (lib/feedMotion.ts): cards that just left the list
               play their exit here, outside React's tree. Always empty to React. */}
           <div ref={attachFeedGhosts} className="feed-ghosts" aria-hidden="true" />

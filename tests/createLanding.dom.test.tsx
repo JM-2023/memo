@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { TipProvider } from "../src/components/Tip";
 import { LanguageProvider } from "../src/lib/i18n";
+import { LIVE_REGION_ATTR } from "../src/lib/liveAnnouncer";
 import type { Memo } from "../src/lib/types";
 
 const mocks = vi.hoisted(() => ({
@@ -56,6 +57,10 @@ function renderApp(): void {
       </TipProvider>
     </LanguageProvider>
   );
+}
+
+function spoken(): string {
+  return document.querySelector(`[${LIVE_REGION_ATTR}] [role="status"]`)?.textContent ?? "";
 }
 
 const startViewTransition = document.startViewTransition;
@@ -174,6 +179,35 @@ describe("sending a memo", () => {
     expect(landed).toBeTruthy();
     expect(animate.mock.contexts).not.toContain(landed);
     expect(screen.getByText("Fresh thought")).toBeTruthy();
+    // The card says it to the eye; a screen reader hears it.
+    expect(spoken()).toBe("Sent");
     await waitFor(() => expect(document.documentElement.dataset.vtCreate).toBeUndefined());
+  });
+
+  it("stops a send on Esc, keeps the draft and says so", async () => {
+    let signal: AbortSignal | undefined;
+    mocks.createMemo.mockImplementation(
+      (_clientId: string, _content: string, _images: unknown, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          signal = options?.signal;
+          signal?.addEventListener("abort", () => reject(new DOMException("The send was stopped.", "AbortError")));
+        })
+    );
+    const field = () => screen.getByRole("combobox", { name: "Memo content" }) as HTMLTextAreaElement;
+    const user = userEvent.setup();
+    renderApp();
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
+    await user.type(field(), "Second thoughts");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mocks.createMemo).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(field(), { key: "Escape" });
+    expect(await screen.findByText("Stopped sending the memo", { selector: ".toast-text" })).toBeTruthy();
+    expect(signal?.aborted).toBe(true);
+    await waitFor(() => expect(field().readOnly).toBe(false));
+    expect(field().value).toBe("Second thoughts");
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+    // A stop, not a failure: nothing in the composer's error line.
+    expect(document.querySelector(".editor-note.is-open .editor-error")).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { SPRING_MS } from "../lib/motion";
 
 /** Phones re-present dialogs as bottom sheets (app.css, "Dialogs as bottom sheets"). */
 const SHEET_QUERY = "(max-width: 560px)";
@@ -11,7 +12,6 @@ const GRABBER_BAND = 28;
 const DRAG_SLOP = 6;
 const DISMISS_FRACTION = 0.25;
 const DISMISS_VELOCITY = 0.5; // px/ms, downward
-const SPRING_MS = 280;
 /** A flung sheet leaves at the finger's pace, within these bounds (ms). */
 const EXIT_MIN_MS = 100;
 const EXIT_MAX_MS = 220;

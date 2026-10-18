@@ -102,3 +102,19 @@ describe("review settings tag picker", () => {
     expect(first().getAttribute("aria-pressed")).toBe("false");
   });
 });
+
+describe("review settings save", () => {
+  it("keeps Save at rest until the draft differs from what is saved", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderModal({ scope: "all" });
+    const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    await user.click(save);
+    expect(onSave).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("radio", { name: "Past month" }));
+    expect(save.disabled).toBe(false);
+    await user.click(screen.getByRole("radio", { name: "All time" }));
+    expect(save.disabled).toBe(true);
+  });
+});

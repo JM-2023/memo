@@ -6,10 +6,11 @@
  * Anything shorter springs back. The toast's own CSS keeps `touch-action:
  * pan-x`, so the vertical drag is the toast's, never the page's.
  */
+import { SPRING_MS } from "./motion";
+
 const SLOP = 4;
 const DISMISS_DISTANCE = 24;
 const DISMISS_VELOCITY = 0.3; // px/ms, upward
-const SPRING_MS = 280;
 
 function resistDown(distance: number): number {
   return 14 * (1 - 1 / (1 + distance / 60));

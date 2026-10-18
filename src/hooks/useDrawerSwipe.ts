@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
-import { EASE, EASE_OUT } from "../lib/motion";
+import { EASE, EASE_OUT, SPRING_MS, T_EXIT, T_FAST } from "../lib/motion";
 
 /** Movement before a touch counts as a gesture at all (a tap stays a tap). */
 const SLOP = 10;
@@ -9,9 +9,8 @@ const CLOSE_SHARE = 1 / 3;
 const FLICK = 0.5;
 /** Velocity is read over the last stretch of the gesture, not all of it. */
 const VELOCITY_WINDOW = 100;
-/** The drawer's own exit (.sidebar.is-closing) and the spring back. */
-const CLOSE_MS = 160;
-const SPRING_MS = 280;
+/** The drawer's own exit (.sidebar.is-closing: --t-exit); the spring back is the shared SPRING_MS. */
+const CLOSE_MS = T_EXIT;
 /** Controls that own a horizontal drag themselves. */
 const OWN_DRAG = "input, textarea, select, [contenteditable='true']";
 /** Past the open edge the drawer gives, never more than this, and springs back. */
@@ -53,7 +52,7 @@ function stretched(dx: number): number {
  *
  * The motion rides Web Animations held over the drawer's CSS: a script
  * animation outranks the CSS entrance (whose fill would otherwise pin the
- * drawer open) and the closing transition, and cancelling it hands the
+ * drawer open) and the closing one, and cancelling it hands the
  * element straight back to its classes.
  */
 export function useDrawerSwipe(drawerRef: RefObject<HTMLElement>, backdropRef: RefObject<HTMLElement>, open: boolean, onClose: () => void): void {
@@ -158,9 +157,18 @@ export function useDrawerSwipe(drawerRef: RefObject<HTMLElement>, backdropRef: R
       const fade = String(Math.min(1, 1 + done.dx / done.width));
       if (close) {
         // On from the finger, not back to open first: the pins become the
-        // exit and hold there until the drawer is gone.
-        settle(drawer, [{ transform: `translateX(${done.dx}px)` }, { transform: "translateX(-102%)" }], reduced ? 0 : CLOSE_MS, EASE, true);
-        settle(backdropRef.current, [{ opacity: fade }, { opacity: "0" }], reduced ? 0 : CLOSE_MS, EASE, true);
+        // exit and hold there until the drawer is gone. Under reduced motion
+        // the drawer stays where the finger left it and fades on --t-fast,
+        // the close path's own reduced beat, instead of sliding the rest.
+        const from = `translateX(${done.dx}px)`;
+        settle(
+          drawer,
+          reduced ? [{ transform: from, opacity: 1 }, { transform: from, opacity: 0 }] : [{ transform: from }, { transform: "translateX(-102%)" }],
+          reduced ? T_FAST : CLOSE_MS,
+          EASE,
+          true
+        );
+        settle(backdropRef.current, [{ opacity: fade }, { opacity: "0" }], reduced ? T_FAST : CLOSE_MS, EASE, true);
         onCloseRef.current();
       } else {
         settle(drawer, [{ transform: `translateX(${done.dx}px)` }, { transform: "none" }], reduced ? 0 : SPRING_MS, EASE_OUT, false);

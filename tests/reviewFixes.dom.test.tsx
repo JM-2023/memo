@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Image } from "lucide-react";
 import type { ReactNode } from "react";
@@ -29,7 +29,7 @@ beforeEach(() => {
   localStorage.clear();
   // jsdom has no Web Animations; the tag tree's FLIP pass reads them.
   Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: vi.fn(() => []) });
-  Object.defineProperty(Element.prototype, "animate", { configurable: true, value: vi.fn(() => ({ cancel: vi.fn(), finish: vi.fn() })) });
+  Object.defineProperty(Element.prototype, "animate", { configurable: true, value: vi.fn(() => ({ cancel: vi.fn(), finish: vi.fn(), finished: Promise.resolve() })) });
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     value: vi.fn((query: string) => ({
@@ -117,7 +117,7 @@ describe("tag tree", () => {
     expect(screen.getByRole("button", { name: "cooking, 2 memos" }).getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("stays open once the lens has opened it, until folded by hand", () => {
+  it("stays open once the lens has opened it, until folded by hand", async () => {
     // Picking the parent (or leaving the subtree) must not slam it shut —
     // that fold, and the reopen on the next child pick, read as the unfold
     // playing twice.
@@ -135,9 +135,25 @@ describe("tag tree", () => {
     expect(screen.getByRole("button", { name: "Collapse tag life" }).getAttribute("aria-expanded")).toBe("true");
     // A fold by hand holds; the lens landing inside again opens it back up.
     fireEvent.click(screen.getByRole("button", { name: "Collapse tag life" }));
-    expect(screen.queryByRole("button", { name: "cooking, 2 memos" })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "cooking, 2 memos" })).toBeNull());
     rerenderWith("life/garden");
     expect(screen.getByRole("button", { name: "garden, 1 memo" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("fades a fold under reduced motion instead of cutting or shrinking it", async () => {
+    let finish = () => {};
+    const animate = vi.fn(() => ({ cancel: vi.fn(), finish: vi.fn(), finished: new Promise<void>((resolve) => (finish = resolve)) }));
+    Object.defineProperty(Element.prototype, "animate", { configurable: true, value: animate });
+    renderTree("life/cooking");
+    fireEvent.click(screen.getByRole("button", { name: "Collapse tag life" }));
+    // Opacity only, on the quick beat; the rows hold their room until it ends.
+    expect(animate).toHaveBeenLastCalledWith([{ opacity: "1" }, { opacity: "0" }], expect.objectContaining({ id: "track", duration: 100 }));
+    expect(screen.getByRole("button", { name: "cooking, 2 memos" })).toBeTruthy();
+    finish();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "cooking, 2 memos" })).toBeNull());
+    // Unfolding fades back in on --t.
+    fireEvent.click(screen.getByRole("button", { name: "Expand tag life" }));
+    expect(animate).toHaveBeenLastCalledWith([{ opacity: "0" }, { opacity: "1" }], expect.objectContaining({ id: "track", duration: 150 }));
   });
 
   it("stays folded when the lens is elsewhere", () => {

@@ -10,6 +10,7 @@ import {
   pickReviewIds,
   removeReviewSettingsTag,
   renameReviewSettingsTag,
+  reviewDayStarved,
   reviewDayValid,
   reviewFingerprint,
   reviewTagChoices,
@@ -149,6 +150,18 @@ describe("daily draw", () => {
     expect(reviewDayValid(built, settings({ count: 5 }), NOW)).toBe(false);
     expect(reviewDayValid(built, settings({ count: 4 }), new Date("2026-07-26T09:00:00.000Z"))).toBe(false);
     expect(reviewDayValid(null, settings(), NOW)).toBe(false);
+  });
+
+  it("lets an empty batch go stale once something qualifies, and only then", () => {
+    const empty = buildReviewDay([], settings(), NOW);
+    expect(empty.ids).toEqual([]);
+    expect(reviewDayStarved(empty, [], settings(), NOW)).toBe(false);
+    expect(reviewDayStarved(empty, [memo("a", "x", "2026-07-25T09:00:00.000Z", "2026-07-25T09:30:00.000Z")], settings(), NOW)).toBe(false);
+    expect(reviewDayStarved(empty, [memo("a", "x #work", "2026-07-25T09:00:00.000Z")], settings({ scope: "untagged" }), NOW)).toBe(false);
+    expect(reviewDayStarved(empty, [memo("a", "x", "2026-07-25T09:00:00.000Z")], settings(), NOW)).toBe(true);
+    // A batch that drew something stays frozen, whatever arrives.
+    const drawn = buildReviewDay(pool, settings({ count: 4 }), NOW);
+    expect(reviewDayStarved(drawn, [...pool, memo("new", "x", "2026-07-25T09:00:00.000Z")], settings({ count: 4 }), NOW)).toBe(false);
   });
 
   it("fingerprints ignore tag order but track every knob", () => {

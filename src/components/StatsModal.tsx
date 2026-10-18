@@ -797,11 +797,17 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
   const perActiveDay = activeDays > 0 ? Math.round((memoCount / activeDays) * 10) / 10 : 0;
   const lastYear = year - 1;
   // Against the year before, in words: the figure already says "memos".
-  let delta: string;
+  // Null when there is nothing to compare: an empty first year says only
+  // that nothing is written yet (the pace line below).
+  let delta: string | null;
   if (before.total > 0) {
     const gap = memoCount - before.byCutoff;
     const amount = formatNumber(Math.abs(gap));
-    if (year === maxYear) {
+    if (year === maxYear && before.byCutoff === 0) {
+      // Last year began later than today's date: "87 more than this time
+      // last year" is true but says nothing, and "level" at 0 and 0 less.
+      delta = tr("Nothing by this date last year", "去年此时还没有笔记");
+    } else if (year === maxYear) {
       delta =
         gap > 0
           ? tr(`${amount} more than this time last year`, `比去年同期多 ${amount} 条`)
@@ -817,7 +823,12 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
             : tr(`Level with ${lastYear}`, `与 ${lastYear} 年持平`);
     }
   } else {
-    delta = lastYear < minYear ? tr("Your first year of memos", "记录的第一年") : tr(`Nothing written in ${lastYear}`, `${lastYear} 年没有笔记`);
+    delta =
+      lastYear >= minYear
+        ? tr(`Nothing written in ${lastYear}`, `${lastYear} 年没有笔记`)
+        : memoCount > 0
+          ? tr("Your first year of memos", "记录的第一年")
+          : null;
   }
   const pace = memoCount > 0 ? tr(`${formatNumber(perActiveDay)} per active day`, `活跃日均 ${formatNumber(perActiveDay)} 条`) : tr("Nothing written this year", "这一年还没有笔记");
 
@@ -936,9 +947,11 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
                 {memoCount > 0 ? <ChevronRight size={19} className="stats-drill-cue" aria-hidden="true" /> : null}
               </button>
               <p className="stats-hero-note">
-                <span key={delta} className="stats-swap">
-                  {delta}
-                </span>
+                {delta ? (
+                  <span key={delta} className="stats-swap">
+                    {delta}
+                  </span>
+                ) : null}
                 <span key={pace} className="stats-swap">
                   {pace}
                 </span>

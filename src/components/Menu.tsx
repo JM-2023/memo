@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties
 import { createPortal } from "react-dom";
 import { afterExit, continueFrom, paintedFrameOf, type PaintedFrame } from "../hooks/useOverlayExit";
 import { useReducedMotion } from "../hooks/useReducedMotion";
+import { EXIT_MS, T_EXIT } from "../lib/motion";
 
 /** ARIA wiring for the trigger button — spread it onto the button. */
 export interface MenuTriggerProps {
@@ -67,8 +68,14 @@ interface PortalPos {
 
 /** Type-ahead keeps its letters this long between presses. */
 const TYPEAHEAD_RESET_MS = 500;
-/** The exit's length where the engine can't report it (menu-out runs 0.12s). */
-const MENU_EXIT_MS = 130;
+/** menu-out's duration (app.css, .action-menu.is-closing: 0.12s) — change the two together. */
+const MENU_OUT_MS = 120;
+/**
+ * The exit's length where the engine can't report it: menu-out plus the same
+ * frame of slack EXIT_MS adds to the shared --t-exit, so the panel unmounts
+ * after its last frame, never on it.
+ */
+const MENU_EXIT_MS = MENU_OUT_MS + (EXIT_MS - T_EXIT);
 
 function itemLabel(item: HTMLElement): string {
   return (item.textContent || item.getAttribute("aria-label") || "").trim().toLocaleLowerCase();
@@ -299,6 +306,11 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     }
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        // Only an Escape pressed in the menu (or with nothing focused, as a
+        // click on the panel's own text leaves it) is the menu's: one
+        // pressed in the composer or the search box is theirs.
+        const target = event.target as Node;
+        if (target !== document.body && !rootRef.current?.contains(target) && !panelRef.current?.contains(target)) return;
         event.preventDefault();
         event.stopImmediatePropagation();
         requestClose(true);
@@ -327,13 +339,30 @@ export function Menu({ trigger, children, align = "right", className, panelClass
         target.focus();
       }
     }
+    // A panel keeps native Tab, so focus can walk out of it: once it lands
+    // outside, the panel has been left — it closes where focus went, without
+    // pulling it back to the trigger. (No relatedTarget: focus went nowhere,
+    // or the window lost it; the panel stays.)
+    function onFocusOut(event: FocusEvent) {
+      const next = event.relatedTarget;
+      if (!(next instanceof Node) || rootRef.current?.contains(next) || panelRef.current?.contains(next)) return;
+      requestClose(false);
+    }
+    const root = rootRef.current;
     window.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKey, true);
     panel?.addEventListener("pointermove", onPointerMove);
+    if (kind === "panel") {
+      root?.addEventListener("focusout", onFocusOut);
+      // A portaled panel sits outside the root, so it reports on its own.
+      if (panel && !root?.contains(panel)) panel.addEventListener("focusout", onFocusOut);
+    }
     return () => {
       window.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKey, true);
       panel?.removeEventListener("pointermove", onPointerMove);
+      root?.removeEventListener("focusout", onFocusOut);
+      panel?.removeEventListener("focusout", onFocusOut);
       window.clearTimeout(typeaheadRef.current.timer);
       typeaheadRef.current.text = "";
     };
@@ -362,7 +391,10 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   // In-flow mode: same before-paint measurement, but the answer is only a
   // direction. The panel stays inside .menu-root (so scrolling keeps it open
   // and glued to its card); near the bottom edge it opens upward instead of
-  // hanging its last items — often Delete — below the fold.
+  // hanging its last items — often Delete — below the fold. The room above
+  // ends at the sticky topbar's bottom edge, not the viewport's top: a card
+  // menu sits under the band (app.css, .memo-slot's lift), so an upward panel
+  // measured to the viewport top would open behind it.
   useLayoutEffect(() => {
     if (!open || portal) return;
     const anchor = rootRef.current;
@@ -371,8 +403,12 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     const rect = anchor.getBoundingClientRect();
     const panelHeight = panel.offsetHeight;
     const viewportHeight = window.innerHeight;
+    // Only for menus in the page under the band (a card's, the composer's):
+    // the band's own menus and anything in an overlay stand above it.
+    const band = anchor.closest(".main-column") && !anchor.closest(".topbar, .overlay") ? document.querySelector(".topbar") : null;
+    const ceiling = band ? Math.max(0, band.getBoundingClientRect().bottom) : 0;
     const spaceBelow = viewportHeight - 8 - (rect.bottom + 6);
-    const spaceAbove = rect.top - 6 - 8;
+    const spaceAbove = rect.top - 6 - 8 - ceiling;
     setFlipUp(panelHeight > spaceBelow && (panelHeight <= spaceAbove || spaceAbove > spaceBelow));
   }, [open, portal]);
 

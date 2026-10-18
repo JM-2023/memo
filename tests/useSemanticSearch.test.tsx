@@ -331,6 +331,74 @@ describe("useSemanticSearch", () => {
     expect(renders - before).toBeLessThanOrEqual(5);
   });
 
+  it("holds the previous ranking, flagged stale, until the new one replaces it in one publish", async () => {
+    mocks.load.mockResolvedValue(indexOf("a"));
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const embed = vi.fn(async (texts: readonly string[]) => {
+      if (texts[0] === "pears") await gate;
+      return texts.map(() => new Float32Array(384));
+    });
+    mocks.getEmbedder.mockResolvedValue(embed);
+    const publish = vi.fn((commit: () => void) => commit());
+    const { result, rerender } = renderHook(({ query }) => useSemanticSearch(true, [], query, null, publish), {
+      initialProps: { query: "apples" }
+    });
+    await waitFor(() => expect(result.current.results).not.toBeNull());
+    const apples = result.current.results;
+    expect(result.current.stale).toBe(false);
+    expect(publish).toHaveBeenCalledTimes(1);
+
+    // The very render that carries the new text already marks the old
+    // ranking stale; nothing is dropped in between.
+    rerender({ query: "pears" });
+    expect(result.current.results).toBe(apples);
+    expect(result.current.stale).toBe(true);
+    await waitFor(() => expect(embed).toHaveBeenCalledWith(["pears"]));
+    expect(result.current.results).toBe(apples);
+    expect(publish).toHaveBeenCalledTimes(1);
+
+    release();
+    await waitFor(() => expect(result.current.stale).toBe(false));
+    expect(result.current.results).not.toBe(apples);
+    expect(publish).toHaveBeenCalledTimes(2);
+  });
+
+  it("takes a held ranking away through publish when the new query fails", async () => {
+    mocks.load.mockResolvedValue(indexOf("a"));
+    const embed = vi.fn(async (texts: readonly string[]) => {
+      if (texts[0] === "pears") throw new Error("embedder died");
+      return texts.map(() => new Float32Array(384));
+    });
+    mocks.getEmbedder.mockResolvedValue(embed);
+    const publish = vi.fn((commit: () => void) => commit());
+    const { result, rerender } = renderHook(({ query }) => useSemanticSearch(true, [], query, null, publish), {
+      initialProps: { query: "apples" }
+    });
+    await waitFor(() => expect(result.current.results).not.toBeNull());
+    rerender({ query: "pears" });
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    // One move: the stale rows and the status leave in the same commit.
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(result.current.results).toBeNull();
+    expect(result.current.stale).toBe(false);
+  });
+
+  it("hides the ranking in the same render that empties the query", async () => {
+    mocks.load.mockResolvedValue(indexOf("a"));
+    const publish = vi.fn((commit: () => void) => commit());
+    const { result, rerender } = renderHook(({ query }) => useSemanticSearch(true, [], query, null, publish), {
+      initialProps: { query: "apples" }
+    });
+    await waitFor(() => expect(result.current.results).not.toBeNull());
+    rerender({ query: "  " });
+    expect(result.current.results).toBeNull();
+    expect(result.current.stale).toBe(false);
+    // Nothing on screen to move: no publish for the clear.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
   it("re-ranks an earlier query from its cached vector instead of embedding it again", async () => {
     mocks.load.mockResolvedValue(indexOf("a"));
     const embed = vi.fn(async (texts: readonly string[]) => texts.map(() => new Float32Array(384)));
@@ -341,10 +409,10 @@ describe("useSemanticSearch", () => {
     await waitFor(() => expect(result.current.results).not.toBeNull());
     rerender({ query: "pears" });
     await waitFor(() => expect(embed).toHaveBeenCalledWith(["pears"]));
-    await waitFor(() => expect(result.current.results).not.toBeNull());
+    await waitFor(() => expect(result.current.stale).toBe(false));
 
     rerender({ query: "apples" });
-    await waitFor(() => expect(result.current.results).not.toBeNull());
+    await waitFor(() => expect(result.current.stale).toBe(false));
     expect(embed.mock.calls.filter(([texts]) => texts[0] === "apples")).toHaveLength(1);
   });
 

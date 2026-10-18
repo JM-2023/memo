@@ -30,6 +30,17 @@ function field(): HTMLTextAreaElement {
   return screen.getByRole("combobox", { name: "Memo content" }) as HTMLTextAreaElement;
 }
 
+/** The complaint on show: the open note's line (spoken through the live
+ * region, so the line itself carries no role). Null while none is. */
+function shownError(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(".editor-note.is-open .editor-error");
+}
+
+/** What the standing live region of the given tone is saying. */
+function spoken(tone: "status" | "alert"): string {
+  return document.querySelector(`[${LIVE_REGION_ATTR}] [role="${tone}"]`)?.textContent ?? "";
+}
+
 function pending(id: string): NewImagePayload {
   return { id, dataBase64: "AA==", mime: "image/webp", width: 1, height: 1, previewUrl: `blob:${id}` };
 }
@@ -249,6 +260,31 @@ describe("Editor tag suggestions follow the caret", () => {
     expect(options()[1].getAttribute("aria-selected")).toBe("true");
     expect(document.querySelectorAll(".tag-suggest .is-active")).toHaveLength(1);
   });
+
+  it("sends on ⌘↩ with the list open instead of taking the highlighted tag", async () => {
+    const user = userEvent.setup();
+    const { area, onSubmit } = renderCreate(["life", "linux"]);
+    await user.type(area, "note #li");
+    expect(screen.getByRole("listbox", { name: "Tag suggestions" })).not.toBeNull();
+    fireEvent.keyDown(area, { key: "Enter", metaKey: true });
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].content).toBe("note #li");
+  });
+
+  it("breaks the line on Shift+↩ and leaves Shift+Tab its own job, closing the list either way", async () => {
+    const user = userEvent.setup();
+    const { area } = renderCreate(["life", "linux"]);
+    await user.type(area, "note #li");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(area.value).toBe("note #li\n");
+    expect(screen.queryByRole("listbox")).toBeNull();
+
+    await user.keyboard("{Backspace}");
+    expect(screen.getByRole("listbox")).not.toBeNull();
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(area.value).toBe("note #li");
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
 });
 
 describe("Editor file drops", () => {
@@ -324,7 +360,7 @@ describe("Editor file drops", () => {
     fireEvent.dragOver(editor, over);
     expect(over.dataTransfer.dropEffect).toBe("none");
     expect(fireEvent.drop(editor, fileDrag([pdf]))).toBe(false);
-    expect(screen.getByRole("alert").textContent).toBe("Only images can be added");
+    expect(shownError()?.textContent).toBe("Only images can be added");
     cleanup();
 
     render(
@@ -408,7 +444,7 @@ describe("Editor send", () => {
     fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(["a"], "a.png", { type: "image/png" })] } });
     await user.click(screen.getByRole("button", { name: "Send" }));
     await act(async () => image.reject(new Error("Decoder gave up")));
-    expect((await screen.findByRole("alert")).textContent).toBe("Decoder gave up");
+    await waitFor(() => expect(shownError()?.textContent).toBe("Decoder gave up"));
     expect(screen.queryByText("Preparing image…")).toBeNull();
     expect(onSubmit).not.toHaveBeenCalled();
     expect(area.value).toBe("with a photo");
@@ -471,12 +507,12 @@ describe("Editor edit state", () => {
     await user.click(screen.getByRole("button", { name: "Insert image link" }));
     const link = document.querySelector(".link-pop-inner input") as HTMLInputElement;
     await user.type(link, "not a url{Enter}");
-    expect(screen.getByRole("alert").textContent).toBe("Enter an image URL beginning with http(s)://");
+    expect(shownError()?.textContent).toBe("Enter an image URL beginning with http(s)://");
     fireEvent.keyDown(link, { key: "Escape" });
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(shownError()).toBeNull();
 
     fireEvent.drop(document.querySelector(".editor")!, fileDrag([new File(["a"], "a.png", { type: "image/png" })]));
-    expect((await screen.findByRole("alert")).textContent).toBe("You can add up to 9 images");
+    await waitFor(() => expect(shownError()?.textContent).toBe("You can add up to 9 images"));
     const [first] = screen.getAllByRole("button", { name: /^Remove image/ });
     await user.click(first);
     // jsdom has no AnimationEvent, so React listens under the prefixed name.
@@ -486,7 +522,7 @@ describe("Editor edit state", () => {
       first.closest(".attachment")!.dispatchEvent(exited);
     });
     expect(screen.getAllByRole("button", { name: /^Remove image/ })).toHaveLength(8);
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(shownError()).toBeNull();
   });
 
   it("lets the composer go on Esc", async () => {
@@ -597,6 +633,17 @@ describe("Editor tag list motion", () => {
     finishAnimation(list, "menu-out");
     expect(list.isConnected).toBe(false);
   });
+
+  it("leaves on the reduced-motion dissolve too", async () => {
+    const user = userEvent.setup();
+    const { area } = renderCreate(["life"]);
+    await user.type(area, "#li");
+    const list = screen.getByRole("listbox");
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(list.classList.contains("is-closing")).toBe(true);
+    finishAnimation(list, "fade-out");
+    expect(list.isConnected).toBe(false);
+  });
 });
 
 describe("Editor paste with a picture beside the words", () => {
@@ -641,13 +688,14 @@ describe("Editor notes", () => {
     const user = userEvent.setup();
     const { area } = renderCreate();
     fireEvent.drop(area.closest(".editor")!, fileDrag([new File(["%PDF"], "a.pdf", { type: "application/pdf" })]));
-    expect(screen.getByRole("alert").textContent).toBe("Only images can be added");
+    expect(shownError()?.textContent).toBe("Only images can be added");
     await user.type(area, "x");
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(shownError()).toBeNull();
     expect(document.querySelector(".editor-note:not(.is-open) .editor-error")?.textContent).toBe("Only images can be added");
   });
 
   it("keeps the caret in the field through a failed send, and says a second failure again", async () => {
+    const unmountRegions = mountLiveRegions();
     setPointer(true);
     const user = userEvent.setup();
     const onSubmit = vi.fn(async (_data: EditorSubmission): Promise<boolean> => {
@@ -659,12 +707,17 @@ describe("Editor notes", () => {
     // A mouse press on Send leaves the caret where it was.
     expect(fireEvent.mouseDown(sendButton)).toBe(false);
     await user.click(sendButton);
-    const first = await screen.findByRole("alert");
-    expect(first.textContent).toBe("Server hiccup");
+    await waitFor(() => expect(shownError()?.textContent).toBe("Server hiccup"));
+    const first = shownError();
+    // Said through the standing region, not by a freshly mounted alert.
+    expect(first?.getAttribute("role")).toBeNull();
+    expect(spoken("alert")).toBe("Server hiccup");
     expect(document.activeElement).toBe(area);
     await user.click(sendButton);
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByRole("alert")).not.toBe(first));
+    await waitFor(() => expect(shownError()).not.toBe(first));
+    expect(spoken("alert")).toBe("Server hiccup");
+    unmountRegions();
   });
 
   it("lets a tap on Send take focus, so a phone's keyboard can go", () => {
@@ -727,6 +780,18 @@ describe("Editor attachment tiles", () => {
       "Remove image 1 of 2",
       "Remove image 2 of 2"
     ]);
+  });
+
+  it("keeps the caret in the field when a tile's × is clicked", async () => {
+    const user = userEvent.setup();
+    mocks.compressImage.mockImplementation(async () => pending("p1"));
+    const { area } = renderCreate();
+    addFiles(1);
+    const remove = await screen.findByRole("button", { name: "Remove image" });
+    await user.click(area);
+    await user.click(remove);
+    expect(remove.closest(".attachment")?.classList.contains("is-removing")).toBe(true);
+    expect(document.activeElement).toBe(area);
   });
 
   it("offers Undo for a removed image and puts it back in the slot it left", async () => {
