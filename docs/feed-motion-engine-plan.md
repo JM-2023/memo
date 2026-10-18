@@ -1,6 +1,7 @@
 # Feed motion engine — one mover for the feed
 
-Status: **approved 2026-10-18; being implemented step by step.** Written
+Status: **approved 2026-10-18; implemented, steps 0–6 (see §11 for where
+the build departs from this plan).** Written
 2026-10-18 from the code at `6203fa7`. Line numbers refer to that commit.
 
 Contracts agreed with the sibling sessions working in `App.tsx` at the same
@@ -759,6 +760,30 @@ appendix. Without this, "parity" can't be judged.
   WAAPI): fine? Recommended: yes.
 - **D6.** The CDP harness: scratchpad only (as before) or committed under
   `scripts/`? Recommended: scratchpad.
+
+## 11. As built
+
+The owner took every recommendation (D1–D6). Where the code departs from
+the sketches above:
+
+- **Send keeps `data-vt-create`** rather than `data-morph="create"`; the
+  rules it keys are the same. The composer's context tag carries a name of
+  its own during the morph (`composer-context-tag`), or it is baked into
+  both composer snapshots and shows twice for a frame.
+- **Retag moves the card, not its text.** A card's own stage
+  (`card-stage is-morphing`) already cross-fades its content, so the engine
+  plays no hand-over of its own; it would have doubled the text.
+- **Kept CSS.** `::view-transition-group(*)` timing and the old/new
+  only-child defaults stay for the morphs. The reduced-motion block keeps
+  its root-capture rules for the splash → login brand-mark dissolve.
+- **Step 6.** The module keeps its name and `data-vt` keeps its name (the
+  contracts above). With the relay gone, presses on a morph's named parts
+  (the new card, the composer, the top bar, the lightbox) are lost for at
+  most 0.24s (D4), and every card stays live. A held mouse press on a card
+  or pill that is gliding could still split across two elements, so the
+  click went to their common ancestor. The motion layer therefore captures
+  the pointer on what was pressed while it carries it (`holdPress`), as a
+  touch already does.
 
 ## Appendix A — CSS that goes, stays, or moves
 
