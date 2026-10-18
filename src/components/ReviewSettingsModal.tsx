@@ -8,6 +8,7 @@ import {
   REVIEW_COUNT_MAX,
   REVIEW_COUNT_MIN,
   eligibleReviewMemos,
+  reviewFingerprint,
   reviewTagChoices,
   type ReviewRange,
   type ReviewScope,
@@ -87,6 +88,9 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
   const eligibleCount = useMemo(() => eligibleReviewMemos(memos, draft, now).length, [memos, draft, now]);
   const needsTags = scope === "include" || scope === "exclude";
   const tagsMissing = needsTags && selectedTags.size === 0;
+  // Nothing changed yet: there is nothing to save ("unchanged" only
+  // disables the button, as in PromptDialog).
+  const unchanged = reviewFingerprint(draft) === reviewFingerprint(settings);
 
   // Parents are choices too (a pick covers its subtree), grouped under their
   // top-level tag. The saved picks lead the list — including ones whose last
@@ -105,7 +109,7 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
   }
 
   function requestSave() {
-    if (tagsMissing) return;
+    if (tagsMissing || unchanged) return;
     leave(() => saveRef.current(draftRef.current));
   }
 
@@ -345,7 +349,7 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
             <button type="button" className="ghost-button" onClick={requestClose}>
               {tr("Cancel", "取消")}
             </button>
-            <button type="button" className="accent-button" disabled={tagsMissing} onClick={requestSave}>
+            <button type="button" className="accent-button" disabled={tagsMissing || unchanged} onClick={requestSave}>
               {tr("Save", "保存")}
             </button>
           </div>

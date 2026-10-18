@@ -3971,8 +3971,15 @@ button.is-busy:disabled { opacity: 1; }
    plays once it can be seen. */
 .lightbox-image.is-pending { opacity: 0; animation: none; }
 /* The page it replaces holds, still, until then — no black gap — and leaves
-   toward the side it was sent while the new one slides in. */
-.lightbox-image.is-leaving { animation: none; pointer-events: none; }
+   toward the side it was sent while the new one slides in. Swiped away, it
+   holds where the finger let go (--lb-leave-dx, Lightbox.tsx) rather than
+   gliding back to the centre, and leaves onward from there. */
+.lightbox-image.is-leaving {
+  translate: var(--lb-leave-dx, 0px) 0px;
+  transition: none;
+  animation: none;
+  pointer-events: none;
+}
 .lightbox-image.is-leaving.out-fwd { animation: swap-out-fwd var(--t-exit) var(--ease) both; }
 .lightbox-image.is-leaving.out-back { animation: swap-out-back var(--t-exit) var(--ease) both; }
 /* Closing, the picture recedes with the scrim — unless a swipe already

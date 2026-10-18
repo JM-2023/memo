@@ -409,3 +409,43 @@ describe("boot waterfall", () => {
     expect(await screen.findByText("Create an access passcode")).toBeTruthy();
   });
 });
+
+describe("Daily review over an empty notebook", () => {
+  const storedIds = () => (JSON.parse(localStorage.getItem("memo-review-day") ?? "null") as { ids: string[] } | null)?.ids;
+
+  it("says there is nothing yet, then deals the batch once a memo syncs in while Review is up", async () => {
+    mocks.bootstrap.mockResolvedValue(page([]));
+    renderApp();
+    await screen.findByText("👋 Capture your first thought");
+    fireEvent.click(screen.getByRole("button", { name: /^Daily review/ }));
+    expect(await screen.findByText("Nothing to review yet")).toBeTruthy();
+    expect(screen.queryByText(/Widen the scope/)).toBeNull();
+    expect(storedIds()).toEqual([]);
+
+    act(() => {
+      mocks.syncOptions.current?.applyChanges([memo(1)], [], [], 11);
+    });
+    expect(await screen.findByText("memo-1 original")).toBeTruthy();
+    expect(storedIds()).toEqual(["memo-1"]);
+  });
+
+  it("draws afresh on the next visit instead of replaying the empty batch", async () => {
+    mocks.bootstrap.mockResolvedValue(page([]));
+    renderApp();
+    await screen.findByText("👋 Capture your first thought");
+    fireEvent.click(screen.getByRole("button", { name: /^Daily review/ }));
+    await screen.findByText("Nothing to review yet");
+    fireEvent.click(screen.getAllByRole("button", { name: /^All memos/ })[0]);
+    await waitFor(() => expect(screen.queryByText("Nothing to review yet")).toBeNull());
+
+    act(() => {
+      mocks.syncOptions.current?.applyChanges([memo(1)], [], [], 11);
+    });
+    await screen.findByText("memo-1 original");
+    fireEvent.click(screen.getByRole("button", { name: /^Daily review/ }));
+    // Dealt in the same swap as the view change, not a beat later.
+    expect(screen.getByText("memo-1 original")).toBeTruthy();
+    expect(screen.queryByText("Nothing to review yet")).toBeNull();
+    expect(storedIds()).toEqual(["memo-1"]);
+  });
+});

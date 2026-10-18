@@ -249,6 +249,31 @@ describe("Editor tag suggestions follow the caret", () => {
     expect(options()[1].getAttribute("aria-selected")).toBe("true");
     expect(document.querySelectorAll(".tag-suggest .is-active")).toHaveLength(1);
   });
+
+  it("sends on ⌘↩ with the list open instead of taking the highlighted tag", async () => {
+    const user = userEvent.setup();
+    const { area, onSubmit } = renderCreate(["life", "linux"]);
+    await user.type(area, "note #li");
+    expect(screen.getByRole("listbox", { name: "Tag suggestions" })).not.toBeNull();
+    fireEvent.keyDown(area, { key: "Enter", metaKey: true });
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].content).toBe("note #li");
+  });
+
+  it("breaks the line on Shift+↩ and leaves Shift+Tab its own job, closing the list either way", async () => {
+    const user = userEvent.setup();
+    const { area } = renderCreate(["life", "linux"]);
+    await user.type(area, "note #li");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(area.value).toBe("note #li\n");
+    expect(screen.queryByRole("listbox")).toBeNull();
+
+    await user.keyboard("{Backspace}");
+    expect(screen.getByRole("listbox")).not.toBeNull();
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(area.value).toBe("note #li");
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
 });
 
 describe("Editor file drops", () => {
@@ -597,6 +622,17 @@ describe("Editor tag list motion", () => {
     finishAnimation(list, "menu-out");
     expect(list.isConnected).toBe(false);
   });
+
+  it("leaves on the reduced-motion dissolve too", async () => {
+    const user = userEvent.setup();
+    const { area } = renderCreate(["life"]);
+    await user.type(area, "#li");
+    const list = screen.getByRole("listbox");
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(list.classList.contains("is-closing")).toBe(true);
+    finishAnimation(list, "fade-out");
+    expect(list.isConnected).toBe(false);
+  });
 });
 
 describe("Editor paste with a picture beside the words", () => {
@@ -727,6 +763,18 @@ describe("Editor attachment tiles", () => {
       "Remove image 1 of 2",
       "Remove image 2 of 2"
     ]);
+  });
+
+  it("keeps the caret in the field when a tile's × is clicked", async () => {
+    const user = userEvent.setup();
+    mocks.compressImage.mockImplementation(async () => pending("p1"));
+    const { area } = renderCreate();
+    addFiles(1);
+    const remove = await screen.findByRole("button", { name: "Remove image" });
+    await user.click(area);
+    await user.click(remove);
+    expect(remove.closest(".attachment")?.classList.contains("is-removing")).toBe(true);
+    expect(document.activeElement).toBe(area);
   });
 
   it("offers Undo for a removed image and puts it back in the slot it left", async () => {

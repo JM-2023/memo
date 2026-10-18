@@ -299,6 +299,11 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     }
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        // Only an Escape pressed in the menu (or with nothing focused, as a
+        // click on the panel's own text leaves it) is the menu's: one
+        // pressed in the composer or the search box is theirs.
+        const target = event.target as Node;
+        if (target !== document.body && !rootRef.current?.contains(target) && !panelRef.current?.contains(target)) return;
         event.preventDefault();
         event.stopImmediatePropagation();
         requestClose(true);
@@ -327,13 +332,30 @@ export function Menu({ trigger, children, align = "right", className, panelClass
         target.focus();
       }
     }
+    // A panel keeps native Tab, so focus can walk out of it: once it lands
+    // outside, the panel has been left — it closes where focus went, without
+    // pulling it back to the trigger. (No relatedTarget: focus went nowhere,
+    // or the window lost it; the panel stays.)
+    function onFocusOut(event: FocusEvent) {
+      const next = event.relatedTarget;
+      if (!(next instanceof Node) || rootRef.current?.contains(next) || panelRef.current?.contains(next)) return;
+      requestClose(false);
+    }
+    const root = rootRef.current;
     window.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKey, true);
     panel?.addEventListener("pointermove", onPointerMove);
+    if (kind === "panel") {
+      root?.addEventListener("focusout", onFocusOut);
+      // A portaled panel sits outside the root, so it reports on its own.
+      if (panel && !root?.contains(panel)) panel.addEventListener("focusout", onFocusOut);
+    }
     return () => {
       window.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKey, true);
       panel?.removeEventListener("pointermove", onPointerMove);
+      root?.removeEventListener("focusout", onFocusOut);
+      panel?.removeEventListener("focusout", onFocusOut);
       window.clearTimeout(typeaheadRef.current.timer);
       typeaheadRef.current.text = "";
     };

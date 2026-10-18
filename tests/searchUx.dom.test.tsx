@@ -234,6 +234,34 @@ describe("search box", () => {
     expect(screen.getAllByRole("article")).toHaveLength(1);
   });
 
+  it("waits out an IME composition in the Trash search too, without filtering or scrolling", async () => {
+    const deletedAt = "2026-01-01T00:01:00.000Z";
+    mocks.bootstrap.mockResolvedValue({
+      memos: [{ ...memo(0, "Window seat"), deletedAt }, { ...memo(1, "Fruit salad"), deletedAt }, memo(2, "Plain note")],
+      tags: [],
+      cursor: 3,
+      syncEpoch: "epoch-a",
+      serverTime: "2026-01-01T00:02:00.000Z",
+      hasMore: false,
+      nextAfter: null
+    });
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: /^Trash/ }));
+    const search = (await screen.findByRole("searchbox", { name: "Search Trash" })) as HTMLInputElement;
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
+    vi.mocked(window.scrollTo).mockClear();
+    fireEvent.compositionStart(search);
+    fireEvent.change(search, { target: { value: "chuang" } });
+    expect(search.value).toBe("chuang");
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+    expect(screen.queryByText("No matching memos in Trash")).toBeNull();
+    expect(window.scrollTo).not.toHaveBeenCalled();
+    fireEvent.change(search, { target: { value: "Window" } });
+    fireEvent.compositionEnd(search);
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(1));
+    expect(search.value).toBe("Window");
+  });
+
   it("clears the query on Escape without also leaving select mode", async () => {
     const user = userEvent.setup();
     renderApp();

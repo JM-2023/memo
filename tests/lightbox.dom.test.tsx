@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Lightbox, openLightboxFrom } from "../src/components/Lightbox";
@@ -287,6 +289,32 @@ describe("Lightbox paging", () => {
       for (const type of ["animationend", "webkitAnimationEnd"]) first.dispatchEvent(new Event(type, { bubbles: true }));
     });
     expect(first.isConnected).toBe(false);
+  });
+
+  it("lets a swiped-away picture leave from where the finger let go, not from the centre", () => {
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    const first = screen.getByRole("img", { name: "Image 1 of 3" });
+    fireEvent.load(first);
+
+    swipe(first, [600, 400], [200, 410]);
+    expect(first.classList.contains("is-leaving")).toBe(true);
+    expect(first.style.getPropertyValue("--lb-leave-dx")).toBe("-400px");
+    // The incoming picture starts from the centre.
+    expect(overlay().style.getPropertyValue("--lb-dx")).toBe("0px");
+    const second = screen.getByRole("img", { name: "Image 2 of 3" });
+    fireEvent.load(second);
+    expect(first.classList.contains("out-fwd")).toBe(true);
+    expect(first.style.getPropertyValue("--lb-leave-dx")).toBe("-400px");
+    // Pinned there with nothing to glide it back while it leaves onward.
+    const css = readFileSync(resolve(process.cwd(), "src/styles/app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const leaving = css.match(/\n\.lightbox-image\.is-leaving\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(leaving).toMatch(/translate:\s*var\(--lb-leave-dx,\s*0px\)\s+0px;/);
+    expect(leaving).toMatch(/transition:\s*none;/);
+
+    // A key press has no offset to carry.
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(second.classList.contains("is-leaving")).toBe(true);
+    expect(second.style.getPropertyValue("--lb-leave-dx")).toBe("");
   });
 
   it("draws a page seen a moment ago at once instead of fading it in again", () => {

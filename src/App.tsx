@@ -98,6 +98,7 @@ import {
   persistReviewSettings,
   removeReviewSettingsTag,
   renameReviewSettingsTag,
+  reviewDayStarved,
   reviewDayValid,
   reviewFingerprint,
   SETTINGS_KEY as REVIEW_SETTINGS_KEY,
@@ -715,7 +716,10 @@ export default function App() {
   const [searchComposition, setSearchComposition] = useState<string | null>(null);
   const searchComposingRef = useRef(false);
   // Trash's own keyword search: never carried into the memos feed or back.
+  // It waits out an IME composition the same way (see searchComposition).
   const [trashQuery, setTrashQuery] = useState("");
+  const [trashComposition, setTrashComposition] = useState<string | null>(null);
+  const trashComposingRef = useRef(false);
   // A device preference like theme and language: it survives logout and
   // session expiry (the hook itself only runs in the ready phase).
   const [semanticOn, setSemanticOn] = useState(() => {
@@ -1077,6 +1081,8 @@ export default function App() {
     setSearchComposition(null);
     searchComposingRef.current = false;
     setTrashQuery("");
+    setTrashComposition(null);
+    trashComposingRef.current = false;
     setSearchOpen(false);
     setFilters(EMPTY_FILTERS);
     setStatsDrilldown(null);
@@ -2070,6 +2076,7 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [searchSettled]);
   const searchText = searchComposition ?? query;
+  const trashText = trashComposition ?? trashQuery;
   const searchPlaceholder = activeTag
     ? semanticOn
       ? tr(`Search #${activeTag} by meaning`, `在 #${activeTag} 中按意思搜索`)
@@ -2745,6 +2752,8 @@ export default function App() {
       () => {
         setView("trash");
         setTrashQuery("");
+        setTrashComposition(null);
+        trashComposingRef.current = false;
         setStatsDrilldown(null);
         // Same flush: the "已选 N 条" pill hands topbar-action to the Empty
         // Trash pill inside one morph instead of two competing transitions.
@@ -2767,7 +2776,7 @@ export default function App() {
     if (view !== "review" && holdForOpenEdit("open Daily review", "打开每日回顾")) return;
     let next = reviewDay;
     const provisionalStale = next !== null && next === provisionalReviewRef.current && !bootstrapJobRef.current;
-    if (!reviewDayValid(next, reviewSettings) || provisionalStale) {
+    if (!reviewDayValid(next, reviewSettings) || provisionalStale || reviewDayStarved(next, activeMemos, reviewSettings)) {
       next = drawReviewDay(activeMemos, reviewSettings);
     }
     // Re-clicking the nav item on a still-valid day is a no-op; on a rolled-
@@ -2805,11 +2814,24 @@ export default function App() {
     };
   }, [phase, view, reviewDay, reviewSettings, drawReviewDay]);
 
+  // An empty batch frozen before anything qualified (the notebook was empty
+  // when Review first opened) gives way once memos do — a sync bringing them
+  // in while Review is up deals the real batch in the same morph.
+  useEffect(() => {
+    if (phase !== "ready" || view !== "review" || !reviewDayValid(reviewDay, reviewSettings)) return;
+    if (!reviewDayStarved(reviewDay, activeMemos, reviewSettings)) return;
+    const frame = window.requestAnimationFrame(() => {
+      const next = drawReviewDay(activeMemos, reviewSettings);
+      withViewTransition(() => flushSync(() => setReviewDay(next)));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [phase, view, reviewDay, reviewSettings, activeMemos, drawReviewDay]);
+
   /** Put a remembered lens on screen (Back/Forward, or a reload). */
   function applyNavLens(lens: NavLens) {
     // Review replays the day's frozen batch, drawing it first if the day
     // rolled over — what openReview does.
-    if (lens.view === "review" && !reviewDayValid(reviewDay, reviewSettings)) {
+    if (lens.view === "review" && (!reviewDayValid(reviewDay, reviewSettings) || reviewDayStarved(reviewDay, activeMemos, reviewSettings))) {
       const next = buildReviewDay(activeMemos, reviewSettings);
       persistReviewDay(next);
       setReviewDay(next);
@@ -2820,6 +2842,7 @@ export default function App() {
       setSelected(new Set());
       setConfirmBatchDelete(false);
       setTrashQuery("");
+      setTrashComposition(null);
     }
     setView(lens.view);
     setActiveTag(lens.tag);
@@ -5298,11 +5321,11 @@ export default function App() {
             // Trash's search: the same box, keywords only — no Brain, no
             // funnel. Its text never follows the reader out of Trash.
             <div className="search-tools" role="search">
-              <div className={`searchbox${searchOpen || trashQuery ? " is-open" : ""}`}>
+              <div className={`searchbox${searchOpen || trashText ? " is-open" : ""}`}>
                 <Search size={15} className="searchbox-icon" aria-hidden="true" />
                 <input
                   type="search"
-                  value={trashQuery}
+                  value={trashText}
                   placeholder={tr("Search Trash", "搜索回收站")}
                   aria-label={tr("Search Trash", "搜索回收站")}
                   enterKeyHint="search"
@@ -5310,7 +5333,26 @@ export default function App() {
                   autoCorrect="off"
                   autoCapitalize="none"
                   spellCheck={false}
-                  onChange={(event) => setTrashQuery(event.target.value)}
+                  onChange={(event) => {
+                    // As in the memo search: mid-composition the box shows
+                    // the IME's text, and the list (and its scroll) waits
+                    // for the composed word.
+                    if (trashComposingRef.current || (event.nativeEvent as InputEvent).isComposing) {
+                      setTrashComposition(event.target.value);
+                      return;
+                    }
+                    setTrashComposition(null);
+                    setTrashQuery(event.target.value);
+                  }}
+                  onCompositionStart={(event) => {
+                    trashComposingRef.current = true;
+                    setTrashComposition(event.currentTarget.value);
+                  }}
+                  onCompositionEnd={(event) => {
+                    trashComposingRef.current = false;
+                    setTrashComposition(null);
+                    setTrashQuery(event.currentTarget.value);
+                  }}
                   onKeyDown={(event) => {
                     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
                     if (event.key === "Escape") {
@@ -5329,15 +5371,18 @@ export default function App() {
                 />
                 <button
                   type="button"
-                  className={`searchbox-clear${trashQuery ? " is-shown" : ""}`}
+                  className={`searchbox-clear${trashText ? " is-shown" : ""}`}
                   aria-label={tr("Clear search", "清空搜索")}
-                  aria-hidden={trashQuery ? undefined : true}
-                  tabIndex={trashQuery ? undefined : -1}
+                  aria-hidden={trashText ? undefined : true}
+                  tabIndex={trashText ? undefined : -1}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={(event) => {
-                    if (!trashQuery) return;
+                    if (!trashText) return;
                     const input = event.currentTarget.parentElement?.querySelector("input");
-                    changeFeed(() => setTrashQuery(""));
+                    changeFeed(() => {
+                      setTrashComposition(null);
+                      setTrashQuery("");
+                    });
                     input?.focus();
                   }}
                 >
@@ -5480,6 +5525,12 @@ export default function App() {
                 <>
                   <p className="feed-empty-title">{tr("Trash is empty", "回收站是空的")}</p>
                   <p>{tr("Deleted memos appear here before you restore or permanently delete them.", "删除的笔记会先到这里，可以恢复或彻底删除")}</p>
+                </>
+              ) : view === "review" && activeMemos.length === 0 ? (
+                // No memos at all: no scope or range would draw more.
+                <>
+                  <p className="feed-empty-title">{tr("Nothing to review yet", "还没有可回顾的笔记")}</p>
+                  <p>{tr("Write a few memos and some will come back here each day.", "写下几条笔记后，每天都会有几条回到这里")}</p>
                 </>
               ) : view === "review" ? (
                 <>

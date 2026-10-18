@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -409,5 +409,73 @@ describe("selected and expanded semantics", () => {
     expect(screen.getByRole("button", { name: /Trash/ }).hasAttribute("aria-current")).toBe(false);
     await user.click(screen.getByRole("button", { name: "Filter memos" }));
     expect(screen.getByRole("button", { name: "Focus" }).getAttribute("aria-pressed")).toBe("true");
+  });
+});
+
+describe("a filter panel left by the keyboard", () => {
+  function PanelFixture({ onComposerEscape }: { onComposerEscape: () => void }) {
+    return (
+      <>
+        <Menu
+          kind="panel"
+          panelLabel="Search filters"
+          trigger={(_open, triggerProps) => (
+            <button type="button" {...triggerProps}>
+              Filter memos
+            </button>
+          )}
+        >
+          {() => (
+            <>
+              <button type="button">No tags</button>
+              <button type="button">Has images</button>
+            </>
+          )}
+        </Menu>
+        <textarea
+          aria-label="Memo content"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") onComposerEscape();
+          }}
+        />
+      </>
+    );
+  }
+
+  it("closes once Tab walks out of it, leaving focus where it went", async () => {
+    const user = userEvent.setup();
+    render(<PanelFixture onComposerEscape={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Filter memos" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "No tags" }));
+    await user.tab();
+    expect(screen.getByRole("dialog", { name: "Search filters" })).not.toBeNull();
+    await user.tab();
+    const composer = screen.getByRole("textbox", { name: "Memo content" });
+    expect(document.activeElement).toBe(composer);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search filters" })).toBeNull());
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it("leaves an Escape pressed elsewhere to its own field, and still takes its own", async () => {
+    const user = userEvent.setup();
+    const onComposerEscape = vi.fn();
+    render(<PanelFixture onComposerEscape={onComposerEscape} />);
+    const trigger = screen.getByRole("button", { name: "Filter memos" });
+    await user.click(trigger);
+    // Focus reaches the composer without leaving the panel by Tab (it fell
+    // to <body> first), so the panel is still up.
+    act(() => (document.activeElement as HTMLElement).blur());
+    const composer = screen.getByRole("textbox", { name: "Memo content" });
+    act(() => composer.focus());
+    expect(screen.getByRole("dialog", { name: "Search filters" })).not.toBeNull();
+    await user.keyboard("{Escape}");
+    expect(onComposerEscape).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("dialog", { name: "Search filters" })).not.toBeNull();
+
+    act(() => screen.getByRole("button", { name: "Has images" }).focus());
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search filters" })).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+    expect(onComposerEscape).toHaveBeenCalledTimes(1);
   });
 });

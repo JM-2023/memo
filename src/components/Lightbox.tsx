@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, ExternalLink, ImageOff, Loader2, RotateCw, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { flushSync } from "react-dom";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useReducedMotion } from "../hooks/useReducedMotion";
@@ -47,6 +47,9 @@ interface Leaving {
   src: string;
   external: boolean;
   dir: Dir;
+  /** Where a swipe let go of it (0 for a key or button): it leaves from
+      there, carrying on the way it was thrown, not from the centre. */
+  dx: number;
 }
 
 /* ---- Shared-element morph between a feed tile and the viewer ----
@@ -319,21 +322,21 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [closeSignal]);
 
-  function goTo(next: number, dir: Dir) {
+  function goTo(next: number, dir: Dir, dx = 0) {
     if (next === current) return;
     // Whatever is on screen now stays there, on its own layer, until the
     // next picture can take its place.
     setLeaving((previous) => {
       const outgoing =
-        status === "ready" && source.src ? { key: imageKey, src: source.src, external: Boolean(item.external), dir } : previous && { ...previous, dir };
+        status === "ready" && source.src ? { key: imageKey, src: source.src, external: Boolean(item.external), dir, dx } : previous && { ...previous, dir };
       return outgoing && !outgoing.key.startsWith(`${itemKey(items[next])}#`) ? outgoing : null;
     });
     setAttempt(0);
     setView({ current: next, dir });
   }
 
-  function page(step: 1 | -1) {
-    goTo((current + items.length + step) % items.length, step > 0 ? "fwd" : "back");
+  function page(step: 1 | -1, dx = 0) {
+    goTo((current + items.length + step) % items.length, step > 0 ? "fwd" : "back", dx);
   }
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: () => requestClose(), initialFocusRef: closeButtonRef });
@@ -530,7 +533,9 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
       const far = Math.abs(drag.dx) > window.innerWidth * 0.25;
       const flick = Math.abs(vx) > FLICK_SPEED && Math.abs(drag.dx) > 30 && Math.sign(vx) === Math.sign(drag.dx);
       setDragStyle(0, 0, 0);
-      if (items.length > 1 && (far || flick)) page(drag.dx < 0 ? 1 : -1);
+      // A committed swipe hands its offset to the leaving layer, which stays
+      // where the finger let go instead of springing back to the centre.
+      if (items.length > 1 && (far || flick)) page(drag.dx < 0 ? 1 : -1, drag.dx);
       return;
     }
     const far = drag.dy > window.innerHeight * 0.18;
@@ -627,6 +632,7 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
           key={outgoing.key}
           className={`lightbox-image is-leaving${settled ? ` out-${outgoing.dir}` : ""}`}
           src={outgoing.src}
+          style={outgoing.dx ? ({ "--lb-leave-dx": `${outgoing.dx}px` } as CSSProperties) : undefined}
           alt=""
           aria-hidden="true"
           referrerPolicy={outgoing.external ? "no-referrer" : undefined}

@@ -199,6 +199,13 @@ export function reviewDayValid(stored: ReviewDay | null, settings: ReviewSetting
   return stored !== null && stored.day === dateKey(now) && stored.fingerprint === reviewFingerprint(settings);
 }
 
+/** An empty batch only stands while there is still nothing to draw: one
+    frozen over an empty pool (a new notebook, a scope nothing matched yet)
+    goes stale once a memo qualifies, instead of keeping Review empty all day. */
+export function reviewDayStarved(stored: ReviewDay, memos: readonly Memo[], settings: ReviewSettings, now = new Date()): boolean {
+  return stored.ids.length === 0 && eligibleReviewMemos(memos, settings, now).length > 0;
+}
+
 /** Parse a stored batch, dropping anything malformed. Pure, for tests. */
 export function parseReviewDay(json: string | null): ReviewDay | null {
   if (!json) return null;

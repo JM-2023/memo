@@ -1217,11 +1217,14 @@ export function Editor({
         setSuggestion({ ...active, index: (active.index + delta + active.items.length) % active.items.length });
         return;
       }
-      if (event.key === "Enter" && active.exact) {
+      const modified = event.shiftKey || event.metaKey || event.ctrlKey || event.altKey;
+      if ((event.key === "Enter" && active.exact) || ((event.key === "Enter" || event.key === "Tab") && modified)) {
         // The run is already a tag: Enter keeps its ordinary meaning (a new
         // line, a continued list) and only puts the list away. It used to
         // take the first child instead — `#life` became `#life/cooking` and
         // the line never broke. Tab still accepts the highlighted one.
+        // A held modifier means the key's own job — ⌘↩ sends, Shift+↩
+        // breaks the line, Shift+Tab steps back — so it too only closes.
         setSuggestion(null);
       } else if (event.key === "Enter" || event.key === "Tab") {
         event.preventDefault();
@@ -1563,7 +1566,9 @@ export function Editor({
           aria-label={tr("Tag suggestions", "标签建议")}
           aria-hidden={listOpen ? undefined : true}
           onAnimationEnd={(event) => {
-            if (event.target === event.currentTarget && event.animationName.startsWith("menu-out")) setLeavingSuggestion(null);
+            // menu-out, or the dissolve that stands in for it under reduced motion.
+            if (event.target !== event.currentTarget) return;
+            if (event.animationName.startsWith("menu-out") || event.animationName === "fade-out") setLeavingSuggestion(null);
           }}
         >
           {list.items.map((tag, index) => (
@@ -1662,6 +1667,7 @@ export function Editor({
                           : tr("Remove image", "移除图片")
                       }
                       tabIndex={removing ? -1 : undefined}
+                      onMouseDown={keepFieldFocus}
                       onClick={(event) => beginRemove(image.id, event.currentTarget)}
                       disabled={locked}
                     >
