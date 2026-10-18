@@ -207,6 +207,62 @@ describe("chrome motion", () => {
     expect(ghostsOf().some((ghost) => ghost.textContent === "Images" && ghost.style.left === "230px")).toBe(true);
   });
 
+  /** The composer in the column, at `top` on the screen, with the lens's tag if any. */
+  function composer(top: number, tag?: string): HTMLElement {
+    const node = at(html(`<div class="composer"><textarea></textarea></div>`), 0, top, 600, 120) as HTMLElement;
+    if (tag) node.prepend(at(html(`<span class="editor-context-tag"><span>${tag}</span></span>`), 12, top + 8, 60, 20));
+    main.insertBefore(node, main.querySelector(".memo-feed"));
+    return node;
+  }
+
+  it("sinks the composer as Trash folds it away, over the cards closing under it", () => {
+    const column = composer(80, "#idea");
+    motion.run("lens", [], () => {
+      column.hidden = true;
+    });
+
+    const [ghost] = ghostsOf();
+    expect(ghostsOf()).toHaveLength(1);
+    expect(ghost.matches(".composer")).toBe(true);
+    // Where it was on the screen, at the composer's own level.
+    expect(ghost.style.top).toBe("80px");
+    expect(ghost.style.zIndex).toBe("30");
+    expect(playedOn(ghost)[0].keyframes[1]).toMatchObject({ opacity: 0, transform: "scale(0.965)" });
+    // The tag inside it leaves with it, not on its own.
+    expect(ghost.querySelector(".editor-context-tag")).not.toBeNull();
+  });
+
+  it("raises a composer a rewind brings from far above where it lands, rather than streak it down the page", () => {
+    const column = composer(-3000);
+    motion.run("lens", [], () => {
+      at(column, 0, 80, 600, 120);
+    });
+
+    expect(ghostsOf()).toEqual([]);
+    expect(playedOn(column).map((entry) => entry.keyframes[0])).toEqual([{ opacity: 0, transform: "translateY(18px) scale(0.995)" }]);
+  });
+
+  it("glides the composer when it moves only a little, and folds the lens's tag in as a crumb", () => {
+    const column = composer(80);
+    motion.run("lens", [], () => {
+      at(column, 0, 110, 600, 120);
+      column.prepend(at(html(`<span class="editor-context-tag"><span>#idea</span></span>`), 12, 118, 60, 20));
+    });
+
+    expect(playedOn(column).map((entry) => entry.keyframes)).toEqual([[{ translate: "0px -30px" }, { translate: "0px 0px" }]]);
+    const tag = column.querySelector(".editor-context-tag")!;
+    expect(playedOn(tag).map((entry) => entry.keyframes[0])).toEqual([{ opacity: 0, transform: "translateX(-12px)", filter: "blur(4px)" }]);
+  });
+
+  it("lets a column part leave unseen when it was off the screen", () => {
+    const column = composer(-3000);
+    motion.run("lens", [], () => {
+      column.hidden = true;
+    });
+    expect(ghostsOf()).toEqual([]);
+    expect(played).toEqual([]);
+  });
+
   it("ends the stand-ins when everything settles", () => {
     trail();
     motion.run("select", [], toolbar);

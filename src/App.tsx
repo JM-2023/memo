@@ -139,7 +139,7 @@ import { startToastSwipe } from "./lib/toastSwipe";
 import { applyTheme, loadTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
-import { createFeedMotion, type InPlaceIntent } from "./lib/feedMotion";
+import { createFeedMotion, type FeedIntent } from "./lib/feedMotion";
 import { withViewTransition } from "./lib/viewTransition";
 
 type Phase = "checking" | "error" | "login" | "ready";
@@ -1166,12 +1166,12 @@ export default function App() {
   }, []);
 
   /**
-   * The feed's motion layer for in-place changes (lib/feedMotion.ts). Every
-   * action that changes the list without changing the lens names its verb
-   * here: the layer measures the painted feed, the change commits at once,
-   * and the cards move from where the reader saw them — glides for the cards
-   * that shift, the verb's own exit for the one that leaves. Lens swaps and
-   * sends stay whole-scene view transitions (swapFeed, landCreated).
+   * The feed's motion layer (lib/feedMotion.ts). Every action that changes
+   * the list names its verb here — a lens, a pin, a trash: the layer
+   * measures the painted feed, the change commits at once, and the cards
+   * move from where the reader saw them — glides for the cards that shift,
+   * the verb's own exit for the ones that leave. Sends stay a view
+   * transition (landCreated), for the text that travels into its card.
    */
   const feedGhostsRef = useRef<HTMLDivElement | null>(null);
   const [feedMotion] = useState(() =>
@@ -1188,7 +1188,7 @@ export default function App() {
     [feedMotion]
   );
   const moveFeed = useCallback(
-    (intent: InPlaceIntent, ids: Iterable<string>, apply: () => void) => feedMotion.run(intent, ids, () => flushSync(apply)),
+    (intent: FeedIntent, ids: Iterable<string>, apply: () => void) => feedMotion.run(intent, ids, () => flushSync(apply)),
     [feedMotion]
   );
 
@@ -2152,50 +2152,39 @@ export default function App() {
   );
 
   /**
-   * Feed reorders run inside a view transition: shared cards glide to their
-   * new positions, departures fade back, arrivals rise. Skipped while the
-   * mobile drawer is open (its own closing animation would get
-   * double-captured). Which cards morph is decided on both sides by
-   * tuneFeedTransitionNames.
+   * A new list for the feed, moved by the feed's motion layer: shared cards
+   * glide to their new places, departures sink, arrivals rise. A cut while
+   * the phone drawer is open (its own closing slide is the motion).
    *
    * `rewind` separates the two kinds of reorder. A new result list (a filter,
-   * a tag, the sort key) starts over: back to page one, back to the top, and
-   * the transition masks the scroll reset. A re-ranking of the list the reader
-   * is already in (semantic scores landing) keeps both their page and their
-   * place — collapsing the window under them would drop them somewhere else
-   * entirely.
+   * a tag, the sort key) starts over: back to page one, back to the top —
+   * the scroll reset is part of the change, so the cards move from where
+   * the reader saw them to where they will. A re-ranking of the list the
+   * reader is already in (semantic scores landing) keeps both their page and
+   * their place — collapsing the window under them would drop them somewhere
+   * else entirely.
    */
   const swapFeed = useCallback(
     (apply: () => void, { rewind, morph = true }: { rewind: boolean; morph?: boolean }) => {
-      const update = (animated = false) => {
-        try {
-          flushSync(() => {
-            if (rewind) setRenderWindow((current) => ({ ...current, cap: FEED_PAGE }));
-            apply();
-          });
-        } finally {
-          // The swap's cards arrive with the swap — its snapshot, or the
-          // browser's own Back slide — not with the feed's entrance.
-          feedMotion.claim();
-          // The swap's lens change has been recorded (or there was none).
-          navIntentRef.current = "replace";
-        }
-        // Capture the composer at its final opacity/position. Its named
-        // snapshot plays the entrance; hidden -> visible also restarts the
-        // ordinary CSS entrance, which would otherwise animate underneath it.
-        if (animated) {
-          document.querySelector(".composer")?.getAnimations().forEach((animation) => {
-            if (animation instanceof CSSAnimation && animation.animationName === "rise-in") animation.finish();
-          });
-        }
-        if (rewind) window.scrollTo(0, 0);
-      };
-      // `morph: false` is a swap the browser already animated (a Back swipe
-      // with its own slide): playing the feed morph on top would show it twice.
-      if (drawerOpen || !morph) update();
-      else {
-        withViewTransition(update);
-      }
+      feedMotion.run(
+        "lens",
+        [],
+        () => {
+          try {
+            flushSync(() => {
+              if (rewind) setRenderWindow((current) => ({ ...current, cap: FEED_PAGE }));
+              apply();
+            });
+          } finally {
+            // The swap's lens change has been recorded (or there was none).
+            navIntentRef.current = "replace";
+          }
+          if (rewind) window.scrollTo(0, 0);
+        },
+        // `morph: false` is a swap the browser already animated (a Back swipe
+        // with its own slide): moving the feed on top would show it twice.
+        { motion: drawerOpen || !morph ? "none" : "auto" }
+      );
     },
     [drawerOpen, feedMotion]
   );
@@ -2768,14 +2757,14 @@ export default function App() {
   }, [view, reviewDay, reviewSettings, activeMemos, changeFeed, holdForOpenEdit, drawReviewDay]);
 
   // Crossing midnight while the review view sits open: returning focus (or
-  // visibility) re-checks the frozen batch and deals the new day in a morph.
+  // visibility) re-checks the frozen batch and deals the new day in place.
   useEffect(() => {
     if (phase !== "ready" || view !== "review") return;
     function refresh() {
       if (document.visibilityState === "hidden") return;
       if (reviewDayValid(reviewDay, reviewSettings)) return;
       const next = drawReviewDay(memosOf(syncStateRef.current), reviewSettings);
-      withViewTransition(() => flushSync(() => setReviewDay(next)));
+      moveFeed("lens", [], () => setReviewDay(next));
     }
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", refresh);
@@ -2783,7 +2772,7 @@ export default function App() {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, [phase, view, reviewDay, reviewSettings, drawReviewDay]);
+  }, [phase, view, reviewDay, reviewSettings, drawReviewDay, moveFeed]);
 
   /** Put a remembered lens on screen (Back/Forward, or a reload). */
   function applyNavLens(lens: NavLens) {
@@ -3054,9 +3043,9 @@ export default function App() {
     if (reviewDayValid(currentDay, next)) return;
     if (view === "review") {
       // Redraw immediately — after the dialog's exit has painted, so the
-      // feed's morph to the new batch reads as its own beat.
+      // feed's move to the new batch reads as its own beat.
       const nextDay = drawReviewDay(activeMemos, next);
-      window.requestAnimationFrame(() => withViewTransition(() => flushSync(() => setReviewDay(nextDay))));
+      window.requestAnimationFrame(() => moveFeed("lens", [], () => setReviewDay(nextDay)));
     } else {
       // Invalidate; the next visit draws under the new settings.
       clearReviewDay();

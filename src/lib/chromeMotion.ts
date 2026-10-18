@@ -3,7 +3,8 @@ import { T_BASE, T_ENTER, T_EXIT, T_FAST, T_SLOW } from "./motion";
 
 /**
  * The chrome around the feed — the location pill and its trail, the filter
- * chips, the selection toolbar — moved in the same run as the cards
+ * chips, the selection toolbar, and in the column the composer, the review
+ * banner and the empty state — moved in the same run as the cards
  * (lib/feedMotion.ts), on live DOM: what the reader sees is always what
  * takes the press.
  *
@@ -13,11 +14,15 @@ import { T_BASE, T_ENTER, T_EXIT, T_FAST, T_SLOW } from "./motion";
  * taken before the change fades out while the live element fades in, both at
  * their natural size. A key the change takes away leaves a stand-in that
  * plays its exit; a key it brings plays its own CSS entrance, or a short
- * fade-in when it has none. Under reduced motion nothing travels: the same
- * decisions play as opacity alone.
+ * fade-in when it has none. The top bar's parts are placed against the bar
+ * (it is sticky, and tucks on phones); the column's against the screen, like
+ * the cards, and like a card one that comes from or goes to far off leaves
+ * and enters rather than streak across the page. Under reduced motion
+ * nothing travels: the same decisions play as opacity alone.
  */
 
 type ChromeExit = "crumb" | "fade" | "sink";
+type ChromeEnter = "crumb" | "rise";
 
 interface ChromeKey {
   selector: string;
@@ -31,6 +36,10 @@ interface ChromeKey {
    * never cross-fades for what changed inside it.
    */
   container?: boolean;
+  /** How it comes in when it brings no entrance of its own (a fade, by default). */
+  enter?: ChromeEnter;
+  /** The stand-in's stacking level: the composer's own, over the cards closing under it. */
+  layer?: number;
 }
 
 const KEYS: ChromeKey[] = [
@@ -51,7 +60,13 @@ const KEYS: ChromeKey[] = [
   { selector: ".select-exit", name: "select-exit", exit: "crumb" },
   { selector: ".searchbox", name: "searchbox", exit: "fade" },
   // Filter chips name themselves.
-  { selector: "[data-motion]", name: (el) => (el as HTMLElement).dataset.motion, exit: "crumb" }
+  { selector: "[data-motion]", name: (el) => (el as HTMLElement).dataset.motion, exit: "crumb" },
+  // The column. The composer folds away for Trash and Daily review, sinking
+  // with the cards; shown again, it replays its own rise.
+  { selector: ".composer", name: "composer", exit: "sink", container: true, enter: "rise", layer: 30 },
+  { selector: ".composer .editor-context-tag", name: "composer-context-tag", exit: "crumb", enter: "crumb" },
+  { selector: ".review-banner", name: "review-banner", exit: "fade" },
+  { selector: ".feed-empty", name: "feed-empty", exit: "fade" }
 ];
 const ANY_KEY = KEYS.map((key) => key.selector).join(", ");
 /** Stand-ins carry this; they are never parts themselves. */
@@ -73,6 +88,23 @@ const EXITS: Record<ChromeExit, { duration: number; frames: (opacity: number) =>
   fade: { duration: T_FAST, frames: (opacity) => [{ opacity }, { opacity: 0 }] },
   // card-depart: what sinks with the cards.
   sink: { duration: T_EXIT, frames: (opacity) => [{ opacity, transform: "none" }, { opacity: 0, transform: "scale(0.965)" }] }
+};
+
+const ENTERS: Record<ChromeEnter, { duration: number; frames: Keyframe[] }> = {
+  crumb: {
+    duration: T_SLOW,
+    frames: [
+      { opacity: 0, transform: "translateX(-12px)", filter: "blur(4px)" },
+      { opacity: 1, transform: "none", filter: "blur(0)" }
+    ]
+  },
+  rise: {
+    duration: T_ENTER,
+    frames: [
+      { opacity: 0, transform: "translateY(18px) scale(0.995)" },
+      { opacity: 1, transform: "none" }
+    ]
+  }
 };
 
 type Part = HTMLElement | SVGElement;
@@ -200,6 +232,17 @@ export function captureChrome(root: HTMLElement, stage: Pick<ChromeStage, "owns"
   return { root, shots };
 }
 
+/** Against the screen, a column part was on it (and not still arriving). */
+function seen(at: { top: number }, box: Box, opacity = 1): boolean {
+  return at.top < window.innerHeight && at.top + box.height > 0 && opacity >= 0.05;
+}
+
+/** Near enough to the screen that a glide between two such places reads as one move. */
+function near(top: number, box: Box): boolean {
+  const margin = window.innerHeight / 2;
+  return top < window.innerHeight + margin && top + box.height > -margin;
+}
+
 /** Does the element bring its own entrance (a CSS animation in its subtree)? */
 function entersByItself(el: Part): boolean {
   if (typeof el.getAnimations !== "function" || typeof CSSAnimation === "undefined") return false;
@@ -241,7 +284,7 @@ function stand(shot: Shot, band: Element | null, hidden: (el: Element) => boolea
   style.width = `${shot.box.width}px`;
   style.height = `${shot.box.height}px`;
   style.pointerEvents = "none";
-  style.zIndex = "1";
+  style.zIndex = String(shot.spec.layer ?? 1);
   host.appendChild(ghost);
   const origin = band ? band.getBoundingClientRect() : { left: 0, top: 0 };
   const placed = ghost.getBoundingClientRect();
@@ -287,25 +330,41 @@ export function chromeMotions(capture: ChromeCapture, stage: ChromeStage, reduce
     stage.animate(el, [from, to], { duration: T_ENTER, easing: easeOut });
   };
 
+  const leave = (shot: Shot) => {
+    if (reduced) {
+      fadeOut(shot, shot.band);
+      return;
+    }
+    const ghost = stand(shot, shot.band, kept);
+    if (!ghost) return;
+    const exit = EXITS[shot.spec.exit];
+    stage.keep(ghost, ghost.animate(exit.frames(shot.opacity), { duration: exit.duration, easing: easeIn, fill: "forwards" }));
+  };
+  const enter = (spec: ChromeKey, el: Part) => {
+    if (reduced) fadeIn(el);
+    else if (spec.enter) stage.animate(el, ENTERS[spec.enter].frames, { duration: ENTERS[spec.enter].duration, easing: easeOut, fill: "backwards" });
+    else fadeIn(el, T_SLOW, ARRIVAL_LAG_MS, easeIn);
+  };
+
   for (const [key, shot] of before) {
     const next = after.get(key);
     if (!next) {
       // Inside a container that leaves too: its stand-in carries this one.
       if (shot.parent && before.has(shot.parent) && !after.has(shot.parent)) continue;
-      motions.push(() => {
-        if (reduced) {
-          fadeOut(shot, shot.band);
-          return;
-        }
-        const ghost = stand(shot, shot.band, kept);
-        if (!ghost) return;
-        const exit = EXITS[shot.spec.exit];
-        stage.keep(ghost, ghost.animate(exit.frames(shot.opacity), { duration: exit.duration, easing: easeIn, fill: "forwards" }));
-      });
+      // A column part off the screen goes unseen.
+      if (!shot.band && !seen(shot.at, shot.box, shot.opacity)) continue;
+      motions.push(() => leave(shot));
       continue;
     }
     const band = bandOf(next.el);
     const now = measure(next.el, band);
+    if (!band && !(near(shot.at.top, shot.box) && near(now.box.top, now.box))) {
+      // A column part from far off, or going there: it leaves where it was
+      // seen and enters where it will be, rather than streak across.
+      if (seen(shot.at, shot.box, shot.opacity)) motions.push(() => leave(shot));
+      if (seen(now.box, now.box)) motions.push(() => enter(shot.spec, next.el));
+      continue;
+    }
     const dx = shot.at.left - now.box.left;
     const dy = shot.at.top - now.box.top;
     const moved = Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5;
@@ -348,7 +407,11 @@ export function chromeMotions(capture: ChromeCapture, stage: ChromeStage, reduce
     // reduced motion), or a kept part inside it that is moving by itself.
     if (entersByItself(next.el)) continue;
     if (Array.from(next.el.querySelectorAll(ANY_KEY)).some((el) => before.has(keyOf(el) ?? ""))) continue;
-    motions.push(() => (reduced ? fadeIn(next.el) : fadeIn(next.el, T_SLOW, ARRIVAL_LAG_MS, easeIn)));
+    if (!bandOf(next.el)) {
+      const { box } = measure(next.el, null);
+      if (!seen(box, box)) continue;
+    }
+    motions.push(() => enter(next.spec, next.el));
   }
   return motions;
 }

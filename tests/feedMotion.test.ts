@@ -410,3 +410,258 @@ describe("card arrivals", () => {
     expect(glideOf("3")!.keyframes[0]).toEqual({ translate: `0px ${STEP + 9}px`, opacity: 0.5 });
   });
 });
+
+describe("lens swaps", () => {
+  /** A new list in the feed's place — these cards, in this order (kept ones keep their nodes) — and the page where the change leaves it. */
+  function swap(ids: string[], scrollY = 0): () => void {
+    return () => {
+      const nodes = ids.map((id) => feed.querySelector<HTMLElement>(`:scope > .memo-slot[data-vt="memo-${id}"]`) ?? slot(id));
+      feed.replaceChildren(...nodes, ghosts);
+      window.scrollY = scrollY;
+    };
+  }
+  const ghostsNow = () => [...ghosts.querySelectorAll<HTMLElement>(".feed-ghost")];
+
+  it("glides the cards it keeps from where the reader saw them to where the rewind puts them", () => {
+    // Scrolled two cards down: card 5 is painted at 342px, card 7 at 570px.
+    build(20, 2 * STEP);
+
+    motion.run("lens", [], swap(["7", "5", "x", "y"]));
+
+    expect(translateOf(glideOf("7")!.keyframes)).toBe(`0px ${5 * STEP}px`);
+    expect(translateOf(glideOf("5")!.keyframes)).toBe(`0px ${2 * STEP}px`);
+    // The cards it drops sink where they were seen, though the page is back at the top.
+    expect(ghostsNow().map((node) => [node.textContent, node.style.top])).toEqual(
+      ["2", "3", "4", "6", "8", "9"].map((id) => [`Memo ${id}`, `${(Number(id) - 2) * STEP}px`])
+    );
+    const exit = played.find((entry) => entry.target === ghostsNow()[0])!;
+    expect(exit.keyframes[1]).toMatchObject({ opacity: 0, transform: "scale(0.965)" });
+    expect(exit.timing.duration).toBe(160);
+    // Kept cards close over them.
+    expect(slotOf("7").style.zIndex).toBe("1");
+  });
+
+  it("keeps a card that stays put over the exits too, while they play", async () => {
+    build(6);
+
+    motion.run("lens", [], swap(["0", "1", "2"]));
+
+    // Cards 0–2 kept their places; 3–5 sink below them.
+    expect(glideOf("0")).toBeUndefined();
+    expect(slotOf("0").style.zIndex).toBe("1");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(slotOf("0").style.zIndex).toBe("");
+  });
+
+  it("brings a card from far off in where it lands, and lets one going far off leave where it was, instead of streaking", () => {
+    build(20);
+    const order = ["15", "0", ...Array.from({ length: 13 }, (_unused, index) => String(index + 2)), "16", "17", "18", "19", "1"];
+
+    motion.run("lens", [], swap(order));
+
+    // Card 15 was a page and a half down: it rises at the top.
+    expect(glideOf("15")).toBeUndefined();
+    const rise = played.find((entry) => entry.target === slotOf("15"))!;
+    expect(rise.keyframes[0]).toMatchObject({ opacity: 0, transform: "translateY(18px) scale(0.995)" });
+    // Card 1 went to the end of the list: a copy of it sinks where it was seen; the card itself is left alone.
+    expect(ghostsNow().map((node) => [node.textContent, node.style.top])).toEqual([["Memo 1", `${STEP}px`]]);
+    expect(played.filter((entry) => entry.target === slotOf("1"))).toEqual([]);
+    expect(translateOf(glideOf("0")!.keyframes)).toBe(`0px ${-STEP}px`);
+  });
+
+  it("brings a new list in a beat behind the old one leaving, ≤48ms apart down the screen", async () => {
+    build(3);
+    motion.observe(feed);
+    played = [];
+
+    motion.run("lens", [], swap(Array.from({ length: 10 }, (_unused, index) => `n${index}`)));
+    await delivered();
+
+    // n0–n7 land on screen (n7 at 798px); n8 and n9 below the fold need nothing.
+    const rises = entrances();
+    expect(rises.map((entry) => (entry.target as HTMLElement).dataset.vt)).toEqual(Array.from({ length: 8 }, (_unused, index) => `memo-n${index}`));
+    expect(rises.map((entry) => entry.timing.delay)).toEqual([30, 38, 46, 54, 62, 70, 78, 78]);
+    expect(rises[0].timing.fill).toBe("backwards");
+    expect(ghostsNow().map((node) => node.textContent)).toEqual(["Memo 0", "Memo 1", "Memo 2"]);
+    // It comes in over the old list sinking, not under it.
+    expect(slotOf("n0").style.zIndex).toBe("1");
+  });
+
+  it("starts a second lens swap from the frame the first one paints", () => {
+    build(6);
+    motion.run("lens", [], swap(["3", "0", "1", "2", "4", "5"]));
+    const first = glideOf("3")!;
+    expect(translateOf(first.keyframes)).toBe(`0px ${3 * STEP}px`);
+
+    // Half-way down its glide: drawn 171px below its place.
+    const style = vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element: Element) =>
+        ({ translate: element === slotOf("3") ? "0px 171px" : "none", transform: "none", opacity: "1", getPropertyValue: () => "" }) as unknown as CSSStyleDeclaration
+    );
+    const box = slotOf("3").getBoundingClientRect;
+    slotOf("3").getBoundingClientRect = () => {
+      const rest = box();
+      return { ...rest, top: rest.top + 171, bottom: rest.bottom + 171, y: rest.y + 171 } as DOMRect;
+    };
+    try {
+      motion.run("lens", [], swap(["0", "3", "1", "2", "4", "5"]));
+    } finally {
+      style.mockRestore();
+    }
+
+    expect(first.cancel).toHaveBeenCalled();
+    // From 171px, where it was drawn, to its new place at 114px.
+    expect(translateOf(glideOf("3")!.keyframes)).toBe(`0px ${171 - STEP}px`);
+  });
+
+  it("dissolves a new list under reduced motion: opacity only, nothing travels, nothing waits", () => {
+    window.matchMedia = vi.fn(() => ({ matches: true }) as MediaQueryList);
+    build(10);
+
+    motion.run("lens", [], swap(["5", "n1", "0"]));
+
+    expect(played.length).toBeGreaterThan(0);
+    for (const entry of played) {
+      for (const frame of entry.keyframes) expect(Object.keys(frame).filter((key) => key !== "offset")).toEqual(["opacity"]);
+      expect(entry.timing.duration).toBeLessThanOrEqual(150);
+      expect(entry.timing.delay ?? 0).toBe(0);
+    }
+    // Card 5's old look fades out where it was while it fades in at the top.
+    expect(ghostsNow().some((node) => node.textContent === "Memo 5" && node.style.top === `${5 * STEP}px`)).toBe(true);
+    expect(played.find((entry) => entry.target === slotOf("5"))!.keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
+  });
+
+  it("renders the cards around the screen for the measure, and lets them go two frames later", async () => {
+    build(30);
+
+    motion.run("lens", [], swap(["n", ...Array.from({ length: 29 }, (_unused, index) => String(index))]));
+
+    // Down to a viewport below the screen (1600px), eight at a time: the
+    // first sixteen cards.
+    const forced = Array.from(feed.querySelectorAll<HTMLElement>(":scope > .memo-slot")).map((node) => node.style.contentVisibility);
+    expect(forced.slice(0, 16)).toEqual(Array(16).fill("visible"));
+    expect(forced.slice(16)).toEqual(Array(14).fill(""));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    expect(Array.from(feed.querySelectorAll<HTMLElement>(":scope > .memo-slot")).every((node) => node.style.contentVisibility === "")).toBe(true);
+  });
+
+  it("keeps the card a restored place hangs on where the change put it while the cards above it take their real heights", () => {
+    build(30);
+    // Rendered, a card is 160px tall; until then it stands at the 100px estimate.
+    const heightOf = (node: HTMLElement) => (node.style.contentVisibility === "visible" ? 160 : CARD);
+    for (const node of feed.querySelectorAll<HTMLElement>(":scope > .memo-slot")) {
+      node.getBoundingClientRect = () => {
+        let top = -window.scrollY;
+        for (const other of feed.querySelectorAll<HTMLElement>(":scope > .memo-slot")) {
+          if (other === node) break;
+          top += heightOf(other) + GAP;
+        }
+        return { top, bottom: top + heightOf(node), left: 0, right: 600, width: 600, height: heightOf(node), x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+      };
+    }
+
+    // The change restores a place: card 10 at the top of the screen.
+    motion.run("lens", [], () => {
+      window.scrollY = 10 * STEP;
+    });
+
+    // Cards 3–9, within a viewport above it, were rendered — 60px taller each — and the page followed.
+    expect(window.scrollY).toBe(10 * STEP + 7 * 60);
+    expect(slotOf("10").getBoundingClientRect().top).toBe(0);
+  });
+
+  it("holds the place card while the browser renders the cards above it, until the reader takes over", () => {
+    let report: (() => void) | null = null;
+    const observed = new Set<Element>();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          report = callback;
+        }
+        observe(element: Element) {
+          observed.add(element);
+        }
+        disconnect() {
+          observed.clear();
+        }
+      }
+    );
+    build(30);
+    const grown = new Set<string>();
+    for (const node of feed.querySelectorAll<HTMLElement>(":scope > .memo-slot")) {
+      node.getBoundingClientRect = () => {
+        let top = -window.scrollY;
+        for (const other of feed.querySelectorAll<HTMLElement>(":scope > .memo-slot")) {
+          if (other === node) break;
+          top += (grown.has(other.dataset.vt!) ? 60 : CARD) + GAP;
+        }
+        return { top, bottom: top + CARD, left: 0, right: 600, width: 600, height: CARD, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+      };
+    }
+    try {
+      // A return lands card 20 at the top of the screen.
+      motion.run("lens", [], () => {
+        window.scrollY = 20 * STEP;
+      });
+      // The cards above it are watched — three viewports' worth.
+      expect(observed.has(slotOf("19"))).toBe(true);
+      expect(observed.has(slotOf("20"))).toBe(false);
+
+      // A frame later two of them take their real, shorter heights.
+      grown.add("memo-17").add("memo-18");
+      report!();
+      expect(window.scrollY).toBe(20 * STEP - 80);
+      expect(slotOf("20").getBoundingClientRect().top).toBe(0);
+
+      // Where the browser's own scroll anchoring has already kept it, nothing more moves.
+      grown.add("memo-16");
+      window.scrollY -= 40;
+      report!();
+      expect(window.scrollY).toBe(20 * STEP - 80 - 40);
+
+      // The reader scrolls: the place is theirs now.
+      window.dispatchEvent(new Event("wheel"));
+      expect(observed.size).toBe(0);
+
+      // A later change ends one in progress, too.
+      motion.run("lens", [], () => {
+        window.scrollY = 22 * STEP;
+      });
+      expect(observed.size).toBeGreaterThan(0);
+      motion.run("trash", ["25"], () => slotOf("25").remove());
+      expect(observed.size).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps an exit in flight where the reader sees it when the next swap scrolls the page", () => {
+    build(20, 5 * STEP);
+    motion.run("trash", ["7"], () => slotOf("7").remove());
+    const leaving = ghostsNow()[0];
+    // Drawn where the card was: 2 cards below the top of the screen.
+    leaving.getBoundingClientRect = () => ({ top: Number.parseFloat(leaving.style.top) - window.scrollY, left: 0 }) as DOMRect;
+    expect(leaving.getBoundingClientRect().top).toBe(2 * STEP);
+
+    motion.run("lens", [], swap(["0", "1", "2"]));
+
+    expect(leaving.isConnected).toBe(true);
+    expect(leaving.getBoundingClientRect().top).toBe(2 * STEP);
+  });
+
+  it("cuts a swap the browser has animated already: what is in flight lands, nothing new plays", async () => {
+    build(5);
+    motion.observe(feed);
+    motion.run("trash", ["2"], () => slotOf("2").remove());
+    const glide = glideOf("3")!;
+    played = [];
+
+    motion.run("lens", [], swap(["n0", "0"]), { motion: "none" });
+    await delivered();
+
+    expect(glide.cancel).toHaveBeenCalled();
+    expect(ghosts.children).toHaveLength(0);
+    expect(played).toEqual([]);
+  });
+});

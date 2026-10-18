@@ -324,6 +324,106 @@ describe("sidebar selection", () => {
   });
 });
 
+describe("feed motion on a lens change", () => {
+  interface Played {
+    target: Element;
+    keyframes: Keyframe[];
+    timing: KeyframeAnimationOptions;
+  }
+  let played: Played[] = [];
+  let startViewTransition: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    played = [];
+    matchMediaWith(() => false);
+    Object.defineProperty(Element.prototype, "animate", {
+      configurable: true,
+      value(this: Element, keyframes: Keyframe[], timing?: number | KeyframeAnimationOptions) {
+        played.push({ target: this, keyframes, timing: typeof timing === "object" ? timing : {} });
+        return { cancel() {}, finish() {}, finished: new Promise(() => undefined), effect: { target: this } };
+      }
+    });
+    startViewTransition = vi.fn((update: () => void) => {
+      update();
+      return { ready: Promise.resolve(), finished: Promise.resolve(), updateCallbackDone: Promise.resolve(), skipTransition() {} };
+    });
+    Object.defineProperty(document, "startViewTransition", { configurable: true, value: startViewTransition });
+  });
+
+  afterEach(() => {
+    delete (Element.prototype as Partial<Element>).animate;
+    delete (document as Partial<Document>).startViewTransition;
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+  });
+
+  /** The cards stand one under another on the screen, from 200px down. */
+  function stackCards(): void {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (!this.classList.contains("memo-slot") || !this.parentElement) return new DOMRect(0, 0, 0, 0);
+      const slots = Array.from(this.parentElement.querySelectorAll(":scope > .memo-slot"));
+      return new DOMRect(0, 200 + slots.indexOf(this) * 114, 600, 100);
+    });
+  }
+
+  it("moves the feed for a tag pick itself, with no view transition: the card the lens drops sinks where it stood", async () => {
+    const user = userEvent.setup();
+    stackCards();
+    renderApp();
+    await screen.findByText(/beta note/);
+    played = [];
+
+    await user.click(screen.getByRole("button", { name: /^alpha/ }));
+    // (Its stand-in still shows its words while it sinks.)
+    const live = () => Array.from(document.querySelectorAll(".memo-feed > .memo-slot"), (slot) => slot.textContent).join(" ");
+    await waitFor(() => expect(live()).not.toContain("beta note"));
+
+    expect(startViewTransition).not.toHaveBeenCalled();
+    const sink = played.find((entry) => entry.target.classList.contains("feed-ghost") && entry.target.textContent?.includes("beta note"));
+    expect(sink?.keyframes[1]).toMatchObject({ opacity: 0, transform: "scale(0.965)" });
+  });
+
+  it("lands a return on the place it left with motion on: the restore comes after the query's scroll to the top", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByText(/beta note/);
+    const scrollTo = window.scrollTo as unknown as ReturnType<typeof vi.fn>;
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 900 });
+    await user.type(screen.getByPlaceholderText("Search memos"), "beta");
+    await waitFor(() => expect(screen.queryByText(/alpha note/)).toBeNull());
+
+    scrollTo.mockClear();
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
+    await screen.findByText(/alpha note/);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(0, 900));
+
+    const calls = scrollTo.mock.calls.map((call) => JSON.stringify(call));
+    expect(calls.lastIndexOf(JSON.stringify([0, 0]))).toBeLessThan(calls.indexOf(JSON.stringify([0, 900])));
+    expect(calls.at(-1)).toBe(JSON.stringify([0, 900]));
+    expect(startViewTransition).not.toHaveBeenCalled();
+  });
+
+  it("gives the cards a control's search brings their arrival once, from the change that brought them", async () => {
+    const user = userEvent.setup();
+    stackCards();
+    renderApp();
+    await screen.findByText(/beta note/);
+    await user.type(screen.getByPlaceholderText("Search memos"), "beta");
+    await waitFor(() => expect(screen.queryByText(/alpha note/)).toBeNull());
+    played = [];
+
+    // The × sets the search text outright: the full list lands inside the change.
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
+    const alpha = (await screen.findByText(/alpha note/)).closest(".memo-slot")!;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const entrances = played.filter((entry) => entry.target === alpha);
+    expect(entrances).toHaveLength(1);
+    expect(entrances[0].keyframes[0]).toMatchObject({ opacity: 0, transform: "translateY(18px) scale(0.995)" });
+    // A beat behind what leaves, not the feed's own entrance.
+    expect(entrances[0].timing.delay).toBeGreaterThanOrEqual(30);
+  });
+});
+
 describe("trash search", () => {
   it("filters trashed memos by keyword without the semantic or filter controls", async () => {
     const user = userEvent.setup();

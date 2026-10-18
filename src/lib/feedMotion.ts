@@ -2,19 +2,24 @@ import { onTransitionCommitted, onTransitionUpdate, paintedTransitionOffsets, sk
 import { captureChrome, chromeMotions, type ChromeCapture, type ChromeStage } from "./chromeMotion";
 import { layoutRect, motionOffset, type Box } from "./feedBoxes";
 import { EASE, EASE_OUT, T_BASE, T_ENTER, T_EXIT } from "./motion";
+import { SCROLL_JUMP_EVENT } from "./navHistory";
 
 /**
- * Why the feed is about to change. Two kinds of change exist, and they move
- * differently:
+ * Why the feed is about to change. Every change plays here, as FLIP: the
+ * cards are measured where they are painted, the change commits, and each
+ * card is moved back to where the reader saw it and released.
  *
- *  - Whole-scene swaps — a lens (tag, day, sort, filter, search) or a send —
- *    ride a view transition (lib/viewTransition.ts): the chrome around the
- *    feed changes with it, and the snapshot masks the scroll reset.
+ *  - A lens (tag, day, sort, filter, search, Trash, Daily review) is a new
+ *    list: the cards it keeps glide to their new places, the ones it drops
+ *    sink where they stood, and the ones it brings rise in. The scroll reset
+ *    (or the restored reading place) is part of the change, so every
+ *    position is the reader's: where they saw a card, where they will.
  *  - Everything else happens in place, inside the list the reader is already
  *    looking at — pins, edits, ticks, deletes and restores, and the deltas
- *    another tab or device sends. Those play here, as FLIP: the cards are
- *    measured before the change, the change commits, and each card is moved
- *    back to where it was painted and released.
+ *    another tab or device sends — and keeps the reader's place.
+ *
+ * A send still rides a view transition (lib/viewTransition.ts), for the
+ * text that travels from the composer into its card.
  *
  * Cards that simply mount — the first page, the next one, a typed search's
  * results — get the feed's entrance here as well (`observe`). And the chrome
@@ -23,6 +28,15 @@ import { EASE, EASE_OUT, T_BASE, T_ENTER, T_EXIT } from "./motion";
  */
 export type FeedIntent = "create" | "lens" | "pin" | "unpin" | "trash" | "restore" | "purge" | "edit-save" | "task" | "remote" | "select";
 export type InPlaceIntent = Exclude<FeedIntent, "create" | "lens">;
+
+export interface RunOptions {
+  /**
+   * "none" commits without motion: a change the browser has animated already
+   * (a Back swipe's own slide), or one made behind the closing drawer. What
+   * is in flight lands first.
+   */
+  motion?: "auto" | "none";
+}
 
 /** Where a named card went, for the caller's focus and words. */
 export type Departure = "removed" | "up" | "down";
@@ -34,11 +48,12 @@ export interface FeedMotionResult {
 
 export interface FeedMotion {
   /**
-   * One in-place change. `commit` must leave the DOM in its new state before
-   * it returns (React callers wrap their setState in flushSync). `ids` are the
-   * memos the action is about — the cards that may leave their place.
+   * One change to the feed. `commit` must leave the DOM in its new state —
+   * scroll included — before it returns (React callers wrap their setState in
+   * flushSync). `ids` are the memos the action is about — the cards that may
+   * leave their place.
    */
-  run(intent: InPlaceIntent, ids: Iterable<string>, commit: () => void): FeedMotionResult;
+  run(intent: FeedIntent, ids: Iterable<string>, commit: () => void, options?: RunOptions): FeedMotionResult;
   /** Stop everything in flight: running glides land, exit ghosts go. */
   settle(): void;
   /**
@@ -81,7 +96,7 @@ interface Shot {
 }
 
 interface Capture {
-  intent: InPlaceIntent;
+  intent: FeedIntent;
   /** Slot keys (`memo-<id>`) of the memos the action names. */
   targets: Set<string>;
   /** Every slot key in the feed before the change. */
@@ -107,6 +122,8 @@ const DISSOLVE_MS = T_BASE;
 /** Cards arriving together enter this far apart, the seventh and later at once with the sixth. */
 const STAGGER_MS = 8;
 const STAGGER_CAP = 6;
+/** A new list's cards rise a beat after the old ones start to sink. */
+const LENS_LAG_MS = 30;
 /** How long the reader's place is held after a change: past the glides, and
     past the 220ms height tween a card plays when it leaves its editor. */
 const HOLD_MS = 400;
@@ -139,10 +156,10 @@ const ARRIVALS: Record<Arrival, Keyframe[]> = {
 };
 
 /** Intents whose named cards can change place rather than leave the list. */
-const RELOCATING: ReadonlySet<InPlaceIntent> = new Set(["pin", "unpin", "edit-save", "task", "remote"]);
+const RELOCATING: ReadonlySet<FeedIntent> = new Set(["pin", "unpin", "edit-save", "task", "remote"]);
 
 /** How a card leaves the list under each verb. */
-function exitOf(intent: InPlaceIntent): Exit {
+function exitOf(intent: FeedIntent): Exit {
   switch (intent) {
     case "restore":
       return "lift";
@@ -157,13 +174,13 @@ function exitOf(intent: InPlaceIntent): Exit {
 }
 
 /** How a named card goes when its new place is far off-screen. */
-function departureOf(intent: InPlaceIntent, up: boolean): Exit {
+function departureOf(intent: FeedIntent, up: boolean): Exit {
   if (intent === "remote") return "fade";
   return up ? "lift" : "settle";
 }
 
 /** How a named card comes in when its old place was far off-screen. */
-function arrivalOf(intent: InPlaceIntent, up: boolean): Arrival {
+function arrivalOf(intent: FeedIntent, up: boolean): Arrival {
   if (intent === "remote") return "fade";
   return up ? "rise" : "drop";
 }
@@ -217,6 +234,9 @@ function firstFrom(slots: HTMLElement[], edge: number): number {
 const idOf = (key: string) => key.slice("memo-".length);
 
 const hasAnimations = () => typeof Element !== "undefined" && typeof Element.prototype.animate === "function";
+
+/** The reader taking the page over: a held place is theirs from then on. */
+const READER_INPUT = ["wheel", "touchstart", "keydown", "mousedown"] as const;
 
 /** Below this a card is not seen yet — an arrival still waiting out its stagger. */
 const UNSEEN = 0.05;
@@ -291,12 +311,128 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
 
   function settle(): void {
     holding += 1;
+    keeping?.();
     stopGlides();
     for (const ghost of ghosts) ghost.remove();
     ghosts.clear();
   }
 
-  function capture(intent: InPlaceIntent, ids: Iterable<string>): Capture | null {
+  /**
+   * Render the cards around the screen now, at their real heights, so the
+   * change is measured against where they will rest. A card the browser has
+   * never rendered stands at the feed's height estimate (content-visibility)
+   * and takes its own size a frame later — under the reader, after its glide
+   * has aimed at the estimate. Each one rendered moves the ones after it, so
+   * this goes on until a viewport below the screen. They go back to rendering
+   * lazily two frames later, their sizes remembered by then.
+   *
+   * The card the reader's place hangs on — the first one clear of the
+   * sticky bar, where a restored place put it — stays where the change left
+   * it: the cards above it taking their real heights must not push it off,
+   * to be re-aimed a frame later under the reader.
+   */
+  function materialize(feed: HTMLElement): HTMLElement | undefined {
+    const slots = slotsOf(feed);
+    const edge = feed.closest("main")?.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0;
+    const anchor = slots[firstFrom(slots, edge + 0.5)];
+    if (feed.classList.contains("is-small")) return anchor;
+    const height = window.innerHeight;
+    const placed = anchor ? layoutRect(anchor).top : 0;
+    const forced: HTMLElement[] = [];
+    for (let index = firstFrom(slots, -height); index < slots.length; ) {
+      const end = Math.min(slots.length, index + 8);
+      for (; index < end; index += 1) {
+        if (slots[index].style.contentVisibility) continue;
+        slots[index].style.contentVisibility = "visible";
+        forced.push(slots[index]);
+      }
+      if (slots[end - 1].getBoundingClientRect().top > 2 * height) break;
+    }
+    if (forced.length === 0) return anchor;
+    const drift = anchor ? layoutRect(anchor).top - placed : 0;
+    if (Math.abs(drift) >= 0.5) {
+      window.dispatchEvent(new Event(SCROLL_JUMP_EVENT));
+      window.scrollTo({ top: window.scrollY + drift, behavior: "instant" });
+    }
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        for (const slot of forced) slot.style.contentVisibility = "";
+      })
+    );
+    return anchor;
+  }
+
+  // Ends the place keeping in progress, if any.
+  let keeping: (() => void) | null = null;
+
+  /**
+   * Hold the reader's place card where a new list put it while the browser
+   * renders the cards above it. Those that stood at the height estimate take
+   * their own heights in the frames after the change, during layout — after
+   * any frame callback could re-aim, so the frame would paint the place
+   * pushed off. A ResizeObserver runs after that layout and before the
+   * paint, and scrolls back whatever the place card has moved on the screen
+   * (nothing, where the browser's own scroll anchoring has already). The
+   * reader's first scroll, press or key ends it: from then on the place is
+   * theirs.
+   */
+  function keepPlace(feed: HTMLElement, anchor: HTMLElement): void {
+    keeping?.();
+    if (typeof ResizeObserver !== "function") return;
+    const slots = slotsOf(feed);
+    const end = slots.indexOf(anchor);
+    if (end <= 0) return;
+    const placed = layoutRect(anchor).top;
+    const observer = new ResizeObserver(() => {
+      if (!anchor.isConnected) {
+        stop();
+        return;
+      }
+      const drift = layoutRect(anchor).top - placed;
+      if (Math.abs(drift) < 0.5) return;
+      window.dispatchEvent(new Event(SCROLL_JUMP_EVENT));
+      window.scrollTo({ top: window.scrollY + drift, behavior: "instant" });
+    });
+    // The browser renders well ahead of the screen; three viewports covers it.
+    for (let index = firstFrom(slots, -3 * window.innerHeight); index < end; index += 1) observer.observe(slots[index]);
+    const timer = window.setTimeout(() => stop(), HOLD_MS);
+    const stop = () => {
+      observer.disconnect();
+      window.clearTimeout(timer);
+      for (const type of READER_INPUT) window.removeEventListener(type, stop);
+      if (keeping === stop) keeping = null;
+    };
+    for (const type of READER_INPUT) window.addEventListener(type, stop, { passive: true });
+    keeping = stop;
+  }
+
+  /** Where each exit in flight is drawn now — but those riding the sticky bar, which move with it. */
+  function placeGhosts(): Map<HTMLElement, DOMRect> {
+    const placed = new Map<HTMLElement, DOMRect>();
+    for (const node of ghosts) {
+      if (node instanceof HTMLElement && node.isConnected && !node.closest(".topbar")) placed.set(node, node.getBoundingClientRect());
+    }
+    return placed;
+  }
+
+  /**
+   * An exit in flight finishes where the reader sees it: when the change
+   * scrolled the page (a new list starts at the top) or moved its layer,
+   * the stand-in is moved back by as much.
+   */
+  function rebase(placed: Map<HTMLElement, DOMRect>): void {
+    for (const [node, was] of placed) {
+      if (!node.isConnected) continue;
+      const now = node.getBoundingClientRect();
+      const dx = was.left - now.left;
+      const dy = was.top - now.top;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+      node.style.left = `${(Number.parseFloat(node.style.left) || 0) + dx}px`;
+      node.style.top = `${(Number.parseFloat(node.style.top) || 0) + dy}px`;
+    }
+  }
+
+  function capture(intent: FeedIntent, ids: Iterable<string>): Capture | null {
     const feed = options.feed();
     if (!feed) return null;
     const offsets = paintedTransitionOffsets();
@@ -350,6 +486,28 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     return top < window.innerHeight + margin && top + height > -margin;
   }
 
+  /** Keep a card at `layer` while `animation` carries it. */
+  function raise(el: HTMLElement, layer: number, animation: Animation): void {
+    if (layer <= 0) return;
+    el.style.zIndex = String(layer);
+    lifted.add(el);
+    const release = () => {
+      // Unless a later motion carries it now.
+      const current = glides.get(el);
+      if ((current === undefined || current === animation) && lifted.delete(el)) el.style.zIndex = "";
+    };
+    void Promise.resolve(animation.finished).then(release, () => undefined);
+  }
+
+  /** Keep a card that has no motion of its own over the exits for `ms`. */
+  function liftFor(el: HTMLElement, ms: number): void {
+    el.style.zIndex = "1";
+    lifted.add(el);
+    window.setTimeout(() => {
+      if (!glides.has(el) && lifted.delete(el)) el.style.zIndex = "";
+    }, ms);
+  }
+
   /** `layer` raises the card for the glide: 2 for a named card, which
    *  crosses its neighbours over them, not under; 1 for a neighbour closing
    *  over an exit ghost (the ghost layer comes after every slot). */
@@ -360,18 +518,15 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
       from.opacity = opacity;
       to.opacity = 1;
     }
-    if (layer > 0) {
-      el.style.zIndex = String(layer);
-      lifted.add(el);
-    }
     const animation = el.animate([from, to], { duration: GLIDE_MS, easing: ease("--ease-out") });
     glides.set(el, animation);
-    const release = () => {
-      if (glides.get(el) !== animation) return;
-      glides.delete(el);
-      if (lifted.delete(el)) el.style.zIndex = "";
-    };
-    void Promise.resolve(animation.finished).then(release, () => undefined);
+    raise(el, layer, animation);
+    void Promise.resolve(animation.finished).then(
+      () => {
+        if (glides.get(el) === animation) glides.delete(el);
+      },
+      () => undefined
+    );
   }
 
   /** `delay` holds the card at its first frame (unseen) until its turn in a cascade. */
@@ -643,12 +798,90 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     return { result, changed, motions };
   }
 
-  function play(capture: Capture | null, chrome: ChromeCapture | null): FeedMotionResult {
+  /**
+   * A new list, measured where the reader sees it: before the change, and
+   * after it with its scroll reset or place restored. A card in both that is
+   * near the screen at both ends glides; one that comes from (or goes to)
+   * far off would streak across the page, so it leaves and enters like its
+   * neighbours. Cards the change drops sink where they stood; the ones it
+   * brings rise a beat later, ≤48ms apart down the page. The change itself
+   * chose where the reader lands — the top, or the card they left — and
+   * keepPlace holds it there; nothing here moves the page.
+   */
+  function planLens(capture: Capture, reduced: boolean): { result: FeedMotionResult; changed: boolean; motions: Array<() => void> } {
+    const result: FeedMotionResult = { departed: new Map() };
+    const motions: Array<() => void> = [];
+    const feed = options.feed();
+    if (!feed) return { result, changed: false, motions };
+    const height = window.innerHeight;
+    const slots = slotsOf(feed);
+    const leave = (node: HTMLElement, shot: Shot) => (reduced ? ghost(node, shot, "fade", DISSOLVE_MS) : ghost(node, shot, "sink"));
+    let changed = false;
+    let ghosted = false;
+    let arrivals = 0;
+    // The cards measured after the change.
+    const placed = new Set<string>();
+    // Kept cards that stay put on screen.
+    const still: HTMLElement[] = [];
+    for (let index = firstFrom(slots, -height); index < slots.length; index += 1) {
+      const slot = slots[index];
+      const key = slot.dataset.vt;
+      if (!key) continue;
+      const box = boxOf(slot);
+      if (box.top > 2 * height) break;
+      placed.add(key);
+      const shot = capture.shots.get(key);
+      // A card still waiting out its entrance was never seen: it arrives again.
+      const seen = shot && shot.opacity >= UNSEEN ? shot : undefined;
+      if (seen && nearScreen(seen.at.top, seen.box.height) && nearScreen(box.top, box.height)) {
+        const dx = seen.at.left - box.left;
+        const dy = seen.at.top - box.top;
+        if (Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5 || seen.opacity < 0.99) {
+          changed = true;
+          motions.push(() => (reduced ? dissolve(slot, seen) : glide(slot, dx, dy, seen.opacity, ghosted ? 1 : 0)));
+        } else if (onScreen(box.top, box.height)) still.push(slot);
+        continue;
+      }
+      if (seen && seenAt(seen)) {
+        // From where the reader saw it, to far off: its look (the same card)
+        // leaves from there.
+        changed = true;
+        ghosted = true;
+        motions.push(() => leave(slot.cloneNode(true) as HTMLElement, seen));
+      }
+      if (onScreen(box.top, box.height)) {
+        changed = true;
+        const delay = LENS_LAG_MS + Math.min(arrivals++, STAGGER_CAP) * STAGGER_MS;
+        // The new list comes in over the old one leaving, not under it.
+        motions.push(() => raise(slot, ghosted ? 1 : 0, reduced ? arrive(slot, "fade", DISSOLVE_MS) : arrive(slot, "rise", ARRIVE_MS, delay)));
+      }
+    }
+    for (const [key, shot] of capture.shots) {
+      if (placed.has(key) || !seenAt(shot)) continue;
+      changed = true;
+      ghosted = true;
+      // Gone from the list: its own node, which React is done with. Still in
+      // it but far off now: a copy of it, which looks the same.
+      const node = shot.el.parentElement === feed ? (shot.el.cloneNode(true) as HTMLElement) : shot.el;
+      motions.push(() => leave(node, shot));
+    }
+    // What stays put can still be moved by the page (the phone composer
+    // unfolding above it): it too passes over the exits, not under them.
+    if (ghosted) motions.push(() => still.forEach((slot) => liftFor(slot, EXIT_MS)));
+    return { result, changed, motions };
+  }
+
+  function play(capture: Capture | null, chrome: ChromeCapture | null, inFlight: Map<HTMLElement, DOMRect>): FeedMotionResult {
     // Reduced motion keeps every decision and changes only how each one
     // plays: a dissolve in place, never a cut and never a journey.
     const reduced = reducedMotion();
-    const cards = capture ? plan(capture, reduced) : { result: { departed: new Map<string, Departure>() }, changed: false, motions: [] };
+    const cards = !capture
+      ? { result: { departed: new Map<string, Departure>() }, changed: false, motions: [] }
+      : capture.intent === "lens"
+        ? planLens(capture, reduced)
+        : plan(capture, reduced);
     const around = chrome ? chromeMotions(chrome, stage, reduced) : [];
+    rebase(inFlight);
     // Nothing moved: whatever is in flight keeps flying.
     if (!cards.changed && around.length === 0) return cards.result;
     // Something moved under a view transition still on screen: end it here
@@ -663,17 +896,25 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
   }
 
   return {
-    run(intent, ids, commit) {
+    run(intent, ids, commit, { motion = "auto" } = {}) {
       // Inside a view transition's update the snapshot owns the motion (and
       // the update's end claims the cards it mounted); with no Web
-      // Animations there is nothing to play.
-      if (transitionUpdating() || !hasAnimations()) {
-        commit();
-        claim();
+      // Animations there is nothing to play. A change without motion lands
+      // what is in flight with it.
+      if (motion === "none" || transitionUpdating() || !hasAnimations()) {
+        if (motion === "none") settle();
+        try {
+          commit();
+        } finally {
+          claim();
+        }
         return EMPTY;
       }
       let taken: Capture | null = null;
       let chrome: ChromeCapture | null = null;
+      let inFlight = new Map<HTMLElement, DOMRect>();
+      // This change decides the reader's place now.
+      keeping?.();
       try {
         // Cards mounted just before this change enter first, so it starts
         // from the frame their entrance paints.
@@ -681,16 +922,24 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
         taken = capture(intent, ids);
         const root = options.feed()?.closest("main");
         chrome = root ? captureChrome(root, stage) : null;
+        inFlight = placeGhosts();
       } catch {
         taken = null;
         chrome = null;
       }
-      commit();
-      // The change's own new cards are play's to move.
-      claim();
+      try {
+        commit();
+      } finally {
+        // The change's own new cards are play's to move.
+        claim();
+      }
       if (!taken && !chrome) return EMPTY;
       try {
-        return play(taken, chrome);
+        const feed = options.feed();
+        const anchor = feed ? materialize(feed) : undefined;
+        // A new list keeps the place it lands on (a rewind's top, a return's card).
+        if (feed && anchor && intent === "lens") keepPlace(feed, anchor);
+        return play(taken, chrome, inFlight);
       } catch {
         // Motion is decoration: a failure here must never fail the action.
         settle();
