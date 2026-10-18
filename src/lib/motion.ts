@@ -10,6 +10,21 @@ export const EASE = "cubic-bezier(0.22, 0.61, 0.36, 1)";
 /** --ease-out: entrances and glides — a long damped settle. */
 export const EASE_OUT = "cubic-bezier(0.16, 1, 0.3, 1)";
 
+/** The duration steps, in ms: --t-fast, --t, --t-slow. */
+export const T_FAST = 100;
+export const T_BASE = 150;
+export const T_SLOW = 220;
+/** The surface roles, in ms: --t-enter for a thing arriving, --t-exit for it leaving. */
+export const T_ENTER = 240;
+export const T_EXIT = 160;
+/**
+ * --t-hold: how long a busy look waits before it shows, so a fast round trip
+ * never flashes a spinner or dims the controls.
+ */
+export const BUSY_HOLD_MS = 150;
+/** A gesture that didn't commit (a drawer, sheet or toast let go short) springs home in this. */
+export const SPRING_MS = 280;
+
 /**
  * How long a script waits before unmounting a surface whose exit it can't
  * watch: the shared exit (--t-exit, 0.16s) plus a frame's slack.

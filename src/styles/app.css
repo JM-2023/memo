@@ -136,6 +136,9 @@
      out an exit use EXIT_MS (src/lib/motion.ts). */
   --t-enter: 0.24s;
   --t-exit: 0.16s;
+  /* How long a busy look holds back before it shows, so a fast round trip
+     never flashes a spinner or dims the controls (BUSY_HOLD_MS). */
+  --t-hold: 0.15s;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.3, 0.5, 1);
