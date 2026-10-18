@@ -279,6 +279,33 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     }
   };
 
+  /** Does this layer carry `el` right now — a glide or entrance on it or around it? */
+  function carried(el: Element): boolean {
+    for (let node: Element | null = el; node; node = node.parentElement) {
+      if (node instanceof HTMLElement && (glides.has(node) || stage.owns(node))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * A mouse press on something on the move: it can glide out from under the
+   * pointer before the button comes up, and the click would then land on
+   * whatever lies there instead. Capturing the pointer keeps the release, and
+   * so the click, on what was pressed — as a touch's own capture already does.
+   */
+  function holdPress(event: PointerEvent): void {
+    if (event.pointerType !== "mouse" || event.button !== 0) return;
+    if (glides.size === 0 && chromeLive.size === 0) return;
+    const pressed = event.target;
+    if (!(pressed instanceof Element) || !carried(pressed)) return;
+    try {
+      pressed.setPointerCapture(event.pointerId);
+    } catch {
+      // The pointer is already gone.
+    }
+  }
+  let pressesHeld = false;
+
   // The hold now running; a later one (or a settle) ends it.
   let holding = 0;
 
@@ -896,6 +923,10 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     stopGlides();
     for (const motion of cards.motions) motion();
     for (const motion of around) motion();
+    if (!pressesHeld) {
+      pressesHeld = true;
+      document.addEventListener("pointerdown", holdPress, true);
+    }
     return cards.result;
   }
 

@@ -282,6 +282,32 @@ describe("feed motion", () => {
     for (const lift of lifts) expect(lift.keyframes[1].transform).toBe("translateY(-18px) scale(0.995)");
   });
 
+  it("keeps a mouse press on a gliding card on what it went down on", () => {
+    build(4);
+    motion.run("trash", ["1"], () => slotOf("1").remove());
+    const press = (target: Element, pointerType: string) =>
+      target.dispatchEvent(Object.assign(new MouseEvent("pointerdown", { bubbles: true, button: 0 }), { pointerType, pointerId: 7 }));
+    const button = (id: string) => {
+      const element = document.createElement("button");
+      element.setPointerCapture = vi.fn();
+      slotOf(id).append(element);
+      return element;
+    };
+
+    // The card below the gap is gliding up: its release, and so its click,
+    // stays on what was pressed even if the card moves on under the pointer.
+    const moving = button("2");
+    press(moving, "mouse");
+    expect(moving.setPointerCapture).toHaveBeenCalledWith(7);
+    // A touch holds its target by itself; a card standing still needs nothing.
+    const touched = button("3");
+    press(touched, "touch");
+    expect(touched.setPointerCapture).not.toHaveBeenCalled();
+    const still = button("0");
+    press(still, "mouse");
+    expect(still.setPointerCapture).not.toHaveBeenCalled();
+  });
+
   it("just commits where Web Animations are missing", () => {
     delete (Element.prototype as Partial<Element>).animate;
     build(5);
