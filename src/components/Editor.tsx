@@ -1,5 +1,19 @@
-import { Bold, Hash, Image as ImageIcon, ImageOff, ImagePlus, Link2, List, Loader2, Table, X } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { Bold, Hash, Image as ImageIcon, ImageOff, ImagePlus, Link2, List, Loader2, Plus, Table, X } from "lucide-react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type DragEvent,
+  type FocusEvent as ReactFocusEvent,
+  type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode
+} from "react";
 import { ApiError } from "../lib/api";
 import { isImageUrl } from "../lib/content";
 import { htmlCarriesText, htmlToMarkdown } from "../lib/htmlToMarkdown";
@@ -7,20 +21,24 @@ import { ImageSlotLedger } from "../lib/imageSlots";
 import { compressImage } from "../lib/images";
 import { useI18n } from "../lib/i18n";
 import { announce } from "../lib/liveAnnouncer";
-import { BUSY_HOLD_MS } from "../lib/motion";
+import { BUSY_HOLD_MS, EASE_OUT, EXIT_MS, T_BASE, T_SLOW } from "../lib/motion";
 import { inheritTagContext } from "../lib/tags";
 import {
   backspaceListMarker,
   continueListOnEnter,
   insertTableTemplate,
+  listLineAt,
   shiftListIndent,
   tableTabStop,
   toggleBulletLine,
   toggleWrap,
+  wrapActiveAt,
+  wrapLink,
   type EditPatch
 } from "../lib/markdownEdit";
 import { caretPoint } from "../lib/textareaCaret";
-import type { MemoImage, NewImagePayload } from "../lib/types";
+import type { LightboxItem, MemoImage, NewImagePayload } from "../lib/types";
+import { openLightboxFrom } from "./Lightbox";
 import { StoredImg } from "./StoredImage";
 import { useTip } from "./Tip";
 
@@ -41,6 +59,13 @@ const GROW_FLOOR = 200;
 /** Removed attachments held for their toast's Undo — as many as the toast
  * stack shows at once (TOAST_LIMIT in App); an older one's Undo is gone. */
 const UNDO_HOLD = 3;
+/** A tile that could not be made stays this long, marked, before it fades. */
+const FAILED_TILE_MS = 2_000;
+/** A finger lifts a tile to reorder after holding still this long (a mouse
+ * lifts it as soon as it moves), so a swipe across the row still scrolls. */
+const TOUCH_LIFT_MS = 300;
+/** The other tiles' glide into place once a reordered one is let go. */
+const REORDER_MS = T_SLOW;
 
 /**
  * An edit discarded by Esc / Cancel, held in memory only (drafts are never
@@ -66,13 +91,41 @@ const SUGGEST_BLUR_MS = 120;
 
 /** Characters a tag can hold (TAG_PATTERN in lib/tags). */
 const TAG_CHAR = /[\p{L}\p{N}_\-/·]/u;
+/** What may stand right before a `#` that opens the tag list: whitespace or
+ * punctuation (CJK punctuation included), or a Han or kana character, since
+ * Chinese and Japanese run a tag into the sentence with no space. A Latin
+ * letter or a digit is a word going on: C#, page#section. */
+const TAG_LEAD = /[\s\p{P}\p{S}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
 
-/** The `#run` the caret sits in (or right after), if any. */
+/** The `#run` the caret sits in (or right after), if any — only where a tag can start. */
 function tagTokenAt(value: string, caret: number): { hashStart: number; query: string } | null {
   let start = caret;
   while (start > 0 && !/[\s#]/.test(value[start - 1])) start -= 1;
   if (start === 0 || value[start - 1] !== "#") return null;
-  return { hashStart: start - 1, query: value.slice(start, caret) };
+  const hashStart = start - 1;
+  // By code point, so an emoji before the # is one character, not two halves.
+  const lead = [...value.slice(Math.max(0, hashStart - 2), hashStart)].pop();
+  if (lead !== undefined && (lead === "#" || !TAG_LEAD.test(lead))) return null;
+  // A fragment inside a link (x.com/#top) is the link's own.
+  let word = hashStart;
+  while (word > 0 && !/\s/.test(value[word - 1])) word -= 1;
+  if (value.slice(word, hashStart).includes("://")) return null;
+  return { hashStart, query: value.slice(start, caret) };
+}
+
+/** Where `tag` holds the letters of `query` in order (#wrk → work), the
+ * offsets of the ones that matched, first fit; null where it does not. */
+function subsequenceHits(tag: string, query: string): number[] | null {
+  const hits: number[] = [];
+  let at = 0;
+  for (let index = 0; index < query.length; index += 1) {
+    const char = query[index].toLowerCase();
+    while (at < tag.length && tag[at].toLowerCase() !== char) at += 1;
+    if (at === tag.length) return null;
+    hits.push(at);
+    at += 1;
+  }
+  return hits;
 }
 
 /**
@@ -226,26 +279,41 @@ function registerDropTarget(target: DropTarget): () => void {
  * outline plane sat at 45° in the accent green and read as a second, lighter
  * object beside the 600-weight label. The stroke only rounds the corners.
  */
-function SendGlyph() {
+function SendGlyph({ flying = false, onFlown }: { flying?: boolean; onFlown?: () => void }) {
+  // `flying`: the composer just cleared after a send, and the dart flies
+  // off and comes back round (app.css, .send-glyph.is-flying).
   return (
-    <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true">
+    <svg className={`send-glyph${flying ? " is-flying" : ""}`} width="17" height="17" viewBox="0 0 24 24" aria-hidden="true" onAnimationEnd={onFlown}>
       <path fill="currentColor" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" d="M3.6 3.7 20.9 12 3.6 20.3 6.7 13.25 13.4 12 6.7 10.75Z" />
     </svg>
   );
 }
 
-/** `text` with [from, to) set in weight 600, the matched run of a suggestion. */
-function withHit(text: string, from: number, to: number): ReactNode {
-  const start = Math.max(0, Math.min(text.length, from));
-  const end = Math.max(start, Math.min(text.length, to));
-  if (start === end) return text;
-  return (
-    <>
-      {text.slice(0, start)}
-      <b className="tag-suggest-hit">{text.slice(start, end)}</b>
-      {text.slice(end)}
-    </>
-  );
+/** `text` with the characters at `hits` (sorted offsets into it) set in
+ * weight 600 — what matched of a suggestion, runs drawn as one. */
+function withHits(text: string, hits: number[]): ReactNode {
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (let index = 0; index < hits.length; ) {
+    const start = hits[index];
+    let end = start + 1;
+    index += 1;
+    while (index < hits.length && hits[index] === end) {
+      end += 1;
+      index += 1;
+    }
+    if (start < cursor || end > text.length) continue;
+    if (start > cursor) parts.push(text.slice(cursor, start));
+    parts.push(
+      <b key={start} className="tag-suggest-hit">
+        {text.slice(start, end)}
+      </b>
+    );
+    cursor = end;
+  }
+  if (parts.length === 0) return text;
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return <>{parts}</>;
 }
 
 interface EditorProps {
@@ -274,6 +342,47 @@ interface EditorProps {
    * removed), with an optional action such as Undo. Without it a removal
    * is final and its preview is released at once. */
   onNotice?: (text: string, action?: { label: string; run: () => void }) => void;
+  /** Opens an attachment tile in the photo viewer (App's Lightbox). */
+  onOpenImage?: (items: LightboxItem[], index: number) => void;
+  /** Edit mode: hands the owner this edit's handle as it opens (`open`) and
+   * takes it back as it goes. */
+  onHandle?: (handle: EditHandle, open: boolean) => void;
+  /** Create mode: the owner's handle for putting a sent memo back. */
+  controlRef?: { current: ComposerControl | null };
+  /** Create mode: whether the composer holds anything (text or images). */
+  onOccupiedChange?: (occupied: boolean) => void;
+  /** Create mode: ⌘Z / Ctrl+Z in the composer a send just emptied, before
+   * anything else is typed. True when the owner took the memo back. */
+  onUndoSend?: () => boolean;
+}
+
+/**
+ * What the owner may ask of an open edit when another memo's Edit is
+ * pressed (App, startEdit): whether there is anything to lose, and the two
+ * ways on from there.
+ */
+export interface EditHandle {
+  /** The text or images differ from what the edit opened on. */
+  readonly dirty: boolean;
+  /** Bring the edit back into view, focus it, and pulse its border. */
+  attend: () => void;
+  /** Close the edit as Esc does (a dirty one goes up through onCancel as a
+   * draft, Undo and all); false while a save holds it. */
+  discard: () => boolean;
+}
+
+/** A sent memo coming back into the composer (taken back, or to be edited). */
+export interface ComposerDraft {
+  content: string;
+  newImages: NewImagePayload[];
+  selectionStart: number;
+  selectionEnd: number;
+}
+
+export interface ComposerControl {
+  /** Puts `draft` in, caret and focus included; false, changing nothing,
+   * unless the composer is empty and idle. */
+  recall: (draft: ComposerDraft) => boolean;
 }
 
 /** One attachment tile: an image on the memo, one ready to upload, or one
@@ -281,20 +390,50 @@ interface EditorProps {
 type AttachmentTile =
   | { kind: "stored"; key: string; image: MemoImage }
   | { kind: "pending"; key: string; image: NewImagePayload }
-  | { kind: "preparing"; key: string; url: string | null };
+  | ({ kind: "preparing" } & PreparingImage);
 
-/** An image being compressed: its tile's key and a preview of the original. */
+/** An image being compressed: its tile's key and a preview of the original.
+ * One that failed keeps its tile a moment, marked, then fades (`leaving`). */
 interface PreparingImage {
   key: string;
   url: string | null;
+  failed?: boolean;
+  leaving?: boolean;
 }
+
+/** A pending tile being dragged to a new place in the row. */
+interface TileDrag {
+  id: string;
+  pointerId: number;
+  touch: boolean;
+  x0: number;
+  y0: number;
+  lifted: boolean;
+  holdTimer: number;
+  tile: HTMLElement;
+  handle: HTMLElement;
+  /** The movable tiles' boxes when it lifted, relative to the row. */
+  slots: Array<{ id: string; left: number; top: number; right: number; bottom: number }>;
+  /** Where letting go would put it: before this image, at the end (null),
+   * or nowhere new (undefined). */
+  before: string | null | undefined;
+  /** Stops listening for a release the tile itself never hears. */
+  unlisten: () => void;
+}
+
+/** The toolbar's buttons, in order (its one Tab stop roves among them). */
+type ToolKey = "tag" | "bold" | "list" | "table" | "image" | "link";
+const TOOL_ORDER: ToolKey[] = ["tag", "bold", "list", "table", "image", "link"];
 
 export interface EditorSubmission {
   clientId: string;
   content: string;
   newImages: NewImagePayload[];
   removeImageIds: string[];
-  /** Set when the save carries new images: reports the sent fraction (0..1). */
+  /** Create mode: the caret in `content` when Send went. */
+  selection?: { start: number; end: number };
+  /** Set when a save (edit mode) carries new images: reports the sent
+   * fraction (0..1). A send lands at once and uploads in the background. */
   onUploadProgress?: (fraction: number) => void;
   /** Aborted when Esc stops the send in flight. The owner hands it to the
    * request and, once it has fired, resolves false (or rejects) without
@@ -304,18 +443,24 @@ export interface EditorSubmission {
   /** Create mode: the owner calls this inside the update that lands the new
    * memo, so the composer clears in that same commit (and the same view
    * transition, `animated`) instead of a frame later. Optional: a create
-   * resolved true without it clears afterwards as before. */
+   * resolved true without it clears afterwards as before. Once cleared, the
+   * sent images and their preview URLs are the owner's to release. */
   onCommitted?: (animated: boolean) => void;
 }
 
 interface Suggestion {
   tokenStart: number;
   query: string;
+  /** Empty when nothing matches: the list then only says a new tag is on its way. */
   items: string[];
+  /** The lit row; -1 for none yet (a bare #: Enter still breaks the line,
+      Tab or ↓ picks one). */
   index: number;
   /** The typed run already spells a known tag in full; Enter must not swap
       it for a longer suggestion (e.g. `#life` → `#life/cooking`). */
   exact: boolean;
+  /** No tag spells the run outright; these only hold its letters in order. */
+  fuzzy: boolean;
 }
 
 /**
@@ -323,8 +468,8 @@ interface Suggestion {
  * #tag affordances: a toolbar "#" button, live tag autocomplete under the
  * caret token. Markdown is written as plain syntax (cards render it):
  * Enter continues list/task/quote lines and builds tables row by row, Tab
- * indents lists and hops table cells, ⌘B/⌘I/⌘E/⌘⇧S/⌘⇧H wrap the selection,
- * and the toolbar covers bold + list + table for touch. Images
+ * indents lists and hops table cells, ⌘B/⌘I/⌘E/⌘⇧S/⌘⇧H wrap the selection
+ * (⌘K makes it a link), and the toolbar covers bold + list + table for touch. Images
  * arrive four ways: file picker, paste, drag-and-drop (all compressed
  * client-side and stored), or as an external link that renders as a preview
  * without touching the database.
@@ -344,7 +489,12 @@ export function Editor({
   conflictMessage,
   onAcceptRemoteBase,
   onDraftChange,
-  onNotice
+  onNotice,
+  onOpenImage,
+  onHandle,
+  controlRef,
+  onOccupiedChange,
+  onUndoSend
 }: EditorProps) {
   const { errorMessage, formatNumber, tr } = useI18n();
   const tip = useTip();
@@ -362,7 +512,7 @@ export function Editor({
   // Images still compressing, in the order they were added. Each already
   // has the tile it keeps once it lands (tileKeysRef carries the key over).
   const [preparing, setPreparing] = useState<PreparingImage[]>([]);
-  const compressing = preparing.length;
+  const compressing = preparing.filter((item) => !item.failed).length;
   const tileKeysRef = useRef(new Map<string, string>());
   const preparingUrlsRef = useRef(new Set<string>());
   // Tiles the editor opened with (the memo's images, a reopened draft's):
@@ -427,6 +577,27 @@ export function Editor({
   const heldRemovalsRef = useRef<NewImagePayload[]>([]);
   const undoEpochRef = useRef(0);
   const addImageRef = useRef<HTMLButtonElement>(null);
+  // A pending tile lifted to reorder, and the insertion bar's spot in the
+  // row while letting go would move it.
+  const [reorder, setReorder] = useState<{ id: string; bar: { left: number; top: number; height: number } | null } | null>(null);
+  const tileDragRef = useRef<TileDrag | null>(null);
+  // The click that trails a drag's release is not a tap to open the tile.
+  const tileClickFloorRef = useRef(0);
+  // Tile centres taken just before the order changes; the layout effect
+  // after it glides each tile from there (FLIP). `flips` asks for that pass.
+  const flipFromRef = useRef<Map<string, { x: number; y: number }> | null>(null);
+  const refocusTileRef = useRef<string | null>(null);
+  const [flips, setFlips] = useState(0);
+  const attachmentsRef = useRef<HTMLDivElement>(null);
+  // Bold and List show whether the caret already sits in bold text or on a
+  // list line (aria-pressed).
+  const [pressed, setPressed] = useState({ bold: false, list: false });
+  // The toolbar is one Tab stop; ←/→ move it between the tools.
+  const [toolStop, setToolStop] = useState<ToolKey>("tag");
+  // Bumped when another memo's Edit is refused: the field's border pulses.
+  const [attention, setAttention] = useState(0);
+  // Sends whose cleared composer the glyph has already flown for.
+  const [flown, setFlown] = useState(0);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
@@ -445,6 +616,7 @@ export function Editor({
   const suggestionListId = useId();
   const contextTagDescriptionId = useId();
   const countId = useId();
+  const linkPopId = useId();
   // Stable across ambiguous network failures; rotate only after a confirmed
   // create so retrying the same draft remains idempotent.
   const draftIdRef = useRef(crypto.randomUUID());
@@ -452,6 +624,11 @@ export function Editor({
   // The send in flight, until the owner lands it (onCommitted) or it settles:
   // Esc aborts it through this.
   const abortRef = useRef<AbortController | null>(null);
+  // Create mode: a send has just emptied the composer and nothing has been
+  // typed since, so ⌘Z means the send (onUndoSend), not the field's history.
+  const freshClearRef = useRef(false);
+  const onUndoSendRef = useRef(onUndoSend);
+  onUndoSendRef.current = onUndoSend;
   const mountedRef = useRef(true);
   const [imageSlots] = useState(() => new ImageSlotLedger(MAX_IMAGES, existingImages.length));
 
@@ -555,6 +732,34 @@ export function Editor({
   // Send pressed mid-compression is accepted and held (see submit).
   const canQueue = ready && !sendQueued && compressing > 0;
 
+  // The owner's handle on this edit (see EditHandle): one stable object
+  // reading the latest render through a ref, so App can hold it across
+  // renders and tell it from an outgoing editor still finishing its morph.
+  const handleRef = useRef<{ dirty: boolean; attend: () => void; discard: () => boolean }>({ dirty, attend, discard: () => false });
+  handleRef.current = {
+    dirty,
+    attend,
+    discard: () => {
+      if (!onCancel || locked) return false;
+      cancel();
+      return true;
+    }
+  };
+  const [handle] = useState<EditHandle>(() => ({
+    get dirty() {
+      return handleRef.current.dirty;
+    },
+    attend: () => handleRef.current.attend(),
+    discard: () => handleRef.current.discard()
+  }));
+  const onHandleRef = useRef(onHandle);
+  onHandleRef.current = onHandle;
+  useEffect(() => {
+    const report = onHandleRef.current;
+    report?.(handle, true);
+    return () => report?.(handle, false);
+  }, [handle]);
+
   useLayoutEffect(() => {
     imageSlots.syncCommitted(totalImages);
   }, [imageSlots, totalImages]);
@@ -636,6 +841,56 @@ export function Editor({
   useEffect(() => {
     if (linkOpen) linkRef.current?.focus();
   }, [linkOpen]);
+
+  // Every edit can move the caret into or out of bold text or a list line
+  // (caret moves alone are caught by onCaretMove).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(syncPressed, [content]);
+
+  // A reorder just landed: each tile glides from where it was to its new
+  // place (under reduced motion a tile that moved fades in there instead),
+  // and a tile moved from the keyboard keeps focus through its DOM move.
+  useLayoutEffect(() => {
+    const from = flipFromRef.current;
+    flipFromRef.current = null;
+    if (from) {
+      const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      const to = tileCentres();
+      for (const tile of attachmentsRef.current?.querySelectorAll<HTMLElement>(".attachment[data-image-id]") ?? []) {
+        const was = from.get(tile.dataset.imageId ?? "");
+        const now = to.get(tile.dataset.imageId ?? "");
+        if (!was || !now || typeof tile.animate !== "function") continue;
+        const dx = was.x - now.x;
+        const dy = was.y - now.y;
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+        tile.animate(reduced ? [{ opacity: 0 }, { opacity: 1 }] : [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], {
+          duration: reduced ? T_BASE : REORDER_MS,
+          easing: EASE_OUT
+        });
+      }
+    }
+    const refocus = refocusTileRef.current;
+    refocusTileRef.current = null;
+    if (refocus) {
+      const row = [...(attachmentsRef.current?.querySelectorAll<HTMLElement>(".attachment[data-image-id]") ?? [])];
+      row.find((tile) => tile.dataset.imageId === refocus)?.querySelector<HTMLElement>(".attachment-open")?.focus({ preventScroll: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flips]);
+
+  // A finger that lifted a tile drags it, not the page. Registered up front
+  // (and not passive): a browser decides whether a touch may scroll as it
+  // starts, so a listener added mid-drag would come too late.
+  const hasTiles = keptExisting.length + newImages.length + preparing.length > 0;
+  useEffect(() => {
+    const row = attachmentsRef.current;
+    if (!row) return;
+    const hold = (event: TouchEvent) => {
+      if (tileDragRef.current?.lifted) event.preventDefault();
+    };
+    row.addEventListener("touchmove", hold, { passive: false });
+    return () => row.removeEventListener("touchmove", hold);
+  }, [hasTiles]);
 
   /**
    * The tag list opens at the "#" being typed, not pinned under the field:
@@ -843,17 +1098,35 @@ export function Editor({
       return;
     }
     const { hashStart, query } = token;
+    // A bare # offers the tags used last (knownTags arrives ranked by recent
+    // use, then by count — App), with no row lit: Enter still breaks the line.
+    if (!query) {
+      setSuggestion({ tokenStart: hashStart, query, items: knownTags.slice(0, 5), index: -1, exact: false, fuzzy: false });
+      return;
+    }
+    // A character no tag can hold has ended the tag ("#work," is #work).
+    if (![...query].every((char) => TAG_CHAR.test(char))) {
+      setSuggestion(null);
+      return;
+    }
     const lowered = query.toLowerCase();
-    const exact = lowered.length > 0 && knownTags.some((tag) => tag.toLowerCase() === lowered);
+    const exact = knownTags.some((tag) => tag.toLowerCase() === lowered);
     // Tags that begin with the run lead the list, then any that contain it;
-    // the tag typed out in full is left off (nothing left to complete).
-    // knownTags arrives sorted, and the sort is stable, so each group stays
-    // alphabetical.
-    const items = knownTags
+    // the tag typed out in full is left off (nothing left to complete). The
+    // sort is stable, so each group keeps knownTags' own order.
+    const direct = knownTags
       .filter((tag) => tag.toLowerCase().includes(lowered) && tag.toLowerCase() !== lowered)
-      .sort((a, b) => Number(!a.toLowerCase().startsWith(lowered)) - Number(!b.toLowerCase().startsWith(lowered)))
-      .slice(0, 6);
-    setSuggestion(items.length > 0 ? { tokenStart: hashStart, query, items, index: 0, exact } : null);
+      .sort((a, b) => Number(!a.toLowerCase().startsWith(lowered)) - Number(!b.toLowerCase().startsWith(lowered)));
+    // Nothing spells the run outright: tags that hold its letters in order
+    // (#wrk → work) are offered as a guess, and the list says so.
+    const guess = direct.length === 0 && !exact;
+    const items = (guess ? knownTags.filter((tag) => subsequenceHits(tag, query) !== null) : direct).slice(0, 6);
+    // The tag is typed out and nothing longer starts with it: nothing to say.
+    if (items.length === 0 && exact) {
+      setSuggestion(null);
+      return;
+    }
+    setSuggestion({ tokenStart: hashStart, query, items, index: items.length > 0 ? 0 : -1, exact, fuzzy: guess && items.length > 0 });
   }
 
   /**
@@ -898,6 +1171,7 @@ export function Editor({
       area.setSelectionRange(selStart, selEnd);
       quietSelectRef.current = { start: selStart, end: selEnd };
       if (suggest) refreshSuggestion(next, selStart);
+      syncPressed();
       autoGrow();
     };
     if (landed) settle();
@@ -938,7 +1212,9 @@ export function Editor({
    */
   function onCaretMove() {
     const area = areaRef.current;
-    if (!area || composingRef.current) return;
+    if (!area) return;
+    syncPressed();
+    if (composingRef.current) return;
     const quiet = quietSelectRef.current;
     quietSelectRef.current = null;
     if (quiet && quiet.start === area.selectionStart && quiet.end === area.selectionEnd) return;
@@ -948,18 +1224,21 @@ export function Editor({
 
   /**
    * One suggestion row: the parent path gives way (ellipsized) before the
-   * leaf, so a deep tag still shows its own name; the run that matched is
-   * set a step heavier.
+   * leaf, so a deep tag still shows its own name; what matched — the run, or
+   * a guess's scattered letters — is set a step heavier.
    */
-  function suggestionRow(tag: string, query: string): ReactNode {
+  function suggestionRow(tag: string, query: string, fuzzy: boolean): ReactNode {
     const split = tag.lastIndexOf("/") + 1;
-    const hit = query ? tag.toLowerCase().indexOf(query.toLowerCase()) : -1;
-    const from = hit < 0 ? 0 : hit;
-    const to = hit < 0 ? 0 : hit + query.length;
+    let hits: number[] = [];
+    if (fuzzy) hits = subsequenceHits(tag, query) ?? [];
+    else if (query) {
+      const at = tag.toLowerCase().indexOf(query.toLowerCase());
+      if (at >= 0) hits = Array.from({ length: query.length }, (_, offset) => at + offset);
+    }
     return (
       <>
-        <span className="tag-suggest-path">{withHit(`#${tag.slice(0, split)}`, from + 1, to + 1)}</span>
-        <span className="tag-suggest-leaf">{withHit(tag.slice(split), from - split, to - split)}</span>
+        <span className="tag-suggest-path">{withHits(`#${tag.slice(0, split)}`, hits.filter((at) => at < split).map((at) => at + 1))}</span>
+        <span className="tag-suggest-leaf">{withHits(tag.slice(split), hits.filter((at) => at >= split).map((at) => at - split))}</span>
       </>
     );
   }
@@ -989,7 +1268,7 @@ export function Editor({
 
   /** Toolbar buttons never take focus from the field: on iOS a blurred
    * textarea drops the keyboard, and a refocus outside the tap cannot raise
-   * it again. Keyboard users still Tab to them as before. */
+   * it again. Keyboard users still Tab to them (one stop, then ←/→). */
   function keepFieldFocus(event: ReactMouseEvent) {
     event.preventDefault();
   }
@@ -1004,6 +1283,244 @@ export function Editor({
   function applyPatch(patch: EditPatch) {
     if (busy || submittingRef.current) return;
     landValue(patch.value, patch.start, patch.end);
+  }
+
+  /** Read Bold's and List's pressed state off the caret. */
+  function syncPressed() {
+    const area = areaRef.current;
+    if (!area) return;
+    const bold = wrapActiveAt(area.value, area.selectionStart, area.selectionEnd, "**");
+    const list = listLineAt(area.value, area.selectionStart);
+    setPressed((current) => (current.bold === bold && current.list === list ? current : { bold, list }));
+  }
+
+  /**
+   * Another memo's Edit was refused for this one: bring its caret line ~40%
+   * down the screen (where revealCaret puts it), take focus, and pulse the
+   * field's border twice (app.css, .is-attending-*) so the eye finds it.
+   */
+  function attend() {
+    const area = areaRef.current;
+    if (!area) return;
+    area.focus({ preventScroll: true });
+    const rect = area.getBoundingClientRect();
+    const caret = caretPoint(area, area.selectionEnd);
+    const line = Math.min(Math.max(rect.top + caret.top - area.scrollTop, rect.top), rect.bottom - caret.height) + caret.height / 2;
+    const viewport = window.visualViewport;
+    const target = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight) * 0.4;
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (Math.abs(line - target) >= 1) window.scrollBy({ top: line - target, behavior: reduced ? "instant" : "smooth" });
+    setAttention((value) => value + 1);
+  }
+
+  /* ---- The toolbar: one Tab stop, ←/→ (Home/End) between its tools ---- */
+
+  function onToolsKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
+    const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button[data-tool]:not(:disabled)")];
+    const at = buttons.indexOf(event.target as HTMLButtonElement);
+    if (at < 0) return;
+    event.preventDefault();
+    const last = buttons.length - 1;
+    const next = event.key === "Home" ? 0 : event.key === "End" ? last : (at + (event.key === "ArrowRight" ? 1 : last)) % buttons.length;
+    buttons[next].focus();
+  }
+
+  function onToolsFocus(event: ReactFocusEvent<HTMLDivElement>) {
+    const key = (event.target as HTMLElement).dataset.tool as ToolKey | undefined;
+    if (key && TOOL_ORDER.includes(key)) setToolStop(key);
+  }
+
+  /* ---- Attachment tiles: open, reorder ---- */
+
+  /** Each tile's centre on screen, by image id. */
+  function tileCentres(): Map<string, { x: number; y: number }> {
+    const centres = new Map<string, { x: number; y: number }>();
+    for (const tile of attachmentsRef.current?.querySelectorAll<HTMLElement>(".attachment[data-image-id]") ?? []) {
+      const box = tile.getBoundingClientRect();
+      centres.set(tile.dataset.imageId ?? "", { x: box.left + box.width / 2, y: box.top + box.height / 2 });
+    }
+    return centres;
+  }
+
+  /** Change the tile order with every tile gliding on from where it is now. */
+  function glideTiles(change: () => void) {
+    flipFromRef.current = tileCentres();
+    change();
+    setFlips((value) => value + 1);
+  }
+
+  /** Put a pending image before `before` (null: at the end). The order is the one sent. */
+  function moveImage(id: string, before: string | null) {
+    setNewImages((value) => {
+      const moving = value.find((image) => image.id === id);
+      if (!moving) return value;
+      const rest = value.filter((image) => image !== moving);
+      const at = before === null ? rest.length : rest.findIndex((image) => image.id === before);
+      return at < 0 ? value : [...rest.slice(0, at), moving, ...rest.slice(at)];
+    });
+  }
+
+  /** The photo viewer, on the tiles that stay (a preview for an image not yet sent). */
+  function openTile(event: ReactMouseEvent<HTMLButtonElement>, id: string) {
+    if (!onOpenImage || event.timeStamp < tileClickFloorRef.current) return;
+    const shown = tiles.filter(
+      (tile): tile is Exclude<AttachmentTile, { kind: "preparing" }> => tile.kind !== "preparing" && !removingKeys.has(tile.image.id)
+    );
+    const items: LightboxItem[] = shown.map((tile) =>
+      tile.kind === "stored" ? { src: `/api/images/${tile.image.id}`, imageId: tile.image.id } : { src: tile.image.previewUrl }
+    );
+    const index = Math.max(0, shown.findIndex((tile) => tile.image.id === id));
+    openLightboxFrom(event.currentTarget.closest<HTMLElement>(".attachment"), () => onOpenImage(items, index));
+  }
+
+  /** The pending images in the row's order, those leaving left out. */
+  function movableIds(): string[] {
+    return newImages.filter((image) => !removingKeys.has(image.id)).map((image) => image.id);
+  }
+
+  /** Alt+←/→ moves the focused tile one place and says where it now is. */
+  function onTileKeyDown(event: KeyboardEvent<HTMLButtonElement>, id: string) {
+    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    // Alt+← is Back in some browsers: never leave the page from here.
+    event.preventDefault();
+    if (locked) return;
+    const order = movableIds();
+    const at = order.indexOf(id);
+    if (at < 0) return;
+    const to = Math.min(order.length - 1, Math.max(0, at + (event.key === "ArrowRight" ? 1 : -1)));
+    if (to !== at) {
+      refocusTileRef.current = id;
+      glideTiles(() => moveImage(id, event.key === "ArrowRight" ? (order[to + 1] ?? null) : order[to]));
+    }
+    // The memo's own images stay first; the moved one is counted after them.
+    const position = removable.length - order.length + to + 1;
+    announce(tr(`Image ${position} of ${removable.length}`, `第 ${position} 张，共 ${removable.length} 张`));
+  }
+
+  function onTilePointerDown(event: ReactPointerEvent<HTMLButtonElement>, id: string) {
+    // A fresh press is a new gesture: only the click trailing a drag is held back.
+    tileClickFloorRef.current = 0;
+    if (!event.isPrimary || event.button !== 0 || locked || tileDragRef.current) return;
+    const tile = event.currentTarget.closest<HTMLElement>(".attachment");
+    if (!tile) return;
+    const drag: TileDrag = {
+      id,
+      pointerId: event.pointerId,
+      touch: event.pointerType !== "mouse",
+      x0: event.clientX,
+      y0: event.clientY,
+      lifted: false,
+      holdTimer: 0,
+      tile,
+      handle: event.currentTarget,
+      slots: [],
+      before: undefined,
+      unlisten: () => undefined
+    };
+    tileDragRef.current = drag;
+    if (drag.touch) drag.holdTimer = window.setTimeout(() => liftTile(drag), TOUCH_LIFT_MS);
+  }
+
+  /** Lift the pressed tile: it follows the pointer from here, and the row's
+   * movable tiles are measured once as the slots it can land between. */
+  function liftTile(drag: TileDrag) {
+    const row = attachmentsRef.current;
+    if (tileDragRef.current !== drag || drag.lifted || !row) return;
+    drag.lifted = true;
+    try {
+      drag.handle.setPointerCapture?.(drag.pointerId);
+    } catch {
+      // Capture is a nicety; the drag still tracks without it.
+    }
+    // Without capture a release off the tile goes elsewhere: the window
+    // still hears it (after the tile's own handlers, which end it first).
+    const release = (event: PointerEvent) => {
+      if (event.pointerId === drag.pointerId) endTileDrag(drag, event.type === "pointerup", event.timeStamp);
+    };
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    drag.unlisten = () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+    };
+    const origin = row.getBoundingClientRect();
+    drag.slots = [...row.querySelectorAll<HTMLElement>(".attachment[data-movable]")].map((tile) => {
+      const box = tile.getBoundingClientRect();
+      return { id: tile.dataset.imageId ?? "", left: box.left - origin.left, top: box.top - origin.top, right: box.right - origin.left, bottom: box.bottom - origin.top };
+    });
+    setReorder({ id: drag.id, bar: null });
+  }
+
+  function onTilePointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = tileDragRef.current;
+    const row = attachmentsRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !row) return;
+    const dx = event.clientX - drag.x0;
+    const dy = event.clientY - drag.y0;
+    if (!drag.lifted) {
+      // A finger that moves before its hold is up is scrolling the page.
+      if (drag.touch) {
+        if (Math.hypot(dx, dy) > 8) endTileDrag(drag, false);
+        return;
+      }
+      if (Math.hypot(dx, dy) < 4) return;
+      liftTile(drag);
+      if (!drag.lifted) return;
+    }
+    // Written straight to the tile: a render per pointer move would be waste.
+    drag.tile.style.translate = `${dx}px ${dy}px`;
+    const origin = row.getBoundingClientRect();
+    const x = event.clientX - origin.left;
+    const y = event.clientY - origin.top;
+    let nearest = -1;
+    let distance = Infinity;
+    drag.slots.forEach((slot, index) => {
+      const away = Math.hypot(x - (slot.left + slot.right) / 2, y - (slot.top + slot.bottom) / 2);
+      if (away < distance) {
+        distance = away;
+        nearest = index;
+      }
+    });
+    if (nearest < 0) return;
+    const target = drag.slots[nearest];
+    const index = nearest + (x > (target.left + target.right) / 2 ? 1 : 0);
+    const from = drag.slots.findIndex((slot) => slot.id === drag.id);
+    // Either side of the tile's own place is where it already is.
+    const before = index === from || index === from + 1 ? undefined : index < drag.slots.length ? drag.slots[index].id : null;
+    if (before === drag.before) return;
+    drag.before = before;
+    const anchor = before === undefined ? null : before === null ? drag.slots[drag.slots.length - 1] : drag.slots[index];
+    // The bar stands in the 8px gap: before its tile, or after the last.
+    const bar = anchor ? { left: before === null ? anchor.right + 3 : anchor.left - 5, top: anchor.top, height: anchor.bottom - anchor.top } : null;
+    setReorder({ id: drag.id, bar });
+  }
+
+  /** Let the tile go — into its new place when `drop` (and one was found), else home. */
+  function endTileDrag(drag: TileDrag, drop: boolean, timeStamp = 0) {
+    window.clearTimeout(drag.holdTimer);
+    drag.unlisten();
+    if (tileDragRef.current !== drag) return;
+    tileDragRef.current = null;
+    if (!drag.lifted) return;
+    tileClickFloorRef.current = timeStamp + 400;
+    glideTiles(() => {
+      drag.tile.style.translate = "";
+      setReorder(null);
+      if (drop && drag.before !== undefined && !locked) moveImage(drag.id, drag.before);
+    });
+  }
+
+  /** What a file that could not be added says, by name. */
+  function failureText(file: File, cause: unknown): string {
+    const name = file.name;
+    if (/^image\/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(name)) {
+      return tr(`${name}: this browser can’t read HEIC — export it as JPG first`, `${name}：这个浏览器读不出 HEIC，可以先导出成 JPG 再拖进来`);
+    }
+    const reason = errorMessage(cause, "Couldn’t process the image", "图片处理失败");
+    return name ? tr(`${name}: ${reason}`, `${name}：${reason}`) : reason;
   }
 
   function confirmLink() {
@@ -1023,6 +1540,7 @@ export function Editor({
 
   async function addFiles(files: File[]) {
     if (busy || submittingRef.current || sendQueuedRef.current) return;
+    freshClearRef.current = false;
     const images = files.filter((file) => file.type.startsWith("image/"));
     if (images.length === 0) {
       if (files.length > 0) fail(tr("Only images can be added", "只能添加图片"));
@@ -1044,6 +1562,7 @@ export function Editor({
     let added = 0;
     for (const { file, key, url } of batch) {
       let reservationOpen = true;
+      let failed = false;
       try {
         if (!mountedRef.current) continue;
         const payload = await compressImage(file);
@@ -1065,7 +1584,8 @@ export function Editor({
         added += 1;
       } catch (cause) {
         if (mountedRef.current) {
-          fail(errorMessage(cause, "Couldn’t process the image", "图片处理失败"));
+          failed = true;
+          fail(failureText(file, cause));
           // A queued send would go out without the image it was waiting for.
           setSendQueued(false);
         }
@@ -1075,7 +1595,19 @@ export function Editor({
           URL.revokeObjectURL(url);
           preparingUrlsRef.current.delete(url);
         }
-        if (mountedRef.current) setPreparing((value) => value.filter((item) => item.key !== key));
+        if (mountedRef.current && failed) {
+          // The tile it would have been stays a moment, marked, so the
+          // reader sees which one it was; then it fades out. Timers, not
+          // animationend: an edit scrolled off screen runs no animations.
+          setPreparing((value) => value.map((item) => (item.key === key ? { ...item, url: null, failed: true } : item)));
+          window.setTimeout(() => {
+            if (!mountedRef.current) return;
+            setPreparing((value) => value.map((item) => (item.key === key ? { ...item, leaving: true } : item)));
+            window.setTimeout(() => {
+              if (mountedRef.current) setPreparing((value) => value.filter((item) => item.key !== key));
+            }, EXIT_MS);
+          }, FAILED_TILE_MS);
+        } else if (mountedRef.current) setPreparing((value) => value.filter((item) => item.key !== key));
       }
     }
     // The tiles are silent to a screen reader until they land: say so then.
@@ -1229,6 +1761,21 @@ export function Editor({
       return;
     }
     const area = event.currentTarget;
+    if (
+      mode === "create" &&
+      freshClearRef.current &&
+      !area.value &&
+      newImages.length === 0 &&
+      compressing === 0 &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.shiftKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "z" &&
+      onUndoSendRef.current?.()
+    ) {
+      event.preventDefault();
+      return;
+    }
     // The list belongs to the token under the caret. One left behind by a
     // caret move would splice its tag over the wrong span: drop it and let
     // the key do what it would have done.
@@ -1241,25 +1788,32 @@ export function Editor({
       }
     }
     if (active) {
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const count = active.items.length;
+      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && count > 0) {
         event.preventDefault();
         const delta = event.key === "ArrowDown" ? 1 : -1;
-        setSuggestion({ ...active, index: (active.index + delta + active.items.length) % active.items.length });
+        // With no row lit yet, ↓ lights the first and ↑ the last.
+        const index = active.index < 0 ? (delta > 0 ? 0 : count - 1) : (active.index + delta + count) % count;
+        setSuggestion({ ...active, index });
         return;
       }
       const modified = event.shiftKey || event.metaKey || event.ctrlKey || event.altKey;
-      if ((event.key === "Enter" && active.exact) || ((event.key === "Enter" || event.key === "Tab") && modified)) {
-        // The run is already a tag: Enter keeps its ordinary meaning (a new
-        // line, a continued list) and only puts the list away. It used to
-        // take the first child instead — `#life` became `#life/cooking` and
-        // the line never broke. Tab still accepts the highlighted one.
-        // A held modifier means the key's own job — ⌘↩ sends, Shift+↩
-        // breaks the line, Shift+Tab steps back — so it too only closes.
-        setSuggestion(null);
-      } else if (event.key === "Enter" || event.key === "Tab") {
-        event.preventDefault();
-        applySuggestion(active.items[active.index]);
-        return;
+      if (event.key === "Enter" || event.key === "Tab") {
+        if (count === 0 || modified || (event.key === "Enter" && (active.exact || active.index < 0))) {
+          // Enter keeps its ordinary meaning (a new line, a continued list)
+          // and only puts the list away when the run is already a tag — it
+          // used to take the first child, `#life` became `#life/cooking` and
+          // the line never broke — or when no row is lit yet: a bare # is
+          // not a request for a tag until a letter follows; Tab or ↓ picks one.
+          // A held modifier means the key's own job — ⌘↩ sends, Shift+↩
+          // breaks the line, Shift+Tab steps back — so it too only closes,
+          // as both keys do on a list that only says a new tag is coming.
+          setSuggestion(null);
+        } else {
+          event.preventDefault();
+          applySuggestion(active.items[Math.max(0, active.index)]);
+          return;
+        }
       }
       if (event.key === "Escape") {
         event.preventDefault();
@@ -1303,6 +1857,13 @@ export function Editor({
     }
     if ((event.metaKey || event.ctrlKey) && !event.altKey) {
       const key = event.key.toLowerCase();
+      if (key === "k" && !event.shiftKey) {
+        // The field's own: the page's ⌘K (search) must not hear it too.
+        event.preventDefault();
+        event.stopPropagation();
+        applyPatch(wrapLink(content, area.selectionStart, area.selectionEnd));
+        return;
+      }
       const marker =
         key === "b" ? "**" : key === "i" ? "*" : key === "e" ? "`" : key === "s" && event.shiftKey ? "~~" : key === "h" && event.shiftKey ? "==" : null;
       if (marker) {
@@ -1420,7 +1981,11 @@ export function Editor({
       if (abortRef.current === controller) abortRef.current = null;
       draftIdRef.current = crypto.randomUUID();
       imageSlots.syncCommitted(existingImages.length);
-      for (const image of newImages) URL.revokeObjectURL(image.previewUrl);
+      // The sent images' previews went with the memo: the owner releases
+      // them, or hands them back if the memo is taken back. Only a tile
+      // still playing its exit stays behind.
+      for (const image of newImages) if (removingKeys.has(image.id)) URL.revokeObjectURL(image.previewUrl);
+      freshClearRef.current = true;
       // An Undo still on a toast belongs to the memo just sent, not the next.
       undoEpochRef.current += 1;
       releaseHeldRemovals();
@@ -1439,14 +2004,21 @@ export function Editor({
     };
     try {
       const uploading = keptNewImages;
-      if (uploading.length > 0) setUploadPercent(0);
+      // Only a save waits on its upload; a send lands at once and goes out
+      // in the background (App's outbox).
+      const tracksUpload = mode === "edit" && uploading.length > 0;
+      if (tracksUpload) setUploadPercent(0);
+      const sent = content.trim();
+      const lead = content.length - content.trimStart().length;
+      const caret = (offset: number) => Math.max(0, Math.min(sent.length, offset - lead));
       const ok = await onSubmit({
         clientId: draftIdRef.current,
-        content: content.trim(),
+        content: sent,
         newImages: uploading,
         removeImageIds: removedImageIds,
+        selection: held ? { start: caret(held.start), end: caret(held.end) } : { start: sent.length, end: sent.length },
         onUploadProgress:
-          uploading.length > 0
+          tracksUpload
             ? (fraction) => {
                 if (mountedRef.current) setUploadPercent(Math.min(99, Math.round(fraction * 100)));
               }
@@ -1493,6 +2065,47 @@ export function Editor({
     }
   }
 
+  // Create mode: a sent memo taken back from the feed (App's outbox) comes
+  // back in here — only into an empty, idle composer, never over a draft.
+  const recallRef = useRef<{ start: number; end: number } | null>(null);
+  function recall(draft: ComposerDraft): boolean {
+    const area = areaRef.current;
+    if (mode !== "create" || !area || !mountedRef.current || recallRef.current || submittingRef.current || sendQueuedRef.current) return false;
+    if (area.value.trim() || newImages.length > 0 || compressing > 0) return false;
+    freshClearRef.current = false;
+    recallRef.current = { start: draft.selectionStart, end: draft.selectionEnd };
+    setError(null);
+    setContent(draft.content);
+    setNewImages(draft.newImages);
+    return true;
+  }
+  if (controlRef) controlRef.current = { recall };
+  // The caret goes back where it was when Send went, once the text is in.
+  useLayoutEffect(() => {
+    const caret = recallRef.current;
+    const area = areaRef.current;
+    if (!caret || !area) return;
+    recallRef.current = null;
+    autoGrow();
+    const end = area.value.length;
+    area.focus({ preventScroll: true });
+    area.setSelectionRange(Math.min(caret.start, end), Math.min(caret.end, end));
+    quietSelectRef.current = { start: area.selectionStart, end: area.selectionEnd };
+    // The composer heads the feed: a reader scrolled down it (or with it
+    // under the sticky bar) goes up to it.
+    const band = document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0;
+    if ((rootRef.current?.getBoundingClientRect().top ?? 0) < Math.max(0, band)) {
+      window.scrollTo({ top: 0, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content, newImages]);
+  const occupied = content.trim().length > 0 || newImages.length > 0 || compressing > 0;
+  const onOccupiedChangeRef = useRef(onOccupiedChange);
+  onOccupiedChangeRef.current = onOccupiedChange;
+  useEffect(() => {
+    onOccupiedChangeRef.current?.(occupied);
+  }, [occupied]);
+
   // The drop veil: lit while a file drag is over this editor, or anywhere in
   // the window when this is the editor a stray drop would land in. It says
   // what letting go would do — or why it would do nothing. The last words
@@ -1519,12 +2132,27 @@ export function Editor({
   const tiles: AttachmentTile[] = [
     ...keptExisting.map((image): AttachmentTile => ({ kind: "stored", key: image.id, image })),
     ...newImages.map((image): AttachmentTile => ({ kind: "pending", key: tileKeysRef.current.get(image.id) ?? image.id, image })),
-    ...preparing.map(({ key, url }): AttachmentTile => ({ kind: "preparing", key, url }))
+    ...preparing.map((item): AttachmentTile => ({ kind: "preparing", ...item }))
   ];
   // What stays, numbered like the card's own "View image 2 of 3".
   const removable = tiles.flatMap((tile) => (tile.kind !== "preparing" && !removingKeys.has(tile.image.id) ? [tile.image.id] : []));
   // The row folds shut while its last tile leaves, and unmounts after.
-  const attachmentsOpen = removable.length > 0 || compressing > 0;
+  const attachmentsOpen = removable.length > 0 || preparing.length > 0;
+  // Only images not yet sent can be reordered: the server keeps a memo's own
+  // images in their order, so an edit's new ones line up after them.
+  const movableCount = newImages.filter((image) => !removingKeys.has(image.id)).length;
+  // The toolbar's one Tab stop: the tool last focused, or the first that
+  // can take focus when that one is disabled.
+  const toolEnabled: Record<ToolKey, boolean> = {
+    tag: !locked,
+    bold: !locked,
+    list: !locked,
+    table: !locked,
+    image: !locked && totalImages + compressing < MAX_IMAGES,
+    link: !locked
+  };
+  const tabStop = toolEnabled[toolStop] ? toolStop : (TOOL_ORDER.find((key) => toolEnabled[key]) ?? toolStop);
+  const toolTab = (key: ToolKey) => (key === tabStop ? 0 : -1);
   // The note rows fold open and shut (see .editor-note); a closing one keeps
   // its last words while it folds, as an aria-hidden copy.
   const errorText = imageLimitExceeded ? imageLimitText : (error?.text ?? null);
@@ -1539,11 +2167,41 @@ export function Editor({
   // The tag list: open, stepped aside for an IME, or playing its exit.
   const list = suggestion ?? leavingSuggestion;
   const listOpen = suggestion !== null && !composing;
+  const suggestOptions = list === null ? null : list.items.map((tag, index) => (
+    <button
+      key={tag}
+      id={listOpen ? `${suggestionListId}-option-${index}` : undefined}
+      type="button"
+      role="option"
+      tabIndex={-1}
+      aria-selected={index === list.index}
+      className={index === list.index ? "is-active" : ""}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        if (listOpen) applySuggestion(tag);
+      }}
+      onMouseMove={(event) => {
+        // The pointer picks the row the keyboard would act on, so only one
+        // row is ever lit. A list redrawn under a resting pointer
+        // (movement 0) leaves the keyboard's row alone.
+        if (!suggestion || composing || (event.movementX === 0 && event.movementY === 0)) return;
+        if (index !== suggestion.index) setSuggestion({ ...suggestion, index });
+      }}
+      disabled={locked}
+    >
+      {suggestionRow(tag, list.query, list.fuzzy)}
+    </button>
+  ));
+  // The tag a list with no match says is on its way, trimmed as a card trims it.
+  const newTagName = list?.query.replace(/^[/·]+|[/·]+$/g, "") ?? "";
 
   return (
     <div
       ref={rootRef}
-      className={`editor ${mode === "create" ? "editor-create" : "editor-edit"}${dropKind !== null ? " is-dropping" : ""}`}
+      // The attending class alternates, so each call replays the pulse.
+      className={`editor ${mode === "create" ? "editor-create" : "editor-edit"}${dropKind !== null ? " is-dropping" : ""}${
+        attention > 0 ? ` is-attending-${attention % 2 ? "a" : "b"}` : ""
+      }`}
       aria-busy={locked}
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
@@ -1573,9 +2231,9 @@ export function Editor({
           aria-autocomplete="list"
           aria-expanded={listOpen}
           aria-controls={listOpen ? suggestionListId : undefined}
-          aria-activedescendant={listOpen ? `${suggestionListId}-option-${suggestion.index}` : undefined}
+          aria-activedescendant={listOpen && suggestion.index >= 0 ? `${suggestionListId}-option-${suggestion.index}` : undefined}
           // The wraps act on the field's selection; Bold's tip names them.
-          aria-keyshortcuts="Meta+B Control+B Meta+I Control+I Meta+E Control+E Meta+Shift+S Control+Shift+S Meta+Shift+H Control+Shift+H"
+          aria-keyshortcuts="Meta+B Control+B Meta+I Control+I Meta+E Control+E Meta+Shift+S Control+Shift+S Meta+Shift+H Control+Shift+H Meta+K Control+K"
           value={content}
           placeholder={tr("What’s on your mind…", "现在的想法是……")}
           rows={mode === "create" ? 2 : 3}
@@ -1583,6 +2241,7 @@ export function Editor({
           readOnly={locked}
           onChange={(event) => {
             if (busy || submittingRef.current) return;
+            freshClearRef.current = false;
             setContent(event.target.value);
             // A refused file or a failed send is old news once the text moves on.
             clearError("other");
@@ -1632,39 +2291,42 @@ export function Editor({
             if (event.animationName.startsWith("menu-out") || event.animationName === "fade-out") setLeavingSuggestion(null);
           }}
         >
-          {list.items.map((tag, index) => (
-            <button
-              key={tag}
-              id={listOpen ? `${suggestionListId}-option-${index}` : undefined}
-              type="button"
-              role="option"
-              tabIndex={-1}
-              aria-selected={index === list.index}
-              className={index === list.index ? "is-active" : ""}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                if (listOpen) applySuggestion(tag);
-              }}
-              onMouseMove={(event) => {
-                // The pointer picks the row the keyboard would act on, so
-                // only one row is ever lit. A list redrawn under a resting
-                // pointer (movement 0) leaves the keyboard's row alone.
-                if (!listOpen || (event.movementX === 0 && event.movementY === 0)) return;
-                if (index !== suggestion.index) setSuggestion({ ...suggestion, index });
-              }}
-              disabled={locked}
-            >
-              {suggestionRow(tag, list.query)}
-            </button>
-          ))}
+          {list.fuzzy ? (
+            // Guesses come under their own overline; the group's name says it aloud.
+            <div className="tag-suggest-group" role="group" aria-label={tr("Did you mean", "是不是想用")}>
+              <div className="tag-suggest-overline" aria-hidden="true">
+                {tr("Did you mean", "是不是想用")}
+              </div>
+              {suggestOptions}
+            </div>
+          ) : list.items.length > 0 ? (
+            suggestOptions
+          ) : (
+            // Nothing matches: no row to pick (Enter, Tab and the arrows
+            // keep their own jobs), only word that writing on makes it a
+            // new tag — a card takes any #word as one.
+            <div className="tag-suggest-create" role="option" aria-disabled="true" aria-selected="false" onMouseDown={(event) => event.preventDefault()}>
+              <Plus size={14} aria-hidden="true" />
+              <span>{tr(`Keep typing to create #${newTagName}`, `继续输入会新建 #${newTagName}`)}</span>
+            </div>
+          )}
         </div>
       ) : null}
 
-      <div className={`editor-attach${attachmentsOpen ? " is-open" : ""}`}>
+      <div className={`editor-attach${attachmentsOpen ? " is-open" : ""}${reorder ? " is-reordering" : ""}`}>
         <div className="editor-attach-clip">
           {tiles.length > 0 ? (
-            <div className="editor-attachments">
+            <div ref={attachmentsRef} className="editor-attachments">
               {tiles.map((tile) => {
+                if (tile.kind === "preparing" && tile.failed) {
+                  // A file that could not be made into an image keeps its
+                  // tile a moment, marked; the error line names it.
+                  return (
+                    <div key={tile.key} className={`attachment is-failed${tile.leaving ? " is-leaving" : ""}`} aria-hidden="true">
+                      <ImageOff size={18} aria-hidden="true" />
+                    </div>
+                  );
+                }
                 if (tile.kind === "preparing") {
                   // The file itself stands in while it compresses; the
                   // compressed image takes over this same tile.
@@ -1680,13 +2342,17 @@ export function Editor({
                 const image = tile.image;
                 const removing = removingKeys.has(image.id);
                 const position = removable.indexOf(image.id);
+                const movable = tile.kind === "pending" && !removing && !locked && movableCount > 1;
                 return (
                   <div
                     key={tile.key}
-                    className={`attachment${removing ? " is-removing" : ""}${settledTiles.has(image.id) ? " is-settled" : ""}`}
+                    className={`attachment${removing ? " is-removing" : ""}${settledTiles.has(image.id) ? " is-settled" : ""}${
+                      reorder?.id === image.id ? " is-lifted" : ""
+                    }`}
                     // A send names the tile after this id, so the picture
                     // rides into the new card (App, landCreated).
                     data-image-id={image.id}
+                    data-movable={movable ? "" : undefined}
                     aria-hidden={removing || undefined}
                     onAnimationEnd={(event) => {
                       // The exit, or its reduced-motion dissolve (app.css).
@@ -1722,7 +2388,47 @@ export function Editor({
                       });
                     }}
                   >
-                    {tile.kind === "stored" ? <StoredImg image={tile.image} /> : <img src={tile.image.previewUrl} alt="" decoding="async" />}
+                    {/* The picture is a button: a click (or Enter) opens it in
+                        the viewer; a drag — or Alt+←/→ — moves an image not
+                        yet sent to another place in the row. */}
+                    <button
+                      type="button"
+                      className="attachment-open"
+                      aria-label={
+                        removable.length > 1 && position >= 0
+                          ? onOpenImage
+                            ? tr(`View image ${position + 1} of ${removable.length}`, `查看图片 ${position + 1}/${removable.length}`)
+                            : tr(`Image ${position + 1} of ${removable.length}`, `第 ${position + 1} 张，共 ${removable.length} 张`)
+                          : onOpenImage
+                            ? tr("View image", "查看图片")
+                            : tr("Image", "图片")
+                      }
+                      aria-keyshortcuts={movable ? "Alt+ArrowLeft Alt+ArrowRight" : undefined}
+                      tabIndex={removing ? -1 : undefined}
+                      onMouseDown={keepFieldFocus}
+                      onClick={(event) => openTile(event, image.id)}
+                      onKeyDown={movable ? (event) => onTileKeyDown(event, image.id) : undefined}
+                      onPointerDown={movable ? (event) => onTilePointerDown(event, image.id) : undefined}
+                      onPointerMove={onTilePointerMove}
+                      onPointerUp={(event) => {
+                        const drag = tileDragRef.current;
+                        if (drag && drag.pointerId === event.pointerId) endTileDrag(drag, true, event.timeStamp);
+                      }}
+                      onPointerCancel={(event) => {
+                        const drag = tileDragRef.current;
+                        if (drag && drag.pointerId === event.pointerId) endTileDrag(drag, false, event.timeStamp);
+                      }}
+                      // A long press lifts the tile; no image menu over it.
+                      onContextMenu={(event) => {
+                        if (tileDragRef.current) event.preventDefault();
+                      }}
+                    >
+                      {tile.kind === "stored" ? (
+                        <StoredImg image={tile.image} />
+                      ) : (
+                        <img src={tile.image.previewUrl} alt="" decoding="async" draggable={false} />
+                      )}
+                    </button>
                     <button
                       type="button"
                       className="attachment-remove"
@@ -1741,6 +2447,9 @@ export function Editor({
                   </div>
                 );
               })}
+              {reorder?.bar ? (
+                <span className="attachment-slot" style={{ left: reorder.bar.left, top: reorder.bar.top, height: reorder.bar.height }} aria-hidden="true" />
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -1749,7 +2458,7 @@ export function Editor({
       {/* The note slot: the image-link row, then the error and conflict
           lines, each folding open and shut in place (see .editor-notes). */}
       <div className="editor-notes">
-        <div className={`link-pop${linkOpen ? " is-open" : ""}`} aria-hidden={!linkOpen}>
+        <div id={linkPopId} className={`link-pop${linkOpen ? " is-open" : ""}`} aria-hidden={!linkOpen}>
           <div className="link-pop-inner">
             <Link2 size={14} aria-hidden="true" />
             <input
@@ -1829,13 +2538,16 @@ export function Editor({
       </div>
 
       <div className="editor-bar">
-        <div className="editor-tools">
+        {/* One Tab stop for the whole toolbar; ←/→ (Home/End) move along it. */}
+        <div className="editor-tools" role="toolbar" aria-label={tr("Writing tools", "编辑工具")} onKeyDown={onToolsKeyDown} onFocus={onToolsFocus}>
           <button
             type="button"
+            data-tool="tag"
+            tabIndex={toolTab("tag")}
             onMouseDown={keepFieldFocus}
             className="icon-button"
             onClick={insertHash}
-            disabled={locked}
+            disabled={!toolEnabled.tag}
             aria-label={tr("Insert tag", "插入标签")}
             {...tip.bind({ text: tr("Insert tag", "插入标签") })}
           >
@@ -1843,21 +2555,24 @@ export function Editor({
           </button>
           <button
             type="button"
+            data-tool="bold"
+            tabIndex={toolTab("bold")}
             onMouseDown={keepFieldFocus}
-            className="icon-button"
+            className={`icon-button${pressed.bold ? " is-active-tool" : ""}`}
             onClick={() => {
               const area = areaRef.current;
               if (area) applyPatch(toggleWrap(content, area.selectionStart, area.selectionEnd, "**"));
             }}
             aria-label={tr("Bold", "加粗")}
-            disabled={locked}
+            aria-pressed={pressed.bold}
+            disabled={!toolEnabled.bold}
             aria-keyshortcuts="Meta+B Control+B"
             // The other wraps have no button of their own; their keys ride
             // along here (and on the field's aria-keyshortcuts).
             {...tip.bind({
               text: tr(
-                `Bold (${MOD}B) · italic ${MOD}I · code ${MOD}E · strike ${MOD}${SHIFT}S · highlight ${MOD}${SHIFT}H`,
-                `加粗（${MOD}B）· 斜体 ${MOD}I · 代码 ${MOD}E · 删除线 ${MOD}${SHIFT}S · 高亮 ${MOD}${SHIFT}H`
+                `Bold (${MOD}B) · italic ${MOD}I · code ${MOD}E · strike ${MOD}${SHIFT}S · highlight ${MOD}${SHIFT}H · link ${MOD}K`,
+                `加粗（${MOD}B）· 斜体 ${MOD}I · 代码 ${MOD}E · 删除线 ${MOD}${SHIFT}S · 高亮 ${MOD}${SHIFT}H · 链接 ${MOD}K`
               )
             })}
           >
@@ -1865,20 +2580,25 @@ export function Editor({
           </button>
           <button
             type="button"
+            data-tool="list"
+            tabIndex={toolTab("list")}
             onMouseDown={keepFieldFocus}
-            className="icon-button"
+            className={`icon-button${pressed.list ? " is-active-tool" : ""}`}
             onClick={() => {
               const area = areaRef.current;
               if (area) applyPatch(toggleBulletLine(content, area.selectionStart, area.selectionEnd));
             }}
             aria-label={tr("Bullet list", "列表")}
-            disabled={locked}
+            aria-pressed={pressed.list}
+            disabled={!toolEnabled.list}
             {...tip.bind({ text: tr("Bullet list (again for a checklist)", "无序列表（再按一次变为待办）") })}
           >
             <List size={17} aria-hidden="true" />
           </button>
           <button
             type="button"
+            data-tool="table"
+            tabIndex={toolTab("table")}
             onMouseDown={keepFieldFocus}
             className="icon-button"
             onClick={() => {
@@ -1886,7 +2606,7 @@ export function Editor({
               if (area) applyPatch(insertTableTemplate(content, area.selectionStart, tr("Col 1", "列 1"), tr("Col 2", "列 2")));
             }}
             aria-label={tr("Insert table", "插入表格")}
-            disabled={locked}
+            disabled={!toolEnabled.table}
             {...tip.bind({ text: tr("Insert table", "插入表格") })}
           >
             <Table size={16} aria-hidden="true" />
@@ -1894,10 +2614,12 @@ export function Editor({
           <button
             ref={addImageRef}
             type="button"
+            data-tool="image"
+            tabIndex={toolTab("image")}
             onMouseDown={keepFieldFocus}
             className="icon-button"
             onClick={() => fileRef.current?.click()}
-            disabled={locked || totalImages + compressing >= MAX_IMAGES}
+            disabled={!toolEnabled.image}
             aria-label={tr("Add image", "添加图片")}
             {...tip.bind({ text: tr("Add image (or drag and paste)", "添加图片（可拖拽/粘贴）") })}
           >
@@ -1905,7 +2627,11 @@ export function Editor({
           </button>
           <button
             type="button"
+            data-tool="link"
+            tabIndex={toolTab("link")}
             onMouseDown={keepFieldFocus}
+            aria-expanded={linkOpen}
+            aria-controls={linkPopId}
             className={`icon-button${linkOpen ? " is-active-tool" : ""}`}
             onClick={() => {
               // Focus inside the tap itself, or iOS will not raise the keyboard.
@@ -1915,7 +2641,7 @@ export function Editor({
               setError(null);
             }}
             aria-label={tr("Insert image link", "插入图片链接")}
-            disabled={locked}
+            disabled={!toolEnabled.link}
             {...tip.bind({ text: tr("Insert image link", "插入图片链接") })}
           >
             <Link2 size={16} aria-hidden="true" />
@@ -1980,7 +2706,8 @@ export function Editor({
                 <Loader2 size={17} className="spin" aria-hidden="true" />
               </span>
             ) : (
-              <SendGlyph />
+              // Keyed by the clears, so each emptied composer replays the flight.
+              <SendGlyph key={clears} flying={clears > flown} onFlown={() => setFlown(clears)} />
             )}
             {/* Label and percentage share one grid cell with hidden sizers for
                 both, so the chip is the same width idle, at 0% and at 99%

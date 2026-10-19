@@ -318,7 +318,30 @@ describe("a sheet pulled down", () => {
     });
   }
 
-  it("thins the scrim with the pull and leaves at the flick's pace", async () => {
+  /** The sheet's inline drag offset in px, or null when it carries none. */
+  function dragOf(card: HTMLElement): number | null {
+    const value = card.style.getPropertyValue("translate").trim();
+    return value ? Number.parseFloat(value.split(/\s+/)[1] ?? "0") : null;
+  }
+
+  /** Stand-in WAAPI: records what the sheet asked to play. */
+  function recordAnimations() {
+    const played: Array<{ target: Element; keyframes: Keyframe[]; options: KeyframeAnimationOptions }> = [];
+    Object.defineProperty(HTMLElement.prototype, "animate", {
+      configurable: true,
+      value: vi.fn(function (this: HTMLElement, keyframes: Keyframe[], options: KeyframeAnimationOptions) {
+        played.push({ target: this, keyframes, options });
+        return { cancel: vi.fn(), onfinish: null } as unknown as Animation;
+      })
+    });
+    return played;
+  }
+
+  afterEach(() => {
+    delete (HTMLElement.prototype as Partial<HTMLElement>).animate;
+  });
+
+  it("thins the scrim with the pull and leaves on the flick's own spring", async () => {
     reducedMotion = false;
     sheet = true;
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(400);
@@ -329,22 +352,27 @@ describe("a sheet pulled down", () => {
       </LanguageProvider>
     );
     const overlay = screen.getByRole("dialog", { name: "Remove?" });
+    const card = overlay.firstElementChild as HTMLElement;
     const title = screen.getByRole("heading", { name: "Remove?" });
     pointer(title, "pointerdown", 100, 1000);
     pointer(window, "pointermove", 120, 1020);
     pointer(window, "pointermove", 200, 1040);
     expect(overlay.style.getPropertyValue("--sheet-pull")).toBe("0.250");
+    expect(dragOf(card)).toBe(100);
     pointer(window, "pointermove", 260, 1050);
     pointer(window, "pointerup", 260, 1060);
-    // 240px left to go at ~2.7px/ms is under 100ms: the quickest exit allowed.
-    expect(overlay.style.getPropertyValue("--sheet-exit")).toBe("100ms");
+    // ~2.7px/ms with 240px to go: the spring carries it off well inside
+    // the standard exit, and a slower pull would take longer.
+    const flung = Number.parseFloat(overlay.style.getPropertyValue("--sheet-exit"));
+    expect(flung).toBeGreaterThan(0);
+    expect(flung).toBeLessThan(160);
     expect(overlay.className).toContain("is-closing");
     await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1));
   });
 
-  it("springs back, scrim and all, when let go short of the line", () => {
-    sheet = true;
+  it("glides a slow pull past the line out more slowly than a flick", () => {
     reducedMotion = false;
+    sheet = true;
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(400);
     render(
       <LanguageProvider>
@@ -354,11 +382,189 @@ describe("a sheet pulled down", () => {
     const overlay = screen.getByRole("dialog", { name: "Remove?" });
     const title = screen.getByRole("heading", { name: "Remove?" });
     pointer(title, "pointerdown", 100, 1000);
+    pointer(window, "pointermove", 160, 1400);
+    pointer(window, "pointermove", 220, 1800);
+    pointer(window, "pointerup", 220, 2200);
+    expect(overlay.className).toContain("is-closing");
+    expect(Number.parseFloat(overlay.style.getPropertyValue("--sheet-exit"))).toBeGreaterThan(80);
+  });
+
+  it("springs home from where it was let go, scrim and all, when let go short of the line", () => {
+    sheet = true;
+    reducedMotion = false;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(400);
+    const played = recordAnimations();
+    render(
+      <LanguageProvider>
+        <ConfirmDialog title="Remove?" body="Removes it" confirmLabel="Remove" onCancel={vi.fn()} onConfirm={vi.fn()} />
+      </LanguageProvider>
+    );
+    const overlay = screen.getByRole("dialog", { name: "Remove?" });
+    const card = overlay.firstElementChild as HTMLElement;
+    const title = screen.getByRole("heading", { name: "Remove?" });
+    pointer(title, "pointerdown", 100, 1000);
     pointer(window, "pointermove", 140, 1100);
     pointer(window, "pointerup", 140, 1400);
     expect(overlay.className).not.toContain("is-closing");
-    expect(overlay.style.getPropertyValue("--sheet-pull")).toBe("0");
-    expect(overlay.style.transition).toContain("--sheet-pull");
+    // The drag is lifted off at once; the spring plays on top of the rest state.
+    expect(overlay.style.getPropertyValue("--sheet-pull")).toBe("");
+    expect(dragOf(card)).toBeNull();
+    const spring = played.find((entry) => entry.target === card);
+    expect(spring).toBeTruthy();
+    expect(spring!.keyframes[0]).toMatchObject({ translate: "0 40.00px", offset: 0 });
+    expect(spring!.keyframes.at(-1)).toMatchObject({ translate: "0 0.00px", offset: 1 });
+    expect(spring!.keyframes.length).toBeGreaterThan(8);
+    expect(Number(spring!.options.duration)).toBeGreaterThan(150);
+  });
+
+  it("pulls from a body at the top of its scroll, but not from a field in it", () => {
+    sheet = true;
+    reducedMotion = false;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(400);
+    render(
+      <LanguageProvider>
+        <PromptDialog title="Name it" body="Pick a name." initialValue="" confirmLabel="Save" validate={() => null} onCancel={vi.fn()} onConfirm={vi.fn()} />
+      </LanguageProvider>
+    );
+    const overlay = screen.getByRole("dialog", { name: "Name it" });
+    const card = overlay.firstElementChild as HTMLElement;
+    pointer(screen.getByText("Pick a name."), "pointerdown", 100, 1000);
+    pointer(window, "pointermove", 130, 1020);
+    expect(dragOf(card)).toBe(30);
+    // Back up past where it started: the sheet is home and the touch is the body's again.
+    pointer(window, "pointermove", 90, 1040);
+    expect(dragOf(card)).toBeNull();
+    // And down again from there, the sheet's once more.
+    pointer(window, "pointermove", 120, 1050);
+    expect(dragOf(card)).toBe(20);
+    pointer(window, "pointermove", 90, 1055);
+    pointer(window, "pointerup", 90, 1060);
+
+    pointer(screen.getByRole("textbox"), "pointerdown", 100, 2000);
+    pointer(window, "pointermove", 140, 2020);
+    expect(dragOf(card)).toBeNull();
+  });
+
+  it("rubber-bands a sheet holding an unsaved draft, both ways, and springs it home", () => {
+    sheet = true;
+    reducedMotion = false;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(400);
+    const onCancel = vi.fn();
+    render(
+      <LanguageProvider>
+        <PromptDialog title="Rename" initialValue="work" confirmLabel="Rename" validate={() => null} onCancel={onCancel} onConfirm={vi.fn()} />
+      </LanguageProvider>
+    );
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "work/notes" } });
+    const overlay = screen.getByRole("dialog", { name: "Rename" });
+    const card = overlay.firstElementChild as HTMLElement;
+    const title = screen.getByRole("heading", { name: "Rename" });
+    pointer(title, "pointerdown", 100, 1000);
+    pointer(window, "pointermove", 400, 1050);
+    const down = dragOf(card)!;
+    expect(down).toBeGreaterThan(0);
+    expect(down).toBeLessThan(48);
+    pointer(window, "pointermove", -200, 1100);
+    const up = dragOf(card)!;
+    expect(up).toBeLessThan(0);
+    expect(up).toBeGreaterThan(-48);
+    pointer(window, "pointermove", 600, 1110);
+    pointer(window, "pointerup", 600, 1120);
+    expect(overlay.className).not.toContain("is-closing");
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+});
+
+describe("a dialog holding an unsaved draft", () => {
+  function renderDirtyPrompt(closeSignal = 0) {
+    const onCancel = vi.fn();
+    const view = render(
+      <LanguageProvider>
+        <PromptDialog title="Rename" initialValue="work" confirmLabel="Rename" validate={() => null} onCancel={onCancel} onConfirm={vi.fn()} closeSignal={closeSignal} />
+      </LanguageProvider>
+    );
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "life" } });
+    return { onCancel, view, overlay: screen.getByRole("dialog", { name: "Rename" }) };
+  }
+
+  afterEach(() => {
+    delete (HTMLElement.prototype as Partial<HTMLElement>).animate;
+  });
+
+  it("boops its card on a backdrop click instead of closing", () => {
+    reducedMotion = false;
+    const animate = vi.fn(() => ({ cancel: vi.fn() }) as unknown as Animation);
+    Object.defineProperty(HTMLElement.prototype, "animate", { configurable: true, value: animate });
+    const { onCancel, overlay } = renderDirtyPrompt();
+    fireEvent.pointerDown(overlay);
+    fireEvent.click(overlay);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(animate).toHaveBeenCalledWith([{ scale: "1" }, { scale: "1.012" }, { scale: "1" }], expect.objectContaining({ duration: 220 }));
+  });
+
+  it("flashes the card's border for two frames under reduced motion", async () => {
+    const { overlay } = renderDirtyPrompt();
+    const card = overlay.firstElementChild as HTMLElement;
+    fireEvent.pointerDown(overlay);
+    fireEvent.click(overlay);
+    expect(card.classList.contains("is-flash")).toBe(true);
+    await sleep(20);
+    expect(card.classList.contains("is-flash")).toBe(false);
+  });
+
+  it("boops on Back too, while Esc and Cancel still close", async () => {
+    const { onCancel, view, overlay } = renderDirtyPrompt();
+    view.rerender(
+      <LanguageProvider>
+        <PromptDialog title="Rename" initialValue="work" confirmLabel="Rename" validate={() => null} onCancel={onCancel} onConfirm={vi.fn()} closeSignal={1} />
+      </LanguageProvider>
+    );
+    expect((overlay.firstElementChild as HTMLElement).classList.contains("is-flash")).toBe(true);
+    expect(onCancel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1));
+  });
+
+  it("closes on Escape", async () => {
+    const { onCancel } = renderDirtyPrompt();
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
+    await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("a dialog's card", () => {
+  it("grows from the control that opened it", () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid === "opener") return new DOMRect(40, 600, 20, 20);
+      return new DOMRect(0, 0, 0, 0);
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetLeft", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("confirm-card") ? 100 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("confirm-card") ? 200 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(340);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(160);
+    function Fixture() {
+      const [open, setOpen] = useState(false);
+      return (
+        <LanguageProvider>
+          <button type="button" data-testid="opener" onClick={() => setOpen(true)}>
+            Open
+          </button>
+          {open ? <ConfirmDialog title="Remove?" body="Removes it" confirmLabel="Remove" onCancel={() => setOpen(false)} onConfirm={vi.fn()} /> : null}
+        </LanguageProvider>
+      );
+    }
+    render(<Fixture />);
+    const opener = screen.getByTestId("opener");
+    act(() => opener.focus());
+    fireEvent.click(opener);
+    const card = screen.getByRole("dialog", { name: "Remove?" }).firstElementChild as HTMLElement;
+    // The opener's centre (50, 610) from the card's top-left (100, 200),
+    // held within half a card of its box.
+    expect(card.style.transformOrigin).toBe("-50.0px 240.0px");
   });
 });
 
@@ -388,6 +594,27 @@ describe("menus", () => {
     const panel = document.querySelector(".action-menu");
     expect(panel).not.toBeNull();
     expect(panel!.className).not.toContain("is-closing");
+  });
+
+  it("cascades its rows for a pointer, but not when reopened within a second", async () => {
+    const user = userEvent.setup();
+    render(<MenuFixture />);
+    const trigger = screen.getByRole("button", { name: "Actions" });
+    await user.click(trigger);
+    expect(document.querySelector(".action-menu")?.classList.contains("is-instant")).toBe(false);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(document.querySelector(".action-menu")).toBeNull());
+    // The rows were just read: they are simply there.
+    await user.click(trigger);
+    expect(document.querySelector(".action-menu")?.classList.contains("is-instant")).toBe(true);
+  });
+
+  it("opens from the keyboard without the cascade", () => {
+    render(<MenuFixture />);
+    const trigger = screen.getByRole("button", { name: "Actions" });
+    act(() => trigger.focus());
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(document.querySelector(".action-menu")?.classList.contains("is-instant")).toBe(true);
   });
 });
 

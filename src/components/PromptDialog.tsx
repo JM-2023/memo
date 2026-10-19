@@ -1,11 +1,12 @@
-import { Loader2 } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
-import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
+import { boopCard, useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { nudgeRefusal, useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
+import { DONE_HOLD_MS } from "../lib/motion";
 import type { ConfirmOutcome } from "./ConfirmDialog";
 
 /** A hint that changes what confirming does. */
@@ -18,6 +19,8 @@ export interface PromptNotice {
   busyLabel?: string;
   /** The widest busy label this action can show (its progress at 100%). */
   busyReserve?: string;
+  /** What the button says once this action went through. */
+  doneLabel?: string;
 }
 
 interface PromptDialogProps {
@@ -29,6 +32,8 @@ interface PromptDialogProps {
   busyLabel?: string;
   /** The widest busy label (its progress at 100%), reserved so the button never grows mid-run. */
   busyReserve?: string;
+  /** Said once a confirm that was under way went through; defaults to "Done". */
+  doneLabel?: string;
   busy?: boolean;
   /** Returns an error message for an unacceptable value, or null. */
   validate: (value: string) => string | null;
@@ -60,6 +65,7 @@ export function PromptDialog({
   confirmLabel,
   busyLabel,
   busyReserve,
+  doneLabel,
   busy,
   validate,
   hint,
@@ -76,6 +82,9 @@ export function PromptDialog({
   const [settledValue, setSettledValue] = useState(initialValue);
   const [pending, setPending] = useState(false);
   const [settled, setSettled] = useState(false);
+  // A confirm that went through after a wait says so before the exit.
+  const [done, setDone] = useState(false);
+  const doneTimerRef = useRef(0);
   const reducedMotion = useReducedMotion();
   const inputRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
@@ -108,6 +117,10 @@ export function PromptDialog({
   const liveNote = shownStillTrue ? shown : { error: null, notice: null };
   const held = pending || settled;
   const busyLook = Boolean(busy) || held;
+  // An edited draft isn't thrown away by a stray tap on the backdrop, a
+  // sheet pulled down or Back; Esc, Cancel and the explicit close still go.
+  const dirtyRef = useRef(false);
+  dirtyRef.current = value !== initialValue;
 
   const overlayRef = useModalA11y<HTMLDivElement>({
     onEscape: requestClose,
@@ -116,8 +129,8 @@ export function PromptDialog({
   });
   const { closing, closingRef, leave } = useOverlayExit(overlayRef);
   useKeyboardInset(overlayRef);
-  const backdrop = useBackdropDismiss(requestClose);
-  useCloseSignal(closeSignal, requestClose);
+  const backdrop = useBackdropDismiss(requestClose, { resist: () => dirtyRef.current });
+  useCloseSignal(closeSignal, requestBack);
 
   const canConfirm = trimmed.length > 0 && !validate(trimmed) && !busyLook && !closing;
 
@@ -150,10 +163,27 @@ export function PromptDialog({
     leave(() => cancelRef.current());
   }
 
-  function finish() {
+  /** Back is a stray dismissal too: a draft (or busy work) stays, and the card says so. */
+  function requestBack() {
+    if (closingRef.current) return;
+    if (dirtyRef.current || busyLook) boopCard(overlayRef.current);
+    else requestClose();
+  }
+
+  /** `said`: the work took a while, so its success stands on the button for a beat first. */
+  function finish(said = false) {
     if (!mountedRef.current || closingRef.current) return;
     setSettled(true);
-    leave(() => (doneRef.current ?? cancelRef.current)());
+    const go = () => leave(() => (doneRef.current ?? cancelRef.current)());
+    if (!said) {
+      go();
+      return;
+    }
+    setDone(true);
+    window.clearTimeout(doneTimerRef.current);
+    doneTimerRef.current = window.setTimeout(() => {
+      if (mountedRef.current) go();
+    }, DONE_HOLD_MS);
   }
 
   /**
@@ -181,7 +211,7 @@ export function PromptDialog({
         if (mountedRef.current) setPending(false);
       };
       void outcome.then((result) => {
-        if (result === true) finish();
+        if (result === true) finish(true);
         else release();
       }, release);
     }
@@ -203,6 +233,7 @@ export function PromptDialog({
     inputRef.current?.select();
     return () => {
       mountedRef.current = false;
+      window.clearTimeout(doneTimerRef.current);
     };
   }, []);
 
@@ -272,15 +303,22 @@ export function PromptDialog({
               {tr("Cancel", "取消")}
             </button>
             <button type="submit" className={`accent-button${busyLook ? " is-busy" : ""}`} disabled={!canConfirm}>
-              {/* The busy label wears the spinner every busy action does; the
-                  reserve carries one too, so the widest figure fits. */}
-              <span className="busy-swap">
+              {/* The busy label wears the spinner every busy action does, the
+                  done one its check; the reserve carries one too, so the
+                  widest figure fits. */}
+              <span className="busy-swap" data-done={done || undefined}>
                 <span aria-hidden={busyLook || undefined}>{idleLabel}</span>
                 {busyLabel !== undefined || notice?.busyLabel !== undefined || busyLook ? (
-                  <span aria-hidden={!busyLook || undefined}>
-                    <Loader2 size={14} className="spin busy-spinner" aria-hidden="true" />
-                    {shownBusyText}
-                  </span>
+                  <>
+                    <span aria-hidden={!busyLook || done || undefined}>
+                      <Loader2 size={14} className="spin busy-spinner" aria-hidden="true" />
+                      {shownBusyText}
+                    </span>
+                    <span aria-hidden={!done || undefined}>
+                      <Check size={14} className="busy-spinner" aria-hidden="true" />
+                      {notice?.doneLabel ?? doneLabel ?? tr("Done", "已完成")}
+                    </span>
+                  </>
                 ) : null}
                 {reserve ? (
                   <span aria-hidden="true">

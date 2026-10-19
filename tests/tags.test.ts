@@ -6,8 +6,10 @@ import {
   isValidTagPath,
   renameTagInContent,
   tagMatches,
-  tagRenamePathsOverlap
+  tagRenamePathsOverlap,
+  tagsByRecentUse
 } from "../src/lib/tags";
+import type { Memo } from "../src/lib/types";
 
 describe("tag path protocol", () => {
   it.each(["work", "工作", "work_2026", "parent/child", "领域/项目·甲", "a-b/子_项"])("accepts %s", (path) => {
@@ -121,5 +123,22 @@ describe("tag content rewriting", () => {
     expect(renameTagInContent("keep ``#work`` and ```#work``` plus #work", "work", null)).toBe(
       "keep ``#work`` and ```#work``` plus"
     );
+  });
+});
+
+describe("tagsByRecentUse", () => {
+  function memo(id: string, content: string, createdAt: string, updatedAt = createdAt): Memo {
+    return { id, content, createdAt, updatedAt, pinnedAt: null, deletedAt: null, seq: 1, images: [] };
+  }
+
+  it("puts the tags written last first, then the most used, then by name", () => {
+    const memos = [
+      memo("a", "#old #shared", "2026-01-01T00:00:00.000Z"),
+      memo("b", "#old #shared", "2026-01-02T00:00:00.000Z"),
+      memo("c", "#fresh #shared #beta #alpha", "2026-03-01T00:00:00.000Z"),
+      // Edited lately, written long ago: a ticked box is not using the tag.
+      memo("d", "#ancient", "2025-01-01T00:00:00.000Z", "2026-06-01T00:00:00.000Z")
+    ];
+    expect(tagsByRecentUse(memos)).toEqual(["shared", "alpha", "beta", "fresh", "old", "ancient"]);
   });
 });

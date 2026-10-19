@@ -57,9 +57,13 @@ describe("Editor accessibility and composition", () => {
     const options = screen.getAllByRole("option");
     expect(editor.getAttribute("aria-expanded")).toBe("true");
     expect(editor.getAttribute("aria-controls")).toBe(listbox.id);
+    // A bare # lights no row (Enter still breaks the line); ↓ lights the first.
+    expect(editor.getAttribute("aria-activedescendant")).toBeNull();
+    expect(options[0].getAttribute("aria-selected")).toBe("false");
+    expect(options[0].tabIndex).toBe(-1);
+    await user.keyboard("{ArrowDown}");
     expect(editor.getAttribute("aria-activedescendant")).toBe(options[0].id);
     expect(options[0].getAttribute("aria-selected")).toBe("true");
-    expect(options[0].tabIndex).toBe(-1);
 
     await user.keyboard("{ArrowDown}");
     expect(editor.getAttribute("aria-activedescendant")).toBe(options[1].id);
@@ -127,13 +131,13 @@ describe("Editor accessibility and composition", () => {
 
     fireEvent.change(editor, { target: { value: "x".repeat(39_995), selectionStart: 39_995 } });
     expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
-    // Over the cap the count says so in words (no group separators, so the
-    // digits keep their column); the cap itself is in the tip and for
-    // screen readers, not a native title.
+    // Over the cap the count says so in words (five digits and more are
+    // grouped); the cap itself is in the tip and for screen readers, not a
+    // native title.
     const over = screen.getByText("1 over");
     expect(over.className).toContain("is-over");
     expect(over.getAttribute("title")).toBeNull();
-    expect(over.textContent).toBe("1 over — a memo holds up to 40000 characters");
+    expect(over.textContent).toBe("1 over — a memo holds up to 40,000 characters");
   });
 });
 

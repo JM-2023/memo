@@ -3,11 +3,14 @@ import {
   backspaceListMarker,
   continueListOnEnter,
   insertTableTemplate,
+  listLineAt,
   setTaskMark,
   shiftListIndent,
   tableTabStop,
   toggleBulletLine,
-  toggleWrap
+  toggleWrap,
+  wrapActiveAt,
+  wrapLink
 } from "../src/lib/markdownEdit";
 
 describe("setTaskMark", () => {
@@ -159,8 +162,53 @@ describe("toggleWrap", () => {
   });
 
   it("gives a caret an empty pair and removes one it sits in", () => {
-    expect(toggleWrap("ab", 1, 1, "*")).toEqual({ value: "a**b", start: 2, end: 2 });
+    expect(toggleWrap("a b", 1, 1, "*")).toEqual({ value: "a** b", start: 2, end: 2 });
     expect(toggleWrap("a**b", 2, 2, "*")).toEqual({ value: "ab", start: 1, end: 1 });
+    // Chinese runs on with no spaces: no word to find, so an empty pair.
+    expect(toggleWrap("今天", 1, 1, "**")).toEqual({ value: "今****天", start: 3, end: 3 });
+  });
+
+  it("wraps the whole Latin or number word a caret sits inside", () => {
+    expect(toggleWrap("say hello now", 6, 6, "**")).toEqual({ value: "say **hello** now", start: 8, end: 8 });
+    expect(toggleWrap("in 2026 too", 5, 5, "~~")).toEqual({ value: "in ~~2026~~ too", start: 7, end: 7 });
+    expect(toggleWrap("don't go", 2, 2, "*")).toEqual({ value: "*don't* go", start: 3, end: 3 });
+    // At a word's edge the caret is not inside it.
+    expect(toggleWrap("hello", 5, 5, "**")).toEqual({ value: "hello****", start: 7, end: 7 });
+  });
+
+  it("unwraps the run a caret or selection sits in instead of nesting a pair", () => {
+    expect(toggleWrap("say **hello** now", 8, 8, "**")).toEqual({ value: "say hello now", start: 6, end: 6 });
+    expect(toggleWrap("**bold text**", 7, 11, "**")).toEqual({ value: "bold text", start: 5, end: 9 });
+    expect(toggleWrap("an *it* and **b**", 5, 5, "*")).toEqual({ value: "an it and **b**", start: 4, end: 4 });
+    // ** is not two *: a caret in bold text still gets its italic.
+    expect(toggleWrap("**bold**", 4, 4, "*").value).toBe("***bold***");
+    expect(toggleWrap("x `co de` y", 5, 5, "`")).toEqual({ value: "x co de y", start: 4, end: 4 });
+  });
+});
+
+describe("wrapActiveAt and listLineAt", () => {
+  it("read Bold's and List's pressed state off the caret", () => {
+    expect(wrapActiveAt("a **bold** b", 6, 6, "**")).toBe(true);
+    expect(wrapActiveAt("a **bold** b", 4, 8, "**")).toBe(true);
+    expect(wrapActiveAt("a **bold** b", 11, 11, "**")).toBe(false);
+    expect(wrapActiveAt("an *it*", 5, 5, "**")).toBe(false);
+    expect(listLineAt("plain\n- item", 8)).toBe(true);
+    expect(listLineAt("plain\n- [ ] task", 2)).toBe(false);
+    expect(listLineAt("1. first", 3)).toBe(true);
+  });
+});
+
+describe("wrapLink", () => {
+  it("makes the selection a link's text with the url placeholder selected", () => {
+    expect(wrapLink("see the docs", 4, 12)).toEqual({ value: "see [the docs](url)", start: 15, end: 18 });
+  });
+
+  it("puts a selected address in the parentheses, the caret in the brackets", () => {
+    expect(wrapLink("at https://example.com/a(b) now", 3, 27)).toEqual({ value: "at [](https://example.com/a%28b%29) now", start: 4, end: 4 });
+  });
+
+  it("drops an empty link with the caret between the brackets", () => {
+    expect(wrapLink("ab", 1, 1)).toEqual({ value: "a[](url)b", start: 2, end: 2 });
   });
 });
 

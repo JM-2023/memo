@@ -1,6 +1,6 @@
 import { Minus, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
+import { boopCard, useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import { useI18n } from "../lib/i18n";
@@ -27,6 +27,10 @@ interface ReviewSettingsModalProps {
   onClose: () => void;
   /** Bumped by Back: leave as the ✕ would. */
   closeSignal?: number;
+  /** Memos set aside with "Not again" on this device. */
+  hiddenCount?: number;
+  /** Let them come back (at once, not on Save). */
+  onRestoreHidden?: () => void;
 }
 
 const SCOPE_OPTIONS: { scope: ReviewScope; en: string; zh: string }[] = [
@@ -60,8 +64,10 @@ function rovingTarget(key: string, index: number, length: number): number | null
  * blurred backdrop, damped swell in, staggered section rise, reverse morph
  * out — including on save, before the feed regenerates.
  */
-export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClose, closeSignal }: ReviewSettingsModalProps) {
+export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClose, closeSignal, hiddenCount = 0, onRestoreHidden }: ReviewSettingsModalProps) {
   const { language, locale, tr } = useI18n();
+  // Once restored, the line stays (its button inert) so focus has somewhere to be.
+  const [restoredHidden, setRestoredHidden] = useState(false);
 
   const [scope, setScope] = useState<ReviewScope>(settings.scope);
   const [selectedTags, setSelectedTags] = useState<ReadonlySet<string>>(() => new Set(settings.tags));
@@ -108,6 +114,15 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
     leave(() => closeRef.current());
   }
 
+  // Changed choices aren't thrown away by a stray backdrop tap, a pulled
+  // sheet or Back: those boop the card instead. Esc, Cancel and ✕ still close.
+  const dirtyRef = useRef(false);
+  dirtyRef.current = !unchanged;
+  function requestBack() {
+    if (dirtyRef.current) boopCard(overlayRef.current);
+    else requestClose();
+  }
+
   function requestSave() {
     if (tagsMissing || unchanged) return;
     leave(() => saveRef.current(draftRef.current));
@@ -115,8 +130,8 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
 
   const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
   const { closing, leave } = useOverlayExit(overlayRef);
-  const backdrop = useBackdropDismiss(requestClose);
-  useCloseSignal(closeSignal, requestClose);
+  const backdrop = useBackdropDismiss(requestClose, { resist: () => dirtyRef.current });
+  useCloseSignal(closeSignal, requestBack);
 
   function toggleTag(tag: string) {
     setSelectedTags((current) => {
@@ -327,6 +342,24 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
               </span>
             </div>
           </section>
+
+          {onRestoreHidden && (hiddenCount > 0 || restoredHidden) ? (
+            <p className="review-hidden-line">
+              <span>{restoredHidden ? tr("Set-aside memos can come back", "不再出现的笔记已恢复") : tr(`Set aside with “Not again” · ${hiddenCount}`, `不再出现的笔记 · ${hiddenCount}`)}</span>
+              <button
+                type="button"
+                className="ghost-button review-hidden-restore"
+                aria-disabled={restoredHidden || undefined}
+                onClick={() => {
+                  if (restoredHidden) return;
+                  setRestoredHidden(true);
+                  onRestoreHidden();
+                }}
+              >
+                {restoredHidden ? tr("Restored", "已恢复") : tr("Restore", "恢复")}
+              </button>
+            </p>
+          ) : null}
         </div>
 
         <footer className="review-foot">

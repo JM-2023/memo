@@ -3,6 +3,7 @@ import { forgetAllFolds } from "./foldMemory";
 import { deleteImageCacheDb } from "./imageCache";
 import { resetModelRuntime } from "./modelRuntime";
 import { deleteSemanticIndexDb } from "./semanticIndex";
+import { forgetStatsPlace } from "./statsDrilldown";
 
 const APP_STORAGE_PREFIXES = ["memo:", "memo-"] as const;
 
@@ -11,7 +12,8 @@ const APP_STORAGE_PREFIXES = ["memo:", "memo-"] as const;
  * and behaves on this device. They survive logout so the gate and the next
  * session keep the owner's language and theme. Everything else under the app
  * prefixes (saved filters and Daily Review settings name tags and searches;
- * the review day lists memo ids) is notebook-derived and is cleared.
+ * the review day, its seen cards and the "Not again" list hold memo ids) is
+ * notebook-derived and is cleared.
  */
 const DEVICE_PREFERENCE_KEYS: ReadonlySet<string> = new Set([
   "memo:theme",
@@ -88,6 +90,7 @@ async function clearCacheStorage(): Promise<void> {
 export async function clearLocalDeviceData(): Promise<void> {
   const snapshotInvalidation = invalidateSnapshot();
   forgetAllFolds();
+  forgetStatsPlace();
 
   try {
     if (typeof localStorage !== "undefined") clearAppStorage(localStorage);

@@ -1,6 +1,7 @@
 import { ChevronRight, Hash, MoreHorizontal, Pencil, Pin, PinOff, Tag, Trash2, X } from "lucide-react";
 import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useI18n } from "../lib/i18n";
+import { loadOpenTagPaths, persistOpenTagPaths } from "../lib/sidebarMemory";
 import type { TagNode } from "../lib/tags";
 import { Menu } from "./Menu";
 import { RollingText } from "./RollingText";
@@ -310,8 +311,11 @@ function TagTreeView({ tree, activeTag, pinnedTags, onPickTag, onPinTag, onRenam
   // the rows below still "at" their pre-unfold positions and glided them a
   // second time.) A subtree opens when the lens lands inside it and stays
   // open until folded by hand; folding parks it in `closing` while its track
-  // shuts, then the effect below drops it.
-  const [openPaths, setOpenPaths] = useState<ReadonlySet<string>>(() => new Set(ancestorsOf(activeTag)));
+  // shuts, then the effect below drops it. What was unfolded by hand comes
+  // back after a reload (lib/sidebarMemory); the first render shows it open
+  // rather than unfolding it.
+  const [openPaths, setOpenPaths] = useState<ReadonlySet<string>>(() => new Set([...loadOpenTagPaths(), ...ancestorsOf(activeTag)]));
+  useEffect(() => persistOpenTagPaths(openPaths), [openPaths]);
   const [closingPaths, setClosingPaths] = useState<ReadonlySet<string>>(() => new Set());
   const [seenTag, setSeenTag] = useState(activeTag);
   if (activeTag !== seenTag) {

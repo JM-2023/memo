@@ -1,16 +1,26 @@
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent
+} from "react";
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import { dateFormat, daysBetweenInclusive, formatDayLabel, formatMonthYear, formatYear, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
+import { EASE_OUT, T_SLOW } from "../lib/motion";
 import { buildHeatWeeks, computeStreaks, countsByDay, localMaxima, longestRun, totalStats, wordCountOf, type DayRun, type HeatCell } from "../lib/stats";
-import type { StatsDrilldown } from "../lib/statsDrilldown";
+import { recallStatsPlace, rememberStatsPlace, type StatsDrilldown } from "../lib/statsDrilldown";
 import { tagsOf } from "../lib/tags";
 import type { Memo } from "../lib/types";
 import { RollingText } from "./RollingText";
-import { DATA_TIP_DELAY, useTip, withFocus } from "./Tip";
+import { DATA_TIP_DELAY, useTip, withFocus, type TipContent } from "./Tip";
 
 interface StatsModalProps {
   memos: Memo[];
@@ -48,6 +58,30 @@ function argMax(values: number[]): number {
   return best;
 }
 
+/**
+ * A mark a touch has picked. A finger has no hover to read a day, bar or dot
+ * by, and every one of them drills out of the panel, so on touch the first
+ * tap picks the mark — ring, pinned tip, a "Show n memos" pill in its
+ * section's head — and the second tap (or the pill) drills.
+ */
+interface StatsPick {
+  key: string;
+  count: number;
+  /** What the mark stands for, in words: "Mar 5, 2026", "Monday · 9 AM – 10 AM". */
+  place: string;
+  tip: TipContent;
+  drill: () => void;
+}
+
+type PickSection = "days" | "months" | "rhythm";
+type PickPress = (event: ReactMouseEvent<HTMLElement>, pick: StatsPick) => void;
+
+/** A press that came from a finger — or a pen on a device whose pointer is coarse. */
+function touchLike(pointerType: string | null): boolean {
+  if (pointerType === "touch") return true;
+  return pointerType === "pen" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+}
+
 interface BarChartProps {
   label: string;
   values: number[];
@@ -59,7 +93,12 @@ interface BarChartProps {
    * predecessor to compare with.
    */
   compare: { name: string; values: number[]; shown: boolean };
+  /** Columns still ahead (the rest of this year): a dashed baseline, not a zero. */
+  future?: boolean[];
   onPick: (index: number) => void;
+  /** The touch pick in this chart, by key. */
+  picked: string | null;
+  onPress: PickPress;
 }
 
 /**
@@ -69,12 +108,17 @@ interface BarChartProps {
  * (measured, not guessed), only the local peaks keep theirs, plus the hovered
  * or focused bar; the tip still carries the full sentence.
  */
-function BarChart({ label, values, labels, tips, compare, onPick }: BarChartProps) {
-  const { count, formatNumber } = useI18n();
+function BarChart({ label, values, labels, tips, compare, future = [], onPick, picked, onPress }: BarChartProps) {
+  const { count, formatNumber, tr } = useI18n();
   const tip = useTip();
   const max = Math.max(1, ...values, ...(compare.shown ? compare.values : []));
+  const notYet = tr("Not yet", "还没到");
   const nameOf = (index: number) =>
-    `${tips[index]}: ${count(values[index], "memo")}${compare.shown ? `, ${compare.name}: ${count(compare.values[index], "memo")}` : ""}`;
+    `${tips[index]}: ${future[index] ? notYet : count(values[index], "memo")}${compare.shown ? `, ${compare.name}: ${count(compare.values[index], "memo")}` : ""}`;
+  const tipOf = (index: number): TipContent => ({
+    strong: future[index] ? notYet : count(values[index], "memo"),
+    text: compare.shown ? `${tips[index]} · ${compare.name} ${formatNumber(compare.values[index] ?? 0)}` : tips[index]
+  });
   const summary = `${label}. ${values.map((_, index) => nameOf(index)).join("; ")}`;
   const density = values.length >= 20 ? " is-dense" : values.length >= 10 ? " is-medium" : "";
   const peaks = localMaxima(values);
@@ -112,22 +156,23 @@ function BarChart({ label, values, labels, tips, compare, onPick }: BarChartProp
           // Year switches resize the bars in a left-to-right ripple.
           const ripple = `${Math.min(index, 11) * 0.014}s`;
           const before = compare.values[index] ?? 0;
+          const key = `bar:${index}`;
+          // A month still to come has no stub: an empty past month drew the
+          // same 4px as one that hasn't happened.
+          const shape = future[index] ? " is-future" : value > 0 ? "" : " is-zero";
           return (
             <button
               key={index}
               type="button"
-              className="stats-bar-col"
+              className={`stats-bar-col${picked === key ? " is-picked" : ""}`}
               disabled={value === 0}
               aria-label={nameOf(index)}
-              onClick={() => onPick(index)}
-              {...tip.bind(
-                { strong: count(value, "memo"), text: compare.shown ? `${tips[index]} · ${compare.name} ${formatNumber(before)}` : tips[index] },
-                { delay: DATA_TIP_DELAY }
-              )}
+              onClick={(event) => onPress(event, { key, count: value, place: tips[index], tip: tipOf(index), drill: () => onPick(index) })}
+              {...tip.bind(tipOf(index), { delay: DATA_TIP_DELAY })}
             >
               <span
-                className={`stats-bar${value > 0 ? "" : " is-zero"}`}
-                style={{ height: value > 0 ? `${(value / max) * 100}%` : "4px", animationDelay: `${Math.min(index, 11) * 0.018}s`, "--bar-d": ripple } as CSSProperties}
+                className={`stats-bar${shape}`}
+                style={{ height: future[index] ? 0 : value > 0 ? `${(value / max) * 100}%` : "4px", animationDelay: `${Math.min(index, 11) * 0.008}s`, "--bar-d": ripple } as CSSProperties}
               />
               <span className={`stats-bar-mark${before > 0 ? "" : " is-zero"}`} style={{ "--m": before / max, "--bar-d": ripple } as CSSProperties} aria-hidden="true" />
               {/* A sibling of the bar, not its child, so it can sit over last
@@ -158,6 +203,8 @@ interface YearStripProps {
   monthCounts: number[];
   onPickDay: (key: string) => void;
   onPickMonth: (month: number) => void;
+  picked: string | null;
+  onPress: PickPress;
 }
 
 /**
@@ -167,7 +214,7 @@ interface YearStripProps {
  * their month; days with memos drill into their day. On a phone the strip
  * keeps legible cells and scrolls sideways, opening on today.
  */
-function YearStrip({ year, weeks, monthCounts, onPickDay, onPickMonth }: YearStripProps) {
+function YearStrip({ year, weeks, monthCounts, onPickDay, onPickMonth, picked, onPress }: YearStripProps) {
   const { count, locale, tr } = useI18n();
   const tip = useTip();
   const columns = Math.max(STRIP_WEEKS, weeks.length);
@@ -272,6 +319,8 @@ function YearStrip({ year, weeks, monthCounts, onPickDay, onPickMonth }: YearStr
               const sweep = { "--w": column } as CSSProperties;
               if (cell && cell.inRange && !cell.isFuture && cell.count > 0) {
                 const day = dayFormatter.format(parseDayKey(cell.key));
+                const key = `day:${cell.key}`;
+                const content: TipContent = { strong: count(cell.count, "memo"), text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}` };
                 return (
                   <button
                     key={`${column}-${row}`}
@@ -280,19 +329,13 @@ function YearStrip({ year, weeks, monthCounts, onPickDay, onPickMonth }: YearStr
                       else dayRefs.current.delete(cell.key);
                     }}
                     type="button"
-                    className={`year-cell level-${cell.level}${cell.isToday ? " is-today" : ""}`}
+                    className={`year-cell level-${cell.level}${cell.isToday ? " is-today" : ""}${picked === key ? " is-picked" : ""}`}
                     style={sweep}
                     aria-label={tr(`Show ${count(cell.count, "memo")} from ${day}`, `查看 ${day}的 ${count(cell.count, "memo")}`)}
                     tabIndex={cell.key === roving ? 0 : -1}
-                    {...withFocus(
-                      tip.bind(
-                        { strong: count(cell.count, "memo"), text: `${formatDayLabel(cell.key, locale)} ${weekdayLabel(cell.key, locale)}` },
-                        { delay: DATA_TIP_DELAY }
-                      ),
-                      () => setFocused(cell.key)
-                    )}
+                    {...withFocus(tip.bind(content, { delay: DATA_TIP_DELAY }), () => setFocused(cell.key))}
                     onKeyDown={(event) => moveFocus(event, cell.key)}
-                    onClick={() => onPickDay(cell.key)}
+                    onClick={(event) => onPress(event, { key, count: cell.count, place: day, tip: content, drill: () => onPickDay(cell.key) })}
                   />
                 );
               }
@@ -316,6 +359,8 @@ interface RhythmChartProps {
   onPickWeekday: (weekday: number) => void;
   onPickHour: (hour: number) => void;
   onPickSlot: (weekday: number, hour: number) => void;
+  picked: string | null;
+  onPress: PickPress;
 }
 
 /** Arrow-key stops in the rhythm grid, by [row, column] in reading order. */
@@ -354,7 +399,7 @@ function stepRhythm(stops: [number, number][], from: number, key: string): numbe
  * the hour totals under their columns, each drilling into its slice. Dots
  * re-size in a diagonal ripple when the year changes.
  */
-function RhythmChart({ slots, weekdayCounts, hourCounts, onPickWeekday, onPickHour, onPickSlot }: RhythmChartProps) {
+function RhythmChart({ slots, weekdayCounts, hourCounts, onPickWeekday, onPickHour, onPickSlot, picked, onPress }: RhythmChartProps) {
   const { count, locale, tr } = useI18n();
   const tip = useTip();
   const shortDays = useMemo(() => weekdayNames(locale, "short"), [locale]);
@@ -419,6 +464,7 @@ function RhythmChart({ slots, weekdayCounts, hourCounts, onPickWeekday, onPickHo
                   );
                 }
                 const slot = `${longDays[r]} · ${formatHourRange(c, locale)}`;
+                const content: TipContent = { strong: count(value, "memo"), text: slot };
                 return (
                   <button
                     key={c}
@@ -427,12 +473,12 @@ function RhythmChart({ slots, weekdayCounts, hourCounts, onPickWeekday, onPickHo
                       else cellRefs.current.delete(key);
                     }}
                     type="button"
-                    className="rhythm-cell"
+                    className={`rhythm-cell${picked === `slot:${key}` ? " is-picked" : ""}`}
                     aria-label={`${slot}: ${count(value, "memo")}`}
                     tabIndex={stops[rovingIndex]?.[0] === r && stops[rovingIndex]?.[1] === c ? 0 : -1}
-                    {...withFocus(tip.bind({ strong: count(value, "memo"), text: slot }, { delay: DATA_TIP_DELAY }), () => setFocused(key))}
+                    {...withFocus(tip.bind(content, { delay: DATA_TIP_DELAY }), () => setFocused(key))}
                     onKeyDown={(event) => moveFocus(event, r, c)}
-                    onClick={() => onPickSlot(r, c)}
+                    onClick={(event) => onPress(event, { key: `slot:${key}`, count: value, place: slot, tip: content, drill: () => onPickSlot(r, c) })}
                   >
                     <span className="rhythm-dot" style={style} />
                   </button>
@@ -467,10 +513,18 @@ function RhythmChart({ slots, weekdayCounts, hourCounts, onPickWeekday, onPickHo
             <button
               key={hour}
               type="button"
-              className="rhythm-hour"
+              className={`rhythm-hour${picked === `hour:${hour}` ? " is-picked" : ""}`}
               disabled={value === 0}
               aria-label={`${formatHourRange(hour, locale)}: ${count(value, "memo")}`}
-              onClick={() => onPickHour(hour)}
+              onClick={(event) =>
+                onPress(event, {
+                  key: `hour:${hour}`,
+                  count: value,
+                  place: formatHourRange(hour, locale),
+                  tip: { strong: count(value, "memo"), text: formatHourRange(hour, locale) },
+                  drill: () => onPickHour(hour)
+                })
+              }
               {...tip.bind({ strong: count(value, "memo"), text: formatHourRange(hour, locale) }, { delay: DATA_TIP_DELAY })}
             >
               <span className="rhythm-hour-bar" style={{ "--f": value / hourMax, "--d": `${hour * 7}ms` } as CSSProperties} />
@@ -496,7 +550,7 @@ interface LeavingTag {
   serial: number;
 }
 
-const TAG_GLIDE: KeyframeAnimationOptions = { duration: 220, easing: "cubic-bezier(0.24, 1.1, 0.32, 1)" };
+const TAG_GLIDE: KeyframeAnimationOptions = { duration: T_SLOW, easing: EASE_OUT };
 
 /**
  * Ranked tag bars keyed by tag name. Switching years FLIP-glides surviving
@@ -727,23 +781,42 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
     return min;
   }, [memos, maxYear]);
 
-  const [year, setYear] = useState(maxYear);
+  // The panel opens where it was left this session — the year it showed and
+  // how far down it was read — so a drill and a way back is a round trip.
+  const [year, setYear] = useState(() => {
+    const remembered = recallStatsPlace()?.year;
+    return remembered === undefined ? maxYear : Math.min(maxYear, Math.max(minYear, remembered));
+  });
+  const bodyRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef(onClose);
   const drilldownRef = useRef(onDrilldown);
   closeRef.current = onClose;
   drilldownRef.current = onDrilldown;
 
-  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: requestClose, initialFocusRef: closeButtonRef });
+  const [picked, setPicked] = useState<(StatsPick & { section: PickSection }) | null>(null);
+  const pickAnchorRef = useRef<HTMLElement | null>(null);
+  const pillRef = useRef<HTMLButtonElement>(null);
+  /** The pointer behind the press a click is about to finish, if any (none: the keyboard). */
+  const pressTypeRef = useRef<string | null>(null);
+
+  const overlayRef = useModalA11y<HTMLDivElement>({ onEscape: pressEscape, initialFocusRef: closeButtonRef });
   const exit = useOverlayExit(overlayRef);
   const closing = exit.closing;
   const backdrop = useBackdropDismiss(requestClose);
   // Back closes the panel with its own exit (see Lightbox's closeSignal).
   useCloseSignal(closeSignal, requestClose);
 
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    const scrollTop = recallStatsPlace()?.scrollTop ?? 0;
+    if (body && scrollTop > 0) body.scrollTop = scrollTop;
+  }, []);
+
   function leave(callback: () => void) {
     if (exit.closingRef.current) return;
     tip.hide();
+    rememberStatsPlace({ year, scrollTop: bodyRef.current?.scrollTop ?? 0 });
     exit.leave(callback);
   }
 
@@ -751,8 +824,74 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
     leave(() => closeRef.current());
   }
 
+  /** Escape lets go of a touch pick first, then closes. */
+  function pressEscape() {
+    if (picked) {
+      setPicked(null);
+      tip.hide();
+      return;
+    }
+    requestClose();
+  }
+
   function requestDrilldown(filter: StatsDrilldown) {
     leave(() => drilldownRef.current(filter));
+  }
+
+  /**
+   * A mark's activation. A mouse or the keyboard drills at once, as ever. A
+   * finger's first tap picks the mark instead, pinning its tip above it; a
+   * second tap on it drills.
+   */
+  function pressIn(section: PickSection): PickPress {
+    return (event, pick) => {
+      const touch = touchLike(pressTypeRef.current);
+      pressTypeRef.current = null;
+      if (!touch || picked?.key === pick.key) {
+        pick.drill();
+        return;
+      }
+      pickAnchorRef.current = event.currentTarget;
+      setPicked({ ...pick, section });
+      tip.show(event.currentTarget, pick.tip, { delay: 0 });
+    };
+  }
+
+  // A pick lasts until the body scrolls or a press lands anywhere but the
+  // mark or its pill.
+  useEffect(() => {
+    if (!picked) return;
+    const body = bodyRef.current;
+    const clear = () => setPicked(null);
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && (pickAnchorRef.current?.contains(target) || pillRef.current?.contains(target))) return;
+      clear();
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    body?.addEventListener("scroll", clear, { passive: true });
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      body?.removeEventListener("scroll", clear);
+    };
+  }, [picked]);
+
+  /** The picked mark's way in, in its section's head where the key or note sits. */
+  function pickPill(section: PickSection) {
+    if (!picked || picked.section !== section) return null;
+    const pick = picked;
+    return (
+      <button
+        ref={pillRef}
+        type="button"
+        className="stats-pick-pill"
+        aria-label={tr(`Show ${count(pick.count, "memo")} from ${pick.place}`, `查看 ${pick.place}的 ${count(pick.count, "memo")}`)}
+        onClick={() => pick.drill()}
+      >
+        {tr(`Show ${count(pick.count, "memo")}`, `查看 ${formatNumber(pick.count)} 条`)}
+        <span aria-hidden="true"> ›</span>
+      </button>
+    );
   }
 
   const byDay = useMemo(() => countsByDay(memos), [memos]);
@@ -896,7 +1035,16 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
       tabIndex={-1}
       {...backdrop}
     >
-      <div className="stats-modal" onClick={(event) => event.stopPropagation()}>
+      <div
+        className="stats-modal"
+        onClick={(event) => event.stopPropagation()}
+        onPointerDownCapture={(event) => {
+          pressTypeRef.current = event.pointerType;
+        }}
+        onKeyDownCapture={() => {
+          pressTypeRef.current = null;
+        }}
+      >
         <header className="stats-head">
           <h2>{tr("Statistics", "统计")}</h2>
           <div className="stats-year-nav">
@@ -928,7 +1076,7 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
           </button>
         </header>
 
-        <div className="stats-body">
+        <div ref={bodyRef} className="stats-body scroll-edges">
           {/* Tier 1: the year's figure in display type with its comparison
               in words, beside four supporting figures on hairlines. */}
           <section className="stats-section stats-overview">
@@ -980,19 +1128,22 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
               <h3 className="stats-section-title">{tr("Daily activity", "每日活跃")}</h3>
               {/* The scale, built from the strip's own cell classes so it
                   recolours with them. The swatches are decoration; a screen
-                  reader gets the sentence instead. */}
-              <div className="heat-legend">
-                <span className="heat-legend-sr">
-                  {tr("Shade shows memos per day, from 1 to 5 or more.", "颜色深浅表示每天的笔记数，从 1 条到 5 条或更多。")}
-                </span>
-                <span aria-hidden="true">{tr("Less", "少")}</span>
-                <span className="heat-legend-cells" aria-hidden="true">
-                  {[0, 1, 2, 3, 4].map((level) => (
-                    <span key={level} className={`year-cell level-${level}`} />
-                  ))}
-                </span>
-                <span aria-hidden="true">{tr("More", "多")}</span>
-              </div>
+                  reader gets the sentence instead. A touch pick's pill takes
+                  its place while a day is picked. */}
+              {pickPill("days") ?? (
+                <div className="heat-legend">
+                  <span className="heat-legend-sr">
+                    {tr("Shade shows memos per day, from 1 to 5 or more.", "颜色深浅表示每天的笔记数，从 1 条到 5 条或更多。")}
+                  </span>
+                  <span aria-hidden="true">{tr("Less", "少")}</span>
+                  <span className="heat-legend-cells" aria-hidden="true">
+                    {[0, 1, 2, 3, 4].map((level) => (
+                      <span key={level} className={`year-cell level-${level}`} />
+                    ))}
+                  </span>
+                  <span aria-hidden="true">{tr("More", "多")}</span>
+                </div>
+              )}
             </div>
             <YearStrip
               year={year}
@@ -1000,22 +1151,26 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
               monthCounts={yearData.monthCounts}
               onPickDay={(day) => requestDrilldown({ kind: "day", day })}
               onPickMonth={(month) => requestDrilldown({ kind: "month", year, month })}
+              picked={picked?.section === "days" ? picked.key : null}
+              onPress={pressIn("days")}
             />
           </section>
 
           <section className="stats-section" style={{ animationDelay: "0.06s" }}>
             <div className="stats-section-head">
               <h3 className="stats-section-title">{tr("Memos by month", "每月笔记")}</h3>
-              <div className={`stats-series-key${before.total > 0 ? "" : " is-hidden"}`} aria-hidden="true">
-                <span className="stats-series">
-                  <span className="stats-series-bar" />
-                  {year}
-                </span>
-                <span className="stats-series">
-                  <span className="stats-series-tick" />
-                  {lastYear}
-                </span>
-              </div>
+              {pickPill("months") ?? (
+                <div className={`stats-series-key${before.total > 0 ? "" : " is-hidden"}`} aria-hidden="true">
+                  <span className="stats-series">
+                    <span className="stats-series-bar" />
+                    {year}
+                  </span>
+                  <span className="stats-series">
+                    <span className="stats-series-tick" />
+                    {lastYear}
+                  </span>
+                </div>
+              )}
             </div>
             <BarChart
               label={tr("Memos by month", "每月笔记")}
@@ -1023,18 +1178,23 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
               labels={yearData.monthCounts.map((_, month) => monthFormatter.format(new Date(year, month, 1)))}
               tips={yearData.monthCounts.map((_, month) => formatMonthYear(year, month, locale))}
               compare={{ name: formatYear(lastYear, locale), values: before.months, shown: before.total > 0 }}
+              future={yearData.monthCounts.map((monthCount, month) => year === maxYear && month > now.getMonth() && monthCount === 0)}
               onPick={(month) => requestDrilldown({ kind: "month", year, month })}
+              picked={picked?.section === "months" ? picked.key : null}
+              onPress={pressIn("months")}
             />
           </section>
 
           <section className="stats-section" style={{ animationDelay: "0.09s" }}>
             <div className="stats-section-head">
               <h3 className="stats-section-title">{tr("Writing rhythm", "写作节奏")}</h3>
-              <p className="stats-section-note">
-                <span key={rhythmNote} className="stats-swap">
-                  {rhythmNote}
-                </span>
-              </p>
+              {pickPill("rhythm") ?? (
+                <p className="stats-section-note">
+                  <span key={rhythmNote} className="stats-swap">
+                    {rhythmNote}
+                  </span>
+                </p>
+              )}
             </div>
             <RhythmChart
               slots={yearData.slots}
@@ -1043,6 +1203,8 @@ export function StatsModal({ memos, uniqueTagCount, onClose, onDrilldown, closeS
               onPickWeekday={(weekday) => requestDrilldown({ kind: "weekday", year, weekday })}
               onPickHour={(hour) => requestDrilldown({ kind: "hour", year, hour })}
               onPickSlot={(weekday, hour) => requestDrilldown({ kind: "slot", year, weekday, hour })}
+              picked={picked?.section === "rhythm" ? picked.key : null}
+              onPress={pressIn("rhythm")}
             />
           </section>
 

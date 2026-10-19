@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties
 import { createPortal } from "react-dom";
 import { afterExit, continueFrom, paintedFrameOf, type PaintedFrame } from "../hooks/useOverlayExit";
 import { useReducedMotion } from "../hooks/useReducedMotion";
-import { EXIT_MS, T_EXIT } from "../lib/motion";
+import { EXIT_MS, T_EXIT, T_FAST } from "../lib/motion";
 
 /** ARIA wiring for the trigger button — spread it onto the button. */
 export interface MenuTriggerProps {
@@ -68,8 +68,10 @@ interface PortalPos {
 
 /** Type-ahead keeps its letters this long between presses. */
 const TYPEAHEAD_RESET_MS = 500;
-/** menu-out's duration (app.css, .action-menu.is-closing: 0.12s) — change the two together. */
-const MENU_OUT_MS = 120;
+/** Opened again this soon after closing, the rows are simply there: they were just read. */
+const REOPEN_INSTANT_MS = 1000;
+/** menu-out's duration (app.css, .action-menu.is-closing: --t-fast) — change the two together. */
+const MENU_OUT_MS = T_FAST;
 /**
  * The exit's length where the engine can't report it: menu-out plus the same
  * frame of slack EXIT_MS adds to the shared --t-exit, so the panel unmounts
@@ -102,6 +104,10 @@ const PAGE_FOCUSABLE = [
  */
 export function Menu({ trigger, children, align = "right", className, panelClassName, portal = false, kind = "menu", panelLabel, openSignal, openSignalFocus }: MenuProps) {
   const [phase, setPhase] = useState<"closed" | "open" | "closing">("closed");
+  // No row cascade (.is-instant): the keyboard wants the rows now, and a
+  // menu reopened within a beat of closing has nothing new to introduce.
+  const [instant, setInstant] = useState(false);
+  const closedAtRef = useRef(Number.NEGATIVE_INFINITY);
   const [pos, setPos] = useState<PortalPos | null>(null);
   // In-flow (non-portal) panels open downward unless that would run past the
   // viewport bottom while the space above has room — see the flip effect.
@@ -147,7 +153,10 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     restoreTriggerRef.current = restoreTrigger;
     // Closed mid-entrance (a quick second click): the exit leaves from the
     // frame on screen, not from the fully open panel.
-    if (phase === "open") framePendingRef.current = paintedFrameOf(panelRef.current);
+    if (phase === "open") {
+      framePendingRef.current = paintedFrameOf(panelRef.current);
+      closedAtRef.current = performance.now();
+    }
     setPhase((value) => (value === "open" ? "closing" : value));
   }
 
@@ -166,10 +175,11 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     requestClose(false);
   }
 
-  function requestOpen(edge: "first" | "last" = "first", focusSelector: string | null = null) {
+  function requestOpen(edge: "first" | "last" = "first", focusSelector: string | null = null, fromKeyboard = false) {
     focusEdgeRef.current = edge;
     focusTargetRef.current = focusSelector;
     restoreTriggerRef.current = false;
+    setInstant(fromKeyboard || performance.now() - closedAtRef.current < REOPEN_INSTANT_MS);
     // Re-opened mid-exit: remember the frame on screen, so the entrance
     // carries on from it instead of restarting from transparent.
     framePendingRef.current = paintedFrameOf(panelRef.current);
@@ -452,7 +462,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
       <div
         ref={panelRef}
         id={panelId}
-        className={`action-menu align-${align}${portal ? " is-portal" : ""}${flipUp ? " is-up" : ""}${phase === "closing" ? " is-closing" : ""}${panelClassName ? ` ${panelClassName}` : ""}`}
+        className={`action-menu align-${align}${portal ? " is-portal" : ""}${flipUp ? " is-up" : ""}${instant ? " is-instant" : ""}${phase === "closing" ? " is-closing" : ""}${panelClassName ? ` ${panelClassName}` : ""}`}
         style={panelStyle}
         role={kind === "panel" ? "dialog" : "menu"}
         aria-label={panelLabel}
@@ -466,11 +476,12 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     <div ref={rootRef} className={`menu-root${open ? " is-open" : ""}${className ? ` ${className}` : ""}`}>
       <div
         className="menu-trigger-slot"
-        onClick={() => (open ? requestClose(true) : requestOpen("first"))}
+        // A click with no presses behind it (detail 0) is Enter or Space.
+        onClick={(event) => (open ? requestClose(true) : requestOpen("first", null, event.detail === 0))}
         onKeyDown={(event) => {
           if (kind === "panel" || open || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
           event.preventDefault();
-          requestOpen(event.key === "ArrowUp" ? "last" : "first");
+          requestOpen(event.key === "ArrowUp" ? "last" : "first", null, true);
         }}
       >
         {trigger(open, {

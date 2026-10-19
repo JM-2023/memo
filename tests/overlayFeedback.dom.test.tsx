@@ -270,7 +270,7 @@ describe("backdrop dismissal", () => {
 });
 
 describe("dialogs leave on success too", () => {
-  it("holds the busy look through the exit, then calls onDone", async () => {
+  it("says it went through on the button, holds a beat, then exits and calls onDone", async () => {
     reducedMotion = false;
     stubMatchMedia();
     // jsdom runs no CSS: the closing overlay reports a running exit, and the
@@ -304,6 +304,7 @@ describe("dialogs leave on success too", () => {
           body="Forget this device"
           confirmLabel="Log Out"
           busyLabel="Logging out…"
+          doneLabel="Done"
           busy={busy}
           onCancel={onCancel}
           onConfirm={() => {
@@ -329,9 +330,15 @@ describe("dialogs leave on success too", () => {
     expect(screen.getByRole("button", { name: "Logging out…" })).toBeTruthy();
 
     await act(async () => finish(true));
-    // The parent dropped busy, but the dialog still says what it was doing.
+    // The parent dropped busy; the button now says it went through, still
+    // locked, and the dialog holds a beat before it leaves.
+    const done = screen.getByRole("button", { name: "Done" }) as HTMLButtonElement;
+    expect(done.disabled).toBe(true);
+    expect(done.querySelector(".busy-swap")?.hasAttribute("data-done")).toBe(true);
+    expect(overlay.className).not.toContain("is-closing");
+    await sleep(380);
     expect(overlay.className).toContain("is-closing");
-    expect((screen.getByRole("button", { name: "Logging out…" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
     expect(onDone).not.toHaveBeenCalled();
     await act(async () => {
       endExit();
@@ -341,7 +348,45 @@ describe("dialogs leave on success too", () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it("keeps idle and busy labels in one cell so the button never changes width", () => {
+  it("leaves at once when the confirm answered without a wait", async () => {
+    const onDone = vi.fn();
+    render(
+      <LanguageProvider>
+        <ConfirmDialog title="Remove?" body="b" confirmLabel="Remove" onCancel={vi.fn()} onConfirm={() => true} onDone={onDone} />
+      </LanguageProvider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
+  });
+
+  it("says a prompt's own done label for the action its notice named", async () => {
+    let finish!: (ok: boolean) => void;
+    const onDone = vi.fn();
+    render(
+      <LanguageProvider>
+        <PromptDialog
+          title="Rename tag #work"
+          initialValue="work"
+          confirmLabel="Rename"
+          busyLabel="Renaming…"
+          doneLabel="Renamed"
+          validate={() => null}
+          onCancel={vi.fn()}
+          onConfirm={() => new Promise<boolean>((resolve) => (finish = resolve))}
+          onDone={onDone}
+        />
+      </LanguageProvider>
+    );
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "job" } });
+    fireEvent.submit(screen.getByRole("textbox").closest("form")!);
+    expect(screen.getByRole("button", { name: "Renaming…" })).toBeTruthy();
+    await act(async () => finish(true));
+    expect(screen.getByRole("button", { name: "Renamed" })).toBeTruthy();
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps idle, busy and done labels in one cell so the button never changes width", () => {
     render(
       <LanguageProvider>
         <ConfirmDialog title="Log out?" body="b" confirmLabel="Log Out" busyLabel="Logging out…" onCancel={vi.fn()} onConfirm={vi.fn()} />
@@ -349,8 +394,9 @@ describe("dialogs leave on success too", () => {
     );
     const button = screen.getByRole("button", { name: "Log Out" });
     const labels = button.querySelectorAll(".busy-swap > span");
-    expect([...labels].map((label) => label.textContent)).toEqual(["Log Out", "Logging out…"]);
+    expect([...labels].map((label) => label.textContent)).toEqual(["Log Out", "Logging out…", "Done"]);
     expect(labels[1].getAttribute("aria-hidden")).toBe("true");
+    expect(labels[2].getAttribute("aria-hidden")).toBe("true");
   });
 });
 

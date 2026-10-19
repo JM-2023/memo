@@ -115,6 +115,23 @@ describe("feed task checkboxes", () => {
     expect(screen.getByRole("checkbox", { name: "beta" }).getAttribute("aria-checked")).toBe("true");
   });
 
+  it("strikes a done task on an inline run inside its body, so each wrapped line gets its own", () => {
+    renderCard();
+    const beta = screen.getByRole("checkbox", { name: "beta" });
+    const run = beta.parentElement?.querySelector(":scope > .md-body > .md-task-text");
+    expect(run?.textContent).toBe("beta");
+    expect(run?.closest(".md-task")?.classList.contains("is-done")).toBe(true);
+    // The box is still named by the whole body.
+    expect(beta.getAttribute("aria-labelledby")).toBe(run?.parentElement?.id);
+  });
+
+  it("counts the ticked boxes after the stamp, the flips in flight included", () => {
+    renderCard({ pendingTaskFlips: new Map([[1, true]]) });
+    const progress = document.querySelector(".memo-view-surface .memo-head .memo-progress");
+    expect(progress?.querySelector("[aria-hidden='true']")?.textContent).toBe("2/3");
+    expect(progress?.querySelector(".sr-only")?.textContent).toBe("2 of 3 tasks done");
+  });
+
   it("keeps trash cards and select mode inert (boxes render, controls do not)", () => {
     renderCard({ variant: "trash" });
     expect(screen.queryByRole("checkbox")).toBeNull();

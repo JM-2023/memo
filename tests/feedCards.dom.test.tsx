@@ -5,11 +5,11 @@
 // visible Restore, the off-screen replay skip, and the card's motion under
 // reduced motion.
 
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoCard, SelectRingStagger } from "../src/components/MemoCard";
+import { MemoCard, rippleSelectRange, SelectRingStagger } from "../src/components/MemoCard";
 import { mightFold } from "../src/components/MemoFold";
 import { Menu } from "../src/components/Menu";
 import { TagTree } from "../src/components/TagTree";
@@ -807,5 +807,153 @@ describe("select ring stagger", () => {
     render(<SelectRingStagger active feedRef={feedRef} />);
     expect(slots.map((slot) => slot.style.getPropertyValue("--sbd"))).toEqual(["0ms", "15ms", "30ms", "45ms", "60ms", "75ms", "90ms", "90ms", "90ms"]);
     feed.remove();
+  });
+});
+
+describe("select range ripple", () => {
+  it("steps a shift-click's range out from its anchor among the cards on screen, then lets go", () => {
+    vi.useFakeTimers();
+    try {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
+      const feed = document.createElement("section");
+      const tops = [-400, 40, 240, 440, 640];
+      const slots = tops.map((top, index) => {
+        const slot = document.createElement("div");
+        slot.className = "memo-slot";
+        slot.dataset.vt = `memo-m${index}`;
+        slot.getBoundingClientRect = () => new DOMRect(0, top, 300, 180);
+        feed.appendChild(slot);
+        return slot;
+      });
+      document.body.appendChild(feed);
+      // Anchored on m3, shift-clicked on m0 (above the view): the steps run up from m3.
+      rippleSelectRange(feed, ["m3", "m2", "m1", "m0"]);
+      expect(slots.map((slot) => slot.style.getPropertyValue("--srd"))).toEqual(["", "30ms", "15ms", "0ms", ""]);
+      expect(slots.map((slot) => slot.hasAttribute("data-ripple"))).toEqual([false, true, true, true, false]);
+      vi.advanceTimersByTime(600);
+      expect(slots.every((slot) => slot.style.getPropertyValue("--srd") === "" && !slot.hasAttribute("data-ripple"))).toBe(true);
+      feed.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("card head", () => {
+  it("badges a result meaning alone found, in the ghost header too", () => {
+    const { container, rerenderCard } = renderCard({ related: true });
+    const head = container.querySelector(".memo-view-surface .memo-head-right")!;
+    expect(head.querySelector(".memo-related")?.textContent).toBe("Related");
+    rerenderCard({ related: false });
+    expect(container.querySelector(".memo-related")).toBeNull();
+  });
+
+  it("says how far a memo's tasks have got after the stamp, and pops a check only when the last box is ticked here", () => {
+    const tasks: Memo = { ...baseMemo, content: "- [x] one\n- [ ] two\n- [ ] three" };
+    const { container, rerenderCard } = renderCard({ memo: tasks });
+    const progress = () => container.querySelector(".memo-view-surface .memo-progress");
+    expect(progress()?.previousElementSibling?.matches("time.memo-time")).toBe(true);
+    expect(progress()?.querySelector("[aria-hidden='true']")?.textContent).toBe("1/3");
+    expect(progress()?.querySelector(".sr-only")?.textContent).toBe("1 of 3 tasks done");
+    expect(progress()?.classList.contains("is-complete")).toBe(false);
+
+    // The ticks in flight count as landed.
+    rerenderCard({ memo: tasks, pendingTaskFlips: new Map([[1, true], [2, true]]) });
+    expect(progress()?.querySelector("[aria-hidden='true']")?.textContent).toBe("3/3");
+    expect(progress()?.classList.contains("is-complete")).toBe(true);
+    expect(progress()?.querySelector(".memo-progress-check")?.classList.contains("is-new")).toBe(true);
+    cleanup();
+
+    // Mounting complete: the check is just there.
+    const { container: done } = renderCard({ memo: { ...baseMemo, content: "- [x] one" } });
+    expect(done.querySelector(".memo-progress-check")?.classList.contains("is-new")).toBe(false);
+    cleanup();
+
+    // No tasks, no count; and none in Trash.
+    expect(renderCard().container.querySelector(".memo-progress")).toBeNull();
+    cleanup();
+    expect(renderCard({ memo: { ...tasks, deletedAt: "2026-07-17T09:30:00.000Z" }, variant: "trash" }).container.querySelector(".memo-progress")).toBeNull();
+  });
+
+  it("sets a nested tag's parent path apart from its leaf, the name unchanged", () => {
+    renderCard({ memo: { ...baseMemo, content: "dinner #life/cooking and #work" } });
+    const nested = screen.getByRole("button", { name: "#life/cooking" });
+    expect(nested.querySelector(".memo-tag-parent")?.textContent).toBe("#life/");
+    expect(nested.getAttribute("data-tag")).toBe("life/cooking");
+    expect(screen.getByRole("button", { name: "#work" }).querySelector(".memo-tag-parent")).toBeNull();
+  });
+});
+
+describe("card gestures", () => {
+  it("opens the ⋯ menu on a right-click, but leaves a link's own menu alone", async () => {
+    const { container } = renderCard({ memo: { ...baseMemo, content: "see [the docs](https://example.com/docs)" } });
+    const link = screen.getByRole("link", { name: "the docs" });
+    expect(fireEvent.contextMenu(link)).toBe(true);
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    const line = container.querySelector(".memo-content p")!;
+    // Default prevented: the platform's menu stands down for the card's own.
+    expect(fireEvent.contextMenu(line)).toBe(false);
+    expect(await screen.findByRole("menu")).not.toBeNull();
+    expect(screen.getByRole("button", { name: /^Memo actions/ }).getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("picks the card on a still 450ms touch hold, pressing it in meanwhile and swallowing the lift's tap", () => {
+    vi.useFakeTimers();
+    try {
+      const onSelect = vi.fn();
+      const { container } = renderCard({ onSelect });
+      const card = container.querySelector(".memo-card")!;
+      const line = container.querySelector(".memo-content p")!;
+      const finger = { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: 50, clientY: 50 };
+      fireEvent.pointerDown(line, finger);
+      expect(card.classList.contains("is-holding")).toBe(true);
+      act(() => vi.advanceTimersByTime(449));
+      expect(onSelect).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(1));
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(card.classList.contains("is-holding")).toBe(false);
+      fireEvent.pointerUp(line, finger);
+      expect(fireEvent.click(line)).toBe(false);
+      act(() => vi.advanceTimersByTime(400));
+
+      // A finger that travels is a scroll; a mouse press is no hold at all.
+      fireEvent.pointerDown(line, { ...finger, pointerId: 5 });
+      fireEvent.pointerMove(line, { ...finger, pointerId: 5, clientY: 62 });
+      expect(card.classList.contains("is-holding")).toBe(false);
+      fireEvent.pointerDown(line, { ...finger, pointerId: 6, pointerType: "mouse" });
+      act(() => vi.advanceTimersByTime(600));
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(fireEvent.click(line)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("has no hold where the view has no select mode, or while selecting", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerenderCard } = renderCard();
+      const finger = { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: 50, clientY: 50 };
+      fireEvent.pointerDown(container.querySelector(".memo-content p")!, finger);
+      expect(container.querySelector(".memo-card.is-holding")).toBeNull();
+      const onSelect = vi.fn();
+      rerenderCard({ onSelect, selecting: true });
+      fireEvent.pointerDown(container.querySelector(".memo-select-overlay")!, finger);
+      act(() => vi.advanceTimersByTime(600));
+      expect(onSelect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("tells a shift-click on the select overlay apart", () => {
+    const onToggleSelect = vi.fn();
+    renderCard({ selecting: true, onToggleSelect });
+    const overlay = screen.getByRole("button", { name: "Select this memo" });
+    fireEvent.click(overlay, { shiftKey: true });
+    expect(onToggleSelect).toHaveBeenLastCalledWith(true);
+    fireEvent.click(overlay);
+    expect(onToggleSelect).toHaveBeenLastCalledWith(false);
   });
 });

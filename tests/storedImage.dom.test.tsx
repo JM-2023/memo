@@ -2,6 +2,8 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoCard } from "../src/components/MemoCard";
@@ -199,6 +201,30 @@ describe("stored image tiles", () => {
     await waitFor(() => expect(cold.querySelector("img")?.getAttribute("src")).toMatch(/^blob:/));
     expect(cold.className).toContain("is-arriving");
     expect(warm.className).not.toContain("is-arriving");
+  });
+
+  it("holds a waited-for picture back until it has decoded, then lets it develop", async () => {
+    renderCard(memoWith([image("cold"), image("other")]));
+    const [cold] = screen.getAllByRole("button", { name: /^View image/ });
+    await waitFor(() => expect(cold.querySelector("img")?.getAttribute("src")).toMatch(/^blob:/));
+    expect(cold.className).toContain("is-arriving");
+    // Bytes in hand are not pixels on screen: the ground holds till the decode.
+    expect(cold.hasAttribute("data-developed")).toBe(false);
+    fireEvent.load(cold.querySelector("img")!);
+    await waitFor(() => expect(cold.hasAttribute("data-developed")).toBe(true));
+    // The class list is the load state's alone.
+    expect(cold.className).toBe("memo-image is-arriving");
+  });
+
+  it("waits a beat before the loading shimmer, and develops out of a blur that reduced motion drops", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/styles/app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const shimmer = css.match(/\n\.memo-image:is\(\.is-loading:not\(\.is-failed\), \.is-arriving:not\(\[data-developed\]\)\)::after\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(shimmer).toMatch(/animation:\s*fade-in var\(--t\) var\(--ease\) 0\.3s both,\s*tile-shimmer 1\.4s/);
+    expect(css).toMatch(/@keyframes image-develop \{ from \{ opacity: 0; filter: blur\(8px\); \} \}/);
+    // The reduce block's copy (indented): opacity alone.
+    const reduced = css.match(/\n {2}\.memo-image\.is-arriving\[data-developed\] img \{([^}]*)\}/)?.[1] ?? "";
+    expect(reduced).toMatch(/fade-in/);
+    expect(reduced).not.toMatch(/blur|image-develop/);
   });
 
   it("tags each tile with its place in the viewer", () => {

@@ -1,6 +1,7 @@
 import { ChevronRight, Home } from "lucide-react";
 import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../lib/i18n";
+import { T_FAST } from "../lib/motion";
 import { bindTruncationTip, useOptionalTip } from "./truncationTip";
 
 interface CrumbsProps {
@@ -114,9 +115,10 @@ export function Crumbs({ path, onHome, onPick, children }: CrumbsProps) {
       const home = parts.length === 0;
       if (dropped.length > 0 || home) {
         setGhosts({ home, parts: dropped });
-        // Outlives the capped exit stagger without keeping invisible ghosts
-        // mounted after the fold has visibly finished.
-        const timer = window.setTimeout(() => setGhosts(null), 230);
+        // Outlives the capped exit stagger (4 × 20ms) plus crumb-out
+        // (--t-fast) without keeping invisible ghosts mounted after the fold
+        // has visibly finished.
+        const timer = window.setTimeout(() => setGhosts(null), 4 * 20 + T_FAST + 10);
         return () => window.clearTimeout(timer);
       }
     }

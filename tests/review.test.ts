@@ -2,18 +2,28 @@ import { describe, expect, it } from "vitest";
 import { dateKey } from "../src/lib/dates";
 import {
   DEFAULT_REVIEW_SETTINGS,
+  NO_REVIEW_SEEN,
+  RANDOM_PICK,
   REVIEW_COUNT_MAX,
   buildReviewDay,
+  drawReview,
   eligibleReviewMemos,
   parseReviewDay,
+  parseReviewHidden,
+  parseReviewSeen,
   parseReviewSettings,
   pickReviewIds,
   removeReviewSettingsTag,
   renameReviewSettingsTag,
+  reviewAge,
+  reviewBreakdown,
   reviewDayStarved,
   reviewDayValid,
   reviewFingerprint,
+  reviewPickFor,
+  reviewPickOf,
   reviewTagChoices,
+  withReviewSeen,
   type ReviewSettings
 } from "../src/lib/review";
 import type { Memo } from "../src/lib/types";
@@ -171,10 +181,146 @@ describe("daily draw", () => {
   });
 });
 
+/** Local noon on a local date, so day keys read the same in any timezone. */
+function localNoon(year: number, month: number, day: number): string {
+  return new Date(year, month - 1, day, 12).toISOString();
+}
+
+describe("weighted daily draw", () => {
+  const DAY = "2026-10-19";
+  const at = (year: number, month: number, day: number) => reviewPickFor(localNoon(year, month, day), DAY);
+
+  it("names memos written on this date in earlier years, with how many years back", () => {
+    expect(at(2025, 10, 19)).toEqual({ reason: "onThisDay", years: 1 });
+    expect(at(2021, 10, 19)).toEqual({ reason: "onThisDay", years: 5 });
+    // A 29th comes back on the last day of a short February.
+    expect(reviewPickFor(localNoon(2024, 2, 29), "2027-02-28")).toEqual({ reason: "onThisDay", years: 3 });
+    expect(reviewPickFor(localNoon(2024, 2, 29), "2028-02-28")).toBe(RANDOM_PICK);
+  });
+
+  it("names the anniversaries a day either side, and nothing else", () => {
+    for (const day of [11, 12, 13]) expect(at(2026, 10, day)).toEqual({ reason: "anniversary", span: "week" });
+    for (const day of [18, 19, 20]) expect(at(2026, 9, day)).toEqual({ reason: "anniversary", span: "month" });
+    for (const day of [18, 19, 20]) expect(at(2026, 4, day)).toEqual({ reason: "anniversary", span: "halfYear" });
+    for (const day of [18, 20]) expect(at(2025, 10, day)).toEqual({ reason: "anniversary", span: "year" });
+    expect(at(2026, 10, 10)).toBe(RANDOM_PICK);
+    expect(at(2026, 10, 14)).toBe(RANDOM_PICK);
+    expect(at(2026, 8, 19)).toBe(RANDOM_PICK);
+    // Today's own memos, and a clock running ahead, are chance draws.
+    expect(at(2026, 10, 19)).toBe(RANDOM_PICK);
+    expect(at(2026, 10, 25)).toBe(RANDOM_PICK);
+  });
+
+  const onThisDay = [memo("otd-1", "x", localNoon(2025, 10, 19)), memo("otd-2", "x", localNoon(2023, 10, 19))];
+  const anniversaries = [memo("ann-w", "x", localNoon(2026, 10, 12)), memo("ann-y", "x", localNoon(2025, 10, 20))];
+  const random = Array.from({ length: 20 }, (_, index) => memo(`r${String(index).padStart(2, "0")}`, "x", localNoon(2026, 1, 1 + index)));
+  const pool = [...random, ...anniversaries, ...onThisDay];
+
+  it("deals on this day first, then the anniversaries, then a seeded remainder", () => {
+    const { ids, reasons } = drawReview(pool, 10, "seed", DAY);
+    expect(ids).toHaveLength(10);
+    expect(new Set(ids.slice(0, 2))).toEqual(new Set(["otd-1", "otd-2"]));
+    expect(new Set(ids.slice(2, 4))).toEqual(new Set(["ann-w", "ann-y"]));
+    expect(ids.slice(4).every((id) => id.startsWith("r"))).toBe(true);
+    expect(reasons["otd-2"]).toEqual({ reason: "onThisDay", years: 3 });
+    expect(reasons["ann-w"]).toEqual({ reason: "anniversary", span: "week" });
+    expect(reasons[ids[9]]).toEqual({ reason: "random" });
+    expect(Object.keys(reasons).sort()).toEqual([...ids].sort());
+  });
+
+  it("stays a pure function of pool and seed, inside the count", () => {
+    expect(drawReview([...pool].reverse(), 10, "seed", DAY)).toEqual(drawReview(pool, 10, "seed", DAY));
+    expect(drawReview(pool, 10, "other", DAY).ids.slice(4)).not.toEqual(drawReview(pool, 10, "seed", DAY).ids.slice(4));
+    // A quota smaller than the first tier takes from it alone.
+    const one = drawReview(pool, 1, "seed", DAY);
+    expect(one.ids).toHaveLength(1);
+    expect(one.ids[0].startsWith("otd")).toBe(true);
+    expect(drawReview(pool, 0, "seed", DAY).ids).toEqual([]);
+  });
+
+  it("keeps the dealt prefix when only the count grows", () => {
+    const now = new Date(2026, 9, 19, 9);
+    const three = buildReviewDay(pool, settings({ count: 3 }), now);
+    const twelve = buildReviewDay(pool, settings({ count: 12 }), now);
+    expect(twelve.ids.slice(0, 3)).toEqual(three.ids);
+    expect(twelve.reasons[three.ids[0]]).toEqual(three.reasons[three.ids[0]]);
+  });
+
+  it("only draws what the scope and range allow", () => {
+    const now = new Date(2026, 9, 19, 9);
+    const recent = buildReviewDay(pool, settings({ range: "1m", count: 10 }), now);
+    expect(recent.ids.some((id) => id.startsWith("otd") || id === "ann-y")).toBe(false);
+    expect(recent.ids[0]).toBe("ann-w");
+  });
+
+  it("never draws a memo set aside, and an all-set-aside pool is not starved", () => {
+    const now = new Date(2026, 9, 19, 9);
+    const excluded = new Set(["otd-1", "ann-w", "r00"]);
+    const day = buildReviewDay(pool, settings({ count: 50 }), now, excluded);
+    expect(day.ids.some((id) => excluded.has(id))).toBe(false);
+    expect(day.ids).toHaveLength(pool.length - excluded.size);
+    const only = [memo("solo", "x", localNoon(2026, 1, 1))];
+    const empty = buildReviewDay(only, settings(), now, new Set(["solo"]));
+    expect(empty.ids).toEqual([]);
+    expect(reviewDayStarved(empty, only, settings(), now, new Set(["solo"]))).toBe(false);
+    expect(reviewDayStarved(empty, only, settings(), now)).toBe(true);
+  });
+
+  it("tallies the reasons of the cards still in today's list", () => {
+    const day = buildReviewDay(pool, settings({ count: 10 }), new Date(2026, 9, 19, 9));
+    expect(reviewBreakdown(day, day.ids)).toEqual({ onThisDay: 2, anniversary: 2, random: 6 });
+    expect(reviewBreakdown(day, day.ids.slice(1))).toEqual({ onThisDay: 1, anniversary: 2, random: 6 });
+  });
+});
+
+describe("a memo's age", () => {
+  const now = new Date(2026, 9, 19, 18);
+  const age = (year: number, month: number, day: number) => reviewAge(localNoon(year, month, day), now);
+
+  it("says it in the unit a person would", () => {
+    expect(age(2026, 10, 19)).toEqual({ value: 0, unit: "day" });
+    expect(age(2026, 10, 14)).toEqual({ value: 5, unit: "day" });
+    expect(age(2026, 9, 29)).toEqual({ value: 2, unit: "week" });
+    expect(age(2026, 8, 19)).toEqual({ value: 2, unit: "month" });
+    expect(age(2025, 11, 19)).toEqual({ value: 11, unit: "month" });
+    expect(age(2025, 11, 20)).toEqual({ value: 10, unit: "month" });
+    expect(age(2024, 10, 19)).toEqual({ value: 2, unit: "year" });
+  });
+});
+
 describe("stored day parsing", () => {
   it("round-trips a built day", () => {
     const built = buildReviewDay([memo("a", "x", "2026-01-01T00:00:00.000Z")], settings(), NOW);
     expect(parseReviewDay(JSON.stringify(built))).toEqual(built);
+  });
+
+  it("reads a day stored before reasons were kept as random draws", () => {
+    const parsed = parseReviewDay(JSON.stringify({ day: "2026-07-25", fingerprint: "f", ids: ["a", "b"] }));
+    expect(parsed).toEqual({ day: "2026-07-25", fingerprint: "f", ids: ["a", "b"], reasons: {} });
+    expect(reviewPickOf(parsed!, "a")).toEqual({ reason: "random" });
+    expect(reviewBreakdown(parsed!, parsed!.ids)).toEqual({ onThisDay: 0, anniversary: 0, random: 2 });
+    // An id that happens to name an Object.prototype member is still just an id.
+    expect(reviewPickOf(parsed!, "constructor")).toBe(RANDOM_PICK);
+  });
+
+  it("keeps only well-formed reasons for ids in the batch", () => {
+    const parsed = parseReviewDay(
+      JSON.stringify({
+        day: "2026-07-25",
+        fingerprint: "f",
+        ids: ["a", "b", "c", "d", "e"],
+        reasons: {
+          a: { reason: "onThisDay", years: 0 },
+          b: { reason: "anniversary", span: "decade" },
+          c: "random",
+          d: { reason: "anniversary", span: "week" },
+          e: { reason: "onThisDay", years: 2 },
+          stray: { reason: "random" }
+        }
+      })
+    );
+    expect(parsed?.reasons).toEqual({ d: { reason: "anniversary", span: "week" }, e: { reason: "onThisDay", years: 2 } });
+    expect(parseReviewDay(JSON.stringify({ day: "2026-07-25", fingerprint: "f", ids: ["a"], reasons: ["a"] }))?.reasons).toEqual({});
   });
 
   it("rejects malformed payloads", () => {
@@ -191,6 +337,31 @@ describe("stored day parsing", () => {
     expect(parsed?.ids[0]).toBe("dup");
     expect(parsed?.ids).toHaveLength(REVIEW_COUNT_MAX);
     expect(new Set(parsed?.ids).size).toBe(REVIEW_COUNT_MAX);
+  });
+});
+
+describe("seen cards and set-aside memos", () => {
+  it("parses the seen record by day, dropping junk", () => {
+    expect(parseReviewSeen(null)).toBe(NO_REVIEW_SEEN);
+    expect(parseReviewSeen("nope")).toBe(NO_REVIEW_SEEN);
+    expect(parseReviewSeen(JSON.stringify({ day: "July", ids: ["a"] }))).toBe(NO_REVIEW_SEEN);
+    expect(parseReviewSeen(JSON.stringify({ day: "2026-07-25", ids: ["a", "a", 3, "", "b"] }))).toEqual({ day: "2026-07-25", ids: ["a", "b"] });
+    expect(parseReviewSeen(JSON.stringify({ day: "2026-07-25", ids: "a" }))).toEqual({ day: "2026-07-25", ids: [] });
+  });
+
+  it("adds a seen card to its day and starts over on a new one", () => {
+    const seen = withReviewSeen(NO_REVIEW_SEEN, "2026-07-25", "a");
+    expect(seen).toEqual({ day: "2026-07-25", ids: ["a"] });
+    expect(withReviewSeen(seen, "2026-07-25", "a")).toBe(seen);
+    expect(withReviewSeen(seen, "2026-07-25", "b")).toEqual({ day: "2026-07-25", ids: ["a", "b"] });
+    expect(withReviewSeen(seen, "2026-07-26", "b")).toEqual({ day: "2026-07-26", ids: ["b"] });
+  });
+
+  it("parses the set-aside list as unique ids only", () => {
+    expect(parseReviewHidden(null)).toEqual([]);
+    expect(parseReviewHidden("{")).toEqual([]);
+    expect(parseReviewHidden(JSON.stringify({ ids: ["a"] }))).toEqual([]);
+    expect(parseReviewHidden(JSON.stringify(["a", "b", "a", null, ""]))).toEqual(["a", "b"]);
   });
 });
 

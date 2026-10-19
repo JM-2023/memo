@@ -11,7 +11,7 @@ let active: ActiveTransition | null = null;
  * that need snapshots: the sent text becoming its card (App, landCreated),
  * a feed tile growing into the viewer's photo (Lightbox), and the splash's
  * brand mark landing on the gate. Only the parts a morph names take part,
- * and take no press until it ends (≤0.24s); the rest of the page stays live
+ * and take no press until it ends (≤0.25s); the rest of the page stays live
  * under it (app.css, view-transition section) — the feed's own motion is
  * lib/feedMotion.ts. The callback must
  * leave the DOM in its final state before it returns — React callers wrap

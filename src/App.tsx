@@ -13,6 +13,7 @@ import {
   Loader2,
   Menu as MenuIcon,
   NotebookPen,
+  Pin,
   RotateCcw,
   Search,
   SlidersHorizontal,
@@ -21,30 +22,38 @@ import {
   Trash2,
   X
 } from "lucide-react";
-import { Component, lazy, memo as reactMemo, startTransition, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, lazy, memo as reactMemo, startTransition, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { ChangePasscode } from "./components/ChangePasscode";
 import { BulkTagDialog } from "./components/BulkTagDialog";
+import { ComposeFab } from "./components/ComposeFab";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Crumbs } from "./components/Crumbs";
-import { Editor, type EditDraft, type EditorSubmission } from "./components/Editor";
+import { ReviewActions, ReviewBanner, ReviewContext, ReviewFinish, ReviewSeenMark, reviewFinishTitle } from "./components/DailyReview";
+import { Editor, type ComposerControl, type EditDraft, type EditHandle, type EditorSubmission } from "./components/Editor";
 import { FilterChip } from "./components/FilterChip";
 import { Lightbox } from "./components/Lightbox";
 import { LoginScreen } from "./components/LoginScreen";
-import { MemoCard, SelectRingStagger } from "./components/MemoCard";
+import { MemoCard, rippleSelectRange, SelectRingStagger } from "./components/MemoCard";
 import { Menu } from "./components/Menu";
 import { PromptDialog } from "./components/PromptDialog";
 import { RollingCount, RollingText } from "./components/RollingText";
 import { FeedEnd } from "./components/FeedEnd";
+import { FeedFoot } from "./components/FeedFoot";
 import { ScrollTopButton } from "./components/ScrollTopButton";
 import { FACET_ROWS, SearchFilter, type FilterOpenTarget } from "./components/SearchFilter";
+import { useSearchJump, type JumpRow } from "./components/SearchJump";
+import { ShortcutsSheet } from "./components/ShortcutsSheet";
 import { Sidebar } from "./components/Sidebar";
 import { SwapText } from "./components/SwapText";
 import { SyncNotice } from "./components/SyncNotice";
 import { useTip } from "./components/Tip";
 import { bindAnchored, isTruncated } from "./components/truncationTip";
 import { MODAL_EXEMPT_ATTR, useModalA11y } from "./hooks/useModalA11y";
+import { useDrawerEdgeSwipe } from "./hooks/useDrawerEdgeSwipe";
 import { useDrawerSwipe } from "./hooks/useDrawerSwipe";
+import { useKeyboardInset } from "./hooks/useKeyboardInset";
+import { useReviewSeen } from "./hooks/useReviewSeen";
 import { useSearchHighlight } from "./hooks/useSearchHighlight";
 import { useTopbarTuck } from "./hooks/useTopbarTuck";
 import { useSemanticSearch } from "./hooks/useSemanticSearch";
@@ -77,7 +86,7 @@ import {
 import { BackupFormatError, inspectBackup, readBackupItems } from "./lib/backupFile";
 import { startBoot, type BootStart } from "./lib/boot";
 import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, saveSnapshot } from "./lib/cache";
-import { dateKey, formatDayLabel } from "./lib/dates";
+import { dateFormat, dateKey, formatDayLabel } from "./lib/dates";
 import { forgetFolds } from "./lib/foldMemory";
 import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow } from "./lib/feedSafety";
 import { EXIT_MS, T_FAST } from "./lib/motion";
@@ -87,9 +96,29 @@ import { announce, mountLiveRegions } from "./lib/liveAnnouncer";
 import { clearLocalDeviceData } from "./lib/logoutCleanup";
 import { splitTaskLine } from "./lib/markdown";
 import { useModelDownloadPhase } from "./lib/modelDownload";
+import { storedModelState } from "./lib/modelLoader";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
 import { captureFeedPlace, createNavStore, isLayerState, isRootLens, lensesEqual, navIdOf, restoreFeedPlace, ROOT_LENS, type NavLens, type NavPlace, type NavStore } from "./lib/navHistory";
 import { applyOptimisticLayer, withOptimistic, withoutPatch, withPatch, type OptimisticLayer, type OptimisticPatch } from "./lib/optimisticMemos";
+import { RECENT_SEARCHES_KEY, loadRecentSearches, persistRecentSearches, rememberSearch } from "./lib/recentSearches";
+import {
+  failureOf,
+  freshImages,
+  holdPreviews,
+  mapEntries,
+  nextQueued,
+  optimisticMemo,
+  outboxRetryDelay,
+  SEND_UNDO_MS,
+  sendStatesOf,
+  unsentMemos,
+  withEntry,
+  withoutEntry,
+  type Outbox,
+  type OutboxEntry,
+  type OutboxFailure,
+  type SendState
+} from "./lib/outbox";
 import {
   buildReviewDay,
   clearReviewDay,
@@ -106,6 +135,21 @@ import {
   SETTINGS_KEY as REVIEW_SETTINGS_KEY,
   type ReviewDay,
   type ReviewSettings
+} from "./lib/review";
+import {
+  eligibleReviewMemos,
+  HIDDEN_KEY as REVIEW_HIDDEN_KEY,
+  loadReviewHidden,
+  loadReviewSeen,
+  NO_REVIEW_SEEN,
+  persistReviewHidden,
+  persistReviewSeen,
+  reviewBreakdown,
+  reviewPickOf,
+  SEEN_KEY as REVIEW_SEEN_KEY,
+  withReviewSeen,
+  type ReviewPick,
+  type ReviewSeen
 } from "./lib/review";
 import {
   SAVED_FILTERS_LIMIT,
@@ -132,13 +176,15 @@ import {
 } from "./lib/search";
 import { searchNeedles } from "./lib/searchHighlight";
 import { selectionWithinVisibleIds } from "./lib/selection";
+import { globalShortcutOf, isTextEntry, isUndoLabel, revealComposer } from "./lib/shortcuts";
 import { countsByDay, dayKeyOf } from "./lib/stats";
 import { feedQueryForStatsDrilldown, memoMatchesStatsDrilldown, statsDrilldownLabel, type StatsDrilldown } from "./lib/statsDrilldown";
 import { useSnapshotWriterLease } from "./lib/snapshotWriter";
 import { applySyncDelta, createSyncState, memosOf, purgedOf, tagsOfState, type PurgedMemo, type SyncState } from "./lib/syncState";
-import { buildTagTree, inheritTagContext, isValidTagPath, tagMatches, tagRenamePathsOverlap, tagsOf } from "./lib/tags";
+import { flattenTags } from "./lib/tagJump";
+import { buildTagTree, inheritTagContext, isValidTagPath, renameTagInContent, tagMatches, tagRenamePathsOverlap, tagsByRecentUse, tagsOf, type TagNode } from "./lib/tags";
 import { applyTaskFlips, freshestTaskMemo, type TaskFlipQueue } from "./lib/taskFlips";
-import { startToastSwipe } from "./lib/toastSwipe";
+import { startToastSwipe, toastSwipeDirection } from "./lib/toastSwipe";
 import { applyTheme, loadTheme, type ThemeChoice } from "./lib/theme";
 import type { LightboxItem, Memo, SortKey, TagMeta } from "./lib/types";
 import { useSync } from "./lib/useSync";
@@ -196,6 +242,12 @@ interface ToastOptions {
   detail?: string;
   /** Overrides the length-derived stay, in ms. */
   duration?: number;
+}
+
+/** The session a send went out in (sendSession in App). */
+interface SendSession {
+  epoch: number;
+  passcodeChanges: number;
 }
 
 /** Toasts up at once; past this the oldest steps off. */
@@ -277,6 +329,29 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onHold }: To
     onHold("pointer", false);
     onHold("focus", false);
   }, [empty, onHold]);
+  // A phone's bottom stack rides above the on-screen keyboard (app.css).
+  useKeyboardInset(stackRef, !empty);
+  // At a phone's bottom edge the stack shares the corner with the new-memo
+  // button, which rides above it: the stack's height (plus a gap) goes on
+  // its parent as --toast-lift, inherited down to the button, and follows a
+  // leaving toast's slot as it closes.
+  useLayoutEffect(() => {
+    const stack = stackRef.current;
+    const host = stack?.parentElement;
+    if (!stack || !host) return;
+    const publish = () => {
+      const height = stack.getBoundingClientRect().height;
+      if (height > 0) host.style.setProperty("--toast-lift", `${Math.ceil(height) + 8}px`);
+      else host.style.removeProperty("--toast-lift");
+    };
+    publish();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(publish) : null;
+    observer?.observe(stack);
+    return () => {
+      observer?.disconnect();
+      host.style.removeProperty("--toast-lift");
+    };
+  }, [empty]);
 
   useEffect(() => {
     if (!hasAction) return;
@@ -342,14 +417,21 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onHold }: To
           <div className="toast-clip">
             <div
               className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`}
-              // Any toast, Undo or not, can be flicked up and away on a touch
-              // screen — the only way to clear an action-less one early.
+              // Any toast, Undo or not, can be flicked away on a touch screen
+              // — toward the edge the stack sits at (up on wide screens, down
+              // at a phone's bottom) — the only way to clear an action-less
+              // one early.
               onPointerDown={(event) => {
                 if (toast.leaving) return;
-                startToastSwipe(event.nativeEvent, event.currentTarget, () => {
-                  swipedRef.current.add(toast.id);
-                  settle(toast.id);
-                });
+                startToastSwipe(
+                  event.nativeEvent,
+                  event.currentTarget,
+                  () => {
+                    swipedRef.current.add(toast.id);
+                    settle(toast.id);
+                  },
+                  toastSwipeDirection(stackRef.current)
+                );
               }}
             >
               {toast.tone === "error" ? <CircleAlert size={15} className="toast-mark" aria-hidden="true" /> : null}
@@ -430,6 +512,7 @@ interface PendingBatchTag {
 
 const SORT_KEYS: SortKey[] = ["created-desc", "created-asc", "updated-desc", "updated-asc"];
 const EMPTY_TAGS: string[] = [];
+const NO_REVIEW_IDS: readonly string[] = [];
 
 const SORT_COMPARATORS: Record<SortKey, (a: Memo, b: Memo) => number> = {
   "created-desc": (a, b) => b.createdAt.localeCompare(a.createdAt),
@@ -443,11 +526,19 @@ function loadSortKey(): SortKey {
   return SORT_KEYS.includes(stored as SortKey) ? (stored as SortKey) : "created-desc";
 }
 
+/** A line heading a run of cards: the pinned ones, or what meaning alone found. */
+type FeedLeadKind = "pinned" | "related";
+
 interface MemoSlotProps {
   /** The card's key, `memo-<id>`, written to data-vt. */
   vtName: string | undefined;
   /** A semantic-only row held from the previous query's ranking (data-stale). */
   stale?: boolean;
+  /** This card opens a run, under the line `leadText`. */
+  leadKind?: FeedLeadKind;
+  leadText?: string;
+  /** The last pinned card: the unpinned ones start a beat further down. */
+  pinEnd?: boolean;
   children: ReactNode;
 }
 
@@ -460,10 +551,21 @@ interface MemoSlotProps {
  * the reading place (navHistory) and search highlights find the slot. A
  * send's morph names the landed slot inline, for that morph only
  * (landCreated).
+ *
+ * A run's lead line rides inside its first slot, so the motion layer moves
+ * it with the card; it sits in the slot's top margin (app.css, data-lead)
+ * and the slot's box stays the card's, which the selection ring traces.
  */
-function MemoSlot({ vtName, stale, children }: MemoSlotProps) {
+function MemoSlot({ vtName, stale, leadKind, leadText, pinEnd, children }: MemoSlotProps) {
   return (
-    <div className="memo-slot" data-vt={vtName} data-stale={stale ? "" : undefined}>
+    <div className="memo-slot" data-vt={vtName} data-stale={stale ? "" : undefined} data-lead={leadKind} data-pin-end={pinEnd ? "" : undefined}>
+      {leadKind ? (
+        <p className={`feed-lead is-${leadKind}`}>
+          {leadKind === "pinned" ? <Pin size={12} aria-hidden="true" /> : null}
+          <span className="feed-lead-text">{leadText}</span>
+          {leadKind === "related" ? <span className="feed-lead-rule" aria-hidden="true" /> : null}
+        </p>
+      ) : null}
       {children}
     </div>
   );
@@ -593,14 +695,23 @@ interface FeedHandlers {
   purge: (memo: Memo) => void;
   pickTag: (path: string) => void;
   openImage: (items: LightboxItem[], index: number) => void;
-  toggleSelect: (memo: Memo) => void;
+  /** `extend`: a shift-click, which takes the range from the last pick. */
+  toggleSelect: (memo: Memo, extend?: boolean) => void;
   /** Enter select mode from one card's ⋯ menu, that card already picked. */
   selectFrom: (memo: Memo) => void;
   toggleTask: (memo: Memo, lineKey: number, checked: boolean) => void;
   /** The open edit's text after each change, held in memory for a re-login. */
   editDraftChange: (memoId: string, content: string) => void;
+  /** The open edit's handle (Editor, onHandle), given as it opens and taken back as it goes. */
+  editHandle: (memoId: string, handle: EditHandle, open: boolean) => void;
   /** A toast the inline editor raises on its own (an image removed, with Undo). */
   notice: (text: string, action?: ToastAction) => void;
+  /** Daily review's "Not again": out of today's list, never drawn again here. */
+  hideFromReview: (memo: Memo) => void;
+  /** An unsent memo's own actions (the outbox): back into the composer, again, away. */
+  takeBack: (memo: Memo) => void;
+  retrySend: (memo: Memo) => void;
+  discardUnsent: (memo: Memo) => void;
 }
 
 interface FeedItemProps {
@@ -624,8 +735,22 @@ interface FeedItemProps {
   busy: boolean;
   /** Only here by the previous query's (stale) semantic ranking. */
   stale: boolean;
+  /** Found by meaning alone: none of the query's words are in it. */
+  related: boolean;
+  /** Heads the pinned run or the related run (MemoSlot). */
+  leadKind: FeedLeadKind | undefined;
+  leadText: string | undefined;
+  pinEnd: boolean;
   vtName: string | undefined;
   handlers: FeedHandlers;
+  /** Daily review only: why the memo came back today. */
+  reviewPick?: ReviewPick;
+  /** Daily review only: the reader has seen this card today. */
+  reviewSeen?: boolean;
+  /** Still on its way to the server (the outbox). */
+  sendState: SendState | undefined;
+  /** An unsent memo the composer's draft keeps from going back into it. */
+  recallBlocked: boolean;
 }
 
 /**
@@ -635,9 +760,9 @@ interface FeedItemProps {
  * re-render.
  */
 const FeedItem = reactMemo(
-  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, editDraft, selecting, selected, canSelect, taskFlips, resumeContent, busy, stale, vtName, handlers }: FeedItemProps) {
+  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, editDraft, selecting, selected, canSelect, taskFlips, resumeContent, busy, stale, related, leadKind, leadText, pinEnd, vtName, handlers, reviewPick, reviewSeen, sendState, recallBlocked }: FeedItemProps) {
     return (
-      <MemoSlot vtName={vtName} stale={stale}>
+      <MemoSlot vtName={vtName} stale={stale} leadKind={leadKind} leadText={leadText} pinEnd={pinEnd}>
         <MemoCard
           memo={memo}
           variant={variant}
@@ -648,13 +773,17 @@ const FeedItem = reactMemo(
           editDraft={editDraft}
           selecting={selecting}
           selected={selected}
+          related={related}
           pendingTaskFlips={taskFlips}
           resumeContent={resumeContent}
           onEditDraftChange={editing ? (content) => handlers.editDraftChange(memo.id, content) : undefined}
+          onEditHandle={(handle, open) => handlers.editHandle(memo.id, handle, open)}
           onEditNotice={handlers.notice}
           busy={busy}
-          onToggleSelect={() => handlers.toggleSelect(memo)}
-          onSelect={canSelect ? () => handlers.selectFrom(memo) : undefined}
+          onToggleSelect={(extend) => handlers.toggleSelect(memo, extend)}
+          // An unsent card can't be picked: a long press on it must not
+          // start (or restart) select mode with it.
+          onSelect={canSelect && !sendState ? () => handlers.selectFrom(memo) : undefined}
           onStartEdit={() => handlers.startEdit(memo.id)}
           onCancelEdit={handlers.cancelEdit}
           onSaveEdit={(data) => handlers.saveEdit(memo, data)}
@@ -669,6 +798,28 @@ const FeedItem = reactMemo(
           onPickTag={handlers.pickTag}
           onOpenImage={handlers.openImage}
           onToggleTask={(lineKey, checked) => handlers.toggleTask(memo, lineKey, checked)}
+          stampPrefix={reviewPick ? <ReviewContext pick={reviewPick} createdAt={memo.createdAt} /> : undefined}
+          headMark={reviewPick ? <ReviewSeenMark seen={Boolean(reviewSeen)} /> : undefined}
+          reviewActions={
+            reviewPick
+              ? ({ live, edit }) => (
+                  <ReviewActions
+                    live={live}
+                    createdAt={memo.createdAt}
+                    pinned={Boolean(memo.pinnedAt)}
+                    busy={busy}
+                    onHide={() => handlers.hideFromReview(memo)}
+                    onTogglePin={() => handlers.togglePin(memo)}
+                    onEdit={edit}
+                  />
+                )
+              : undefined
+          }
+          sendState={sendState}
+          recallBlocked={recallBlocked}
+          onTakeBack={() => handlers.takeBack(memo)}
+          onRetrySend={() => handlers.retrySend(memo)}
+          onDiscardUnsent={() => handlers.discardUnsent(memo)}
         />
       </MemoSlot>
     );
@@ -688,8 +839,16 @@ const FeedItem = reactMemo(
     prev.resumeContent === next.resumeContent &&
     prev.busy === next.busy &&
     prev.stale === next.stale &&
+    prev.reviewPick === next.reviewPick &&
+    prev.reviewSeen === next.reviewSeen &&
+    prev.related === next.related &&
+    prev.leadKind === next.leadKind &&
+    prev.leadText === next.leadText &&
+    prev.pinEnd === next.pinEnd &&
     prev.vtName === next.vtName &&
-    prev.handlers === next.handlers
+    prev.handlers === next.handlers &&
+    prev.sendState === next.sendState &&
+    prev.recallBlocked === next.recallBlocked
 );
 
 export default function App() {
@@ -795,13 +954,23 @@ export default function App() {
   // day, never ahead of time and never on the server.
   const [reviewSettings, setReviewSettings] = useState<ReviewSettings>(loadReviewSettings);
   const [reviewDay, setReviewDay] = useState<ReviewDay | null>(loadReviewDay);
+  // Beside the batch, in the same per-device storage: the cards of the day
+  // already seen, and the memos set aside with "Not again" — ids only. The
+  // set-aside ones never enter a draw; today's list drops them at render.
+  const [reviewSeen, setReviewSeen] = useState<ReviewSeen>(loadReviewSeen);
+  const reviewSeenRef = useRef(reviewSeen);
+  reviewSeenRef.current = reviewSeen;
+  const [reviewHidden, setReviewHidden] = useState<readonly string[]>(loadReviewHidden);
+  const reviewHiddenSet = useMemo<ReadonlySet<string>>(() => new Set(reviewHidden), [reviewHidden]);
+  const reviewHiddenRef = useRef(reviewHiddenSet);
+  reviewHiddenRef.current = reviewHiddenSet;
   // A batch drawn while a cold start is still loading older pages comes from
   // a partial pool. It serves this visit but is never saved, and the first
   // visit after loading finishes draws the real one (and saves that), so the
   // same day + settings + notebook still deal the same batch on any device.
   const provisionalReviewRef = useRef<ReviewDay | null>(null);
   const drawReviewDay = useCallback((pool: readonly Memo[], settings: ReviewSettings): ReviewDay => {
-    const next = buildReviewDay(pool, settings);
+    const next = buildReviewDay(pool, settings, new Date(), reviewHiddenRef.current);
     if (bootstrapJobRef.current) {
       provisionalReviewRef.current = next;
     } else {
@@ -821,7 +990,6 @@ export default function App() {
   // and begin indexing without asking for a second click.
   const [enableSemanticWhenReady, setEnableSemanticWhenReady] = useState(false);
 
-  const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const editingIdRef = useRef(editingId);
   editingIdRef.current = editingId;
@@ -846,6 +1014,11 @@ export default function App() {
   // reopening, handed to the editor as it mounts.
   const discardedEditRef = useRef<{ memoId: string; draft: EditDraft; baseSeq: number | null } | null>(null);
   const [reopenedDraft, setReopenedDraft] = useState<{ memoId: string; draft: EditDraft } | null>(null);
+  // The open edit's handle — whether it holds changes, and the levers
+  // another memo's Edit pulls on it (handleStartEdit). Keyed by the handle
+  // itself: an outgoing editor still finishing its morph lets go of its own,
+  // never the next one's.
+  const openEditHandleRef = useRef<{ memoId: string; handle: EditHandle } | null>(null);
   // Feed checkbox toggles: an ephemeral optimistic layer (memoId → lineKey →
   // desired checked state) that only skins the rendered box. syncState stays
   // the server truth throughout, so snapshots and sync never persist a guess;
@@ -862,6 +1035,112 @@ export default function App() {
   // conflict.
   const [optimisticMemos, setOptimisticMemos] = useState<OptimisticLayer>(() => new Map());
   const memoActionTokensRef = useRef(new Map<string, object>());
+
+  // Sends that landed as cards before the server had them (lib/outbox),
+  // delivered one at a time in the order they were sent, so their server
+  // times keep that order (a send that keeps failing steps aside, see
+  // pumpOutbox). Memory only, like the drafts above: a logout discards it,
+  // a lost session keeps it for the next sign-in. Async work reads the ref;
+  // the state is what renders.
+  const outboxRef = useRef<Outbox>(new Map());
+  const [outbox, setOutbox] = useState<Outbox>(outboxRef.current);
+  const writeOutbox = useCallback((change: (current: Outbox) => Outbox) => {
+    const next = change(outboxRef.current);
+    if (next === outboxRef.current) return;
+    outboxRef.current = next;
+    setOutbox(next);
+  }, []);
+  // The work around it, none of it rendered.
+  const outboxWorkRef = useRef({
+    pumping: false,
+    /** The request in flight, by memo id. */
+    controllers: new Map<string, AbortController>(),
+    /** Memos whose request may have reached the server. */
+    attempted: new Set<string>(),
+    /** Taken back or discarded after an attempt: should the server turn out
+        to have one, it goes to Trash (see the watch below). */
+    retracted: new Set<string>(),
+    /** Each entry's hold on its pictures in the image cache. */
+    previews: new Map<string, () => void>(),
+    /** Automatic retries each failed send has spent since the reader, the link or a sign-in last restarted it. */
+    retries: new Map<string, number>(),
+    /** Each failed send's own retry clock (retryLater). */
+    timers: new Map<string, number>(),
+    /** Tag renames and removals under way: the queue waits them out (holdOutbox). */
+    holds: 0,
+    /** Sends whose card the view hides: the toast speaking for the card, and whether it has said the send failed. */
+    hidden: new Map<string, { toast: number; failed: boolean }>(),
+    /** Discarded entries kept for their toast's Undo, oldest first. */
+    discarded: [] as OutboxEntry[],
+    /** The latest send, for ⌘Z in the composer it just emptied. */
+    last: null as { entry: OutboxEntry; confirmedAt: number | null; timer: number } | null
+  });
+  const resumeOutboxRef = useRef<(from: "reader" | "link" | "wake" | "timer", id?: string) => void>(() => undefined);
+  const composerControlRef = useRef<ComposerControl | null>(null);
+  const [composerOccupied, setComposerOccupied] = useState(false);
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+
+  /** An entry's previews are the outbox's until the memo is stored, discarded for good or taken back. */
+  const revokePreviews = useCallback((entry: OutboxEntry) => {
+    for (const image of entry.images) URL.revokeObjectURL(image.previewUrl);
+  }, []);
+  const releaseHold = useCallback((id: string) => {
+    const work = outboxWorkRef.current;
+    work.previews.get(id)?.();
+    work.previews.delete(id);
+  }, []);
+
+  /** Stops every send's retry clock (a logout under way, the outbox discarded). */
+  const stopOutboxClocks = useCallback(() => {
+    const work = outboxWorkRef.current;
+    for (const timer of work.timers.values()) window.clearTimeout(timer);
+    work.timers.clear();
+  }, []);
+  /**
+   * The wipe a revoked session brings (clearLocalDeviceData) empties the
+   * image cache as it starts, under the unsent cards too — and those wait
+   * for the next sign-in: their pictures go back in from the payloads they
+   * carry, ahead of any card drawing them again.
+   */
+  const reholdPreviews = useCallback(() => {
+    const work = outboxWorkRef.current;
+    for (const entry of outboxRef.current.values()) {
+      work.previews.get(entry.id)?.();
+      work.previews.set(entry.id, holdPreviews(entry.images));
+    }
+  }, []);
+
+  /** Logout: unsent memos go with the drafts. */
+  const discardOutbox = useCallback(() => {
+    const work = outboxWorkRef.current;
+    stopOutboxClocks();
+    work.retries.clear();
+    work.hidden.clear();
+    for (const controller of work.controllers.values()) controller.abort();
+    work.controllers.clear();
+    for (const release of work.previews.values()) release();
+    work.previews.clear();
+    const owned = new Set([...outboxRef.current.values(), ...work.discarded]);
+    if (work.last) {
+      window.clearTimeout(work.last.timer);
+      owned.add(work.last.entry);
+    }
+    for (const entry of owned) revokePreviews(entry);
+    work.discarded = [];
+    work.last = null;
+    work.attempted.clear();
+    work.retracted.clear();
+    writeOutbox(() => new Map());
+  }, [revokePreviews, stopOutboxClocks, writeOutbox]);
+  useEffect(
+    () => () => {
+      const work = outboxWorkRef.current;
+      stopOutboxClocks();
+      if (work.last) window.clearTimeout(work.last.timer);
+    },
+    [stopOutboxClocks]
+  );
 
   const stampTaskFlip = useCallback((memoId: string, lineKey: number, checked: boolean) => {
     setPendingTaskFlips((current) => {
@@ -949,7 +1228,18 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerClosing, setDrawerClosing] = useState(false);
   const [toasts, setToasts] = useState<ToastState[]>([]);
-  const [reveal, setReveal] = useState(false);
+  // The unlock reveal while it plays: where it opens from (the passcode
+  // pad's centre, in viewport pixels).
+  const [reveal, setReveal] = useState<{ x: number; y: number } | null>(null);
+  // The keyboard shortcuts sheet (?).
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // The search box's list: open while it has focus, until an action, Esc or
+  // a scroll of the page puts it away (SearchJump).
+  const [jumpOpen, setJumpOpen] = useState(false);
+  const [recentSearches, setRecentSearches] = useState<string[]>(loadRecentSearches);
+  // Whether the semantic model is on this device, so the list can offer
+  // "search by meaning" without sending the reader to a download.
+  const [modelOnDevice, setModelOnDevice] = useState(false);
   // The panel a lens chip reopens; bumping the counter opens it, at the
   // control the chip stands for (the calendar, or its facet's row).
   const [filterOpenRequest, setFilterOpenRequest] = useState(0);
@@ -980,6 +1270,10 @@ export default function App() {
   const layerSkipPopsRef = useRef(0);
   const layerBackTimerRef = useRef(0);
   const logoutBusyRef = useRef(false);
+  // From the press of Log Out until the gate shows (finishLogout) — the
+  // dialog's exit included, while logoutBusyRef is already down: no send
+  // goes out with a session that is ending.
+  const leavingRef = useRef(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const topbarRef = useRef<HTMLDivElement>(null);
   useTopbarTuck(topbarRef, phase === "ready");
@@ -1002,6 +1296,21 @@ export default function App() {
     [dismissToast]
   );
 
+  // Spoken through the standing live regions; an action is announced with
+  // the key that reaches it (see ToastStack).
+  const announceToast = useCallback(
+    (text: string, tone: "info" | "error", label: string | undefined) => {
+      const sentence = text.replace(/[.。]$/, "");
+      // "Exporting your backup…" already ends its sentence.
+      const stop = sentence.endsWith("…") ? ["", ""] : [".", "。"];
+      announce(
+        label ? tr(`${sentence}${stop[0]} Press F6 to ${label.toLowerCase()}.`, `${sentence}${stop[1]}按 F6 ${label}。`) : text,
+        tone === "error" ? "assertive" : "polite"
+      );
+    },
+    [tr]
+  );
+
   const showToast = useCallback(
     (text: string, tone: "info" | "error" = "info", options: ToastOptions = {}) => {
       const id = ++toastSeqRef.current;
@@ -1013,19 +1322,32 @@ export default function App() {
       setToasts((current) => [...current, { id, text, tone, action: options.action, detail: options.detail }]);
       if (toastsPausedRef.current) toastTimersRef.current.set(id, { timer: 0, expiresAt: 0, remaining: duration });
       else armToast(id, duration);
-      // Spoken through the standing live regions; an action is announced
-      // with the key that reaches it (see ToastStack).
-      const label = options.action?.label;
-      const sentence = text.replace(/[.。]$/, "");
-      // "Exporting your backup…" already ends its sentence.
-      const stop = sentence.endsWith("…") ? ["", ""] : [".", "。"];
-      announce(
-        label ? tr(`${sentence}${stop[0]} Press F6 to ${label.toLowerCase()}.`, `${sentence}${stop[1]}按 F6 ${label}。`) : text,
-        tone === "error" ? "assertive" : "polite"
-      );
+      announceToast(text, tone, options.action?.label);
       return id;
     },
-    [armToast, dismissToast, tr]
+    [announceToast, armToast, dismissToast]
+  );
+
+  /**
+   * Say what has changed in a toast still up, in its place — a send's
+   * toast as the send moves on — rather than stacking a second one over it:
+   * new words, tone and action, the clock started again, said again. One
+   * already gone (its clock is the live mark, set as it is shown) is shown
+   * afresh.
+   */
+  const reviseToast = useCallback(
+    (id: number, text: string, tone: "info" | "error" = "info", options: ToastOptions = {}) => {
+      const clock = toastTimersRef.current.get(id);
+      if (!clock) return showToast(text, tone, options);
+      window.clearTimeout(clock.timer);
+      const duration = options.duration ?? toastDuration(text, tone, Boolean(options.action));
+      setToasts((current) => current.map((toast) => (toast.id === id ? { ...toast, text, tone, action: options.action, detail: options.detail } : toast)));
+      if (toastsPausedRef.current) toastTimersRef.current.set(id, { timer: 0, expiresAt: 0, remaining: duration });
+      else armToast(id, duration);
+      announceToast(text, tone, options.action?.label);
+      return id;
+    },
+    [announceToast, armToast, showToast]
   );
 
   /** Rewrite a toast's detail in place (a running export's count); one already gone stays gone. */
@@ -1126,7 +1448,6 @@ export default function App() {
     setStatsDrilldown(null);
     setSavingFilter(false);
     setView("memos");
-    setCreating(false);
     setEditingId(null);
     setEditConflictId(null);
     setReopenedDraft(null);
@@ -1159,7 +1480,9 @@ export default function App() {
     setDrawerOpen(false);
     setDrawerClosing(false);
     setFilterOpenRequest(0);
-    setReveal(false);
+    setReveal(null);
+    setShortcutsOpen(false);
+    setJumpOpen(false);
   }, [clearToasts, stopBootstrapLoad]);
 
   /** Mirror clearLocalDeviceData in memory: theme, language and sort stay. */
@@ -1167,14 +1490,18 @@ export default function App() {
     setSavedFilters([]);
     setReviewSettings(DEFAULT_REVIEW_SETTINGS);
     setReviewDay(null);
+    setReviewSeen(NO_REVIEW_SEEN);
+    setReviewHidden([]);
+    setRecentSearches([]);
   }, []);
 
-  /** Forget held or seeded drafts: the owner chose to leave, not lost the session. */
+  /** Forget held or seeded drafts, and the unsent memos: the owner chose to leave, not lost the session. */
   const discardHeldDrafts = useCallback(() => {
     heldEditRef.current = null;
     setComposerSeed("");
     setEditSeed(null);
-  }, []);
+    discardOutbox();
+  }, [discardOutbox]);
 
   // Opening the drawer lands on where the reader is — the marked nav row,
   // the tag in force, the heatmap day — not on the account menu at its top.
@@ -1217,6 +1544,12 @@ export default function App() {
     persistSavedFilters(savedFilters);
   }, [phase, savedFilters]);
 
+  // Recent searches persist the way saved filters do (lib/recentSearches).
+  useEffect(() => {
+    if (phase !== "ready") return;
+    persistRecentSearches(recentSearches);
+  }, [phase, recentSearches]);
+
   // Presets and review settings stay per-device, but every open tab of this
   // device follows the latest write; otherwise a stale tab's next save would
   // overwrite the whole list with its old copy. (A same-value write fires no
@@ -1225,6 +1558,9 @@ export default function App() {
     function onStorage(event: StorageEvent) {
       if (event.key === null || event.key === SAVED_FILTERS_KEY) setSavedFilters(loadSavedFilters());
       if (event.key === null || event.key === REVIEW_SETTINGS_KEY) setReviewSettings(loadReviewSettings());
+      if (event.key === null || event.key === REVIEW_SEEN_KEY) setReviewSeen(loadReviewSeen());
+      if (event.key === null || event.key === REVIEW_HIDDEN_KEY) setReviewHidden(loadReviewHidden());
+      if (event.key === null || event.key === RECENT_SEARCHES_KEY) setRecentSearches(loadRecentSearches());
     }
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
@@ -1300,6 +1636,7 @@ export default function App() {
       setEditSeed(null);
       if (wipe) {
         void clearLocalDeviceData();
+        reholdPreviews();
         resetLocalWorkspaceState();
       } else {
         forgetCacheKey();
@@ -1313,7 +1650,7 @@ export default function App() {
         "error"
       );
     },
-    [resetLocalWorkspaceState, resetSessionUi, showToast, tr]
+    [reholdPreviews, resetLocalWorkspaceState, resetSessionUi, showToast, tr]
   );
 
   const handlePeerLogout = useCallback(() => {
@@ -1571,10 +1908,13 @@ export default function App() {
       setBootStill(false);
       bootUnreachableRef.current = false;
       setMarkCarried(false);
+      // The notebook opens from where the passcode went in: measured while
+      // the gate is still on screen.
+      const pad = withReveal ? document.querySelector(".login-screen .pin-pad")?.getBoundingClientRect() : undefined;
       setPhase("ready");
       if (withReveal) {
-        setReveal(true);
-        window.setTimeout(() => setReveal(false), 350);
+        setReveal(pad && pad.width > 0 ? { x: pad.left + pad.width / 2, y: pad.top + pad.height / 2 } : { x: window.innerWidth / 2, y: window.innerHeight * 0.42 });
+        window.setTimeout(() => setReveal(null), 350);
       }
       void pumpBootstrapRef.current();
     },
@@ -1757,8 +2097,14 @@ export default function App() {
   );
 
   // What the reader sees: server truth with in-flight pin/trash/restore
-  // guesses laid over it. (`memos` itself stays the truth that snapshots save.)
-  const shownMemos = useMemo(() => applyOptimisticLayer(memos, optimisticMemos), [memos, optimisticMemos]);
+  // guesses laid over it, and the sends the server does not have yet.
+  // (`memos` itself stays the truth that snapshots save.)
+  const unsent = useMemo(() => unsentMemos(outbox, syncState.memos), [outbox, syncState.memos]);
+  const sendStates = useMemo(() => sendStatesOf(outbox, syncState.memos, syncStatus.online), [outbox, syncState.memos, syncStatus.online]);
+  const shownMemos = useMemo(
+    () => applyOptimisticLayer(unsent.length > 0 ? [...unsent, ...memos] : memos, optimisticMemos),
+    [unsent, memos, optimisticMemos]
+  );
   const activeMemos = useMemo(() => shownMemos.filter((memo) => !memo.deletedAt), [shownMemos]);
   // Server truth without the guesses. Anything that changes state or does
   // costly work off the active list (clearing a vanished tag filter, the
@@ -1773,11 +2119,28 @@ export default function App() {
     () => buildTagTree(activeMemos, pinnedTags, locale),
     [activeMemos, pinnedTags, locale]
   );
+  // Each tag's memo count, its subtree's included — the sidebar's figures,
+  // for a chip's hover tip in the feed.
+  const tagCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    const walk = (nodes: TagNode[]) => {
+      for (const node of nodes) {
+        counts.set(node.path, node.count);
+        walk(node.children);
+      }
+    };
+    walk(tagTree);
+    return counts;
+  }, [tagTree]);
+  // The chip whose count the tip is showing.
+  const tagTipRef = useRef<HTMLElement | null>(null);
   const knownTags = useMemo(() => {
     const set = new Set<string>();
     for (const memo of activeMemos) for (const tag of tagsOf(memo)) set.add(tag);
     return [...set].sort((a, b) => a.localeCompare(b, locale));
   }, [activeMemos, locale]);
+  // The editors' tag list offers the tags used most recently first.
+  const suggestTags = useMemo(() => tagsByRecentUse(activeMemos, locale), [activeMemos, locale]);
   const byDay = useMemo(() => countsByDay(activeMemos), [activeMemos]);
   // The earliest local day with a memo: the range calendar's floor.
   const minDay = useMemo(() => {
@@ -1789,9 +2152,11 @@ export default function App() {
   useEffect(() => {
     // A tag's memos may simply not have loaded yet during a cold start.
     if (!activeTag || bootstrapLoad) return;
-    const stillExists = confirmedActiveMemos.some((memo) => tagsOf(memo).some((tag) => tagMatches(tag, activeTag)));
+    const holds = (memo: Memo) => tagsOf(memo).some((tag) => tagMatches(tag, activeTag));
+    // (A tag only an unsent memo carries yet still exists.)
+    const stillExists = confirmedActiveMemos.some(holds) || unsent.some(holds);
     if (!stillExists) setActiveTag(null);
-  }, [activeTag, confirmedActiveMemos, bootstrapLoad]);
+  }, [activeTag, confirmedActiveMemos, unsent, bootstrapLoad]);
 
   useEffect(() => {
     if (!editingId) {
@@ -2008,17 +2373,28 @@ export default function App() {
 
   // The day's frozen batch, resolved against live truth: edits show through
   // (ids point at whatever the memo says now), deletions drop out, and the
-  // draw order itself never reshuffles mid-day.
+  // draw order itself never reshuffles mid-day. A memo set aside with "Not
+  // again" leaves it at once, and comes back to its place if that is undone.
   const reviewMemos = useMemo(() => {
     if (!reviewDay) return [];
     const list: Memo[] = [];
     for (const id of reviewDay.ids) {
+      if (reviewHiddenSet.has(id)) continue;
       const stored = syncState.memos.get(id);
       const memo = stored ? withOptimistic(stored, optimisticMemos) : null;
       if (memo && !memo.deletedAt) list.push(memo);
     }
     return list;
-  }, [reviewDay, syncState.memos, optimisticMemos]);
+  }, [reviewDay, syncState.memos, optimisticMemos, reviewHiddenSet]);
+  const reviewIds = useMemo(() => reviewMemos.map((memo) => memo.id), [reviewMemos]);
+  const reviewIdsRef = useRef(reviewIds);
+  reviewIdsRef.current = reviewIds;
+  // Seen is kept by day, so a re-deal mid-day keeps what was already read.
+  const reviewSeenIds = useMemo<ReadonlySet<string>>(
+    () => new Set(reviewDay && reviewSeen.day === reviewDay.day ? reviewSeen.ids : []),
+    [reviewDay, reviewSeen]
+  );
+  const reviewSeenCount = useMemo(() => reviewIds.filter((id) => reviewSeenIds.has(id)).length, [reviewIds, reviewSeenIds]);
 
   // Trash search is keywords only — no semantic tier, no facets — over the
   // trashed memos alone, in their deletion order.
@@ -2029,7 +2405,8 @@ export default function App() {
   }, [trashedMemos, trashSearch]);
 
   const feedMemos = view === "trash" ? trashFeedMemos : view === "review" ? reviewMemos : visibleMemos;
-  const visibleFeedIds = useMemo(() => feedMemos.map((memo) => memo.id), [feedMemos]);
+  // What select mode can pick: an unsent memo has nothing a batch could act on yet.
+  const visibleFeedIds = useMemo(() => feedMemos.filter((memo) => !sendStates.has(memo.id)).map((memo) => memo.id), [feedMemos, sendStates]);
   const visibleSelected = useMemo(() => selectionWithinVisibleIds(selected, visibleFeedIds), [selected, visibleFeedIds]);
   // Resolved every render, so a sync that deletes the memo closes its sheet.
   const tagMemoMatch = tagMemoId ? syncState.memos.get(tagMemoId) : null;
@@ -2087,12 +2464,102 @@ export default function App() {
         : 0,
     [keywordHitIds, semanticResults, semanticStale, visibleMemos]
   );
+  // What meaning alone found carries a badge, and its run (after every
+  // keyword hit) opens under a line saying so. A stale ranking's rows keep
+  // both: they hold their places, dimmed, until the new answer lands.
+  const semanticOnlyIds = useMemo(() => {
+    if (!keywordHitIds || !semanticResults) return null;
+    const ids = new Set<string>();
+    for (const memo of visibleMemos) if (!keywordHitIds.has(memo.id) && semanticResults.has(memo.id)) ids.add(memo.id);
+    return ids;
+  }, [keywordHitIds, semanticResults, visibleMemos]);
+  const firstRelatedId = useMemo(
+    () => (semanticOnlyIds?.size ? visibleMemos.find((memo) => semanticOnlyIds.has(memo.id))?.id ?? null : null),
+    [semanticOnlyIds, visibleMemos]
+  );
+  // Pins lead the list wherever it keeps the reader's order — not while
+  // meaning ranks a search, nor in Trash or a review's draw. Their run gets
+  // a line and a beat after it, when there is a rest of the list to part.
+  const pinsFloat = view === "memos" && !semanticResults;
+  const pinnedRun = useMemo(() => {
+    if (!pinsFloat) return 0;
+    let run = 0;
+    while (run < feedMemos.length && feedMemos[run].pinnedAt) run += 1;
+    return run < feedMemos.length ? run : 0;
+  }, [pinsFloat, feedMemos]);
+  const leadOf = (memo: Memo, index: number): FeedLeadKind | undefined =>
+    pinnedRun > 0 && index === 0 ? "pinned" : memo.id === firstRelatedId ? "related" : undefined;
+  const leadLine = (kind: FeedLeadKind | undefined): string | undefined =>
+    kind === "pinned"
+      ? tr(`Pinned · ${formatNumber(pinnedRun)}`, `已置顶 · ${formatNumber(pinnedRun)}`)
+      : kind === "related"
+        ? tr(`Related by meaning — these don’t contain “${query.trim()}”`, `下面是意思相近、但没有出现「${query.trim()}」的`)
+        : undefined;
   const searchNeedleList = useMemo(
     () => (searching ? searchNeedles(parsedQuery) : trashSearching ? searchNeedles(trashParsedQuery) : []),
     [searching, parsedQuery, trashSearching, trashParsedQuery]
   );
   const feedRef = useRef<HTMLElement | null>(null);
   useSearchHighlight(feedRef, searchNeedleList, searching ? keywordHitIds : trashHitIds);
+
+  // Daily review's quiet progress: a card read on screen (or opened, pinned,
+  // edited) counts as seen for the day; once the whole set is, the feed says
+  // so after its last card — the one time it is spoken, too.
+  const reviewDayRef = useRef(reviewDay);
+  reviewDayRef.current = reviewDay;
+  const markReviewSeen = useCallback(
+    (id: string) => {
+      const day = reviewDayRef.current?.day;
+      if (!day) return;
+      const current = reviewSeenRef.current;
+      // Another tab of this device may have seen cards meanwhile.
+      let next = current;
+      const stored = loadReviewSeen();
+      if (stored.day === day) for (const seenId of stored.ids) next = withReviewSeen(next, day, seenId);
+      next = withReviewSeen(next, day, id);
+      if (next === current) return;
+      const ids = reviewIdsRef.current;
+      const doneBefore = current.day === day && ids.every((reviewId) => current.ids.includes(reviewId));
+      reviewSeenRef.current = next;
+      persistReviewSeen(next);
+      setReviewSeen(next);
+      if (!doneBefore && ids.length > 0 && ids.every((reviewId) => next.ids.includes(reviewId))) {
+        const title = reviewFinishTitle(ids.length, tr, formatNumber);
+        announce(tr(`${title}. A new set tomorrow`, `${title}。明天再抽新的一组`));
+      }
+    },
+    [formatNumber, tr]
+  );
+  useReviewSeen(feedRef, view === "review" && phase === "ready" ? reviewIds : NO_REVIEW_IDS, reviewSeenIds, markReviewSeen);
+
+  // The sidebar row's mark: a dot while today's set still has cards to see —
+  // including a set not dealt yet, if there is anything to deal — and
+  // nothing once it is done; in the review itself, how far it has got.
+  const reviewDealtToday = reviewDayValid(reviewDay, reviewSettings);
+  const reviewNeedsDeal = !reviewDealtToday || reviewDay.ids.length === 0;
+  const reviewCanDeal = useMemo(
+    () => reviewNeedsDeal && eligibleReviewMemos(activeMemos, reviewSettings, new Date(), reviewHiddenSet).length > 0,
+    [reviewNeedsDeal, activeMemos, reviewSettings, reviewHiddenSet]
+  );
+  const reviewPending = reviewCanDeal || (reviewDealtToday && reviewSeenCount < reviewIds.length);
+  const reviewTotal = reviewIds.length;
+  const reviewNavMark = useMemo(() => {
+    if (view === "review") {
+      if (!reviewDealtToday || reviewTotal === 0) return null;
+      return (
+        <span className="nav-count review-nav-count">
+          <span aria-hidden="true">{`${formatNumber(reviewSeenCount)}/${formatNumber(reviewTotal)}`}</span>
+          <span className="sr-only">{tr(`${reviewSeenCount} of ${reviewTotal} revisited`, `已回顾 ${reviewSeenCount} / ${reviewTotal}`)}</span>
+        </span>
+      );
+    }
+    return reviewPending ? <span className="nav-review-dot" role="img" aria-label={tr("Not revisited yet today", "今天还没看")} /> : null;
+  }, [view, reviewDealtToday, reviewTotal, reviewSeenCount, reviewPending, formatNumber, tr]);
+  // What the settings dialog offers to bring back: set-aside memos that still exist.
+  const reviewHiddenCount = useMemo(
+    () => reviewHidden.filter((id) => syncState.memos.get(id)?.deletedAt === null).length,
+    [reviewHidden, syncState.memos]
+  );
   // A tag, day, stats bar or filter quietly narrows what the query searches;
   // the result line and the empty state say so instead of implying the whole
   // notebook was searched.
@@ -2338,8 +2805,10 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- finishDrawerClose only touches setters and refs
   }, [drawerOpen]);
 
-  // A leftward swipe on the open drawer closes it (touch only).
+  // A leftward swipe on the open drawer closes it (touch only); installed to
+  // the home screen, a swipe in from the left edge opens it.
   useDrawerSwipe(drawerRef, drawerBackdropRef, drawerOpen, () => closeDrawer());
+  useDrawerEdgeSwipe(drawerRef, drawerBackdropRef, drawerOpen, phase === "ready", () => setDrawerOpen(true));
 
   useEffect(
     () => () => {
@@ -2623,7 +3092,8 @@ export default function App() {
   const revealIdRef = useRef<string | null>(null);
   const revealMemo = useCallback(
     (id: string) => {
-      const memo = syncStateRef.current.memos.get(id);
+      // (Or a send the server does not have yet.)
+      const memo = syncStateRef.current.memos.get(id) ?? outboxRef.current.get(id)?.memo;
       if (!memo || memo.deletedAt) return;
       const lens = lensRef.current;
       revealIdRef.current = id;
@@ -2971,7 +3441,7 @@ export default function App() {
     if (view !== "review" && holdForOpenEdit("open Daily review", "打开每日回顾")) return;
     let next = reviewDay;
     const provisionalStale = next !== null && next === provisionalReviewRef.current && !bootstrapJobRef.current;
-    if (!reviewDayValid(next, reviewSettings) || provisionalStale || reviewDayStarved(next, activeMemos, reviewSettings)) {
+    if (!reviewDayValid(next, reviewSettings) || provisionalStale || reviewDayStarved(next, activeMemos, reviewSettings, new Date(), reviewHiddenSet)) {
       next = drawReviewDay(activeMemos, reviewSettings);
     }
     // Re-clicking the nav item on a still-valid day is a no-op; on a rolled-
@@ -2989,7 +3459,7 @@ export default function App() {
       // Re-dealt in place (a new day), the review is a new list, not a return.
       (lens) => (view === "review" ? lens : { ...lens, view: "review", drilldown: null })
     );
-  }, [view, reviewDay, reviewSettings, activeMemos, changeFeed, holdForOpenEdit, drawReviewDay]);
+  }, [view, reviewDay, reviewSettings, activeMemos, reviewHiddenSet, changeFeed, holdForOpenEdit, drawReviewDay]);
 
   // Crossing midnight while the review view sits open: returning focus (or
   // visibility) re-checks the frozen batch and deals the new day in place.
@@ -3014,20 +3484,20 @@ export default function App() {
   // in while Review is up deals the real batch, as a new list.
   useEffect(() => {
     if (phase !== "ready" || view !== "review" || !reviewDayValid(reviewDay, reviewSettings)) return;
-    if (!reviewDayStarved(reviewDay, activeMemos, reviewSettings)) return;
+    if (!reviewDayStarved(reviewDay, activeMemos, reviewSettings, new Date(), reviewHiddenSet)) return;
     const frame = window.requestAnimationFrame(() => {
       const next = drawReviewDay(activeMemos, reviewSettings);
       moveFeed("lens", [], () => setReviewDay(next));
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [phase, view, reviewDay, reviewSettings, activeMemos, drawReviewDay, moveFeed]);
+  }, [phase, view, reviewDay, reviewSettings, activeMemos, reviewHiddenSet, drawReviewDay, moveFeed]);
 
   /** Put a remembered lens on screen (Back/Forward, or a reload). */
   function applyNavLens(lens: NavLens) {
     // Review replays the day's frozen batch, drawing it first if the day
     // rolled over — what openReview does.
-    if (lens.view === "review" && (!reviewDayValid(reviewDay, reviewSettings) || reviewDayStarved(reviewDay, activeMemos, reviewSettings))) {
-      const next = buildReviewDay(activeMemos, reviewSettings);
+    if (lens.view === "review" && (!reviewDayValid(reviewDay, reviewSettings) || reviewDayStarved(reviewDay, activeMemos, reviewSettings, new Date(), reviewHiddenSet))) {
+      const next = buildReviewDay(activeMemos, reviewSettings, new Date(), reviewHiddenSet);
       persistReviewDay(next);
       setReviewDay(next);
     }
@@ -3143,7 +3613,8 @@ export default function App() {
     renameTagTarget !== null ||
     savingFilter ||
     changingPasscode ||
-    confirmLogout;
+    confirmLogout ||
+    shortcutsOpen;
 
   const popNavRef = useRef<(state: unknown, browserAnimated: boolean) => void>(() => undefined);
   popNavRef.current = (state, browserAnimated) => {
@@ -3302,6 +3773,43 @@ export default function App() {
     }
   }
 
+  // Where a shift-click's range starts: the last card picked or unpicked.
+  const selectAnchorRef = useRef<string | null>(null);
+  const visibleFeedIdsRef = useRef(visibleFeedIds);
+  visibleFeedIdsRef.current = visibleFeedIds;
+
+  /**
+   * Daily review's "Not again": the memo leaves today's list with the
+   * trash's exit and is never drawn again on this device. Nothing is
+   * deleted, so the toast's Undo simply lets it back into its place.
+   */
+  function hideFromReview(memo: Memo) {
+    const current = reviewHiddenRef.current;
+    if (current.has(memo.id)) return;
+    const next = [...current, memo.id];
+    const refocus = holdFeedFocus(memo.id);
+    const departed = moveFeed("trash", [memo.id], () => {
+      persistReviewHidden(next);
+      setReviewHidden(next);
+    }).departed.get(memo.id);
+    refocus(departed);
+    showToast(tr("This memo won’t come back in Daily review", "这条笔记不会再出现在每日回顾"), "info", {
+      action: { label: tr("Undo", "撤销"), run: () => unhideFromReview([memo.id]) }
+    });
+  }
+
+  /** Let set-aside memos be drawn again; any in today's list return to their places. */
+  function unhideFromReview(ids: readonly string[]) {
+    const drop = new Set(ids);
+    const current = [...reviewHiddenRef.current];
+    const next = current.filter((id) => !drop.has(id));
+    if (next.length === current.length) return;
+    moveFeed("restore", ids, () => {
+      persistReviewHidden(next);
+      setReviewHidden(next);
+    });
+  }
+
   /**
    * Select mode swaps the whole breadcrumb row for the selection toolbar, as
    * one change of the chrome (lib/chromeMotion.ts): the fused location pill
@@ -3310,7 +3818,12 @@ export default function App() {
    * pop in via their own CSS transitions.
    */
   const enterSelectMode = useCallback((firstId?: string) => {
+    // A send still on its way is no pick: starting with it would wipe the
+    // selection under way, and pruning the pick out of view would then end
+    // select mode altogether.
+    if (firstId && outboxRef.current.has(firstId) && !syncStateRef.current.memos.has(firstId)) return;
     if (holdForOpenEdit("select memos", "多选笔记")) return;
+    selectAnchorRef.current = firstId ?? null;
     const active = document.activeElement;
     moveFeed("select", [], () => {
       setSelectMode(true);
@@ -3337,6 +3850,7 @@ export default function App() {
   }, [holdForOpenEdit, moveFeed]);
 
   const exitSelectMode = useCallback(() => {
+    selectAnchorRef.current = null;
     const active = document.activeElement;
     // Read before the commit: a card's select overlay leaves the tree with it.
     const slot = active instanceof Element ? active.closest(".memo-slot") : null;
@@ -3375,7 +3889,30 @@ export default function App() {
   }, [moveFeed]);
 
   const toggleSelect = useCallback(
-    (memo: Memo) => {
+    (memo: Memo, extend = false) => {
+      const anchor = selectAnchorRef.current;
+      selectAnchorRef.current = memo.id;
+      const ids = visibleFeedIdsRef.current;
+      const from = extend && anchor !== null && anchor !== memo.id ? ids.indexOf(anchor) : -1;
+      const to = from === -1 ? -1 : ids.indexOf(memo.id);
+      if (from !== -1 && to !== -1) {
+        // Shift-click: every card from the anchor to this one takes the state
+        // this one is toggled to, rippling out from the anchor.
+        const range = from < to ? ids.slice(from, to + 1) : ids.slice(to, from + 1).reverse();
+        rippleSelectRange(feedRef.current, range);
+        mutateSelection(() =>
+          setSelected((current) => {
+            const on = !current.has(memo.id);
+            const next = new Set(current);
+            for (const id of range) {
+              if (on) next.add(id);
+              else next.delete(id);
+            }
+            return next;
+          })
+        );
+        return;
+      }
       mutateSelection(() =>
         setSelected((current) => {
           const next = new Set(current);
@@ -3430,12 +3967,18 @@ export default function App() {
   async function handleLogout(): Promise<boolean> {
     if (logoutBusyRef.current) return false;
     logoutBusyRef.current = true;
+    leavingRef.current = true;
+    // A retry answered after the server ended the session would read as an expired one.
+    stopOutboxClocks();
     setLoggingOut(true);
     try {
       const result = await logout();
       if (!result.ok) throw new ApiError("LOGOUT_FAILED", 500, "The server did not confirm logout");
     } catch (cause) {
       if (!(cause instanceof AuthRequiredError)) {
+        // Still signed in: the sends go on, their stopped clocks included.
+        leavingRef.current = false;
+        resumeOutbox("wake");
         setLoggingOut(false);
         setConfirmLogout(false);
         showToast(tr("Logout wasn’t confirmed. Your session remains open.", "退出未得到服务器确认，当前登录仍然有效"), "error");
@@ -3455,16 +3998,18 @@ export default function App() {
     discardHeldDrafts();
     resetSessionUi();
     resetLocalWorkspaceState();
+    leavingRef.current = false;
     setLoggingOut(false);
     setPhase("login");
     void localCleanup;
   }
 
   /**
-   * Land a confirmed create. The memo comes in at the head of the list as one
-   * change of the feed's motion layer — the cards below glide down to make
-   * room — and the typed text becomes the new card in a view transition
-   * around that change. The composer, cleared inside the same update through
+   * Land a send, at the press: `apply` puts the memo in the feed, as the
+   * outbox's card until the server has it. It comes in at the head of the
+   * list as one change of the feed's motion layer — the cards below glide
+   * down to make room — and the typed text becomes the new card in a view
+   * transition around that change. The composer, cleared inside the same update through
    * onCommitted, morphs shut instead of snapping a frame later, and the
    * sticky bar is captured with it so the text passes under the bar (app.css
    * names both through `data-vt-create`, for this morph only). The cards
@@ -3485,7 +4030,7 @@ export default function App() {
    * photo's name over), so a tile grows into its cell instead of riding up
    * with the composer's frame.
    */
-  function landCreated(saved: Memo, data: EditorSubmission): Promise<void> {
+  function landCreated(saved: Memo, data: EditorSubmission, apply: () => void): Promise<void> {
     // The card draws its pictures from memory (compressImage primed the
     // cache), but decoding is still async, and one not yet decoded when the
     // card is captured would grow into a blank cell. So they are decoded
@@ -3509,11 +4054,11 @@ export default function App() {
     const warm = new Set<string>();
     for (const task of decoding) void task.then((id) => id && warm.add(id));
     const ready = decoders.length > 0 ? Promise.race([Promise.allSettled(decoding), new Promise((done) => window.setTimeout(done, decodeWait))]) : Promise.resolve();
-    return ready.then(() => landCreatedNow(saved, data, new Set(warm), decoders));
+    return ready.then(() => landCreatedNow(saved, data, apply, new Set(warm), decoders));
   }
 
   /** landCreated once its pictures are decoded (`warm`: the ones that are). */
-  function landCreatedNow(saved: Memo, data: EditorSubmission, warm: ReadonlySet<string>, decoders: HTMLImageElement[]): Promise<void> {
+  function landCreatedNow(saved: Memo, data: EditorSubmission, apply: () => void, warm: ReadonlySet<string>, decoders: HTMLImageElement[]): Promise<void> {
     return new Promise((resolve) => {
       const root = document.documentElement;
       const name = `memo-${saved.id}`;
@@ -3533,7 +4078,7 @@ export default function App() {
           [saved.id],
           () => {
             flushSync(() => {
-              commitMutation({ memos: [saved] });
+              apply();
               data.onCommitted?.(morphed || reduced);
             });
             then?.();
@@ -3642,90 +4187,582 @@ export default function App() {
     });
   }
 
+  /**
+   * Send. The memo lands as its card at the press — the composer→card morph
+   * plays now, not after the round trip — and the composer is free for the
+   * next one at once. The outbox takes it to the server behind that
+   * (pumpOutbox): the card says "Sending…" only if the trip takes a while,
+   * and says so, with what can be done, if it fails.
+   */
   async function handleCreate(data: EditorSubmission): Promise<boolean> {
-    const content = activeTag ? inheritTagContext(data.content, activeTag) : data.content;
-    setCreating(true);
+    const tag = activeTag;
+    const content = tag ? inheritTagContext(data.content, tag) : data.content;
+    const entry: OutboxEntry = {
+      id: data.clientId,
+      memo: optimisticMemo(data.clientId, content, data.newImages),
+      content,
+      draft: data.content,
+      tag,
+      images: data.newImages,
+      selection: data.selection ?? { start: data.content.length, end: data.content.length },
+      status: "sending",
+      failure: null
+    };
+    // The composer stays up under a search, a day or a filter, and a memo
+    // those lenses exclude would just vanish as the editor clears — read
+    // as a failed send. Say where it went and offer the way to it.
+    const work = outboxWorkRef.current;
+    const id = entry.id;
+    const inMemos = lensRef.current.view === "memos";
+    const hidden = inMemos && !lensShows(entry.memo);
+    if (inMemos && !hidden) {
+      // In the view, but maybe past the render window (see the effect —
+      // it runs as the memo lands, so this is marked first).
+      createdPlacementRef.current = id;
+      window.setTimeout(() => {
+        if (createdPlacementRef.current === id) createdPlacementRef.current = null;
+      }, 1000);
+    }
+    // Marked before it can go out: a send that settles first says so itself (landSent).
+    if (hidden) work.hidden.set(id, { toast: 0, failed: false });
+    // Before the landing: its morph decodes the pictures from the cache.
+    work.previews.set(id, holdPreviews(entry.images));
+    noteLastSend(entry);
+    await landCreated(entry.memo, data, () => writeOutbox((current) => withEntry(current, entry)));
+    // A small knock as the card lands under a finger.
+    if (window.matchMedia?.("(pointer: coarse)").matches) navigator.vibrate?.(8);
+    const said = work.hidden.get(id);
+    if (said && !said.toast && !said.failed) {
+      // Only on its way yet: the toast speaks for the hidden card until the
+      // send settles, saved (landSent) or not (sayHiddenFailure).
+      said.toast = showToast(tr("Sending — this view hides it", "正在发送，当前视图下看不到它"), "info", {
+        action: { label: tr("Show", "显示"), run: () => revealMemo(id) }
+      });
+    }
+    // A press is a fresh try for anything still waiting in front of it.
+    resumeOutbox("reader");
+    return true;
+  }
+
+  /** Whether the feed as it stands shows `memo` (a send's card, or the memo it became). */
+  function lensShows(memo: Memo): boolean {
+    const lens = lensRef.current;
+    return lens.view === "memos" && memoMatchesSearchScope(memo, lens) && memoMatchesQuery(memo, lens.parsedQuery);
+  }
+
+  /** The latest send, for ⌘Z: the one before it is out of reach now. */
+  function noteLastSend(entry: OutboxEntry) {
+    const work = outboxWorkRef.current;
+    const previous = work.last;
+    if (previous) {
+      window.clearTimeout(previous.timer);
+      if (previous.confirmedAt !== null) revokePreviews(previous.entry);
+    }
+    work.last = { entry, confirmedAt: null, timer: 0 };
+  }
+
+  /**
+   * Not now: while the cookie is changing hands (as useSync pauses), a
+   * logout is under way or a tag is being renamed or removed under the
+   * queue (holdOutbox).
+   */
+  function outboxPaused(): boolean {
+    return phaseRef.current !== "ready" || changingPasscodeRef.current || leavingRef.current || outboxWorkRef.current.holds > 0;
+  }
+
+  /**
+   * Deliver the outbox, oldest first, one request at a time. A lost session
+   * stops the queue (the next sign-in sends the rest), and so does a
+   * failure while the browser is offline: every send behind it would meet
+   * the same, and they all say so (blockOutbox). Any other failure is that
+   * one send's own: it tries again on its own clock (retryLater) while the
+   * queue goes on past it, so one send the server keeps failing never holds
+   * up the rest. The sends behind it may then reach the server first and
+   * take earlier server times: the order holds while sends go through,
+   * never at the cost of sending.
+   */
+  async function pumpOutbox() {
+    const work = outboxWorkRef.current;
+    if (work.pumping) return;
+    work.pumping = true;
     try {
-      const result = await guard(() =>
-        createMemo(data.clientId, content, data.newImages, { onUploadProgress: data.onUploadProgress, signal: data.signal })
-      );
-      if (!result) return false;
-      let saved = result.memo;
-      if (result.idempotent) {
-        // The first create committed but its response was lost. Apply any edits
-        // made to the still-open draft as a version-checked update instead of
-        // clearing them or creating a duplicate memo.
-        const draftImageIds = new Set(data.newImages.map((image) => image.id));
-        const storedImageIds = new Set(saved.images.map((image) => image.id));
-        const resumed = await guard(() =>
-          updateMemo(
-            saved.id,
-            {
-              expectedSeq: saved.seq,
-              content,
-              addImages: data.newImages.filter((image) => !storedImageIds.has(image.id)),
-              removeImageIds: saved.images.filter((image) => !draftImageIds.has(image.id)).map((image) => image.id)
-            },
-            { signal: data.signal }
-          )
-        );
-        if (!resumed?.memo) return false;
-        saved = resumed.memo;
-      }
-      // The composer stays up under a search, a day or a filter, and a memo
-      // those lenses exclude would just vanish as the editor clears — read
-      // as a failed send. Say where it went and offer the way to it.
-      const lens = lensRef.current;
-      const savedId = saved.id;
-      const hidden = lens.view === "memos" && !(memoMatchesSearchScope(saved, lens) && memoMatchesQuery(saved, lens.parsedQuery));
-      if (lens.view === "memos" && !hidden) {
-        // In the view, but maybe past the render window (see the effect —
-        // it runs as the memo lands, so this is marked first).
-        createdPlacementRef.current = savedId;
-        window.setTimeout(() => {
-          if (createdPlacementRef.current === savedId) createdPlacementRef.current = null;
-        }, 1000);
-      }
-      await landCreated(saved, data);
-      for (const image of data.newImages) URL.revokeObjectURL(image.previewUrl);
-      if (hidden) {
-        showToast(tr("Saved the memo — this view hides it", "已保存这条笔记，当前视图下看不到它"), "info", {
-          action: { label: tr("Show", "显示"), run: () => revealMemo(savedId) }
-        });
-      } else {
-        // The card says it to the eye; this says it to a screen reader.
-        announce(tr("Sent", "已发送"));
-      }
-      return true;
-    } catch (cause) {
-      // Esc stopped it (Editor). Nothing landed here, and the draft is still
-      // in the composer under its clientId: if the request got through after
-      // all, sending again finds that memo instead of making a second.
-      if (data.signal?.aborted) {
-        showToast(tr("Stopped sending the memo", "已停止发送这条笔记"));
-        return false;
-      }
-      if (cause instanceof ApiError && cause.code === "VERSION_CONFLICT") {
-        if (cause.current) {
-          if (memoMatchesSubmittedDraft(cause.current, content, data.newImages.map((image) => image.id))) {
-            // The recovery update itself committed but its response was lost.
-            // The desired server value is authoritative success; clearing this
-            // draft avoids rotating the id and creating a duplicate memo.
-            await landCreated(cause.current, data);
-            for (const image of data.newImages) URL.revokeObjectURL(image.previewUrl);
-            announce(tr("Sent", "已发送"));
-            return true;
-          }
-          applySyncChanges([cause.current], [], []);
+      for (;;) {
+        if (outboxPaused()) return;
+        const entry = nextQueued(outboxRef.current);
+        if (!entry) return;
+        const failure = await deliverOutbox(entry);
+        if (failure === "auth" || (failure === "network" && navigator.onLine === false)) {
+          blockOutbox(failure);
+          return;
         }
-        void runSync();
-        throw cause;
+        if (failure === "network") retryLater(entry.id);
       }
-      throw cause;
     } finally {
-      setCreating(false);
+      work.pumping = false;
     }
   }
+
+  /**
+   * The session a send went out in. Opening the passcode dialog renews the
+   * session epoch too, so that nothing answered with the old cookie can drop
+   * the tab to the gate — but the notebook after it is the same one, and a
+   * send answered across it is still this notebook's memo.
+   */
+  function sendSession(): SendSession {
+    return { epoch: sessionEpochRef.current, passcodeChanges: passcodeChangesRef.current };
+  }
+
+  /** The session ended since `from` (a logout, an expiry, a sign-in), not just a passcode change. */
+  function sessionLost(from: SendSession): boolean {
+    return sessionEpochRef.current - from.epoch !== passcodeChangesRef.current - from.passcodeChanges;
+  }
+
+  /** One send. Resolves to why it failed, or null once it is settled (sent, or gone from the outbox). */
+  async function deliverOutbox(entry: OutboxEntry): Promise<OutboxFailure | null> {
+    const work = outboxWorkRef.current;
+    const controller = new AbortController();
+    work.controllers.set(entry.id, controller);
+    work.attempted.add(entry.id);
+    const session = sendSession();
+    const imageIds = entry.images.map((image) => image.id);
+    try {
+      const result = await createMemo(entry.id, entry.content, entry.images, { signal: controller.signal });
+      let saved = result.memo;
+      // What the memo should say now: a tag renamed or removed while the
+      // request was out rewrote the entry after it left (retagOutbox).
+      const wanted = outboxRef.current.get(entry.id)?.content ?? entry.content;
+      if ((result.idempotent || wanted !== entry.content) && !memoMatchesSubmittedDraft(saved, wanted, imageIds)) {
+        // An earlier create committed but its answer was lost, and what is
+        // stored differs from this send — or the send was rewritten on its
+        // way: bring it level with a version-checked update instead of
+        // making a second memo.
+        const stored = new Set(saved.images.map((image) => image.id));
+        const kept = new Set(imageIds);
+        const resumed = await updateMemo(
+          saved.id,
+          {
+            expectedSeq: saved.seq,
+            content: wanted,
+            addImages: entry.images.filter((image) => !stored.has(image.id)),
+            removeImageIds: saved.images.filter((image) => !kept.has(image.id)).map((image) => image.id)
+          },
+          { signal: controller.signal }
+        );
+        if (resumed.memo) saved = resumed.memo;
+      }
+      landSent(entry, saved, session);
+      return null;
+    } catch (cause) {
+      // The memo reached the server before (its answer lost) and has
+      // changed there since — trashed or edited elsewhere, or by the
+      // recovery update above. It was sent; the server's version stands.
+      if (cause instanceof ApiError && cause.code === "VERSION_CONFLICT" && cause.current) {
+        landSent(entry, cause.current, session);
+        return null;
+      }
+      // Taken back, discarded or logged out meanwhile: nothing left to say.
+      if (!outboxRef.current.has(entry.id) || controller.signal.aborted) return null;
+      // Turned away as a logout ends the session: the gate is coming anyway,
+      // and a logout the server didn't confirm sends it again.
+      if (leavingRef.current) return null;
+      // The session changed under the request: the next sign-in sends it.
+      if (sessionLost(session)) return "auth";
+      if (cause instanceof AuthRequiredError) {
+        // Turned away with the cookie a passcode change replaced: it waits
+        // out the change (outboxPaused) and goes again with the new one.
+        if (session.epoch !== sessionEpochRef.current) return null;
+        dropToLogin();
+        return "auth";
+      }
+      // A sync brought the memo in meanwhile: the server had it all along.
+      const synced = syncStateRef.current.memos.get(entry.id);
+      if (synced) {
+        landSent(entry, synced, session);
+        return null;
+      }
+      if (cause instanceof ApiError && cause.code === "MEMO_ID_RETIRED") {
+        // Sent once already, then deleted for good elsewhere: there is
+        // nothing left to send.
+        moveFeed("purge", [entry.id], () => writeOutbox((current) => withoutEntry(current, entry.id)));
+        finishSent(entry);
+        showToast(tr("That memo was sent earlier and has since been deleted for good", "这条笔记之前已经发出，后来被彻底删除了"));
+        return null;
+      }
+      const failure = failureOf(cause);
+      if (failure === "refused") {
+        writeOutbox((current) => mapEntries(current, (item) => item.id === entry.id, (item) => ({ ...item, status: "failed", failure })));
+        // A card in view says it beside its Retry, and the toast gives the
+        // server's reason; a hidden one's toast says where it is.
+        if (!sayHiddenFailure(entry.id)) showToast(errorMessage(cause, "Couldn’t send the memo.", "笔记发送失败"), "error");
+      }
+      return failure;
+    } finally {
+      if (work.controllers.get(entry.id) === controller) work.controllers.delete(entry.id);
+    }
+  }
+
+  /**
+   * The server has the memo. It takes the card's place in the same slot —
+   * no second entrance; the stamp dissolves from the send's state to its
+   * time (MemoCard) — and the outbox lets go of it.
+   */
+  function landSent(entry: OutboxEntry, saved: Memo, session: SendSession) {
+    if (sessionLost(session)) {
+      // Answered across a change of session: the next sign-in's notebook
+      // (or a sync) brings the memo in.
+      if (outboxRef.current.has(entry.id)) {
+        writeOutbox((current) => withoutEntry(current, entry.id));
+        finishSent(entry);
+      }
+      return;
+    }
+    const current = outboxRef.current.get(entry.id);
+    if (!current) {
+      // Taken back or discarded while the answer was on its way: the memo
+      // is stored after all, so it shows, and the watch on taken-back ids
+      // moves it to Trash.
+      applyRemoteChanges([saved], [], []);
+      void runSync();
+      notifyPeers();
+      return;
+    }
+    // A memo stamped later than its card (a send that waited out a
+    // connection) can fall out of a day the card was in; one the view hid
+    // all along had a toast speaking for it.
+    const said = outboxWorkRef.current.hidden.get(entry.id);
+    const shows = lensShows(saved);
+    const leaves = lensShows(current.memo) && !shows;
+    // A later server time can also move it among its neighbours: it glides.
+    moveFeed("edit-save", new Set([entry.id, saved.id]), () => {
+      applySyncChanges([saved], [], []);
+      writeOutbox((outbox) => withoutEntry(outbox, entry.id));
+    });
+    finishSent(current);
+    void runSync();
+    notifyPeers();
+    saySent(saved, said, leaves);
+  }
+
+  /**
+   * A send the server has, said: by the stamp to the eye and in words to a
+   * screen reader — or, when the view hides the memo, by a toast with the
+   * way to it (the one that spoke for the hidden card, where there was one).
+   */
+  function saySent(saved: Memo, said: { toast: number } | undefined, leaves: boolean) {
+    if (!lensShows(saved) && (leaves || said)) {
+      reviseToast(said?.toast ?? 0, tr("Saved the memo — this view hides it", "已保存这条笔记，当前视图下看不到它"), "info", {
+        action: { label: tr("Show", "显示"), run: () => revealMemo(saved.id) }
+      });
+      return;
+    }
+    // In view after all (the reader went to it): the card says the rest.
+    if (said?.toast) dismissToast(said.toast);
+    announce(tr("Sent", "已发送"));
+  }
+
+  /** An entry the server has: its pictures leave the cache hold, and its previews go — once ⌘Z can no longer want them back. */
+  function finishSent(entry: OutboxEntry) {
+    const work = outboxWorkRef.current;
+    work.attempted.delete(entry.id);
+    forgetSend(entry.id);
+    releaseHold(entry.id);
+    const last = work.last;
+    if (!last || last.entry.id !== entry.id) {
+      revokePreviews(entry);
+      return;
+    }
+    last.entry = entry;
+    last.confirmedAt = Date.now();
+    window.clearTimeout(last.timer);
+    last.timer = window.setTimeout(() => {
+      if (work.last !== last) return;
+      work.last = null;
+      revokePreviews(last.entry);
+    }, SEND_UNDO_MS);
+  }
+
+  /** A send's retry clock stops, and the tries it has spent are forgotten. */
+  function stopRetrying(id: string) {
+    const work = outboxWorkRef.current;
+    window.clearTimeout(work.timers.get(id));
+    work.timers.delete(id);
+    work.retries.delete(id);
+  }
+
+  /** A send settled or gone (sent, taken back, discarded): nothing of its clock or its toast stays. */
+  function forgetSend(id: string) {
+    stopRetrying(id);
+    outboxWorkRef.current.hidden.delete(id);
+  }
+
+  /**
+   * A send failed whose card the view hides: nothing on screen says so, so
+   * a toast does — once, taking over the one that said it was on its way —
+   * with the way to the card and its Retry. True when the card is hidden
+   * (said now or before); false when it is in view and says it itself.
+   */
+  function sayHiddenFailure(id: string): boolean {
+    const work = outboxWorkRef.current;
+    const entry = outboxRef.current.get(id);
+    if (!entry || lensShows(entry.memo)) return false;
+    const said = work.hidden.get(id);
+    if (said?.failed) return true;
+    const toast = reviseToast(said?.toast ?? 0, tr("A memo didn’t send — this view hides it", "有一条笔记没发出去，当前视图下看不到它"), "error", {
+      action: { label: tr("Show", "显示"), run: () => revealMemo(id) }
+    });
+    work.hidden.set(id, { toast, failed: true });
+    return true;
+  }
+
+  /**
+   * A send that failed on its own while online: its card says it is trying
+   * again (MemoCard), and it does, on its own clock — a few quick retries,
+   * then one a minute for as long as it keeps failing. The clock waits
+   * while the page is out of sight or the connection is gone (resumeOutbox);
+   * coming back to the page, or online, sends it.
+   */
+  function retryLater(id: string) {
+    const work = outboxWorkRef.current;
+    const spent = work.retries.get(id) ?? 0;
+    writeOutbox((current) => mapEntries(current, (entry) => entry.id === id, (entry) => ({ ...entry, status: "failed", failure: "network" })));
+    // Said once; the retries after it stay quiet. (A hidden card's toast says it.)
+    if (spent === 0 && !sayHiddenFailure(id)) announce(tr("Not sent · retrying", "未发送 · 正在重试"), "assertive");
+    window.clearTimeout(work.timers.get(id));
+    work.retries.set(id, spent + 1);
+    work.timers.set(
+      id,
+      window.setTimeout(() => {
+        work.timers.delete(id);
+        resumeOutboxRef.current("timer", id);
+      }, outboxRetryDelay(spent))
+    );
+  }
+
+  /**
+   * The queue stopped on a failure every waiting send shares — the browser
+   * offline, or the session lost: they all say so. The connection coming
+   * back is the cue to go again (the online watch below), and a lost
+   * session's is the next sign-in, which says its own words on the gate.
+   */
+  function blockOutbox(failure: "network" | "auth") {
+    const waiting = [...outboxRef.current.values()].filter((entry) => entry.status === "sending").map((entry) => entry.id);
+    writeOutbox((current) => mapEntries(current, (entry) => entry.status === "sending", (entry) => ({ ...entry, status: "failed", failure })));
+    if (failure !== "network") return;
+    let inView = false;
+    for (const id of waiting) if (!sayHiddenFailure(id)) inView = true;
+    if (inView) announce(tr("Not sent · will retry when you’re online", "未发送 · 联网后会自动补发"), "assertive");
+  }
+
+  /**
+   * Send again what failed: on the reader's press (Send, Retry), the link
+   * coming back (online, sync recovering, a sign-in), a send's own retry
+   * clock, or a "wake" — the page back in view, a logout that didn't go
+   * through — that sends what the clocks held meanwhile. Only a press
+   * retries a refused memo — the one it was pressed on. A clock that runs
+   * out while the page is out of sight or offline sends nothing: coming
+   * back does.
+   */
+  function resumeOutbox(from: "reader" | "link" | "wake" | "timer", id?: string) {
+    if (phaseRef.current !== "ready" || leavingRef.current) return;
+    if ((from === "timer" || from === "wake") && (document.visibilityState === "hidden" || navigator.onLine === false)) return;
+    const work = outboxWorkRef.current;
+    const picked = (entry: OutboxEntry) =>
+      entry.status === "failed" &&
+      (from === "timer"
+        ? entry.id === id
+        : from === "wake"
+          ? entry.failure === "network" && !work.timers.has(entry.id)
+          : entry.failure !== "refused" || entry.id === id);
+    // A press or the link is a fresh start: the quick retries come first again.
+    if (from === "reader" || from === "link") for (const entry of outboxRef.current.values()) if (picked(entry)) stopRetrying(entry.id);
+    writeOutbox((current) => mapEntries(current, picked, (entry) => ({ ...entry, status: "sending", failure: null })));
+    void pumpOutbox();
+  }
+  resumeOutboxRef.current = resumeOutbox;
+
+  /**
+   * Put a sent memo back into the composer: the text as it was typed (with
+   * the lens's tag written out if the lens has moved on), the pictures under
+   * fresh ids, the caret where it was. False when the composer holds
+   * anything — a draft is never clobbered.
+   */
+  function recallIntoComposer(entry: OutboxEntry): boolean {
+    const control = composerControlRef.current;
+    if (!control || view !== "memos") return false;
+    const typed = entry.tag !== null && entry.tag === activeTag;
+    return control.recall({
+      content: typed ? entry.draft : entry.content,
+      newImages: freshImages(entry.images),
+      selectionStart: entry.selection.start,
+      selectionEnd: entry.selection.end
+    });
+  }
+
+  /**
+   * 撤回 while sending, 编辑 once failed: the memo goes back into the
+   * composer — what Esc did to a send in flight before sends landed at the
+   * press — and its card lifts away toward it. Should the request have
+   * reached the server anyway, the memo is moved to Trash when it shows up.
+   */
+  function takeBackUnsent(id: string): boolean {
+    const entry = outboxRef.current.get(id);
+    if (!entry || syncStateRef.current.memos.has(id)) return false;
+    if (!recallIntoComposer(entry)) {
+      showToast(tr("Send or clear what’s in the composer first", "先发出或清空输入框里的内容"));
+      return false;
+    }
+    const work = outboxWorkRef.current;
+    work.controllers.get(id)?.abort();
+    forgetSend(id);
+    const reached = work.attempted.delete(id);
+    if (reached) work.retracted.add(id);
+    if (work.last?.entry.id === id) {
+      window.clearTimeout(work.last.timer);
+      work.last = null;
+    }
+    // The previews are the composer's again; only the cache hold goes.
+    releaseHold(id);
+    moveFeed("restore", [id], () => writeOutbox((current) => withoutEntry(current, id)));
+    announce(tr("Took the memo back into the composer", "已撤回到输入框"));
+    if (reached) void runSync();
+    // The queue behind it goes on.
+    void pumpOutbox();
+    return true;
+  }
+
+  /** 舍弃 on a failed card: it leaves, and its toast's Undo puts it back in its place. */
+  function discardUnsent(id: string) {
+    const entry = outboxRef.current.get(id);
+    if (!entry || syncStateRef.current.memos.has(id)) return;
+    const work = outboxWorkRef.current;
+    work.controllers.get(id)?.abort();
+    forgetSend(id);
+    const reached = work.attempted.delete(id);
+    if (reached) work.retracted.add(id);
+    if (work.last?.entry.id === id) {
+      window.clearTimeout(work.last.timer);
+      work.last = null;
+    }
+    releaseHold(id);
+    // Kept for the Undo, as many as the toast stack shows at once.
+    work.discarded.push(entry);
+    for (const stale of work.discarded.splice(0, Math.max(0, work.discarded.length - TOAST_LIMIT))) revokePreviews(stale);
+    const refocus = holdFeedFocus(id);
+    moveFeed("trash", [id], () => writeOutbox((current) => withoutEntry(current, id)));
+    refocus();
+    showToast(tr("Discarded the unsent memo", "已舍弃这条未发送的笔记"), "info", {
+      action: { label: tr("Undo", "撤销"), run: () => restoreDiscarded(entry, reached) }
+    });
+  }
+
+  function restoreDiscarded(entry: OutboxEntry, reached: boolean) {
+    const work = outboxWorkRef.current;
+    const at = work.discarded.indexOf(entry);
+    if (at < 0) return;
+    work.discarded.splice(at, 1);
+    work.retracted.delete(entry.id);
+    // The server had it all along (sync brought it in): it is there already.
+    if (syncStateRef.current.memos.has(entry.id)) {
+      revokePreviews(entry);
+      return;
+    }
+    if (reached) work.attempted.add(entry.id);
+    work.previews.set(entry.id, holdPreviews(entry.images));
+    moveFeed("restore", [entry.id], () => writeOutbox((current) => withEntry(current, entry)));
+    resumeOutbox("reader", entry.id);
+  }
+
+  /**
+   * ⌘Z in the composer a send just emptied: a send still on its way is
+   * taken back (撤回); one the server confirmed less than SEND_UNDO_MS ago
+   * goes to Trash, its text and pictures back in the composer.
+   */
+  function undoLastSend(): boolean {
+    const work = outboxWorkRef.current;
+    const last = work.last;
+    if (!last) return false;
+    if (last.confirmedAt === null) return outboxRef.current.get(last.entry.id)?.status === "sending" && takeBackUnsent(last.entry.id);
+    if (Date.now() - last.confirmedAt > SEND_UNDO_MS) return false;
+    const memo = syncStateRef.current.memos.get(last.entry.id);
+    if (!memo || memo.deletedAt || memoActionTokensRef.current.has(memo.id) || !recallIntoComposer(last.entry)) return false;
+    window.clearTimeout(last.timer);
+    work.last = null;
+    announce(tr("Took the memo back into the composer", "已撤回到输入框"));
+    void (async () => {
+      try {
+        await runOptimisticMemoAction(memo, { deletedAt: new Date().toISOString() }, async () => (await guard(() => trashMemo(memo.id, memo.seq)))?.memo ?? null);
+      } catch (cause) {
+        if (reconcileVersionConflict(cause)) return;
+        showToast(errorMessage(cause, "Couldn’t delete the memo.", "删除笔记失败"), "error");
+      }
+    })();
+    return true;
+  }
+
+  /**
+   * A memo taken back (or discarded) that reached the server after all: it
+   * was sent, so it goes to Trash with the way back on its toast — nothing
+   * doubled, nothing lost.
+   */
+  async function trashReturned(memo: Memo) {
+    try {
+      const trashed = await runOptimisticMemoAction(
+        memo,
+        { deletedAt: new Date().toISOString() },
+        async () => (await guard(() => trashMemo(memo.id, memo.seq)))?.memo ?? null
+      );
+      if (!trashed) return;
+      showToast(tr("That memo had reached the server after all — moved it to Trash", "这条笔记其实已经发出，已移入回收站"), "info", {
+        action: { label: tr("Undo", "撤销"), run: () => void handleRestore(trashed) }
+      });
+    } catch (cause) {
+      if (reconcileVersionConflict(cause)) return;
+      showToast(errorMessage(cause, "Couldn’t delete the memo.", "删除笔记失败"), "error");
+    }
+  }
+
+  // What sync says about the outbox. A memo it brings in that waits there
+  // with no request in flight was stored all along (its answer lost): sent.
+  // One taken back or discarded that it brings in goes to Trash.
+  useEffect(() => {
+    const work = outboxWorkRef.current;
+    for (const entry of outboxRef.current.values()) {
+      const memo = syncState.memos.get(entry.id);
+      if (work.controllers.has(entry.id) || !memo) continue;
+      const said = work.hidden.get(entry.id);
+      writeOutbox((current) => withoutEntry(current, entry.id));
+      finishSent(entry);
+      saySent(memo, said, false);
+    }
+    for (const id of [...work.retracted]) {
+      const memo = syncState.memos.get(id);
+      if (!memo) continue;
+      work.retracted.delete(id);
+      if (!memo.deletedAt && !outboxRef.current.has(id)) void trashReturned(memo);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs as the truth moves
+  }, [syncState.memos]);
+
+  // The link coming back is the retry the reader would have pressed: the
+  // browser going online, pulls succeeding again, a sign-in, the end of a
+  // passcode change (sends pause while the cookie changes hands). The page
+  // coming back into view sends what its clocks held while it was hidden.
+  const syncHealthy = syncStatus.online && !syncStatus.degraded;
+  useEffect(() => {
+    const onOnline = () => resumeOutboxRef.current("link");
+    const onVisible = () => {
+      if (document.visibilityState === "visible") resumeOutboxRef.current("wake");
+    };
+    window.addEventListener("online", onOnline);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+  useEffect(() => {
+    if (phase === "ready" && !changingPasscode && !loggingOut && syncHealthy) resumeOutboxRef.current("link");
+  }, [phase, changingPasscode, loggingOut, syncHealthy]);
 
   function reconcileVersionConflict(cause: unknown, preserveDraft = false): boolean {
     if (!(cause instanceof ApiError) || cause.code !== "VERSION_CONFLICT") return false;
@@ -3774,12 +4811,69 @@ export default function App() {
     });
   }
 
+  /** The handle of the edit open now, if its editor has handed one over. */
+  function openEditHandle(): EditHandle | null {
+    const held = openEditHandleRef.current;
+    return held && held.memoId === editingIdRef.current ? held.handle : null;
+  }
+
+  /**
+   * Edit another memo while one is open. An open edit holding nothing just
+   * closes and the new one opens in its place. One with changes stays: it is
+   * brought back into view and flagged, and the toast offers to drop it for
+   * this one — that discard leaves its own "Discarded" toast, whose Undo
+   * reopens it as Esc's does.
+   */
+  function handleStartEdit(id: string) {
+    const open = editingIdRef.current;
+    if (open && open !== id) {
+      const handle = openEditHandle();
+      if (!handle || handle.dirty) {
+        handle?.attend();
+        showToast(
+          tr("Save or cancel the open edit before editing another memo.", "请先保存或取消当前编辑，再编辑其他笔记"),
+          "info",
+          handle ? { action: { label: tr("Discard & edit this", "放弃并编辑这条"), run: () => feedActionsRef.current.discardAndEdit(open, id) } } : {}
+        );
+        return;
+      }
+    }
+    openEdit(id);
+  }
+
+  function openEdit(id: string) {
+    editingBaseSeqRef.current = syncStateRef.current.memos.get(id)?.seq ?? null;
+    setEditConflictId(null);
+    // A reopened draft belongs to the edit it reopened, not to this one.
+    setReopenedDraft((current) => (current?.memoId === id ? current : null));
+    setEditingId(id);
+  }
+
+  /** The toast's "Discard & edit this": drop the open edit (Esc's way, Undo and all), then open `id`. */
+  function discardAndEdit(open: string, id: string) {
+    const handle = openEditHandle();
+    if (editingIdRef.current !== open || !handle) {
+      // Things moved on since the toast went up: ask afresh.
+      handleStartEdit(id);
+      return;
+    }
+    // A save under way holds the edit: nothing is dropped, nothing opens.
+    if (!handle.discard()) return;
+    openEdit(id);
+  }
+
   function reopenDiscardedEdit(entry: { memoId: string; draft: EditDraft; baseSeq: number | null }) {
     // A later discard replaced (and released) this one.
     if (discardedEditRef.current !== entry) return;
-    if (editingIdRef.current) {
-      showToast(tr("Save or cancel the open edit before editing another memo.", "请先保存或取消当前编辑，再编辑其他笔记"));
-      return;
+    const open = editingIdRef.current;
+    if (open) {
+      // An untouched edit of another memo gives way, as it does for Edit.
+      const handle = openEditHandle();
+      if (open === entry.memoId || !handle || handle.dirty) {
+        handle?.attend();
+        showToast(tr("Save or cancel the open edit before editing another memo.", "请先保存或取消当前编辑，再编辑其他笔记"));
+        return;
+      }
     }
     const current = syncStateRef.current.memos.get(entry.memoId);
     if (!current || current.deletedAt) {
@@ -3989,6 +5083,8 @@ export default function App() {
     // The open editor owns that memo's content; its draft would just
     // conflict with the flip. (The card shows the editor then anyway.)
     if (editingIdRef.current === memo.id) return;
+    // Nor is there a stored memo to tick before an unsent one arrives.
+    if (outboxRef.current.has(memo.id) && !syncStateRef.current.memos.has(memo.id)) return;
     stampTaskFlip(memo.id, lineKey, checked);
     let queue = taskFlipQueueRef.current.get(memo.id);
     if (!queue) {
@@ -4467,16 +5563,8 @@ export default function App() {
   // survives every App re-render. (The handle* function declarations below
   // are hoisted, so assigning here each render is safe.)
   const feedActionsRef = useRef({
-    startEdit: (id: string) => {
-      const currentEditing = editingIdRef.current;
-      if (currentEditing && currentEditing !== id) {
-        showToast(tr("Save or cancel the open edit before editing another memo.", "请先保存或取消当前编辑，再编辑其他笔记"));
-        return;
-      }
-      editingBaseSeqRef.current = syncStateRef.current.memos.get(id)?.seq ?? null;
-      setEditConflictId(null);
-      setEditingId(id);
-    },
+    startEdit: handleStartEdit,
+    discardAndEdit,
     cancelEdit: handleCancelEdit,
     reopenEdit: reopenDiscardedEdit,
     saveEdit: handleSaveEdit,
@@ -4487,6 +5575,7 @@ export default function App() {
     restore: handleRestore,
     purge: handlePurge,
     toggleTask: handleToggleTask,
+    hideFromReview,
     acceptEditConflict: (id: string) => {
       const current = syncStateRef.current.memos.get(id);
       if (!current || current.deletedAt) return;
@@ -4497,19 +5586,14 @@ export default function App() {
     pickTag,
     toggleSelect,
     selectFrom: (memo: Memo) => enterSelectMode(memo.id),
-    notice: (text: string, action?: ToastAction) => showToast(text, "info", action ? { action } : {})
+    notice: (text: string, action?: ToastAction) => showToast(text, "info", action ? { action } : {}),
+    takeBack: (memo: Memo) => void takeBackUnsent(memo.id),
+    retrySend: (memo: Memo) => resumeOutbox("reader", memo.id),
+    discardUnsent: (memo: Memo) => discardUnsent(memo.id)
   });
   feedActionsRef.current = {
-    startEdit: (id: string) => {
-      const currentEditing = editingIdRef.current;
-      if (currentEditing && currentEditing !== id) {
-        showToast(tr("Save or cancel the open edit before editing another memo.", "请先保存或取消当前编辑，再编辑其他笔记"));
-        return;
-      }
-      editingBaseSeqRef.current = syncStateRef.current.memos.get(id)?.seq ?? null;
-      setEditConflictId(null);
-      setEditingId(id);
-    },
+    startEdit: handleStartEdit,
+    discardAndEdit,
     cancelEdit: handleCancelEdit,
     reopenEdit: reopenDiscardedEdit,
     saveEdit: handleSaveEdit,
@@ -4520,6 +5604,7 @@ export default function App() {
     restore: handleRestore,
     purge: handlePurge,
     toggleTask: handleToggleTask,
+    hideFromReview,
     acceptEditConflict: (id: string) => {
       const current = syncStateRef.current.memos.get(id);
       if (!current || current.deletedAt) return;
@@ -4530,7 +5615,10 @@ export default function App() {
     pickTag,
     toggleSelect,
     selectFrom: (memo: Memo) => enterSelectMode(memo.id),
-    notice: (text: string, action?: ToastAction) => showToast(text, "info", action ? { action } : {})
+    notice: (text: string, action?: ToastAction) => showToast(text, "info", action ? { action } : {}),
+    takeBack: (memo: Memo) => void takeBackUnsent(memo.id),
+    retrySend: (memo: Memo) => resumeOutbox("reader", memo.id),
+    discardUnsent: (memo: Memo) => discardUnsent(memo.id)
   };
   const feedHandlers = useMemo<FeedHandlers>(
     () => ({
@@ -4547,13 +5635,21 @@ export default function App() {
       purge: (memo) => void feedActionsRef.current.purge(memo),
       pickTag: (path) => feedActionsRef.current.pickTag(path),
       openImage: (items, index) => setLightbox({ items, index }),
-      toggleSelect: (memo) => feedActionsRef.current.toggleSelect(memo),
+      toggleSelect: (memo, extend) => feedActionsRef.current.toggleSelect(memo, extend),
       selectFrom: (memo) => feedActionsRef.current.selectFrom(memo),
       toggleTask: (memo, lineKey, checked) => feedActionsRef.current.toggleTask(memo, lineKey, checked),
+      hideFromReview: (memo) => feedActionsRef.current.hideFromReview(memo),
       editDraftChange: (memoId, content) => {
         editDraftRef.current = { memoId, content };
       },
-      notice: (text, action) => feedActionsRef.current.notice(text, action)
+      editHandle: (memoId, handle, open) => {
+        if (open) openEditHandleRef.current = { memoId, handle };
+        else if (openEditHandleRef.current?.handle === handle) openEditHandleRef.current = null;
+      },
+      notice: (text, action) => feedActionsRef.current.notice(text, action),
+      takeBack: (memo) => feedActionsRef.current.takeBack(memo),
+      retrySend: (memo) => feedActionsRef.current.retrySend(memo),
+      discardUnsent: (memo) => feedActionsRef.current.discardUnsent(memo)
     }),
     []
   );
@@ -4661,6 +5757,29 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [confirmBatchDelete, setBatchDeleteArm]);
 
+  // Select mode's keys: ⌘/Ctrl+A takes every memo in the list, Delete or
+  // Backspace arms the batch delete (focus goes to its pill, so Enter
+  // confirms and leaving it disarms) — never on its own, held or not. A
+  // field or a dialog keeps its own keys; the rest are the app's.
+  const selectKeysRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  selectKeysRef.current = (event) => {
+    if (event.defaultPrevented || event.isComposing || event.altKey || (view !== "memos" && view !== "trash")) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && (target.isContentEditable || target.matches("input, textarea, select"))) return;
+    if (document.querySelector("[aria-modal='true']")) return;
+    const command = event.metaKey || event.ctrlKey;
+    if (command && !event.shiftKey && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      if (visibleFeedIds.length > 0) mutateSelection(() => setSelected(new Set(visibleFeedIds)));
+      return;
+    }
+    if (command || (event.key !== "Delete" && event.key !== "Backspace")) return;
+    event.preventDefault();
+    if (event.repeat || batchBusy || visibleSelected.size === 0) return;
+    if (!confirmBatchDelete) setBatchDeleteArm(true);
+    document.querySelector<HTMLElement>(".select-delete:not(:disabled)")?.focus({ preventScroll: true });
+  };
+
   // Escape backs out of select mode (view switches already clear it inside
   // their own transitions; this is the keyboard path).
   useEffect(() => {
@@ -4668,6 +5787,7 @@ export default function App() {
     function onKey(event: KeyboardEvent) {
       // An Escape that cancels an IME candidate belongs to the IME.
       if (event.key === "Escape" && !event.isComposing) exitSelectMode();
+      else selectKeysRef.current(event);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -4784,28 +5904,76 @@ export default function App() {
     }
   }
 
-  /** True when `path` or a tag under it is on any memo, Trash included — renaming onto it merges. */
+  /** True when `path` or a tag under it is on any memo, Trash and the sends on their way included — renaming onto it merges. */
   function tagPathInUse(path: string): boolean {
-    return memos.some((memo) => tagsOf(memo).some((tag) => tagMatches(tag, path)));
+    const carries = (memo: Memo) => tagsOf(memo).some((tag) => tagMatches(tag, path));
+    return memos.some(carries) || unsent.some(carries);
+  }
+
+  /**
+   * Hold the queue while a tag is renamed or removed on the server: a send
+   * stored half-way through would keep the old tag. Returns the release,
+   * which carries on with what waited.
+   */
+  function holdOutbox(): () => void {
+    const work = outboxWorkRef.current;
+    work.holds += 1;
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      work.holds -= 1;
+      if (work.holds === 0) void pumpOutbox();
+    };
+  }
+
+  /**
+   * A tag renamed (or removed: `to` null) reaches the sends on their way
+   * too, as the server's rewrite reached the stored memos — their text, the
+   * draft taken back from them, the lens tag they inherited and their
+   * cards — or a send stored later would bring the old tag back. A send
+   * already out is brought level as it lands (deliverOutbox).
+   */
+  function retagOutbox(from: string, to: string | null) {
+    const moved = (tag: string | null) => (tag !== null && tagMatches(tag, from) ? (to === null ? null : to + tag.slice(from.length)) : tag);
+    const retag = (entry: OutboxEntry): OutboxEntry => {
+      const content = renameTagInContent(entry.content, from, to);
+      return { ...entry, content, draft: renameTagInContent(entry.draft, from, to), tag: moved(entry.tag), memo: { ...entry.memo, content } };
+    };
+    const changes = (entry: OutboxEntry) =>
+      renameTagInContent(entry.content, from, to) !== entry.content || renameTagInContent(entry.draft, from, to) !== entry.draft || moved(entry.tag) !== entry.tag;
+    writeOutbox((current) => mapEntries(current, changes, retag));
+    // Kept for a toast's Undo and for ⌘Z: they would put the old tag back
+    // too. Rewritten in place, as the Undo finds its entry by identity.
+    const work = outboxWorkRef.current;
+    for (const entry of work.discarded) if (changes(entry)) Object.assign(entry, retag(entry));
+    if (work.last && changes(work.last.entry)) work.last.entry = retag(work.last.entry);
   }
 
   /**
    * Rename on the server, then carry every per-device reference along: the
-   * open tag lens, saved presets, a stats drill-down and the review scope.
+   * open tag lens, saved presets, a stats drill-down, the review scope and
+   * the sends still on their way.
    */
   async function performTagRename(from: string, to: string, onProgress?: (fraction: number) => void) {
-    const result = await guard(() => renameTag(from, to, onProgress));
-    if (!result) return undefined;
-    applySyncChanges(result.memos, [], result.tags);
-    setActiveTag((current) => (current && tagMatches(current, from) ? to + current.slice(from.length) : current));
-    setSavedFilters((current) => renameSavedFilterTags(current, from, to));
-    setStatsDrilldown((current) =>
-      current?.kind === "tag" && tagMatches(current.tag, from) ? { ...current, tag: to + current.tag.slice(from.length) } : current
-    );
-    followTagChangeInReview(renameReviewSettingsTag(reviewSettings, from, to), true);
-    void runSync();
-    notifyPeers();
-    return result;
+    const release = holdOutbox();
+    try {
+      const result = await guard(() => renameTag(from, to, onProgress));
+      if (!result) return undefined;
+      applySyncChanges(result.memos, [], result.tags);
+      retagOutbox(from, to);
+      setActiveTag((current) => (current && tagMatches(current, from) ? to + current.slice(from.length) : current));
+      setSavedFilters((current) => renameSavedFilterTags(current, from, to));
+      setStatsDrilldown((current) =>
+        current?.kind === "tag" && tagMatches(current.tag, from) ? { ...current, tag: to + current.tag.slice(from.length) } : current
+      );
+      followTagChangeInReview(renameReviewSettingsTag(reviewSettings, from, to), true);
+      void runSync();
+      notifyPeers();
+      return result;
+    } finally {
+      release();
+    }
   }
 
   /** The rename toast's Undo: the same rename in reverse, unless that would now merge. */
@@ -4827,6 +5995,7 @@ export default function App() {
   tagRenameUndoRef.current = undoTagRename;
 
   async function handleRemoveTag(path: string) {
+    const release = holdOutbox();
     try {
       const result = await guard(() => removeTag(path));
       if (!result) return;
@@ -4840,6 +6009,7 @@ export default function App() {
         result.memos.map((memo) => memo.id),
         () => {
           applySyncChanges(result.memos, [], result.tags);
+          retagOutbox(path, null);
           if (resets) setActiveTag(null);
           setSavedFilters((current) => removeSavedFiltersForTag(current, path));
           setStatsDrilldown((current) => (current?.kind === "tag" && tagMatches(current.tag, path) ? null : current));
@@ -4853,6 +6023,8 @@ export default function App() {
       void runSync();
       notifyPeers();
       showToast(errorMessage(cause, "Couldn’t remove the tag.", "移除标签失败"), "error");
+    } finally {
+      release();
     }
   }
 
@@ -5018,6 +6190,137 @@ export default function App() {
     }
   }
 
+  // ---- The search box's list (components/SearchJump) ----
+  const tagEntries = useMemo(() => flattenTags(tagTree), [tagTree]);
+  const pinnedEntries = useMemo(() => tagEntries.filter((tag) => pinnedTags.has(tag.path)), [tagEntries, pinnedTags]);
+  const rememberRecent = useCallback((text: string) => setRecentSearches((current) => rememberSearch(current, text)), []);
+  const coarsePointer = () => typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+
+  /** A tag picked from the list: its lens, the typed words gone with the list. */
+  function jumpToTag(path: string) {
+    setJumpOpen(false);
+    if (!(view === "memos" && activeTag === path && query === "")) {
+      changeFeed(
+        () => {
+          setActiveTag(path);
+          setStatsDrilldown(null);
+          setView("memos");
+          swapQuery("");
+          setFilters((current) => (current.noTags ? { ...current, noTags: false } : current));
+        },
+        (lens) => ({ ...lens, view: "memos", tag: path, drilldown: null, query: "", filters: lens.filters.noTags ? { ...lens.filters, noTags: false } : lens.filters })
+      );
+    }
+    // After the change, so the box narrows from where the motion found it.
+    searchRef.current?.blur();
+  }
+
+  function actOnJump(row: JumpRow) {
+    switch (row.kind) {
+      case "recent":
+        setJumpOpen(false);
+        rememberRecent(row.text);
+        changeFeed(
+          () => swapQuery(row.text),
+          (lens) => ({ ...lens, query: row.text })
+        );
+        return;
+      case "saved":
+        setJumpOpen(false);
+        applySavedFilter(row.item);
+        searchRef.current?.blur();
+        return;
+      case "pinned":
+        jumpToTag(row.path);
+        return;
+      case "tag":
+        jumpToTag(row.hit.path);
+        return;
+      case "search":
+      case "meaning":
+        // The feed already follows the text; this files it as a recent
+        // search, and by meaning turns the lens on for it (the Brain's own
+        // switch — the ranking lands later and moves the feed itself).
+        setJumpOpen(false);
+        rememberRecent(row.text);
+        if (row.kind === "meaning" && !semanticOn) setSemanticOn(true);
+        // On a phone the keyboard goes away, as the Search key always did.
+        if (coarsePointer()) searchRef.current?.blur();
+        return;
+    }
+  }
+
+  const searchJump = useSearchJump({
+    query: searchText,
+    open: jumpOpen && view === "memos",
+    tags: tagEntries,
+    pinned: pinnedEntries,
+    saved: savedFilters,
+    recent: recentSearches,
+    meaningAvailable: !semanticOn && modelOnDevice && !modelBusy,
+    onAct: actOnJump,
+    onComplete: (text) => {
+      setJumpOpen(true);
+      typeQuery(text);
+    },
+    onOpen: () => setJumpOpen(true),
+    onCollapse: () => setJumpOpen(false)
+  });
+
+  /** Cheap (a key listing): asked as the box takes focus, not on every key. */
+  const checkModelOnDevice = useCallback(() => {
+    void storedModelState().then(
+      (state) => setModelOnDevice(state === "complete"),
+      () => setModelOnDevice(false)
+    );
+  }, []);
+
+  // ---- The app's own keys (lib/shortcuts) ----
+  // Only outside text fields and dialogs: the editor keeps ⌘K and friends,
+  // the feed its select-mode keys, a dialog everything.
+  const shortcutsBlockedRef = useRef(false);
+  shortcutsBlockedRef.current = dialogUp || drawerOpen || statsOpen || lightbox !== null;
+  useEffect(() => {
+    if (phase !== "ready") return;
+    function onKeyDown(event: KeyboardEvent) {
+      const shortcut = globalShortcutOf(event);
+      if (!shortcut || shortcutsBlockedRef.current) return;
+      if (isTextEntry(document.activeElement) || (event.target instanceof Element && isTextEntry(event.target))) return;
+      // An open menu or panel answers its own keys.
+      if (document.querySelector("[aria-modal='true'], .action-menu")) return;
+      if (shortcut === "search") {
+        const field = document.querySelector<HTMLInputElement>(".topbar .search-tools input");
+        if (!field || field.closest("[inert]") || field.getClientRects().length === 0) return;
+        event.preventDefault();
+        field.focus();
+        try {
+          field.setSelectionRange(field.value.length, field.value.length);
+        } catch {
+          // Not every field type keeps a selection.
+        }
+        return;
+      }
+      if (shortcut === "compose") {
+        if (revealComposer(window.matchMedia("(prefers-reduced-motion: reduce)").matches)) event.preventDefault();
+        return;
+      }
+      if (shortcut === "undo") {
+        // The newest toast only, and only its Undo: ⌘Z never reaches past
+        // what the reader can see.
+        const newest = toastsRef.current.filter((toast) => !toast.leaving).at(-1);
+        if (!newest?.action || !isUndoLabel(newest.action.label)) return;
+        event.preventDefault();
+        newest.action.run();
+        dismissToast(newest.id);
+        return;
+      }
+      event.preventDefault();
+      setShortcutsOpen(true);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [phase, dismissToast]);
+
   // One stack for every phase, at one place in the tree: a toast raised at
   // the gate ("session expired") survives the unlock without remounting and
   // replaying its entrance (it is dismissed once the passcode is in).
@@ -5085,7 +6388,7 @@ export default function App() {
   }
 
   const visibleSelectedCount = visibleSelected.size;
-  const allVisibleSelected = feedMemos.length > 0 && visibleSelectedCount === feedMemos.length;
+  const allVisibleSelected = visibleFeedIds.length > 0 && visibleSelectedCount === visibleFeedIds.length;
   // Select mode is a view's own: memos or Trash, each with its own verbs.
   const selectingTrash = selectMode && view === "trash";
   const selectingFeed = selectMode && (view === "memos" || view === "trash");
@@ -5132,8 +6435,61 @@ export default function App() {
     ? tr(`Working… ${formatNumber(batchProgress.done)}/${formatNumber(batchProgress.total)}`, `处理中… ${formatNumber(batchProgress.done)}/${formatNumber(batchProgress.total)}`)
     : tr("Working…", "处理中…");
 
+  // A tag chip's count, on hover (a touch has no hover: its tap is the pick).
+  // One pair of listeners on the feed rather than one per chip: the rows are
+  // memoized and their chips carry nothing but their path (data-tag).
+  function showTagTip(event: ReactPointerEvent<HTMLElement>) {
+    if (event.pointerType === "touch") return;
+    const chip = event.target instanceof Element ? event.target.closest<HTMLElement>("button.memo-tag[data-tag]") : null;
+    if (!chip || chip === tagTipRef.current) return;
+    const total = tagCounts.get(chip.dataset.tag ?? "");
+    if (total === undefined) return;
+    tagTipRef.current = chip;
+    tip.show(chip, { text: count(total, "memo") });
+  }
+  function hideTagTip(event: ReactPointerEvent<HTMLElement>) {
+    const chip = tagTipRef.current;
+    if (!chip || (event.relatedTarget instanceof Node && chip.contains(event.relatedTarget))) return;
+    tagTipRef.current = null;
+    tip.hide();
+  }
+
+  // The foot of a list that has all arrived, where it can say something a
+  // reader can't see from the cards: how much there is, and since when. A
+  // search says its count above the results already, and the Daily review's
+  // foot is its own view's to set (it renders <FeedFoot> with its line).
+  const listWhole = !bootstrapLoad && !hasMoreFeed && feedMemos.length > 0 && view === "memos";
+  const onlyTagLens = activeTag !== null && activeDay === null && statsDrilldown === null && !structuredFiltersOn && trimmedQuery === "";
+  let feedFoot: ReactNode = null;
+  if (listWhole && !filtersActive && minDay) {
+    const [year, month, day] = minDay.split("-").map(Number);
+    const since = dateFormat(locale, { year: "numeric", month: "short", day: "numeric" }).format(new Date(year, month - 1, day));
+    const firstDay = minDay;
+    feedFoot = (
+      <FeedFoot key="all">
+        {tr(`${count(feedMemos.length, "memo")} · since `, `${count(feedMemos.length, "memo")} · 始于 `)}
+        <button
+          type="button"
+          className="feed-foot-date"
+          aria-label={tr(`${since}, show that day’s memos`, `${since}，查看当天的笔记`)}
+          onClick={() => pickDay(firstDay)}
+        >
+          {since}
+        </button>
+      </FeedFoot>
+    );
+  } else if (listWhole && onlyTagLens) {
+    feedFoot = (
+      <FeedFoot key={`tag:${activeTag}`}>
+        {feedMemos.length === 1
+          ? tr(`The only memo in #${activeTag}`, `#${activeTag} 下只有这 1 条`)
+          : tr(`All ${formatNumber(feedMemos.length)} in #${activeTag}`, `#${activeTag} 下的 ${formatNumber(feedMemos.length)} 条都在这里`)}
+      </FeedFoot>
+    );
+  }
+
   return withToasts(
-    <div className={`app-shell${reveal ? " first-reveal" : ""}`}>
+    <div className="app-shell">
       {/* Keyboard users skip the sidebar (stats, heatmap, the whole tag
           tree) and land at the top of the feed column: location, search,
           composer. Focus is lent to <main> only for the jump. */}
@@ -5171,6 +6527,7 @@ export default function App() {
           theme={theme}
           pinnedTags={pinnedTags}
           onSetTheme={setTheme}
+          reviewMark={reviewNavMark}
           {...sidebarHandlers}
         />
       </aside>
@@ -5516,16 +6873,20 @@ export default function App() {
                   />
                 ) : null}
                 {statsChipLabel ? (
+                  // Its label is the way back into Statistics, opening on the
+                  // year and place the drill left it at; its × lifts the lens.
                   <FilterChip
                     icon={ChartNoAxesColumn}
                     label={statsChipLabel}
                     clearLabel={tr(`Clear statistics filter: ${statsChipLabel}`, `清除统计筛选：${statsChipLabel}`)}
+                    editLabel={tr(`Back to Statistics: ${statsChipLabel}`, `回到统计：${statsChipLabel}`)}
                     transitionName="stats-filter-chip"
                     delay={chipDelay("stats")}
                     onClear={() => {
                       armFocusFloor();
                       clearStatsDrilldown();
                     }}
+                    onEdit={() => setStatsOpen(true)}
                   />
                 ) : null}
                 {rangeChipLabel ? (
@@ -5565,94 +6926,139 @@ export default function App() {
                     }}
                   />
                 ))}
+                {/* Two or more lenses: one press lifts them all, keeping the
+                    tag (where the reader is) and the search text. */}
+                {chipKeys.length >= 2 ? (
+                  <button
+                    type="button"
+                    className="filter-clear"
+                    data-motion="filter-clear"
+                    aria-label={tr("Clear all filters", "清除全部筛选")}
+                    onClick={() => {
+                      armFocusFloor();
+                      clearRefinements();
+                    }}
+                  >
+                    {tr("Clear", "清除")}
+                  </button>
+                ) : null}
               </>
             ) : null}
           </div>
           {view === "memos" ? (
             <div className="search-tools" role="search">
-              <div className={`searchbox${searchOpen || searchText ? " is-open" : ""}`}>
-                <Search size={15} className="searchbox-icon" aria-hidden="true" />
-                <input
-                  ref={searchRef}
-                  type="search"
-                  value={searchText}
-                  placeholder={searchPlaceholder}
-                  aria-label={searchPlaceholder}
-                  aria-describedby="search-syntax-hint"
-                  enterKeyHint="search"
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  onChange={(event) => {
-                    // Mid-composition the box shows the IME's text but the
-                    // feed waits; compositionend (or WebKit's trailing
-                    // non-composing input event) hands over the result.
-                    if (searchComposingRef.current || (event.nativeEvent as InputEvent).isComposing) {
-                      setSearchComposition(event.target.value);
-                      return;
-                    }
-                    typeQuery(event.target.value);
-                  }}
-                  onCompositionStart={(event) => {
-                    searchComposingRef.current = true;
-                    setSearchComposition(event.currentTarget.value);
-                  }}
-                  onCompositionEnd={(event) => {
-                    searchComposingRef.current = false;
-                    typeQuery(event.currentTarget.value);
-                  }}
-                  onKeyDown={(event) => {
-                    // Keys that confirm or cancel an IME candidate belong to it.
-                    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-                    if (event.key === "Escape") {
-                      if (query) {
-                        // Consumed: select mode's window listener must not
-                        // also back out on the same press.
-                        event.preventDefault();
-                        event.stopPropagation();
-                        clearSearch();
-                      } else event.currentTarget.blur();
-                    } else if (event.key === "Enter" && window.matchMedia("(pointer: coarse)").matches) {
-                      // The feed already follows each keystroke; on a phone
-                      // the Search key just puts the keyboard away.
-                      event.currentTarget.blur();
-                    }
-                  }}
-                  onMouseEnter={(event) => {
-                    if (document.activeElement !== event.currentTarget) tip.show(event.currentTarget, { text: searchSyntaxHint });
-                  }}
-                  onMouseLeave={tip.hide}
-                  onFocus={() => {
-                    tip.hide();
-                    setSearchOpen(true);
-                  }}
-                  onBlur={() => setSearchOpen(false)}
-                />
-                <span id="search-syntax-hint" className="search-sr">
-                  {searchSyntaxHint}
-                </span>
-                {/* Always mounted, so it can scale in as the first letter
-                    lands and out as the last goes (the input's right padding
-                    eases with it); while empty it is out of reach. */}
-                <button
-                  type="button"
-                  className={`searchbox-clear${searchText ? " is-shown" : ""}`}
-                  aria-label={tr("Clear search", "清空搜索")}
-                  aria-hidden={searchText ? undefined : true}
-                  tabIndex={searchText ? undefined : -1}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    if (!searchText) return;
-                    // The same restoration the home pill performs, so it
-                    // reads the same: one click, the full list glides back
-                    // (to the reading place, when it was there before).
-                    clearSearch();
-                    searchRef.current?.focus();
-                  }}
-                >
-                  <X size={13} aria-hidden="true" />
-                </button>
+              {/* The box and its list (SearchJump). The list hangs outside
+                  .searchbox, whose look the chrome motion compares across a
+                  change: rows changing under it are not the box changing. */}
+              <div className="search-jump">
+                <div className={`searchbox${searchOpen || searchText ? " is-open" : ""}${searchOpen ? " is-focused" : ""}`}>
+                  <Search size={15} className="searchbox-icon" aria-hidden="true" />
+                  <input
+                    ref={searchRef}
+                    type="search"
+                    role="combobox"
+                    aria-expanded={searchJump.expanded}
+                    aria-controls={searchJump.listId}
+                    aria-autocomplete="list"
+                    aria-activedescendant={searchJump.activeDescendant}
+                    aria-keyshortcuts="/ Control+K Meta+K"
+                    value={searchText}
+                    placeholder={searchPlaceholder}
+                    aria-label={searchPlaceholder}
+                    aria-describedby="search-syntax-hint"
+                    enterKeyHint="search"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    onChange={(event) => {
+                      setJumpOpen(true);
+                      // Mid-composition the box shows the IME's text but the
+                      // feed waits; compositionend (or WebKit's trailing
+                      // non-composing input event) hands over the result.
+                      if (searchComposingRef.current || (event.nativeEvent as InputEvent).isComposing) {
+                        setSearchComposition(event.target.value);
+                        return;
+                      }
+                      typeQuery(event.target.value);
+                    }}
+                    onCompositionStart={(event) => {
+                      searchComposingRef.current = true;
+                      setSearchComposition(event.currentTarget.value);
+                    }}
+                    onCompositionEnd={(event) => {
+                      searchComposingRef.current = false;
+                      typeQuery(event.currentTarget.value);
+                    }}
+                    onKeyDown={(event) => {
+                      // Keys that confirm or cancel an IME candidate belong to it.
+                      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                      // ↑ ↓ ↩ ⇧↩ Tab are the list's while it shows.
+                      if (searchJump.onKeyDown(event)) return;
+                      if (event.key === "Escape") {
+                        if (query) {
+                          // Consumed: select mode's window listener must not
+                          // also back out on the same press.
+                          event.preventDefault();
+                          event.stopPropagation();
+                          clearSearch();
+                        } else event.currentTarget.blur();
+                      } else if (event.key === "Enter" && window.matchMedia("(pointer: coarse)").matches) {
+                        // The feed already follows each keystroke; on a phone
+                        // the Search key just puts the keyboard away.
+                        event.currentTarget.blur();
+                      }
+                    }}
+                    onMouseEnter={(event) => {
+                      if (document.activeElement !== event.currentTarget) tip.show(event.currentTarget, { text: searchSyntaxHint });
+                    }}
+                    onMouseLeave={tip.hide}
+                    onMouseDown={() => setJumpOpen(true)}
+                    onFocus={() => {
+                      tip.hide();
+                      setSearchOpen(true);
+                      setJumpOpen(true);
+                      if (!semanticOn) checkModelOnDevice();
+                    }}
+                    onBlur={() => {
+                      setSearchOpen(false);
+                      setJumpOpen(false);
+                      // Read back after the commit that may have just cleared
+                      // it (a tag picked from the list): what is left was searched.
+                      const searched = navLensRef.current.query;
+                      if (searched.trim()) rememberRecent(searched);
+                    }}
+                  />
+                  <span id="search-syntax-hint" className="search-sr">
+                    {searchSyntaxHint}
+                  </span>
+                  {/* The / that reaches the box, while it sits empty and idle. */}
+                  <kbd className="keycap searchbox-key" aria-hidden="true">
+                    /
+                  </kbd>
+                  {/* Always mounted, so it can scale in as the first letter
+                      lands and out as the last goes (the input's right padding
+                      eases with it); while empty it is out of reach. */}
+                  <button
+                    type="button"
+                    className={`searchbox-clear${searchText ? " is-shown" : ""}`}
+                    aria-label={tr("Clear search", "清空搜索")}
+                    aria-hidden={searchText ? undefined : true}
+                    tabIndex={searchText ? undefined : -1}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      if (!searchText) return;
+                      // The same restoration the home pill performs, so it
+                      // reads the same: one click, the full list glides back
+                      // (to the reading place, when it was there before).
+                      clearSearch();
+                      searchRef.current?.focus();
+                    }}
+                  >
+                    <X size={13} aria-hidden="true" />
+                  </button>
+                </div>
+                {searchJump.popup}
               </div>
               <button
                 type="button"
@@ -5904,11 +7310,15 @@ export default function App() {
             onDraftChange={(content) => {
               composerDraftRef.current = content;
             }}
-            knownTags={knownTags}
+            knownTags={suggestTags}
             contextTag={activeTag}
-            busy={creating}
+            busy={false}
             onSubmit={handleCreate}
             onNotice={feedHandlers.notice}
+            onOpenImage={feedHandlers.openImage}
+            controlRef={composerControlRef}
+            onOccupiedChange={setComposerOccupied}
+            onUndoSend={undoLastSend}
           />
         </div>
 
@@ -5932,18 +7342,14 @@ export default function App() {
           aria-label={view === "trash" ? tr("Trash", "回收站") : view === "review" ? tr("Daily review", "每日回顾") : tr("Memo list", "笔记列表")}
           // Older pages of a cold start are still arriving into this list.
           aria-busy={bootstrapLoad ? true : undefined}
+          onPointerOver={showTagTip}
+          onPointerOut={hideTagTip}
         >
           {view === "review" && reviewDay && feedMemos.length > 0 ? (
-            // The day's masthead: date and batch size, fixed all day. Its own
-            // motion key keeps it steady while a settings change moves the
-            // cards beneath it.
-            <div className="review-banner">
-              <Sparkles size={14} aria-hidden="true" />
-              <span>
-                {formatDayLabel(reviewDay.day, locale)}
-                {tr(` · ${count(feedMemos.length, "memo")} to revisit`, ` · 回顾 ${count(feedMemos.length, "memo")}`)}
-              </span>
-            </div>
+            // The day's masthead: the date, how much of today's set has been
+            // revisited and why it came back. Not a slot, so it stays steady
+            // while a settings change moves the cards beneath it.
+            <ReviewBanner day={reviewDay.day} seen={reviewSeenCount} total={feedMemos.length} breakdown={reviewBreakdown(reviewDay, reviewIds)} />
           ) : null}
           {feedMemos.length === 0 ? (
             <div className="feed-empty">
@@ -6050,29 +7456,40 @@ export default function App() {
               )}
             </div>
           ) : (
-            renderedFeedMemos.map((memo) => (
+            renderedFeedMemos.map((memo, index) => (
               <FeedItem
                 key={memo.id}
                 memo={memo}
                 variant={view === "trash" ? "trash" : "normal"}
-                knownTags={editingId === memo.id ? knownTags : EMPTY_TAGS}
+                knownTags={editingId === memo.id ? suggestTags : EMPTY_TAGS}
                 editing={editingId === memo.id}
                 savingEdit={editingId === memo.id && savingEdit}
                 editConflict={editingId === memo.id && editConflictId === memo.id}
                 editDraft={editingId === memo.id && reopenedDraft?.memoId === memo.id ? reopenedDraft.draft : null}
-                selecting={selectingFeed}
+                // An unsent card keeps its own actions through select mode.
+                selecting={selectingFeed && !sendStates.has(memo.id)}
                 selected={selectingFeed && selected.has(memo.id)}
                 canSelect={view === "memos" || view === "trash"}
                 taskFlips={pendingTaskFlips.get(memo.id)}
                 resumeContent={editSeed?.memoId === memo.id ? editSeed.content : undefined}
                 busy={optimisticMemos.has(memo.id)}
                 stale={semanticStale && keywordHitIds !== null && !keywordHitIds.has(memo.id) && memo.id !== editingId}
+                related={semanticOnlyIds?.has(memo.id) ?? false}
+                leadKind={leadOf(memo, index)}
+                leadText={leadLine(leadOf(memo, index))}
+                pinEnd={pinnedRun > 0 && index === pinnedRun - 1}
                 vtName={`memo-${memo.id}`}
                 handlers={feedHandlers}
+                reviewPick={view === "review" && reviewDay ? reviewPickOf(reviewDay, memo.id) : undefined}
+                reviewSeen={view === "review" && reviewSeenIds.has(memo.id)}
+                sendState={sendStates.get(memo.id)}
+                recallBlocked={composerOccupied && sendStates.has(memo.id)}
               />
             ))
           )}
           {hasMoreFeed ? <div ref={feedSentinelRef} className="feed-sentinel" aria-hidden="true" /> : null}
+          {/* Today's set, all seen: a quiet word after the last card. */}
+          {view === "review" && feedMemos.length > 0 && !hasMoreFeed && reviewSeenCount >= feedMemos.length ? <ReviewFinish count={feedMemos.length} /> : null}
           {/* The list ran out, but a cold start is still loading older
               pages: its last card is not the notebook's oldest. */}
           {bootstrapLoad && !hasMoreFeed && feedMemos.length > 0 && view !== "review" ? (
@@ -6084,8 +7501,19 @@ export default function App() {
           <div ref={attachFeedGhosts} className="feed-ghosts" aria-hidden="true" />
         </section>
 
+        {feedFoot}
+
         <ScrollTopButton />
+        <ComposeFab
+          available={view === "memos"}
+          onActivate={() => revealComposer(window.matchMedia("(prefers-reduced-motion: reduce)").matches)}
+        />
       </main>
+      {/* The unlock: one veil in the gate's colour over the whole app,
+          opening from where the passcode went in (app.css). */}
+      {reveal ? (
+        <div className="unlock-reveal" aria-hidden="true" style={{ "--reveal-x": `${reveal.x}px`, "--reveal-y": `${reveal.y}px` } as CSSProperties} />
+      ) : null}
 
       {lightbox ? <Lightbox items={lightbox.items} index={lightbox.index} onClose={() => setLightbox(null)} closeSignal={layerCloseSignal} /> : null}
       {shareMemo ? (
@@ -6142,6 +7570,8 @@ export default function App() {
             onSave={handleSaveReviewSettings}
             onClose={() => setReviewSettingsOpen(false)}
             closeSignal={dialogCloseSignal}
+            hiddenCount={reviewHiddenCount}
+            onRestoreHidden={() => unhideFromReview(reviewHidden)}
           />
         </LazyDialog>
       ) : null}
@@ -6154,11 +7584,13 @@ export default function App() {
               setEnableSemanticWhenReady(false);
             }}
             onModelReady={() => {
+              setModelOnDevice(true);
               if (!enableSemanticWhenReady) return;
               setEnableSemanticWhenReady(false);
               setSemanticOn(true);
             }}
             onModelCleared={() => {
+              setModelOnDevice(false);
               setEnableSemanticWhenReady(false);
               setSemanticOn(false);
             }}
@@ -6305,13 +7737,21 @@ export default function App() {
           }}
         />
       ) : null}
+      {shortcutsOpen ? <ShortcutsSheet onClose={() => setShortcutsOpen(false)} closeSignal={dialogCloseSignal} /> : null}
       {confirmLogout ? (
         <ConfirmDialog
           title={tr("Log out of this device?", "退出这台设备的登录？")}
           body={tr(
-            "Your memos stay on the server. This device forgets its offline copy, search index, saved filters and Daily Review settings. Theme, language and the downloaded semantic search model stay.",
-            "笔记仍保存在服务器上。这台设备会清除离线副本、搜索索引、已保存的筛选和每日回顾设置；主题、语言和已下载的语义搜索模型会保留。"
+            "Your memos stay on the server. This device forgets its offline copy, search index, recent searches, saved filters, sidebar layout and what Daily Review remembers. Theme, language and the downloaded semantic search model stay.",
+            "笔记仍保存在服务器上。这台设备会清除离线副本、搜索索引、最近搜索、已保存的筛选、侧栏布局和每日回顾的设置与记录；主题、语言和已下载的语义搜索模型会保留。"
           )}
+          // Unsent memos live only in this tab's memory (lib/outbox), and the
+          // logout discards them with the drafts: said before, not after.
+          note={
+            unsent.length > 0
+              ? tr(`${count(unsent.length, "memo")} not sent yet will be discarded.`, `还有 ${count(unsent.length, "memo")}没发出去，退出后会丢掉。`)
+              : undefined
+          }
           confirmLabel={tr("Log Out", "退出登录")}
           busyLabel={tr("Logging out…", "正在退出…")}
           busy={loggingOut}

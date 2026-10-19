@@ -925,7 +925,7 @@ export function ModelSettingsModal({
           </button>
         </header>
 
-        <div ref={scrollRef} className="model-panel-scroll">
+        <div ref={scrollRef} className="model-panel-scroll scroll-edges">
           <div className="model-panel-columns">
             <div className="model-stage-col">
               <ThinkingOrb state={ORB[stateId]} size={112} mute={orbMute} />

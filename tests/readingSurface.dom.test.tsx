@@ -216,7 +216,7 @@ describe("a cold load still in progress", () => {
     const user = userEvent.setup();
     const rest = startLoading([memo(3)]);
     await screen.findByText("memo-3 body");
-    await user.type(screen.getByRole("searchbox", { name: "Search memos" }), "zebra");
+    await user.type(screen.getByRole("combobox", { name: "Search memos" }), "zebra");
     await waitFor(() => expect(empty()?.textContent).toContain("Still loading your memos…"));
     expect(empty()?.textContent).toContain("1 of 3 loaded so far, and none match yet.");
     expect(within(empty()!).queryByRole("button")).toBeNull();
@@ -246,7 +246,7 @@ describe("an empty search", () => {
     mocks.bootstrap.mockResolvedValue(page([memo(1), memo(0)]));
     renderApp();
     await screen.findByText("memo-1 body");
-    const search = screen.getByRole("searchbox", { name: "Search memos" }) as HTMLInputElement;
+    const search = screen.getByRole("combobox", { name: "Search memos" }) as HTMLInputElement;
     await user.type(search, "zebra");
     const clear = await within(await waitFor(() => empty()!)).findByRole("button", { name: "Clear search" });
 

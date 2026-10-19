@@ -6,6 +6,7 @@ import { BulkTagDialog } from "../src/components/BulkTagDialog";
 import { StatsModal } from "../src/components/StatsModal";
 import { TipProvider } from "../src/components/Tip";
 import { LanguageProvider, useI18n } from "../src/lib/i18n";
+import { forgetStatsPlace } from "../src/lib/statsDrilldown";
 import type { Memo } from "../src/lib/types";
 
 let reduceMotion = false;
@@ -74,6 +75,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  forgetStatsPlace();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -99,7 +101,8 @@ describe("statistics drilldown", () => {
     );
 
     const monthChart = screen.getByRole("group", { name: /^Memos by month\./ });
-    const emptyMonth = within(monthChart).getByRole("button", { name: new RegExp(`April ${year}: 0 memos`) });
+    // Empty, whether it has passed (a zero) or is still to come ("Not yet").
+    const emptyMonth = within(monthChart).getByRole("button", { name: new RegExp(`April ${year}: (0 memos|Not yet)`) });
     expect((emptyMonth as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(emptyMonth);
     expect(onDrilldown).not.toHaveBeenCalled();

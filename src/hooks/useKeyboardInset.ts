@@ -10,12 +10,14 @@ import { useEffect, type RefObject } from "react";
  * a reason that isn't a keyboard. iOS also zooms on focusing a field under
  * 16px, which would read as a pinch just as the keyboard opens — so the
  * fields in dialogs using this keep 16px on touch screens (app.css).
+ * `active`: whether `ref`'s element is mounted, for one that comes and goes
+ * under a hook that stays (the toast stack).
  */
-export function useKeyboardInset(ref: RefObject<HTMLElement>): void {
+export function useKeyboardInset(ref: RefObject<HTMLElement>, active = true): void {
   useEffect(() => {
     const element = ref.current;
     const viewport = window.visualViewport;
-    if (!element || !viewport) return;
+    if (!active || !element || !viewport) return;
     let frame = 0;
     const apply = () => {
       const covered = viewport.scale > 1.01 ? 0 : window.innerHeight - viewport.height - viewport.offsetTop;
@@ -33,5 +35,5 @@ export function useKeyboardInset(ref: RefObject<HTMLElement>): void {
       viewport.removeEventListener("resize", schedule);
       viewport.removeEventListener("scroll", schedule);
     };
-  }, [ref]);
+  }, [ref, active]);
 }

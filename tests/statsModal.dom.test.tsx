@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StatsModal } from "../src/components/StatsModal";
 import { TipProvider } from "../src/components/Tip";
 import { LanguageProvider } from "../src/lib/i18n";
 import { localMaxima, longestRun, totalStats } from "../src/lib/stats";
+import { forgetStatsPlace, recallStatsPlace, rememberStatsPlace } from "../src/lib/statsDrilldown";
 import type { Memo } from "../src/lib/types";
 
 function Providers({ children }: { children: ReactNode }) {
@@ -22,15 +23,16 @@ function memoAt(id: string, created: Date): Memo {
   return { id, content: `Memo ${id}`, createdAt: timestamp, updatedAt: timestamp, pinnedAt: null, deletedAt: null, seq: 1, images: [] };
 }
 
-function renderStats(memos: Memo[]) {
+function renderStats(memos: Memo[], { onClose = vi.fn(), onDrilldown = vi.fn() } = {}) {
   return render(
     <Providers>
-      <StatsModal memos={memos} uniqueTagCount={0} onClose={vi.fn()} onDrilldown={vi.fn()} />
+      <StatsModal memos={memos} uniqueTagCount={0} onClose={onClose} onDrilldown={onDrilldown} />
     </Providers>
   );
 }
 
 beforeEach(() => {
+  forgetStatsPlace();
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     value: vi.fn((query: string) => ({
@@ -73,7 +75,8 @@ describe("statistics bar values", () => {
     const april = within(monthChart).getByRole("button", { name: `April ${year}: 1 memo` });
     expect(april.querySelector(".stats-bar-value")?.textContent).toBe("1");
     expect(april.querySelector(".stats-bar-value")?.classList.contains("is-peak")).toBe(false);
-    const may = within(monthChart).getByRole("button", { name: `May ${year}: 0 memos` });
+    // An empty May is a zero once it has come, "not yet" before.
+    const may = within(monthChart).getByRole("button", { name: new RegExp(`^May ${year}: (0 memos|Not yet)$`) });
     expect(may.querySelector(".stats-bar-value")?.textContent).toBe("");
     // March and June are the month chart's two local maxima.
     expect(monthChart.querySelectorAll(".stats-bar-value.is-peak")).toHaveLength(2);
@@ -203,6 +206,152 @@ describe("the year against the one before", () => {
     expect(longestRun(["2026-03-02", "2026-03-01", "2026-03-05", "2026-03-06"])).toEqual({ length: 2, start: "2026-03-05", end: "2026-03-06" });
     expect(longestRun(["2025-12-31", "2026-01-01", "2026-01-03"])).toEqual({ length: 2, start: "2025-12-31", end: "2026-01-01" });
     expect(longestRun([])).toEqual({ length: 0, start: null, end: null });
+  });
+});
+
+describe("months still to come", () => {
+  it("draw a dashed baseline instead of a zero stub and say Not yet", () => {
+    const now = new Date();
+    // In December nothing is left to come.
+    if (now.getMonth() === 11) return;
+    const year = now.getFullYear();
+    renderStats([memoAt("a", new Date(year, now.getMonth(), 1, 9))]);
+    const monthChart = screen.getByRole("group", { name: /^Memos by month\./ });
+    const december = within(monthChart).getByRole("button", { name: `December ${year}: Not yet` });
+    expect(december.querySelector(".stats-bar")?.className).toContain("is-future");
+    expect(december.querySelector(".stats-bar")?.className).not.toContain("is-zero");
+    expect(monthChart.getAttribute("aria-label")).toContain(`December ${year}: Not yet`);
+  });
+
+  it("are only this year's: last year's empty December is a zero", () => {
+    const year = new Date().getFullYear();
+    renderStats([memoAt("a", new Date(year - 1, 0, 1, 9)), memoAt("b", new Date(year, 0, 1, 9))]);
+    fireEvent.click(screen.getByRole("button", { name: "Previous year" }));
+    const monthChart = screen.getByRole("group", { name: /^Memos by month\./ });
+    const december = within(monthChart).getByRole("button", { name: `December ${year - 1}: 0 memos` });
+    expect(december.querySelector(".stats-bar")?.className).toContain("is-zero");
+  });
+});
+
+describe("statistics on touch", () => {
+  function setup() {
+    const now = new Date();
+    const day = new Date(now.getFullYear(), now.getMonth(), 1, 9, 15);
+    const onDrilldown = vi.fn();
+    const onClose = vi.fn();
+    renderStats([memoAt("a", day)], { onDrilldown, onClose });
+    const dayLabel = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric" }).format(day);
+    const cell = screen.getAllByRole("button", { name: `Show 1 memo from ${dayLabel}` }).find((button) => button.classList.contains("year-cell"))!;
+    const key = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-01`;
+    return { cell, onDrilldown, onClose, key };
+  }
+
+  function press(element: Element, pointerType: string) {
+    fireEvent.pointerDown(element, { pointerType });
+    fireEvent.click(element, { detail: 1 });
+  }
+
+  it("picks a day on the first tap, pins its tip and offers the drill in the section head", () => {
+    const { cell, onDrilldown } = setup();
+    press(cell, "touch");
+    expect(onDrilldown).not.toHaveBeenCalled();
+    expect(cell.classList.contains("is-picked")).toBe(true);
+    const pill = document.querySelector(".stats-pick-pill");
+    expect(pill?.textContent).toBe("Show 1 memo ›");
+    expect(pill?.closest(".stats-section-head")?.textContent).toContain("Daily activity");
+    // The pill stands in for the legend while a day is picked.
+    expect(pill?.closest(".stats-section-head")?.querySelector(".heat-legend")).toBeNull();
+    expect(document.querySelector(".tip")?.className).toContain("is-show");
+    expect(document.querySelector(".tip")?.textContent).toContain("1 memo");
+  });
+
+  it("drills on a second tap of the same day", async () => {
+    const { cell, onDrilldown, key } = setup();
+    press(cell, "touch");
+    press(cell, "touch");
+    await waitFor(() => expect(onDrilldown).toHaveBeenCalledWith({ kind: "day", day: key }));
+  });
+
+  it("drills from the pill", async () => {
+    const { cell, onDrilldown, key } = setup();
+    press(cell, "touch");
+    press(document.querySelector(".stats-pick-pill")!, "touch");
+    await waitFor(() => expect(onDrilldown).toHaveBeenCalledWith({ kind: "day", day: key }));
+  });
+
+  it("lets go when the tap lands elsewhere, when the body scrolls, and on Escape", () => {
+    const { cell, onClose } = setup();
+    press(cell, "touch");
+    fireEvent.pointerDown(screen.getByRole("heading", { name: "Statistics" }), { pointerType: "touch" });
+    expect(cell.classList.contains("is-picked")).toBe(false);
+    expect(document.querySelector(".stats-pick-pill")).toBeNull();
+    expect(document.querySelector(".heat-legend")).not.toBeNull();
+
+    press(cell, "touch");
+    fireEvent.scroll(document.querySelector(".stats-body")!);
+    expect(cell.classList.contains("is-picked")).toBe(false);
+
+    press(cell, "touch");
+    fireEvent.keyDown(cell, { key: "Escape" });
+    expect(cell.classList.contains("is-picked")).toBe(false);
+    // That Escape only let go of the pick; the next one closes.
+    expect(screen.getByRole("dialog", { name: "Detailed statistics" })).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("leaves a mouse and the keyboard drilling at once", async () => {
+    const { cell, onDrilldown, key } = setup();
+    press(cell, "mouse");
+    await waitFor(() => expect(onDrilldown).toHaveBeenCalledWith({ kind: "day", day: key }));
+    expect(document.querySelector(".stats-pick-pill")).toBeNull();
+  });
+
+  it("treats a bar and a rhythm dot the same way", () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const created = new Date(year, now.getMonth(), 1, 9, 15);
+    const onDrilldown = vi.fn();
+    renderStats([memoAt("a", created)], { onDrilldown });
+    const monthName = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "long" }).format(created);
+    const bar = within(screen.getByRole("group", { name: /^Memos by month\./ })).getByRole("button", { name: `${monthName}: 1 memo` });
+    press(bar, "touch");
+    expect(bar.classList.contains("is-picked")).toBe(true);
+    expect(document.querySelector(".stats-pick-pill")?.closest(".stats-section-head")?.textContent).toContain("Memos by month");
+
+    const rhythm = screen.getByRole("group", { name: "Memos by weekday and hour" });
+    const dot = within(rhythm).getAllByRole("button")[0];
+    press(dot, "touch");
+    expect(bar.classList.contains("is-picked")).toBe(false);
+    expect(dot.classList.contains("is-picked")).toBe(true);
+    expect(document.querySelector(".stats-pick-pill")?.closest(".stats-section-head")?.textContent).toContain("Writing rhythm");
+    expect(onDrilldown).not.toHaveBeenCalled();
+  });
+});
+
+describe("the panel's place", () => {
+  it("reopens on the year and scroll it was left at, for the session", async () => {
+    const year = new Date().getFullYear();
+    const memos = [memoAt("a", new Date(year - 1, 5, 1, 9)), memoAt("b", new Date(year, 0, 1, 9))];
+    const onClose = vi.fn();
+    renderStats(memos, { onClose });
+    fireEvent.click(screen.getByRole("button", { name: "Previous year" }));
+    (document.querySelector(".stats-body") as HTMLElement).scrollTop = 120;
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(recallStatsPlace()).toEqual({ year: year - 1, scrollTop: 120 });
+    cleanup();
+
+    renderStats(memos);
+    expect(document.querySelector(".stats-year .sr-only")?.textContent).toBe(String(year - 1));
+    expect((document.querySelector(".stats-body") as HTMLElement).scrollTop).toBe(120);
+  });
+
+  it("keeps a remembered year inside the years there are", () => {
+    const year = new Date().getFullYear();
+    // A year whose memos have since gone.
+    rememberStatsPlace({ year: year - 5, scrollTop: 0 });
+    renderStats([memoAt("a", new Date(year, 0, 1, 9))]);
+    expect(document.querySelector(".stats-year .sr-only")?.textContent).toBe(String(year));
   });
 });
 

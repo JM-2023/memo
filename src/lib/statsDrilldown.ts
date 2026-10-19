@@ -17,6 +17,29 @@ export type StatsDrilldown =
   | { kind: "slot"; year: number; weekday: number; hour: number }
   | { kind: "tag"; year: number; tag: string };
 
+/** Where the Statistics panel was left: the year it showed and how far down it was read. */
+export interface StatsPlace {
+  year: number;
+  scrollTop: number;
+}
+
+// Memory only: a drill and a way back is one round trip within a session,
+// not a preference to keep across reloads.
+let statsPlace: StatsPlace | null = null;
+
+export function rememberStatsPlace(place: StatsPlace): void {
+  statsPlace = place;
+}
+
+export function recallStatsPlace(): StatsPlace | null {
+  return statsPlace;
+}
+
+/** Logout, and tests: the next panel opens on this year, at the top. */
+export function forgetStatsPlace(): void {
+  statsPlace = null;
+}
+
 /**
  * Stats entry clears the search synchronously, while useDeferredValue may
  * still expose the previous feed query for one render. A live drilldown uses

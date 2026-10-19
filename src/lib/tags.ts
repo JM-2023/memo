@@ -102,6 +102,29 @@ export function tagsOf(memo: Memo): string[] {
 }
 
 /**
+ * Every tag in use, in the order the editor's tag list offers them: the most
+ * recently used first — by the newest memo written with it (createdAt: a
+ * ticked box or a typo fixed in an old memo is not using its tags) — then
+ * the most used, then by name.
+ */
+export function tagsByRecentUse(memos: Memo[], locale = "en-US"): string[] {
+  const uses = new Map<string, { last: string; count: number }>();
+  for (const memo of memos) {
+    for (const tag of tagsOf(memo)) {
+      const use = uses.get(tag);
+      if (!use) uses.set(tag, { last: memo.createdAt, count: 1 });
+      else {
+        use.count += 1;
+        if (memo.createdAt > use.last) use.last = memo.createdAt;
+      }
+    }
+  }
+  return [...uses]
+    .sort(([a, x], [b, y]) => (x.last !== y.last ? (x.last < y.last ? 1 : -1) : y.count - x.count || a.localeCompare(b, locale)))
+    .map(([tag]) => tag);
+}
+
+/**
  * Append one exact tag on its own final line without disturbing the user's
  * existing whitespace. Replaying the operation is idempotent.
  */

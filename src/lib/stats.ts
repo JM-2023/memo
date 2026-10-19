@@ -120,6 +120,55 @@ export function levelFor(count: number): number {
 }
 
 /**
+ * The owner's own scale: the most a day can hold at levels 1, 2 and 3
+ * (strictly rising); anything above is level 4.
+ */
+export interface HeatScale {
+  cuts: readonly [number, number, number];
+}
+
+/** Days of history a personal scale is read from, ending today. */
+export const HEAT_SCALE_DAYS = 90;
+/** Below this many written days the quartiles say little: the fixed steps hold. */
+export const HEAT_SCALE_MIN_DAYS = 8;
+
+/**
+ * Quartiles of the non-zero daily counts over the last ~90 days, so a heavy
+ * writer's ordinary day isn't always the darkest green and a light one's
+ * busy day still stands out. Null (use levelFor's fixed steps) until there
+ * are enough written days to read a pattern from.
+ */
+export function heatScale(byDay: Map<string, number>, now = new Date()): HeatScale | null {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const last = dateKey(today);
+  const first = dateKey(addDays(today, -(HEAT_SCALE_DAYS - 1)));
+  const counts: number[] = [];
+  for (const [key, count] of byDay) {
+    if (count > 0 && key >= first && key <= last) counts.push(count);
+  }
+  if (counts.length < HEAT_SCALE_MIN_DAYS) return null;
+  counts.sort((a, b) => a - b);
+  // Nearest-rank quartiles; each cut at least one above the last, so every
+  // level keeps a range of its own when most days hold the same count.
+  const rank = (share: number) => counts[Math.max(0, Math.ceil(share * counts.length) - 1)];
+  const q1 = Math.max(1, rank(0.25));
+  const q2 = Math.max(q1 + 1, rank(0.5));
+  const q3 = Math.max(q2 + 1, rank(0.75));
+  return { cuts: [q1, q2, q3] };
+}
+
+/** levelFor on a personal scale; the fixed steps without one. */
+export function levelOnScale(count: number, scale: HeatScale | null | undefined): number {
+  if (!scale) return levelFor(count);
+  if (count <= 0) return 0;
+  const [q1, q2, q3] = scale.cuts;
+  if (count <= q1) return 1;
+  if (count <= q2) return 2;
+  if (count <= q3) return 3;
+  return 4;
+}
+
+/**
  * Which bars of a series keep their value label when there is no room for
  * all of them: every local maximum, counting only the first bar of a plateau
  * so two labelled bars are never neighbours. Zero bars never qualify.
@@ -188,9 +237,10 @@ export function computeStreaks(byDay: Map<string, number>, now = new Date()): St
  * Monday-first weeks of day cells covering [start, end] plus the leading /
  * trailing padding needed to complete the first and last weeks. The shared
  * shape behind the sidebar heatmap's week / month / year views and the
- * stats modal's mini calendars.
+ * stats modal's mini calendars. `scale` (heatScale) sets the levels; left
+ * out, they take levelFor's fixed steps.
  */
-export function buildHeatWeeks(start: Date, end: Date, byDay: Map<string, number>, now = new Date()): HeatCell[][] {
+export function buildHeatWeeks(start: Date, end: Date, byDay: Map<string, number>, now = new Date(), scale?: HeatScale | null): HeatCell[][] {
   const startMs = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
   const endMs = new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime();
   const todayKey = dateKey(now);
@@ -208,7 +258,7 @@ export function buildHeatWeeks(start: Date, end: Date, byDay: Map<string, number
         key,
         inRange: ms >= startMs && ms <= endMs,
         count,
-        level: levelFor(count),
+        level: levelOnScale(count, scale),
         isToday: key === todayKey,
         isFuture: ms > nowMs
       });

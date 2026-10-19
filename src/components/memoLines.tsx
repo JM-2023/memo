@@ -42,6 +42,22 @@ interface MemoLineProps {
   taskCheckedOverride?: boolean;
 }
 
+/**
+ * A tag's text with its parent path ("#life/") set a step quieter than the
+ * leaf it names, so a nested tag reads by its last word. Only "/" nests; a
+ * trailing one is not a level (the path drops it).
+ */
+function tagLabel(raw: string): ReactNode {
+  const cut = raw.replace(/\/+$/, "").lastIndexOf("/");
+  if (cut <= 1) return raw;
+  return (
+    <>
+      <span className="memo-tag-parent">{raw.slice(0, cut + 1)}</span>
+      {raw.slice(cut + 1)}
+    </>
+  );
+}
+
 function renderInline(nodes: Inline[], tagMode: TagMode, onPickTag?: (path: string) => void): ReactNode[] {
   return nodes.map((node, index): ReactNode => {
     switch (node.t) {
@@ -75,14 +91,15 @@ function renderInline(nodes: Inline[], tagMode: TagMode, onPickTag?: (path: stri
       case "tag":
         if (tagMode === "button") {
           return (
-            <button key={index} type="button" className="memo-tag" onClick={() => onPickTag?.(node.path)}>
-              {node.raw}
+            // data-tag: the feed's hover tip reads the path (App's showTagTip).
+            <button key={index} type="button" className="memo-tag" data-tag={node.path} onClick={() => onPickTag?.(node.path)}>
+              {tagLabel(node.raw)}
             </button>
           );
         }
         return (
           <span key={index} className={`memo-tag${tagMode === "static" ? " is-static" : ""}`}>
-            {node.raw}
+            {tagLabel(node.raw)}
           </span>
         );
       case "image":
@@ -184,8 +201,10 @@ export const MemoLine = memo(function MemoLine({ raw, nextRaw, tagMode, onPickTa
           ) : (
             <span className="md-task-box" aria-hidden="true" />
           )}
+          {/* The strike is drawn on an inline run inside the body (a flex
+              item, so a block): only an inline box paints per wrapped line. */}
           <span className="md-body" id={live ? bodyId : undefined}>
-            {inline}
+            <span className="md-task-text">{inline}</span>
           </span>
         </p>
       );

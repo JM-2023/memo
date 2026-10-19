@@ -20,6 +20,8 @@ import { useReducedMotion } from "../hooks/useReducedMotion";
 import { displayUrl, externalImagesOf, tokenizeLine } from "../lib/content";
 import { dateKey } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
+import { announce } from "../lib/liveAnnouncer";
+import { DONE_HOLD_MS, T_SLOW } from "../lib/motion";
 import { visualLinesOf } from "../lib/lineDiff";
 import { parseBlock, parseInline, type Inline } from "../lib/markdown";
 import { loadedKatex, loadKatex, subscribeKatex } from "../lib/katexLoader";
@@ -74,10 +76,10 @@ const MODAL_CHROME = 50;
 const EXPORT_SCALE = 2.5;
 /** How long a lifted seal stays in the tree to animate away — mirrors
     seal-lift in app.css. */
-const SEAL_LIFT_MS = 200;
+const SEAL_LIFT_MS = T_SLOW;
 /** How long the dateline's room takes to open before the pen touches down —
     mirrors date-open in app.css, and leads the writing by exactly that. */
-const DATE_OPEN_MS = 180;
+const DATE_OPEN_MS = T_SLOW;
 /** The wordmark, which privacy mode takes off the sheet along with the tags.
     A constant because the ink has to know how long it is. */
 const BRAND = "MEMO";
@@ -315,6 +317,10 @@ type SetupCell = "portrait" | "landscape" | "paper" | "gray" | "hand" | "date" |
 export function ShareDialog({ memo, onToast, onClose, closeSignal }: ShareDialogProps) {
   const { language, locale, tr } = useI18n();
   const [busy, setBusy] = useState<"save" | "copy" | null>(null);
+  // The export went through: its button says so for a beat, then the dialog
+  // leaves. `busy` stays set meanwhile, so nothing else can be pressed.
+  const [done, setDone] = useState<"save" | "copy" | null>(null);
+  const doneTimer = useRef(0);
   const [layout, setLayout] = useState<CardLayout>(loadLayout);
   const [tone, setTone] = useState<CardTone>(loadTone);
   const [sealed, setSealed] = useState<boolean>(() => loadFlag(SEAL_KEY, true));
@@ -379,7 +385,26 @@ export function ShareDialog({ memo, onToast, onClose, closeSignal }: ShareDialog
     beginClose();
   }
 
-  useEffect(() => () => window.clearTimeout(sealExitTimer.current), []);
+  /**
+   * The success answer, said where the press was: the button's icon cell
+   * turns into a check and its label into the outcome (app.css, busy-swap),
+   * then the dialog leaves. It replaces the toast, which only repeated it
+   * from the far side of the screen; a screen reader still hears it.
+   */
+  function finishWith(kind: "save" | "copy") {
+    setDone(kind);
+    announce(kind === "save" ? tr("Saved the image", "已保存图片") : tr("Copied the image", "已复制图片"));
+    window.clearTimeout(doneTimer.current);
+    doneTimer.current = window.setTimeout(beginClose, DONE_HOLD_MS);
+  }
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(sealExitTimer.current);
+      window.clearTimeout(doneTimer.current);
+    },
+    []
+  );
 
   // The artifact keeps its true layout width; narrow dialogs show it through
   // a wrapper scale, and height rides along so the stage scrolls the visual
@@ -578,10 +603,9 @@ export function ShareDialog({ memo, onToast, onClose, closeSignal }: ShareDialog
     try {
       const blob = await renderPng();
       downloadBlob(blob, `memo-${dateKey(new Date(memo.createdAt))}.png`);
-      onToast(tr("Saved the image", "已保存图片"));
-      // The busy look holds through the exit, as every dialog's does: the
-      // idle label flashing back over the last frames reads as "not done".
-      beginClose();
+      // The button holds its done look through the exit, as every dialog's
+      // busy look does: the idle label flashing back reads as "not done".
+      finishWith("save");
     } catch (error) {
       setBusy(null);
       const tooLarge = error instanceof ShareImageTooLargeError;
@@ -603,8 +627,7 @@ export function ShareDialog({ memo, onToast, onClose, closeSignal }: ShareDialog
       });
     try {
       await copyPngToClipboard(render);
-      onToast(tr("Copied the image", "已复制图片"));
-      beginClose();
+      finishWith("copy");
     } catch {
       setBusy(null);
       const tooLarge = renderFailure instanceof ShareImageTooLargeError;
@@ -698,7 +721,7 @@ export function ShareDialog({ memo, onToast, onClose, closeSignal }: ShareDialog
           </button>
         </header>
 
-        <div className="share-stage">
+        <div className="share-stage scroll-edges">
           <div className="share-fit" style={fit ? { width: CARD_WIDTHS[layout] * fit.scale, height: fit.height } : undefined}>
             {/* Keyed by layout: a swap lays a fresh sheet (fade + seal re-stamp)
                 while the persistent frame around it glides between sizes. */}
@@ -930,7 +953,8 @@ export function ShareDialog({ memo, onToast, onClose, closeSignal }: ShareDialog
           {/* Busy wears the one look every dialog's action does: the icon's
               cell turns into the spinner and the label says what is under
               way, both a held-back beat late (app.css, "busy-swap"), in a
-              cell sized for either label so the row never shifts. */}
+              cell sized for every label so the row never shifts. Done, the
+              cell pops a check and the label says what happened. */}
           {supportsImageClipboard() ? (
             <button
               ref={copyRef}
@@ -939,13 +963,15 @@ export function ShareDialog({ memo, onToast, onClose, closeSignal }: ShareDialog
               onClick={handleCopy}
               disabled={busy !== null || tooLong}
             >
-              <span className="busy-icon" data-busy={busy === "copy" || undefined} aria-hidden="true">
+              <span className="busy-icon" data-busy={(busy === "copy" && done === null) || undefined} data-done={done === "copy" || undefined} aria-hidden="true">
                 <Copy size={15} />
                 <Loader2 size={15} className="spin" />
+                <Check size={15} />
               </span>
-              <span className="busy-swap">
+              <span className="busy-swap" data-done={done === "copy" || undefined}>
                 <span aria-hidden={busy === "copy" || undefined}>{tr("Copy image", "复制图片")}</span>
-                <span aria-hidden={busy !== "copy" || undefined}>{tr("Copying…", "复制中…")}</span>
+                <span aria-hidden={busy !== "copy" || done === "copy" || undefined}>{tr("Copying…", "复制中…")}</span>
+                <span aria-hidden={done !== "copy" || undefined}>{tr("Copied", "已复制")}</span>
               </span>
             </button>
           ) : null}
@@ -956,13 +982,15 @@ export function ShareDialog({ memo, onToast, onClose, closeSignal }: ShareDialog
             onClick={handleSave}
             disabled={busy !== null || tooLong}
           >
-            <span className="busy-icon" data-busy={busy === "save" || undefined} aria-hidden="true">
+            <span className="busy-icon" data-busy={(busy === "save" && done === null) || undefined} data-done={done === "save" || undefined} aria-hidden="true">
               <Download size={15} />
               <Loader2 size={15} className="spin" />
+              <Check size={15} />
             </span>
-            <span className="busy-swap">
+            <span className="busy-swap" data-done={done === "save" || undefined}>
               <span aria-hidden={busy === "save" || undefined}>{tr("Save image", "保存图片")}</span>
-              <span aria-hidden={busy !== "save" || undefined}>{tr("Saving…", "保存中…")}</span>
+              <span aria-hidden={busy !== "save" || done === "save" || undefined}>{tr("Saving…", "保存中…")}</span>
+              <span aria-hidden={done !== "save" || undefined}>{tr("Saved", "已保存")}</span>
             </span>
           </button>
         </footer>

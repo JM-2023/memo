@@ -47,7 +47,9 @@ describe("logout cleanup", () => {
     const session = new MemoryStorage();
     const devicePreferences = ["memo:theme", "memo:language", "memo:share-layout", "memo-sort", "memo:semantic-search"];
     for (const key of devicePreferences) local.setItem(key, "preference");
-    for (const key of ["memo-saved-filters", "memo-review-settings", "memo-review-day", "memo:future-notebook-state"]) {
+    // Recent searches and the unfolded tag paths are notebook-derived too
+    // (lib/recentSearches, lib/sidebarMemory).
+    for (const key of ["memo-saved-filters", "memo-review-settings", "memo-review-day", "memo-review-seen", "memo-review-hidden", "memo:future-notebook-state", "memo:recent-searches", "memo:tag-tree-open", "memo:heatmap-period"]) {
       local.setItem(key, "sensitive");
     }
     local.setItem("unrelated:preference", "keep");

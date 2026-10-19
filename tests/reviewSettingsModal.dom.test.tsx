@@ -5,7 +5,7 @@
 // subtags follow their parent as /paths; the saved picks lead the list; and a
 // picked parent shows its subtags as already included.
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ReviewSettingsModal } from "../src/components/ReviewSettingsModal";
@@ -116,5 +116,67 @@ describe("review settings save", () => {
     expect(save.disabled).toBe(false);
     await user.click(screen.getByRole("radio", { name: "All time" }));
     expect(save.disabled).toBe(true);
+  });
+});
+
+describe("review settings with unsaved changes", () => {
+  function renderDirty(closeSignal = 0) {
+    const onClose = vi.fn();
+    const props = { settings: { scope: "all", tags: [], range: "all", count: 10 } as ReviewSettings, memos, knownTags, onSave: vi.fn(), onClose };
+    const view = render(
+      <LanguageProvider>
+        <ReviewSettingsModal {...props} closeSignal={closeSignal} />
+      </LanguageProvider>
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Past month" }));
+    const rerenderWith = (signal: number) =>
+      view.rerender(
+        <LanguageProvider>
+          <ReviewSettingsModal {...props} closeSignal={signal} />
+        </LanguageProvider>
+      );
+    return { onClose, rerenderWith, overlay: screen.getByRole("dialog", { name: "Daily Review Settings" }) };
+  }
+
+  it("boops instead of closing on a backdrop click or Back", () => {
+    const { onClose, rerenderWith, overlay } = renderDirty();
+    const card = overlay.firstElementChild as HTMLElement;
+    fireEvent.pointerDown(overlay);
+    fireEvent.click(overlay);
+    expect(onClose).not.toHaveBeenCalled();
+    // Reduced motion (this file's default): the border flashes, nothing moves.
+    expect(card.classList.contains("is-flash")).toBe(true);
+    rerenderWith(1);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Daily Review Settings" })).toBeTruthy();
+  });
+
+  it("still closes from Cancel, ✕ and Escape", () => {
+    const first = renderDirty();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(first.onClose).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    const second = renderDirty();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(second.onClose).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    const third = renderDirty();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    expect(third.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes on a backdrop click once nothing is changed", () => {
+    const onClose = vi.fn();
+    render(
+      <LanguageProvider>
+        <ReviewSettingsModal settings={{ scope: "all", tags: [], range: "all", count: 10 }} memos={memos} knownTags={knownTags} onSave={vi.fn()} onClose={onClose} />
+      </LanguageProvider>
+    );
+    const overlay = screen.getByRole("dialog", { name: "Daily Review Settings" });
+    fireEvent.pointerDown(overlay);
+    fireEvent.click(overlay);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

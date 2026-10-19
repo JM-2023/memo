@@ -2,7 +2,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { addDays, dateFormat, dateKey, formatDayLabel, startOfWeek, weekdayLabel } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
-import { buildHeatWeeks, type HeatCell, type PeriodKind } from "../lib/stats";
+import { buildHeatWeeks, heatScale, type HeatCell, type PeriodKind } from "../lib/stats";
 import { SwapText } from "./SwapText";
 import { DATA_TIP_DELAY, useTip, withFocus } from "./Tip";
 import { EASE_OUT, T_FAST, T_SLOW } from "../lib/motion";
@@ -157,7 +157,9 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay, onPage
   const direction = nav.period === period ? nav.direction : 0;
 
   const { start, end } = rangeOf(period, offset, now);
-  const weeks = useMemo(() => buildHeatWeeks(start, end, countsByDay, now), [period, offset, countsByDay, todayStamp]); // eslint-disable-line react-hooks/exhaustive-deps
+  // One scale for every page and period: the owner's own last ~90 days.
+  const scale = useMemo(() => heatScale(countsByDay, now), [countsByDay, todayStamp]); // eslint-disable-line react-hooks/exhaustive-deps
+  const weeks = useMemo(() => buildHeatWeeks(start, end, countsByDay, now, scale), [period, offset, countsByDay, todayStamp, scale]); // eslint-disable-line react-hooks/exhaustive-deps
   const navigableCells = useMemo(
     () =>
       weeks.flatMap((week, weekIndex) =>
@@ -302,6 +304,15 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay, onPage
   const leaveHeightRef = useRef<number | null>(null);
   const leaveSerialRef = useRef(0);
 
+  // The month calendar reads like a wall calendar: each cell carries its
+  // date. Decorative — the cell's name already says the day.
+  const dayNumber = (cell: HeatCell) =>
+    period === "month" ? (
+      <span className="heat-day" aria-hidden="true">
+        {Number(cell.key.slice(8))}
+      </span>
+    ) : null;
+
   // A day without memos would only filter the feed down to nothing (and, on
   // a phone, close the drawer onto that empty list), so it is no pick: still
   // a stop for the arrows and its "0 memos" bubble, but idle — unless it is
@@ -339,9 +350,13 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay, onPage
           if (activeDay === cell.key) onPickDay(null);
           else if (cell.count > 0) onPickDay(cell.key);
         }}
-      />
+      >
+        {dayNumber(cell)}
+      </button>
     ) : (
-      <span key={cell.key} className={`heat-cell placeholder${cell.inRange ? " future" : ""}`} aria-hidden="true" />
+      <span key={cell.key} className={`heat-cell placeholder${cell.inRange ? " future" : ""}`} aria-hidden="true">
+        {cell.inRange ? dayNumber(cell) : null}
+      </span>
     );
 
   const gridNode =
@@ -367,7 +382,7 @@ function HeatmapView({ countsByDay, minDay, activeDay, period, onPickDay, onPage
         })}
       </div>
     ) : (
-      <div className="heatmap-grid is-cal">
+      <div className={`heatmap-grid is-cal${period === "month" ? " is-month" : ""}`}>
         {weekdayLabels.map((label, index) => (
           <span key={`${label}-${index}`} className="heat-colhead" aria-hidden="true">
             {label}

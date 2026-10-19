@@ -135,7 +135,7 @@ describe("Lightbox gestures", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves mouse drags, second fingers and a zoomed page to the browser", () => {
+  it("leaves mouse drags at fit and a zoomed page to the browser, and drops a swipe for a second finger", () => {
     renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
 
     swipe(screen.getByRole("img"), [600, 400], [100, 400], "mouse");
@@ -160,6 +160,186 @@ describe("Lightbox gestures", () => {
     expect(overlay().classList.contains("is-zoomed")).toBe(true);
     swipe(screen.getByRole("img"), [600, 400], [100, 400]);
     expect(screen.getByRole("img", { name: "Image 1 of 3" })).not.toBeNull();
+  });
+});
+
+describe("Lightbox zoom", () => {
+  const zoomOf = (image: HTMLElement) => image.style.getPropertyValue("--lb-zs");
+
+  /** A mouse double-click, with the presses that come before it. */
+  function doubleClick(target: HTMLElement, x = 300, y = 200) {
+    for (let press = 0; press < 2; press += 1) {
+      const base = { pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, clientX: x, clientY: y };
+      fireEvent.pointerDown(target, base);
+      fireEvent.pointerUp(target, base);
+    }
+    fireEvent.doubleClick(target, { clientX: x, clientY: y });
+  }
+
+  it("toggles fit ↔ 2.5× on a double-click, and stands the swipes down while magnified", () => {
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    const first = screen.getByRole("img", { name: "Image 1 of 3" });
+    // Nothing to zoom before it can be seen.
+    doubleClick(first);
+    expect(zoomOf(first)).toBe("");
+    fireEvent.load(first);
+
+    doubleClick(first);
+    expect(zoomOf(first)).toBe("2.5");
+    expect(overlay().classList.contains("is-magnified")).toBe(true);
+    // A drag pans now: no page change, no dismiss.
+    swipe(first, [600, 400], [100, 410]);
+    expect(screen.getByRole("img", { name: "Image 1 of 3" })).toBe(first);
+    swipe(first, [400, 300], [410, 700]);
+    expect(overlay().classList.contains("is-closing")).toBe(false);
+
+    doubleClick(first);
+    expect(zoomOf(first)).toBe("1");
+    expect(overlay().classList.contains("is-magnified")).toBe(false);
+  });
+
+  it("toggles on a finger's double-tap of the picture", () => {
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    const first = screen.getByRole("img", { name: "Image 1 of 3" });
+    fireEvent.load(first);
+    const tap = () => {
+      const finger = { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: 300, clientY: 200 };
+      fireEvent.pointerDown(first, finger);
+      fireEvent.pointerUp(first, finger);
+    };
+    tap();
+    expect(zoomOf(first)).toBe("");
+    tap();
+    expect(zoomOf(first)).toBe("2.5");
+  });
+
+  it("zooms by key: + steps up, − steps down, 0 fits; Ctrl/⌘ with them stays the browser's", () => {
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    const first = screen.getByRole("img", { name: "Image 1 of 3" });
+    fireEvent.load(first);
+    fireEvent.keyDown(window, { key: "+", shiftKey: true });
+    expect(zoomOf(first)).toBe("1.5");
+    fireEvent.keyDown(window, { key: "=" });
+    expect(zoomOf(first)).toBe("2.25");
+    fireEvent.keyDown(window, { key: "-" });
+    expect(zoomOf(first)).toBe("1.5");
+    fireEvent.keyDown(window, { key: "0" });
+    expect(zoomOf(first)).toBe("1");
+    const event = new KeyboardEvent("keydown", { key: "=", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(false);
+    expect(zoomOf(first)).toBe("1");
+  });
+
+  it("zooms about the pointer on Ctrl/⌘ + wheel — a trackpad pinch — between 1× and 4×", () => {
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    const first = screen.getByRole("img", { name: "Image 1 of 3" });
+    fireEvent.load(first);
+    const wheel = (deltaY: number, ctrlKey = true) => {
+      const event = new WheelEvent("wheel", { deltaY, ctrlKey, clientX: 300, clientY: 200, bubbles: true, cancelable: true });
+      act(() => {
+        overlay().dispatchEvent(event);
+      });
+      return event;
+    };
+    // A plain scroll at fit is not the viewer's.
+    expect(wheel(-100, false).defaultPrevented).toBe(false);
+    expect(wheel(-100).defaultPrevented).toBe(true);
+    expect(Number(zoomOf(first))).toBeCloseTo(Math.SQRT2);
+    for (let step = 0; step < 10; step += 1) wheel(-100);
+    expect(zoomOf(first)).toBe("4");
+    for (let step = 0; step < 10; step += 1) wheel(100);
+    expect(zoomOf(first)).toBe("1");
+  });
+
+  it("pinches with two fingers, up to 4×, and the finger left down is no tap", () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={onClose} />);
+    const first = screen.getByRole("img", { name: "Image 1 of 3" });
+    fireEvent.load(first);
+    const a = { pointerId: 1, pointerType: "touch", isPrimary: true, clientY: 300 };
+    const b = { pointerId: 2, pointerType: "touch", isPrimary: false, clientY: 300 };
+    fireEvent.pointerDown(overlay(), { ...a, clientX: 300 });
+    fireEvent.pointerDown(overlay(), { ...b, clientX: 400 });
+    fireEvent.pointerMove(overlay(), { ...b, clientX: 500 });
+    expect(zoomOf(first)).toBe("2");
+    fireEvent.pointerMove(overlay(), { ...b, clientX: 1500 });
+    expect(zoomOf(first)).toBe("4");
+    fireEvent.pointerUp(overlay(), { ...b, clientX: 1500 });
+    fireEvent.pointerUp(overlay(), { ...a, clientX: 300 });
+    fireEvent.click(overlay());
+    vi.advanceTimersByTime(200);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(overlay().classList.contains("is-magnified")).toBe(true);
+    // Still one page: a pinch never pages.
+    expect(screen.getByRole("img", { name: "Image 1 of 3" })).toBe(first);
+  });
+
+  it("starts the next page at fit, and lets a magnified page leave as it was framed", () => {
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    const first = screen.getByRole("img", { name: "Image 1 of 3" });
+    fireEvent.load(first);
+    fireEvent.keyDown(window, { key: "+" });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(first.classList.contains("is-leaving")).toBe(true);
+    expect(zoomOf(first)).toBe("1.5");
+    expect(overlay().classList.contains("is-magnified")).toBe(false);
+    expect(zoomOf(screen.getByRole("img", { name: "Image 2 of 3" }))).toBe("");
+  });
+});
+
+describe("Lightbox neighbours", () => {
+  it("draws the neighbour beside a sideways drag, and a committed swipe keeps that very picture", () => {
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    const first = screen.getByRole("img", { name: "Image 1 of 3" });
+    fireEvent.load(first);
+    const finger = { pointerId: 7, pointerType: "touch", isPrimary: true, clientY: 402 };
+    fireEvent.pointerDown(first, { ...finger, clientX: 600, clientY: 400 });
+    fireEvent.pointerMove(first, { ...finger, clientX: 450 });
+    const next = document.querySelector<HTMLImageElement>(".lightbox-image.is-peek.peek-next");
+    expect(next?.getAttribute("src")).toBe("/two.png");
+    expect(next?.getAttribute("aria-hidden")).toBe("true");
+    // Back the other way: the previous one (wrapping round) waits on the left.
+    fireEvent.pointerMove(first, { ...finger, clientX: 700 });
+    expect(document.querySelector(".lightbox-image.peek-prev")?.getAttribute("src")).toBe("/three.png");
+    expect(document.querySelector(".lightbox-image.peek-next")).toBeNull();
+
+    fireEvent.pointerMove(first, { ...finger, clientX: 200 });
+    const peeked = document.querySelector<HTMLImageElement>(".lightbox-image.peek-next")!;
+    fireEvent.load(peeked);
+    fireEvent.pointerUp(first, { ...finger, clientX: 200 });
+    // It slides on from where the finger let go, as the first slides off.
+    const second = screen.getByRole("img", { name: "Image 2 of 3" });
+    expect(second).toBe(peeked);
+    expect(second.classList.contains("is-carried")).toBe(true);
+    expect(second.classList.contains("is-pending")).toBe(false);
+    expect(second.style.getPropertyValue("--lb-enter-dx")).toBe("-400px");
+    expect(first.classList.contains("is-carried")).toBe(true);
+    expect(first.classList.contains("out-fwd")).toBe(true);
+    expect(document.querySelector(".lightbox-image.is-peek")).toBeNull();
+  });
+
+  it("lets a short drag's neighbour ride the spring back, then go", () => {
+    vi.useFakeTimers();
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    swipe(overlay(), [500, 400], [480, 402]);
+    expect(screen.getByRole("img", { name: "Image 1 of 3" })).not.toBeNull();
+    expect(document.querySelector(".lightbox-image.is-peek")).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(document.querySelector(".lightbox-image.is-peek")).toBeNull();
+  });
+
+  it("shows no neighbour for a lone picture", () => {
+    renderLocalized(<Lightbox items={[{ src: "/only.png" }]} index={0} onClose={vi.fn()} />);
+    const finger = { pointerId: 7, pointerType: "touch", isPrimary: true, clientY: 400 };
+    fireEvent.pointerDown(overlay(), { ...finger, clientX: 600 });
+    fireEvent.pointerMove(overlay(), { ...finger, clientX: 400 });
+    expect(document.querySelector(".lightbox-image.is-peek")).toBeNull();
   });
 });
 
@@ -308,7 +488,8 @@ describe("Lightbox paging", () => {
     // Pinned there with nothing to glide it back while it leaves onward.
     const css = readFileSync(resolve(process.cwd(), "src/styles/app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
     const leaving = css.match(/\n\.lightbox-image\.is-leaving\s*\{([^}]*)\}/)?.[1] ?? "";
-    expect(leaving).toMatch(/translate:\s*var\(--lb-leave-dx,\s*0px\)\s+0px;/);
+    // (Plus whatever pan a magnified page had: it leaves as it was framed.)
+    expect(leaving).toMatch(/translate:\s*calc\(var\(--lb-leave-dx,\s*0px\)\s*\+\s*var\(--lb-zx,\s*0px\)\)\s+var\(--lb-zy,\s*0px\);/);
     expect(leaving).toMatch(/transition:\s*none;/);
 
     // A key press has no offset to carry.

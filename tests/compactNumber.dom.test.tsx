@@ -2,7 +2,7 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { compactNumber } from "../src/lib/compactNumber";
-import { LanguageProvider } from "../src/lib/i18n";
+import { LanguageProvider, useI18n } from "../src/lib/i18n";
 import { CompactNumber } from "../src/components/CompactNumber";
 import { RollingText } from "../src/components/RollingText";
 
@@ -20,12 +20,42 @@ describe("compact sidebar counts", () => {
     const ui = render(<LanguageProvider><CompactNumber value={9999} /></LanguageProvider>);
     const numberDrum = ui.container.querySelector(".roll");
     ui.rerender(<LanguageProvider><CompactNumber value={10000} /></LanguageProvider>);
-    expect(ui.container.querySelector(".compact-number > .sr-only")?.textContent).toBe("10000");
+    // The exact count, grouped from five digits on.
+    expect(ui.container.querySelector(".compact-number > .sr-only")?.textContent).toBe("10,000");
     expect(ui.container.querySelector("[role=text]")).toBeNull();
     expect(ui.container.querySelector(".roll")).toBe(numberDrum);
     expect(ui.container.querySelectorAll(".roll")).toHaveLength(2);
     expect(ui.container.querySelector(".roll-char-in.is-up")).not.toBeNull();
   });
+  it("groups digits from five on, and the drum keeps its columns across the separator", () => {
+    function Probe({ value }: { value: number }) {
+      const { formatNumber, count } = useI18n();
+      return <output>{`${formatNumber(value)}|${count(value, "memo")}`}</output>;
+    }
+    const probe = render(<LanguageProvider><Probe value={9255} /></LanguageProvider>);
+    expect(probe.container.textContent).toBe("9255|9255 memos");
+    probe.rerender(<LanguageProvider><Probe value={15880} /></LanguageProvider>);
+    expect(probe.container.textContent).toBe("15,880|15,880 memos");
+    probe.rerender(<LanguageProvider><Probe value={-12000} /></LanguageProvider>);
+    expect(probe.container.textContent).toBe("-12,000|-12,000 memos");
+    probe.unmount();
+
+    const ui = render(<LanguageProvider><RollingText value={15880} /></LanguageProvider>);
+    expect(ui.container.querySelector(".roll > .sr-only")?.textContent).toBe("15,880");
+    expect([...ui.container.querySelectorAll(".roll-measure")].map((el) => el.textContent)).toEqual(["1", "5", ",", "8", "8", "0"]);
+    // The stagger counts digits only: the comma rides with its neighbour.
+    expect([...ui.container.querySelectorAll<HTMLElement>(".roll-slot")].map((el) => el.style.getPropertyValue("--ri"))).toEqual(["4", "3", "3", "2", "1", "0"]);
+    ui.rerender(<LanguageProvider><RollingText value={15881} /></LanguageProvider>);
+    // One column changed, one column rolls; the separator holds still.
+    expect(ui.container.querySelectorAll(".roll-char-in")).toHaveLength(1);
+    expect(ui.container.querySelector(".roll-char-in")?.textContent).toBe("1");
+
+    ui.rerender(<LanguageProvider><RollingText value={9999} /></LanguageProvider>);
+    ui.rerender(<LanguageProvider><RollingText value={10000} /></LanguageProvider>);
+    expect(ui.container.querySelector(".roll > .sr-only")?.textContent).toBe("10,000");
+    expect([...ui.container.querySelectorAll(".roll-measure")].map((el) => el.textContent)).toEqual(["1", "0", ",", "0", "0", "0"]);
+  });
+
   it("uses the last actual value for direction even when rounded text held still", () => {
     const ui = render(<LanguageProvider><RollingText value={10000} text="10" /></LanguageProvider>);
     ui.rerender(<LanguageProvider><RollingText value={10049} text="10" /></LanguageProvider>);

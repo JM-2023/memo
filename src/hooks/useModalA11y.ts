@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import { LIVE_REGION_ATTR } from "../lib/liveAnnouncer";
+import { SHEET_QUERY } from "./useSheet";
 
 const FOCUSABLE = [
   "a[href]",
@@ -139,6 +140,30 @@ function tabNeighbours(element: HTMLElement | null, modal: HTMLElement): HTMLEle
   return [...all.slice(index + 1, index + 5), ...all.slice(Math.max(0, index - 4), index).reverse()];
 }
 
+/**
+ * A dialog card scales in from (and back out to) the control that opened
+ * it: its transform-origin is put on the opener's centre, kept within half a
+ * card of its own box so a far opener tilts the motion rather than flinging
+ * the card. Not for a phone's sheet, which rises from the bottom edge, nor
+ * for an opener that isn't on screen (a shortcut, Back).
+ */
+function growFromOpener(overlay: HTMLElement, opener: HTMLElement | null) {
+  if (!opener || opener === document.body || !overlay.matches(".overlay:not(.lightbox)")) return;
+  if (typeof window.matchMedia === "function" && window.matchMedia(SHEET_QUERY).matches) return;
+  const card = overlay.firstElementChild;
+  if (!(card instanceof HTMLElement)) return;
+  const from = opener.getBoundingClientRect();
+  if (from.width === 0 && from.height === 0) return;
+  // Layout boxes, not painted ones: the entrance's scale is already on the card.
+  const box = overlay.getBoundingClientRect();
+  const width = card.offsetWidth;
+  const height = card.offsetHeight;
+  const x = from.left + from.width / 2 - (box.left + overlay.clientLeft + card.offsetLeft);
+  const y = from.top + from.height / 2 - (box.top + overlay.clientTop + card.offsetTop);
+  const clamp = (value: number, size: number) => Math.min(size * 1.5, Math.max(-size * 0.5, value));
+  card.style.transformOrigin = `${clamp(x, width).toFixed(1)}px ${clamp(y, height).toFixed(1)}px`;
+}
+
 function focusableWithin(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
     (element) => !element.inert && element.getAttribute("aria-hidden") !== "true" && element.getClientRects().length > 0
@@ -183,6 +208,7 @@ export function useModalA11y<T extends HTMLElement>({
     const token = Symbol("modal");
     let restoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     let fallbackFocus = tabNeighbours(restoreFocus, modal);
+    growFromOpener(modal, restoreFocus);
     modalStack.push(token);
     lockBody();
 

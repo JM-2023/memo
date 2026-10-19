@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { TipProvider } from "../src/components/Tip";
+import { ApiError } from "../src/lib/api";
 import { LanguageProvider } from "../src/lib/i18n";
 import type { Memo } from "../src/lib/types";
 
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   syncSince: vi.fn(),
   renameTag: vi.fn(),
   batchMemos: vi.fn(),
+  createMemo: vi.fn(),
   syncApi: {
     setCursor: vi.fn(),
     setSyncEpoch: vi.fn(),
@@ -34,7 +36,8 @@ vi.mock("../src/lib/api", async () => {
     bootstrap: mocks.bootstrap,
     syncSince: mocks.syncSince,
     renameTag: mocks.renameTag,
-    batchMemos: mocks.batchMemos
+    batchMemos: mocks.batchMemos,
+    createMemo: mocks.createMemo
   };
 });
 
@@ -135,6 +138,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   delete (Element.prototype as Element & { getAnimations?: () => Animation[] }).getAnimations;
+  delete (navigator as { onLine?: boolean }).onLine;
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -191,6 +195,45 @@ describe("tag rename follow-ups", () => {
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
   });
 
+  it("carries a rename into a send still waiting, and counts its tags as in use", async () => {
+    let online = false;
+    Object.defineProperty(navigator, "onLine", { configurable: true, get: () => online });
+    mocks.createMemo
+      .mockImplementationOnce(async () => {
+        throw new ApiError("NETWORK_ERROR", 0, "The server could not be reached.");
+      })
+      .mockImplementation(async (id: string, content: string) => ({ memo: { ...memo(id, content, 5) } }));
+    mocks.renameTag.mockResolvedValueOnce(renameResult([{ ...WORK, content: "alpha #job", seq: 3 }]));
+    const user = userEvent.setup();
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+    await screen.findByText("alpha");
+    fireEvent.change(screen.getByRole("combobox", { name: "Memo content" }), { target: { value: "gamma #fresh #work" } });
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(screen.getByText("gamma").closest("article")?.classList.contains("is-send-failed")).toBe(true));
+
+    // Only the unsent memo carries #fresh: renaming onto it would merge.
+    const { dialog, input } = await openRename(user, "work");
+    await user.type(input, "fresh");
+    expect(await within(dialog).findByText("#fresh already exists. Merging the two tags can’t be undone.")).toBeTruthy();
+    await user.clear(input);
+    await user.type(input, "job");
+    await user.click(within(dialog).getByRole("button", { name: "Rename" }));
+    expect(await screen.findByText("Renamed #work to #job in 1 memo", { selector: ".toast *" })).not.toBeNull();
+    // Its card, and what goes to the server once the connection is back.
+    const card = screen.getByText("gamma").closest("article") as HTMLElement;
+    expect(card.textContent).toContain("gamma #fresh #job");
+    online = true;
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+    await waitFor(() => expect(mocks.createMemo).toHaveBeenCalledTimes(2));
+    expect(mocks.createMemo.mock.calls[1][1]).toBe("gamma #fresh #job");
+  });
+
   it("refuses a saved filter whose tag no longer exists instead of widening to every memo", async () => {
     localStorage.setItem(
       "memo-saved-filters",
@@ -223,6 +266,69 @@ describe("tag rename follow-ups", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Filter memos" }));
     expect(await screen.findByRole("button", { name: "Life" })).not.toBeNull();
+  });
+});
+
+describe("select-mode keys and ranges", () => {
+  async function enterSelect(user: ReturnType<typeof userEvent.setup>) {
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+    await screen.findByText("alpha");
+    await user.click(document.querySelector<HTMLButtonElement>(".loc-trigger")!);
+    await user.click(await screen.findByRole("menuitem", { name: "Select memos" }));
+    await screen.findByRole("button", { name: "Cancel selection" });
+  }
+
+  it("takes every memo in the list on ⌘/Ctrl+A, and only arms the batch delete on Delete", async () => {
+    const user = userEvent.setup();
+    await enterSelect(user);
+    fireEvent.keyDown(window, { key: "a", metaKey: true });
+    await waitFor(() => expect(document.querySelectorAll(".memo-card.is-selected")).toHaveLength(2));
+
+    fireEvent.keyDown(window, { key: "Delete" });
+    // Armed, with focus on the pill (Enter confirms there, leaving it disarms) — nothing deleted yet.
+    const armed = await screen.findByRole("button", { name: "Move 2 memos to Trash?" });
+    expect(document.activeElement).toBe(armed);
+    fireEvent.keyDown(window, { key: "Backspace" });
+    expect(mocks.batchMemos).not.toHaveBeenCalled();
+  });
+
+  it("leaves ⌘/Ctrl+A to a text field", async () => {
+    const user = userEvent.setup();
+    await enterSelect(user);
+    const search = screen.getByRole("combobox", { name: "Search memos" });
+    const event = new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      search.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.querySelectorAll(".memo-card.is-selected")).toHaveLength(0);
+  });
+
+  it("selects the range from the last pick on a shift-click", async () => {
+    mocks.bootstrap.mockResolvedValue({
+      memos: [WORK, LIFE, memo("m-third", "gamma", 3), memo("m-fourth", "delta", 4)],
+      tags: [],
+      cursor: 4,
+      syncEpoch: "epoch-a",
+      serverTime: LIFE.createdAt,
+      hasMore: false,
+      nextAfter: null
+    });
+    const user = userEvent.setup();
+    await enterSelect(user);
+    const overlays = () => screen.getAllByRole("button", { name: /^(Select|Deselect) this memo$/ });
+    expect(overlays()).toHaveLength(4);
+    await user.click(overlays()[0]);
+    fireEvent.click(overlays()[2], { shiftKey: true });
+    const picked = () => Array.from(document.querySelectorAll(".memo-card")).map((card) => card.classList.contains("is-selected"));
+    expect(picked()).toEqual([true, true, true, false]);
+    // From that pick, a shift-click on a picked card takes the range back out.
+    fireEvent.click(overlays()[1], { shiftKey: true });
+    expect(picked()).toEqual([true, false, false, false]);
   });
 });
 

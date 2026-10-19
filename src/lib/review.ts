@@ -6,9 +6,10 @@
 // makes it reproducible — clearing storage and re-drawing the same day over
 // the same notebook yields the same batch. Like the sort key and saved
 // filters, settings and the frozen batch are workspace furniture: per-device,
-// outside the encrypted sync pipeline and cleared by ordinary logout.
+// outside the encrypted sync pipeline and cleared by ordinary logout. So are
+// the day's seen ids and the "Not again" list — memo ids only, never text.
 
-import { dateKey } from "./dates";
+import { addDays, dateKey, dateKeyOf } from "./dates";
 import { tagMatches, tagsOf } from "./tags";
 import type { Memo } from "./types";
 
@@ -25,6 +26,23 @@ export interface ReviewSettings {
   count: number;
 }
 
+/** Which anniversary a memo came back on. */
+export type ReviewSpan = "week" | "month" | "halfYear" | "year";
+
+/**
+ * Why a memo is in the day's batch: written on this date in an earlier year,
+ * on an anniversary (a week, a month, six months or a year back, give or
+ * take a day), or drawn by chance from the rest.
+ */
+export type ReviewPick =
+  | { reason: "onThisDay"; years: number }
+  | { reason: "anniversary"; span: ReviewSpan }
+  | { reason: "random" };
+
+export type ReviewReason = ReviewPick["reason"];
+
+export const RANDOM_PICK: ReviewPick = Object.freeze({ reason: "random" as const });
+
 export interface ReviewDay {
   /** Local day key ("2026-07-25") the batch belongs to. */
   day: string;
@@ -32,6 +50,9 @@ export interface ReviewDay {
   fingerprint: string;
   /** Frozen draw order. Memos deleted since simply drop out at render time. */
   ids: string[];
+  /** Why each id was drawn. A day frozen before reasons were kept has none:
+      its memos read as random draws (reviewPickOf). */
+  reasons: Record<string, ReviewPick>;
 }
 
 export const REVIEW_COUNT_MIN = 1;
@@ -47,6 +68,14 @@ export const DEFAULT_REVIEW_SETTINGS: ReviewSettings = Object.freeze({
 /** Exported so open tabs can follow each other's changes (storage events). */
 export const SETTINGS_KEY = "memo-review-settings";
 const DAY_KEY = "memo-review-day";
+/** The ids of today's cards the reader has seen. */
+export const SEEN_KEY = "memo-review-seen";
+/** Memos the reader asked never to be drawn again, on this device. */
+export const HIDDEN_KEY = "memo-review-hidden";
+/** Generous ceilings: a stored list never grows without bound. */
+const SEEN_MAX = 200;
+const HIDDEN_MAX = 5000;
+const NO_IDS: ReadonlySet<string> = new Set();
 const DAY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 const SCOPES: readonly ReviewScope[] = ["all", "include", "exclude", "untagged"];
@@ -132,11 +161,13 @@ function monthsAgo(now: Date, months: number): Date {
   return target;
 }
 
-/** Active memos that qualify for review under `settings` as of `now`. */
-export function eligibleReviewMemos(memos: readonly Memo[], settings: ReviewSettings, now = new Date()): Memo[] {
+/** Active memos that qualify for review under `settings` as of `now`, less
+    the ones set aside with "Not again" (`excluded`). */
+export function eligibleReviewMemos(memos: readonly Memo[], settings: ReviewSettings, now = new Date(), excluded: ReadonlySet<string> = NO_IDS): Memo[] {
   const cutoff = settings.range === "all" ? null : monthsAgo(now, RANGE_MONTHS[settings.range]).toISOString();
   return memos.filter((memo) => {
     if (memo.deletedAt) return false;
+    if (excluded.has(memo.id)) return false;
     if (cutoff !== null && memo.createdAt < cutoff) return false;
     if (settings.scope === "all") return true;
     const tags = tagsOf(memo);
@@ -183,15 +214,126 @@ export function pickReviewIds(eligible: readonly Memo[], count: number, seedKey:
   return pool.slice(0, take);
 }
 
+const SPANS: readonly ReviewSpan[] = ["week", "month", "halfYear", "year"];
+
+/** How far back each anniversary lies from a local day. */
+const SPAN_BACK: Record<ReviewSpan, (day: Date) => Date> = {
+  week: (day) => addDays(day, -7),
+  month: (day) => monthsAgo(day, 1),
+  halfYear: (day) => monthsAgo(day, 6),
+  year: (day) => monthsAgo(day, 12)
+};
+
+function dateOfKey(key: string): Date {
+  const [year, month, day] = key.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+/**
+ * Why a memo written at `createdAt` (local time) would come back on `day`
+ * ahead of chance, if it would. On this day: the same month and date in an
+ * earlier year — on the last day of a short February, a 29th counts. An
+ * anniversary: a week, a month, six months or a year back, a day either
+ * side (the year's own date is already "on this day"). Pure, for tests.
+ */
+export function reviewPickFor(createdAt: string, day: string, anniversaries = anniversaryKeys(day)): ReviewPick {
+  const written = dateKeyOf(createdAt);
+  if (written >= day) return RANDOM_PICK;
+  const [year, month, date] = day.split("-").map(Number);
+  const [writtenYear, writtenMonth, writtenDate] = written.split("-").map(Number);
+  const lastOfMonth = new Date(year, month, 0).getDate();
+  if (writtenMonth === month && (writtenDate === date || (date === lastOfMonth && writtenDate > date))) {
+    return { reason: "onThisDay", years: year - writtenYear };
+  }
+  const span = anniversaries.get(written);
+  return span ? { reason: "anniversary", span } : RANDOM_PICK;
+}
+
+/** The local day keys each anniversary of `day` covers, a day either side. */
+function anniversaryKeys(day: string): Map<string, ReviewSpan> {
+  const today = dateOfKey(day);
+  const keys = new Map<string, ReviewSpan>();
+  for (const span of SPANS) {
+    const target = SPAN_BACK[span](today);
+    for (const shift of [-1, 0, 1]) {
+      const key = dateKey(addDays(target, shift));
+      if (!keys.has(key)) keys.set(key, span);
+    }
+  }
+  return keys;
+}
+
+export interface ReviewDraw {
+  ids: string[];
+  reasons: Record<string, ReviewPick>;
+}
+
+/**
+ * The day's weighted draw, still a pure function of (pool, seedKey, day):
+ * memos written on this date in earlier years come first, then the
+ * anniversaries, then a seeded random remainder — up to `count` in all.
+ * Each tier is shuffled whole under its own seed, so the order never
+ * depends on `count`: raising the quota extends the same hand.
+ */
+export function drawReview(eligible: readonly Memo[], count: number, seedKey: string, day: string): ReviewDraw {
+  const take = Math.max(0, count);
+  const picks = new Map<string, ReviewPick>();
+  const onThisDay: Memo[] = [];
+  const anniversaries: Memo[] = [];
+  const rest: Memo[] = [];
+  const keys = anniversaryKeys(day);
+  for (const memo of eligible) {
+    const pick = reviewPickFor(memo.createdAt, day, keys);
+    picks.set(memo.id, pick);
+    if (pick.reason === "onThisDay") onThisDay.push(memo);
+    else if (pick.reason === "anniversary") anniversaries.push(memo);
+    else rest.push(memo);
+  }
+  const ids = [
+    ...pickReviewIds(onThisDay, onThisDay.length, `${seedKey}|onThisDay`),
+    ...pickReviewIds(anniversaries, anniversaries.length, `${seedKey}|anniversary`)
+  ].slice(0, take);
+  ids.push(...pickReviewIds(rest, take - ids.length, seedKey));
+  const reasons: Record<string, ReviewPick> = {};
+  for (const id of ids) reasons[id] = picks.get(id) ?? RANDOM_PICK;
+  return { ids, reasons };
+}
+
 /** Draw today's batch. The caller freezes the result via persistReviewDay. */
-export function buildReviewDay(memos: readonly Memo[], settings: ReviewSettings, now = new Date()): ReviewDay {
+export function buildReviewDay(memos: readonly Memo[], settings: ReviewSettings, now = new Date(), excluded: ReadonlySet<string> = NO_IDS): ReviewDay {
   const day = dateKey(now);
-  const eligible = eligibleReviewMemos(memos, settings, now);
-  return {
-    day,
-    fingerprint: reviewFingerprint(settings),
-    ids: pickReviewIds(eligible, settings.count, reviewSeedKey(settings, day))
-  };
+  const eligible = eligibleReviewMemos(memos, settings, now, excluded);
+  const { ids, reasons } = drawReview(eligible, settings.count, reviewSeedKey(settings, day), day);
+  return { day, fingerprint: reviewFingerprint(settings), ids, reasons };
+}
+
+/** Why `id` is in `day`'s batch; a day stored before reasons were kept reads as random. */
+export function reviewPickOf(day: ReviewDay, id: string): ReviewPick {
+  return Object.prototype.hasOwnProperty.call(day.reasons, id) ? day.reasons[id] : RANDOM_PICK;
+}
+
+/** How many of `ids` came back for each reason — the banner's breakdown. */
+export function reviewBreakdown(day: ReviewDay, ids: readonly string[]): Record<ReviewReason, number> {
+  const tally: Record<ReviewReason, number> = { onThisDay: 0, anniversary: 0, random: 0 };
+  for (const id of ids) tally[reviewPickOf(day, id).reason] += 1;
+  return tally;
+}
+
+/**
+ * How long ago `createdAt` was, in the one unit a person would say it in:
+ * days under two weeks (0 is today), weeks under two months, months under a
+ * year, years beyond. Calendar-based, in local time. Pure, for tests.
+ */
+export function reviewAge(createdAt: string, now = new Date()): { value: number; unit: "day" | "week" | "month" | "year" } {
+  const written = new Date(createdAt);
+  const from = new Date(written.getFullYear(), written.getMonth(), written.getDate());
+  const to = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const days = Math.max(0, Math.round((to.getTime() - from.getTime()) / 86_400_000));
+  if (days < 14) return { value: days, unit: "day" };
+  const months = Math.max(0, (to.getFullYear() - from.getFullYear()) * 12 + to.getMonth() - from.getMonth() - (to.getDate() < from.getDate() ? 1 : 0));
+  if (months < 2) return { value: Math.floor(days / 7), unit: "week" };
+  if (months < 12) return { value: months, unit: "month" };
+  return { value: Math.floor(months / 12), unit: "year" };
 }
 
 /** True while a frozen batch still answers for `settings` today. */
@@ -202,8 +344,25 @@ export function reviewDayValid(stored: ReviewDay | null, settings: ReviewSetting
 /** An empty batch only stands while there is still nothing to draw: one
     frozen over an empty pool (a new notebook, a scope nothing matched yet)
     goes stale once a memo qualifies, instead of keeping Review empty all day. */
-export function reviewDayStarved(stored: ReviewDay, memos: readonly Memo[], settings: ReviewSettings, now = new Date()): boolean {
-  return stored.ids.length === 0 && eligibleReviewMemos(memos, settings, now).length > 0;
+export function reviewDayStarved(
+  stored: ReviewDay,
+  memos: readonly Memo[],
+  settings: ReviewSettings,
+  now = new Date(),
+  excluded: ReadonlySet<string> = NO_IDS
+): boolean {
+  return stored.ids.length === 0 && eligibleReviewMemos(memos, settings, now, excluded).length > 0;
+}
+
+function parsePick(raw: unknown): ReviewPick | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  if (value.reason === "random") return RANDOM_PICK;
+  if (value.reason === "onThisDay" && typeof value.years === "number" && Number.isInteger(value.years) && value.years >= 1) {
+    return { reason: "onThisDay", years: value.years };
+  }
+  if (value.reason === "anniversary" && SPANS.includes(value.span as ReviewSpan)) return { reason: "anniversary", span: value.span as ReviewSpan };
+  return null;
 }
 
 /** Parse a stored batch, dropping anything malformed. Pure, for tests. */
@@ -226,7 +385,15 @@ export function parseReviewDay(json: string | null): ReviewDay | null {
     ids.push(id);
     if (ids.length >= REVIEW_COUNT_MAX) break;
   }
-  return { day: raw.day, fingerprint: raw.fingerprint, ids };
+  // Reasons arrived later: a day stored without them (or with one that no
+  // longer parses) keeps its ids, and those memos read as random draws.
+  const rawReasons = typeof raw.reasons === "object" && raw.reasons !== null && !Array.isArray(raw.reasons) ? (raw.reasons as Record<string, unknown>) : {};
+  const reasons: Record<string, ReviewPick> = {};
+  for (const id of ids) {
+    const pick = Object.prototype.hasOwnProperty.call(rawReasons, id) ? parsePick(rawReasons[id]) : null;
+    if (pick) reasons[id] = pick;
+  }
+  return { day: raw.day, fingerprint: raw.fingerprint, ids, reasons };
 }
 
 export function loadReviewDay(): ReviewDay | null {
@@ -250,6 +417,85 @@ export function clearReviewDay(): void {
     localStorage.removeItem(DAY_KEY);
   } catch {
     // Ignore: an unreadable record fails parseReviewDay and regenerates anyway.
+  }
+}
+
+/** Unique non-empty string ids, in order, the newest `max` kept. */
+function parseIdList(raw: unknown, max: number): string[] {
+  if (!Array.isArray(raw)) return [];
+  const ids = [...new Set(raw.filter((id): id is string => typeof id === "string" && id.length > 0))];
+  return ids.slice(Math.max(0, ids.length - max));
+}
+
+/** The cards of one local day the reader has seen. Kept by day, not by
+    batch: a settings change that re-deals mid-day keeps what was seen. */
+export interface ReviewSeen {
+  day: string;
+  ids: string[];
+}
+
+export const NO_REVIEW_SEEN: ReviewSeen = Object.freeze({ day: "", ids: [] as string[] });
+
+/** Parse a stored seen record, dropping anything malformed. Pure, for tests. */
+export function parseReviewSeen(json: string | null): ReviewSeen {
+  if (!json) return NO_REVIEW_SEEN;
+  try {
+    const data: unknown = JSON.parse(json);
+    if (typeof data !== "object" || data === null) return NO_REVIEW_SEEN;
+    const raw = data as Record<string, unknown>;
+    if (typeof raw.day !== "string" || !DAY_PATTERN.test(raw.day)) return NO_REVIEW_SEEN;
+    return { day: raw.day, ids: parseIdList(raw.ids, SEEN_MAX) };
+  } catch {
+    return NO_REVIEW_SEEN;
+  }
+}
+
+export function loadReviewSeen(): ReviewSeen {
+  try {
+    return parseReviewSeen(localStorage.getItem(SEEN_KEY));
+  } catch {
+    return NO_REVIEW_SEEN;
+  }
+}
+
+/** `seen` with `id` added for `day` (a record from another day starts over). */
+export function withReviewSeen(seen: ReviewSeen, day: string, id: string): ReviewSeen {
+  if (seen.day === day && seen.ids.includes(id)) return seen;
+  return { day, ids: parseIdList([...(seen.day === day ? seen.ids : []), id], SEEN_MAX) };
+}
+
+export function persistReviewSeen(seen: ReviewSeen): void {
+  try {
+    localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
+  } catch {
+    // Storage blocked — the cards simply count as unseen on the next visit.
+  }
+}
+
+/** Parse the stored "Not again" list. Pure, for tests. */
+export function parseReviewHidden(json: string | null): string[] {
+  if (!json) return [];
+  try {
+    return parseIdList(JSON.parse(json), HIDDEN_MAX);
+  } catch {
+    return [];
+  }
+}
+
+export function loadReviewHidden(): string[] {
+  try {
+    return parseReviewHidden(localStorage.getItem(HIDDEN_KEY));
+  } catch {
+    return [];
+  }
+}
+
+export function persistReviewHidden(ids: readonly string[]): void {
+  try {
+    if (ids.length === 0) localStorage.removeItem(HIDDEN_KEY);
+    else localStorage.setItem(HIDDEN_KEY, JSON.stringify(parseIdList(ids, HIDDEN_MAX)));
+  } catch {
+    // Storage blocked — the list still holds for this session.
   }
 }
 

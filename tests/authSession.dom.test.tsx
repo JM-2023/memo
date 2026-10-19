@@ -9,7 +9,7 @@ import { ChangePasscode } from "../src/components/ChangePasscode";
 import { LoginScreen } from "../src/components/LoginScreen";
 import { PasscodePad } from "../src/components/PasscodePad";
 import { TipProvider } from "../src/components/Tip";
-import { ApiError } from "../src/lib/api";
+import { ApiError, AuthRequiredError } from "../src/lib/api";
 import { defaultLanguage, LanguageProvider } from "../src/lib/i18n";
 import type { Memo } from "../src/lib/types";
 
@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   verifyPasscode: vi.fn(),
   changePassword: vi.fn(),
   updateMemo: vi.fn(),
+  createMemo: vi.fn(),
   clearLocalDeviceData: vi.fn(async () => undefined),
   forgetCacheKey: vi.fn(),
   syncOptions: null as null | { onAuthLost: (revoked: boolean) => void },
@@ -47,7 +48,8 @@ vi.mock("../src/lib/api", async () => {
     logout: mocks.logout,
     verifyPasscode: mocks.verifyPasscode,
     changePassword: mocks.changePassword,
-    updateMemo: mocks.updateMemo
+    updateMemo: mocks.updateMemo,
+    createMemo: mocks.createMemo
   };
 });
 
@@ -277,6 +279,39 @@ describe("logging out", () => {
     await waitFor(() => expect(mocks.logout).toHaveBeenCalledTimes(1));
     expect(mocks.clearLocalDeviceData).toHaveBeenCalledTimes(1);
     await screen.findByRole("button", { name: "Confirm" });
+  });
+
+  it("takes a send turned away as the session ends for the logout it is, not an expiry", async () => {
+    let turnAway: () => void = () => undefined;
+    mocks.createMemo.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          turnAway = () => reject(new AuthRequiredError());
+        })
+    );
+    let confirmLogout: () => void = () => undefined;
+    mocks.logout.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          confirmLogout = () => resolve({ ok: true });
+        })
+    );
+    const user = userEvent.setup();
+    await renderReadyApp();
+    await user.type(composer(), "last words");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mocks.createMemo).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByRole("button", { name: /My MEMO/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Log Out" }));
+    const dialog = await screen.findByRole("dialog", { name: "Log out of this device?" });
+    await user.click(within(dialog).getByRole("button", { name: "Log Out" }));
+    await waitFor(() => expect(mocks.logout).toHaveBeenCalledTimes(1));
+    await act(async () => turnAway());
+    await act(async () => confirmLogout());
+    await screen.findByRole("button", { name: "Confirm" });
+    expect(screen.queryByText(/session has expired/)).toBeNull();
+    expect(mocks.createMemo).toHaveBeenCalledTimes(1);
   });
 });
 

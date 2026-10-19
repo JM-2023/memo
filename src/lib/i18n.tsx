@@ -136,23 +136,30 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const tr = useCallback((en: string, zh: string) => (language === "zh-CN" ? zh : en), [language]);
-  /* No group separators. Every number this app shows is a tally — memos,
-     tags, active days, characters — read at a glance beside its label, never
-     summed or compared against a figure from somewhere else. A separator
-     buys nothing at that job and costs the digits their column: the counts
-     are set tabular so they line up down a list, and a comma appearing at
-     1,000 pushes the row out of the alignment the rest of the list holds. */
-  const numberFormatter = useMemo(() => new Intl.NumberFormat(locale, { useGrouping: false }), [locale]);
-  const formatNumber = useCallback((value: number) => numberFormatter.format(value), [numberFormatter]);
+  /* Group separators from five digits on. Every number this app shows is a
+     tally — memos, tags, active days, characters — read at a glance beside
+     its label, and the counts are set tabular so they line up down a list:
+     a comma at 1,000 would push a four-digit row out of the column the rest
+     of the list holds, for no gain in reading. Past four digits the reader
+     starts counting digits to get the size (15880 or 158800?), so from
+     there the separator earns its place: 15,880. */
+  const formatters = useMemo(
+    () => ({ plain: new Intl.NumberFormat(locale, { useGrouping: false }), grouped: new Intl.NumberFormat(locale, { useGrouping: true }) }),
+    [locale]
+  );
+  const formatNumber = useCallback(
+    (value: number) => (Math.abs(value) >= 10_000 ? formatters.grouped : formatters.plain).format(value),
+    [formatters]
+  );
 
   const count = useCallback(
     (value: number, unit: CountUnit) => {
-      const number = numberFormatter.format(value);
+      const number = formatNumber(value);
       if (language === "zh-CN") return `${number} ${CHINESE_UNITS[unit]}`;
       const [singular, plural] = ENGLISH_UNITS[unit];
       return `${number} ${Math.abs(value) === 1 ? singular : plural}`;
     },
-    [language, numberFormatter]
+    [language, formatNumber]
   );
 
   const errorMessage = useCallback(
@@ -200,14 +207,14 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           const rawMax = params?.max;
           const max = typeof rawMax === "number" ? rawMax : typeof rawMax === "string" && rawMax.trim() ? Number(rawMax) : Number.NaN;
           if (!Number.isFinite(max)) return localized("This memo is too long.", "这条笔记内容过长");
-          const formattedMax = numberFormatter.format(max);
+          const formattedMax = formatNumber(max);
           return localized(`A memo can contain up to ${formattedMax} characters.`, `每条笔记最多可包含 ${formattedMax} 个字符`);
         }
         case "IMAGE_LIMIT_EXCEEDED": {
           const rawMax = params?.max;
           const max = typeof rawMax === "number" ? rawMax : typeof rawMax === "string" && rawMax.trim() ? Number(rawMax) : Number.NaN;
           if (!Number.isFinite(max)) return localized("This memo contains too many images.", "这条笔记包含的图片过多");
-          const formattedMax = numberFormatter.format(max);
+          const formattedMax = formatNumber(max);
           return localized(
             `A memo can contain up to ${formattedMax} ${Math.abs(max) === 1 ? "image" : "images"}.`,
             `每条笔记最多可包含 ${formattedMax} 张图片`
@@ -288,7 +295,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       if (language === "zh-CN" && !containsChinese) return fallbackZh;
       return message;
     },
-    [language, numberFormatter]
+    [language, formatNumber]
   );
 
   const value = useMemo<I18nContextValue>(

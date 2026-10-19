@@ -1,15 +1,17 @@
-import { Check, Copy, ImageOff, ListChecks, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Share, Tags, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Check, Copy, ImageOff, ListChecks, Loader2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Share, Tags, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { externalImagesOf } from "../lib/content";
 import { formatTime } from "../lib/dates";
 import { isUnfolded, rememberFold } from "../lib/foldMemory";
 import { useI18n } from "../lib/i18n";
 import { externalImageSize, mediaGridProps } from "../lib/imageLayout";
-import { visualLinesOf } from "../lib/lineDiff";
-import { EXIT_MS } from "../lib/motion";
+import { visualLinesOf, type VisualLine } from "../lib/lineDiff";
+import { parseBlock } from "../lib/markdown";
+import { BUSY_HOLD_MS, EXIT_MS } from "../lib/motion";
+import type { SendState } from "../lib/outbox";
 import { wordCountOf } from "../lib/stats";
 import type { LightboxItem, Memo, MemoImage, NewImagePayload } from "../lib/types";
-import { Editor, type EditDraft } from "./Editor";
+import { Editor, type EditDraft, type EditHandle } from "./Editor";
 import { openLightboxFrom } from "./Lightbox";
 import { MemoFold, mightFold } from "./MemoFold";
 import { MemoLine } from "./memoLines";
@@ -27,7 +29,10 @@ interface MemoCardProps {
   /** Multi-select mode: the whole card becomes a toggle, actions retire. */
   selecting: boolean;
   selected: boolean;
-  onToggleSelect: () => void;
+  /** `extend`: a shift-click, which takes the range from the last pick. */
+  onToggleSelect: (extend?: boolean) => void;
+  /** A search result found by meaning alone: none of the query's words are in it. */
+  related?: boolean;
   /** Enter select mode with this card picked; absent where a view has none. */
   onSelect?: () => void;
   onStartEdit: () => void;
@@ -56,10 +61,33 @@ interface MemoCardProps {
   onEditDraftChange?: (content: string) => void;
   /** A toast the open editor raises on its own (an image removed, with Undo). */
   onEditNotice?: (text: string, action?: { label: string; run: () => void }) => void;
+  /** The open editor's handle, as it opens and as it goes (see EditHandle). */
+  onEditHandle?: (handle: EditHandle, open: boolean) => void;
   /** A pin / trash / restore for this memo is in flight (already shown
       optimistically): those actions hold until it settles. */
   busy?: boolean;
+  /** Rendered just before the stamp (Daily review's "A year ago ·"). */
+  stampPrefix?: ReactNode;
+  /** Leads the head's right side (Daily review's seen check). */
+  headMark?: ReactNode;
+  /**
+   * Daily review's row of actions under the body. Called with `live` false
+   * for the stage's inert twin, which keeps the row's height without its
+   * controls; `edit` opens the editor as the menu's Edit does.
+   */
+  reviewActions?: (slot: { live: boolean; edit: () => void }) => ReactNode;
+  /** A memo still on its way to the server (App's outbox): its head says so
+      where the time sits, and offers the send's own actions instead of ⋯. */
+  sendState?: SendState;
+  /** The composer holds a draft, so this memo cannot go back into it. */
+  recallBlocked?: boolean;
+  /** 撤回 while sending, 编辑 once it failed: back into the composer. */
+  onTakeBack?: () => void;
+  onRetrySend?: () => void;
+  onDiscardUnsent?: () => void;
 }
+
+const NO_EDIT = () => undefined;
 
 interface MemoMenuBodyProps {
   memo: Memo;
@@ -330,6 +358,126 @@ export function SelectRingStagger({ active, feedRef }: { active: boolean; feedRe
   return null;
 }
 
+/**
+ * A shift-click's range lands as a ripple from the anchor toward the card
+ * clicked, on the rings' own steps (15ms a card up to 90ms), counted among
+ * the cards on screen. Its own variable (--srd, read as a transition delay
+ * by app.css) rather than --sbd: --sbd times the rings' entrance animation,
+ * and moving its delay after the fact could replay it. Call before the
+ * selection commits, so the delays are in place when the transitions start.
+ */
+export function rippleSelectRange(feed: HTMLElement | null, ids: readonly string[]): void {
+  if (!feed || ids.length < 2) return;
+  const slots = new Map<string, HTMLElement>();
+  for (const slot of Array.from(feed.children)) {
+    if (slot instanceof HTMLElement && slot.dataset.vt) slots.set(slot.dataset.vt, slot);
+  }
+  const top = Math.max(0, document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0);
+  const rippled: HTMLElement[] = [];
+  for (const id of ids) {
+    const slot = slots.get(`memo-${id}`);
+    if (!slot) continue;
+    const box = slot.getBoundingClientRect();
+    if (box.bottom <= top || box.top >= window.innerHeight) continue;
+    slot.style.setProperty("--srd", `${Math.min(rippled.length * SELECT_RING_STEP_MS, SELECT_RING_MAX_MS)}ms`);
+    slot.dataset.ripple = "";
+    rippled.push(slot);
+  }
+  // Past the last step and its transition, a single tap answers at once again.
+  window.setTimeout(() => {
+    for (const slot of rippled) {
+      slot.style.removeProperty("--srd");
+      delete slot.dataset.ripple;
+    }
+  }, SELECT_RING_MAX_MS + 400);
+}
+
+/** Done and total task boxes as the card draws them; a flip in flight counts as landed. */
+function taskProgressOf(lines: readonly VisualLine[], flips?: ReadonlyMap<number, boolean>): { done: number; total: number } {
+  let done = 0;
+  let total = 0;
+  for (const line of lines) {
+    const block = parseBlock(line.raw);
+    if (block.kind !== "task") continue;
+    total += 1;
+    if (flips?.get(line.key) ?? block.checked) done += 1;
+  }
+  return { done, total };
+}
+
+/**
+ * "1/3" after the stamp: how far a memo's tasks have got. Ticking the last
+ * open box turns it the accent with a check, which pops only when that
+ * happens in front of the reader (as the pin mark does), not on each mount.
+ */
+function TaskProgress({ done, total }: { done: number; total: number }) {
+  const { tr } = useI18n();
+  const complete = done === total;
+  const [seen, setSeen] = useState(complete);
+  const [pop, setPop] = useState(false);
+  if (seen !== complete) {
+    setSeen(complete);
+    setPop(complete);
+  }
+  return (
+    <span className={`memo-progress${complete ? " is-complete" : ""}`}>
+      {/* "1/3" alone reads as a fraction. */}
+      <span className="sr-only">{tr(`${done} of ${total} tasks done`, `已完成 ${done}/${total} 项任务`)}</span>
+      <span className="memo-progress-figure" aria-hidden="true">
+        {complete ? (
+          <Check size={12} strokeWidth={2.8} className={`memo-progress-check${pop ? " is-new" : ""}`} onAnimationEnd={() => setPop(false)} />
+        ) : null}
+        {done}/{total}
+      </span>
+    </span>
+  );
+}
+
+/** The ghost header's twin of the live count, read off the content it replays. */
+function ContentTaskProgress({ content }: { content: string }) {
+  const { done, total } = useMemo(() => taskProgressOf(visualLinesOf(content)), [content]);
+  return total > 0 ? <TaskProgress done={done} total={total} /> : null;
+}
+
+/** A touch held this long, and this still, picks the card. */
+const HOLD_MS = 450;
+const HOLD_SLOP_PX = 8;
+/** Pressed here, a hold or a right-click is the platform's (a link's or picture's own menu, a field). */
+const NATIVE_PRESS = "a[href], img, .memo-image, input, textarea, [contenteditable], .action-menu";
+
+/**
+ * After a hold has picked a card, the finger is still down: the long press
+ * that follows must not also open the platform's menu, and the tap its lift
+ * may still fire must not toggle the card straight back out.
+ */
+function swallowHoldRelease(pointerId: number): void {
+  const block = (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  const done = () => {
+    window.removeEventListener("pointerup", lift, true);
+    window.removeEventListener("pointercancel", lift, true);
+    window.removeEventListener("contextmenu", block, true);
+    window.removeEventListener("click", block, true);
+    window.clearTimeout(timer);
+  };
+  function lift(event: PointerEvent) {
+    if (event.pointerId !== pointerId) return;
+    window.removeEventListener("pointerup", lift, true);
+    window.removeEventListener("pointercancel", lift, true);
+    window.addEventListener("click", block, true);
+    // The lift's tap, if it comes, comes at once.
+    window.clearTimeout(timer);
+    timer = window.setTimeout(done, 350);
+  }
+  window.addEventListener("pointerup", lift, true);
+  window.addEventListener("pointercancel", lift, true);
+  window.addEventListener("contextmenu", block, true);
+  // A finger that never lifts (or a lost pointerup) lets go of the guards anyway.
+  let timer = window.setTimeout(done, 3000);
+}
+
 export function MemoCard(props: MemoCardProps) {
   const { locale, tr } = useI18n();
   const { memo, variant, editing, selecting, selected } = props;
@@ -360,6 +508,70 @@ export function MemoCard(props: MemoCardProps) {
   const foldId = useId();
   // The card is named by its time, as its ⋯ is (see menuLabel).
   const timeId = useId();
+
+  // A touch held still on the card opens select mode with it picked — the
+  // phone's way into selection, where no shift key or ⋯ hover exists.
+  const onSelectRef = useRef(props.onSelect);
+  onSelectRef.current = props.onSelect;
+  const holdRef = useRef<{ pointer: number; x: number; y: number; timer: number } | null>(null);
+  const [holding, setHolding] = useState(false);
+  const releaseHold = useCallback(() => {
+    const hold = holdRef.current;
+    if (!hold) return;
+    window.clearTimeout(hold.timer);
+    holdRef.current = null;
+    setHolding(false);
+  }, []);
+  useEffect(() => releaseHold, [releaseHold]);
+
+  function startHold(event: ReactPointerEvent<HTMLElement>) {
+    if (event.pointerType !== "touch" || !event.isPrimary || !props.onSelect || selecting || editing) return;
+    if (event.target instanceof Element && event.target.closest(NATIVE_PRESS)) return;
+    releaseHold();
+    const pointer = event.pointerId;
+    const timer = window.setTimeout(() => {
+      holdRef.current = null;
+      setHolding(false);
+      swallowHoldRelease(pointer);
+      window.getSelection()?.removeAllRanges();
+      try {
+        navigator.vibrate?.(10);
+      } catch {
+        // Not every engine lets a page buzz.
+      }
+      onSelectRef.current?.();
+    }, HOLD_MS);
+    holdRef.current = { pointer, x: event.clientX, y: event.clientY, timer };
+    setHolding(true);
+  }
+
+  function moveHold(event: ReactPointerEvent<HTMLElement>) {
+    const hold = holdRef.current;
+    if (hold && hold.pointer === event.pointerId && Math.hypot(event.clientX - hold.x, event.clientY - hold.y) >= HOLD_SLOP_PX) releaseHold();
+  }
+
+  // Right-click opens the card's own ⋯ menu (from its trigger: the menu
+  // has no anchor point of its own). A link's, a picture's or selected
+  // text's menu stays the platform's, as does a touch's long press.
+  const [menuSignal, setMenuSignal] = useState(0);
+  function openMenuFromContext(event: ReactMouseEvent<HTMLElement>) {
+    // An unsent card has no ⋯ (its send's own actions stand in for it): a
+    // menu opened unseen would hold the keys and pop up once it is sent.
+    // The platform's menu stays.
+    if (props.sendState) return;
+    // A platform whose long press beats the hold: the hold still wins.
+    if (holdRef.current) {
+      event.preventDefault();
+      return;
+    }
+    if (selecting || editing) return;
+    if ((event.nativeEvent as MouseEvent & { pointerType?: string }).pointerType === "touch") return;
+    if (event.target instanceof Element && event.target.closest(NATIVE_PRESS)) return;
+    const picked = window.getSelection();
+    if (picked && !picked.isCollapsed && picked.toString().trim() && articleRef.current?.contains(picked.anchorNode)) return;
+    event.preventDefault();
+    setMenuSignal((value) => value + 1);
+  }
 
   // One stable task callback for every row (rows pass their own lineKey), so
   // memoized MemoLines don't re-render just because the card did.
@@ -440,6 +652,38 @@ export function MemoCard(props: MemoCardProps) {
     return () => window.clearTimeout(timer);
   }, [pinLeaving]);
 
+  // A send's state stands where the time will. Once the server has the
+  // memo, the time dissolves in over what stood there — over nothing when
+  // "Sending…" was still waiting out its hold (app.css), so a fast send
+  // never flashes it.
+  const sendState = props.sendState;
+  const [sendSeen, setSendSeen] = useState(() => (sendState ? { state: sendState, since: performance.now() } : null));
+  const [stampArriving, setStampArriving] = useState<SendState | "quiet" | null>(null);
+  // The send's buttons trade places as it moves on; focus on one of them
+  // goes to what takes its place (below), not to <body>. Read as the
+  // change renders, while the DOM still shows the old buttons.
+  const sendFocusRef = useRef(false);
+  if ((sendState ?? null) !== (sendSeen?.state ?? null)) {
+    if (!sendState && sendSeen) setStampArriving(sendSeen.state !== "sending" || performance.now() - sendSeen.since >= BUSY_HOLD_MS ? sendSeen.state : "quiet");
+    else setStampArriving(null);
+    setSendSeen(sendState ? { state: sendState, since: performance.now() } : null);
+    const active = document.activeElement;
+    sendFocusRef.current = active instanceof Element && active.closest(".memo-send-actions") !== null && articleRef.current?.contains(active) === true;
+  }
+  // A timer, as for the pin mark: an off-screen slot never runs the animation.
+  useEffect(() => {
+    if (!stampArriving) return;
+    const timer = window.setTimeout(() => setStampArriving(null), EXIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [stampArriving]);
+  useLayoutEffect(() => {
+    if (!sendFocusRef.current) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    sendFocusRef.current = false;
+    articleRef.current?.querySelector<HTMLElement>(sendState ? ".memo-send-action" : ".memo-menu-trigger")?.focus({ preventScroll: true });
+  }, [sendState]);
+
   // A lone linked picture is drawn square until the browser knows its
   // shape; learning it re-renders the card, and a shape learned from a load
   // (not one known at mount) eases the box to it (.is-reshaping).
@@ -468,6 +712,7 @@ export function MemoCard(props: MemoCardProps) {
   const lines = useMemo(() => visualLinesOf(memo.content), [memo.content]);
   const foldable = useMemo(() => mightFold(memo.content), [memo.content]);
   const inTrash = variant === "trash";
+  const progress = useMemo(() => taskProgressOf(lines, props.pendingTaskFlips), [lines, props.pendingTaskFlips]);
   const busy = Boolean(props.busy);
   const mediaCount = memo.images.length + externalUrls.length;
   // Media-set fingerprint for the stage's change detection.
@@ -477,7 +722,7 @@ export function MemoCard(props: MemoCardProps) {
   const mediaGrid = mediaGridProps(mediaCount, memo.images[0] ?? (externalUrls.length > 0 ? externalImageSize(externalUrls[0]) : undefined));
 
   function startEditFromDoubleClick(target: EventTarget, clientY: number) {
-    if (editing || selecting || inTrash) return;
+    if (editing || selecting || inTrash || sendState) return;
 
     // Preserve the behavior of controls embedded in a memo. A double-click on
     // a tag, link, image or action button belongs to that control, and one
@@ -487,6 +732,12 @@ export function MemoCard(props: MemoCardProps) {
     if (target instanceof Element && target.closest("button, a, input, textarea, select, [contenteditable], .md-codeblock, .md-math-block")) return;
 
     editCaretRef.current = caretFromDoubleClick(target, clientY);
+    props.onStartEdit();
+  }
+
+  /** Edit from a control: the caret goes to the end, as from the menu. */
+  function startEditPlain() {
+    editCaretRef.current = null;
     props.onStartEdit();
   }
 
@@ -557,6 +808,30 @@ export function MemoCard(props: MemoCardProps) {
   // Each card's controls are told apart by its time — 80 identical "Memo
   // actions" buttons give a screen-reader user nothing to choose by.
   const menuLabel = inTrash ? tr(`Memo actions, deleted ${stamp}`, `笔记操作，删除于 ${stamp}`) : tr(`Memo actions, ${stamp}`, `笔记操作，${stamp}`);
+  const sendLabel = (state: SendState) =>
+    state === "sending" ? (
+      <>
+        <Loader2 size={11} className="spin" aria-hidden="true" />
+        <span className="memo-send-text">{tr("Sending…", "发送中…")}</span>
+      </>
+    ) : (
+      <>
+        <span className="memo-send-dot" aria-hidden="true" />
+        <span className="memo-send-text">
+          {state === "refused"
+            ? tr("Not sent · the server refused it", "未发送 · 服务器未接受")
+            : state === "retrying"
+              ? tr("Not sent · retrying", "未发送 · 正在重试")
+              : tr("Not sent · will retry when you’re online", "未发送 · 联网后会自动补发")}
+        </span>
+      </>
+    );
+  const sendStateClass = (state: SendState) => `memo-send-state ${state === "sending" ? "is-sending" : "is-failed"}`;
+  const time = (
+    <time id={timeId} className={`memo-time${stampArriving ? " is-arriving" : ""}`} dateTime={inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt}>
+      {timeLabel}
+    </time>
+  );
 
   const renderBody = (content: string, contentLines: ReturnType<typeof visualLinesOf>, live: boolean) => {
     const body = (
@@ -626,8 +901,12 @@ export function MemoCard(props: MemoCardProps) {
   const renderGhost = (content: string, images: MemoImage[]) => (
     <>
       <header className="memo-head">
+        {props.stampPrefix}
         <time className="memo-time">{timeLabel}</time>
+        {inTrash ? null : <ContentTaskProgress content={content} />}
         <div className="memo-head-right">
+          {props.headMark}
+          {props.related ? <span className="memo-related">{tr("Related", "意思相近")}</span> : null}
           {pinned && !inTrash ? <Pin size={13} className="memo-pin-mark" aria-hidden="true" /> : null}
           {inTrash ? (
             <span className="memo-restore">
@@ -647,6 +926,7 @@ export function MemoCard(props: MemoCardProps) {
       </header>
       {renderBody(content, visualLinesOf(content), false)}
       {renderGhostMedia(content, images)}
+      {props.reviewActions?.({ live: false, edit: NO_EDIT })}
     </>
   );
 
@@ -654,10 +934,50 @@ export function MemoCard(props: MemoCardProps) {
     <>
       <div ref={viewSurfaceRef} className="memo-view-surface" aria-hidden={selecting || undefined}>
         <header className="memo-head">
-          <time id={timeId} className="memo-time" dateTime={inTrash ? memo.deletedAt ?? memo.createdAt : memo.createdAt}>
-            {timeLabel}
-          </time>
+          {props.stampPrefix}
+          {sendState ? (
+            <span key={sendState} id={timeId} className={sendStateClass(sendState)}>
+              {sendLabel(sendState)}
+            </span>
+          ) : stampArriving ? (
+            <span className="memo-stamp-swap">
+              {time}
+              {stampArriving !== "quiet" ? (
+                <span className={`${sendStateClass(stampArriving)} is-leaving`} aria-hidden="true">
+                  {sendLabel(stampArriving)}
+                </span>
+              ) : null}
+            </span>
+          ) : (
+            time
+          )}
+          {progress.total > 0 && !inTrash && !sendState ? <TaskProgress done={progress.done} total={progress.total} /> : null}
           <div className="memo-head-right">
+            {props.headMark}
+            {props.related ? <span className="memo-related">{tr("Related", "意思相近")}</span> : null}
+            {sendState ? (
+              // The send's own actions; the ⋯ (hidden, app.css) has nothing
+              // to act on before the server has the memo.
+              <div className={`memo-send-actions${sendState === "sending" ? " is-holding" : ""}`}>
+                {sendState === "sending" ? (
+                  <button type="button" className="memo-send-action" aria-disabled={props.recallBlocked || undefined} onClick={props.onTakeBack}>
+                    {tr("Take back", "撤回")}
+                  </button>
+                ) : (
+                  <>
+                    <button type="button" className="memo-send-action is-primary" onClick={props.onRetrySend}>
+                      {tr("Retry", "重试")}
+                    </button>
+                    <button type="button" className="memo-send-action" aria-disabled={props.recallBlocked || undefined} onClick={props.onTakeBack}>
+                      {tr("Edit", "编辑")}
+                    </button>
+                    <button type="button" className="memo-send-action" onClick={props.onDiscardUnsent}>
+                      {tr("Discard", "舍弃")}
+                    </button>
+                  </>
+                )}
+              </div>
+            ) : null}
             {pinned && !inTrash ? (
               <Pin
                 size={13}
@@ -689,6 +1009,7 @@ export function MemoCard(props: MemoCardProps) {
             <div className="memo-tool-slot">
               <Menu
                 panelClassName="memo-action-menu"
+                openSignal={menuSignal}
                 trigger={(open, triggerProps) => (
                   <button
                     ref={menuTriggerRef}
@@ -789,6 +1110,8 @@ export function MemoCard(props: MemoCardProps) {
             )}
           </div>
         ) : null}
+
+        {props.reviewActions?.({ live: true, edit: startEditPlain })}
       </div>
 
       {selecting ? (
@@ -800,7 +1123,7 @@ export function MemoCard(props: MemoCardProps) {
           className="memo-select-overlay"
           aria-pressed={selected}
           aria-label={selected ? tr("Deselect this memo", "取消选择这条笔记") : tr("Select this memo", "选择这条笔记")}
-          onClick={props.onToggleSelect}
+          onClick={(event) => props.onToggleSelect(event.shiftKey)}
         />
       ) : null}
     </>
@@ -812,8 +1135,13 @@ export function MemoCard(props: MemoCardProps) {
       aria-labelledby={timeId}
       className={`memo-card${pinned && !inTrash ? " is-pinned" : ""}${inTrash ? " is-trash" : ""}${selecting ? " is-selecting" : ""}${
         selected ? " is-selected" : ""
-      }`}
+      }${sendState ? ` is-unsent${sendState === "sending" ? "" : " is-send-failed"}` : ""}${stampArriving ? " is-settling" : ""}${holding ? " is-holding" : ""}`}
       onDoubleClick={(event) => startEditFromDoubleClick(event.target, event.clientY)}
+      onPointerDown={startHold}
+      onPointerMove={holding ? moveHold : undefined}
+      onPointerUp={holding ? releaseHold : undefined}
+      onPointerCancel={holding ? releaseHold : undefined}
+      onContextMenu={openMenuFromContext}
     >
       <MemoStage
         editing={editing}
@@ -828,6 +1156,8 @@ export function MemoCard(props: MemoCardProps) {
               initialContent={memo.content}
               onDraftChange={props.onEditDraftChange}
               onNotice={props.onEditNotice}
+              onHandle={props.onEditHandle}
+              onOpenImage={props.onOpenImage}
               existingImages={memo.images}
               knownTags={props.knownTags}
               busy={props.savingEdit}

@@ -225,6 +225,24 @@ function tileClass(status: Status, arriving = false): string {
   return `memo-image${status === "ready" ? "" : " is-loading"}${status === "error" ? " is-failed" : ""}${arriving && status === "ready" ? " is-arriving" : ""}`;
 }
 
+/**
+ * A picture that had to be waited for develops in (app.css, .is-arriving)
+ * once it has decoded, not when its bytes land: an <img> is handed its src
+ * before it can paint, and a fade started then plays over nothing. Marked
+ * on the tile (data-developed) so its loading ground holds until then. A
+ * later src on the same <img> (preview → original) is drawn as it lands.
+ */
+function useDeveloped() {
+  const [developed, setDeveloped] = useState(false);
+  const onLoad = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
+    const image = event.currentTarget;
+    const show = () => setDeveloped(true);
+    if (typeof image.decode === "function") image.decode().then(show, show);
+    else show();
+  }, []);
+  return { developed, onLoad };
+}
+
 interface StoredImageButtonProps {
   image: MemoImage;
   sizing: ImageSizing;
@@ -242,6 +260,7 @@ export function StoredImageButton({ image, sizing, label, tabIndex, lightboxInde
   const { tr } = useI18n();
   const ref = useRef<HTMLButtonElement>(null);
   const { src, status, arriving, retrying, retry, onDecodeError } = useStoredImage(image, sizing, ref);
+  const { developed, onLoad } = useDeveloped();
   const failed = status === "error";
   return (
     <button
@@ -250,12 +269,13 @@ export function StoredImageButton({ image, sizing, label, tabIndex, lightboxInde
       className={tileClass(status, arriving)}
       tabIndex={tabIndex}
       data-lightbox-index={lightboxIndex}
+      data-developed={developed ? "" : undefined}
       onClick={failed ? retry : (event) => onOpen(event.currentTarget)}
       aria-label={failed ? (retrying ? tr("Retrying image…", "正在重试加载图片…") : tr("Couldn’t load image. Retry", "图片加载失败，点按重试")) : label}
       aria-busy={status === "loading" || retrying || undefined}
     >
       {src ? (
-        <img src={src} alt="" decoding="async" width={image.width || undefined} height={image.height || undefined} onError={onDecodeError} />
+        <img src={src} alt="" decoding="async" width={image.width || undefined} height={image.height || undefined} onLoad={onLoad} onError={onDecodeError} />
       ) : null}
       {failed ? <FailedLabel retrying={retrying} /> : null}
     </button>
@@ -318,16 +338,30 @@ interface ExternalImageButtonProps {
 /** A feed tile for a linked picture, in the stored tiles' load states; a corner badge says it is a link. */
 export function ExternalImageButton({ url, label, tabIndex, lightboxIndex, onOpen, onBroken, onShape }: ExternalImageButtonProps) {
   const { ref, status, arriving, onLoad } = useExternalImage(url, onShape);
+  const developing = useDeveloped();
   return (
     <button
       type="button"
       className={`${tileClass(status, arriving)} is-external`}
       tabIndex={tabIndex}
       data-lightbox-index={lightboxIndex}
+      data-developed={developing.developed ? "" : undefined}
       onClick={(event) => onOpen(event.currentTarget)}
       aria-label={label}
     >
-      <img ref={ref} src={url} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onLoad={onLoad} onError={onBroken} />
+      <img
+        ref={ref}
+        src={url}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        referrerPolicy="no-referrer"
+        onLoad={(event) => {
+          onLoad(event);
+          developing.onLoad(event);
+        }}
+        onError={onBroken}
+      />
       <span className="ext-badge" aria-hidden="true">
         <Link2 size={11} />
       </span>

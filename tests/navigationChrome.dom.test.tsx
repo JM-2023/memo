@@ -429,14 +429,14 @@ describe("saved filters", () => {
     await user.click(screen.getByRole("button", { name: "Filter memos" }));
     await user.click(screen.getByRole("button", { name: "First" }));
     await waitFor(() => expect(screen.queryByText(/beta note/)).toBeNull());
-    expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("alpha");
+    expect((screen.getByRole("combobox", { name: "Search memos" }) as HTMLInputElement).value).toBe("alpha");
 
     await user.click(screen.getByRole("button", { name: "Filter memos" }));
     const active = await screen.findByRole("button", { name: "First" });
     expect(active.getAttribute("aria-pressed")).toBe("true");
     await user.click(active);
     expect(await screen.findByText(/beta note/)).toBeTruthy();
-    expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("");
+    expect((screen.getByRole("combobox", { name: "Search memos" }) as HTMLInputElement).value).toBe("");
     // The panel closes as it does for any preset.
     expect(document.querySelector(".saved-name")).toBeNull();
   });
@@ -533,5 +533,30 @@ describe("toast holds", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("the way back into Statistics", () => {
+  async function drillIntoYear(user: ReturnType<typeof userEvent.setup>) {
+    const year = new Date().getFullYear();
+    await user.click(screen.getAllByRole("button", { name: /^2\s*Memos/ })[0]);
+    await screen.findByRole("dialog", { name: /statistics/i });
+    await waitFor(() => expect(isLayerState(window.history.state)).toBe(true));
+    await user.click(screen.getByRole("button", { name: `Show 2 memos from ${year}` }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /statistics/i })).toBeNull());
+    await screen.findByRole("button", { name: `Clear statistics filter: ${year}` });
+    return year;
+  }
+
+  it("offers the panel again from the drill's chip, the lens left in place", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByText(/beta note/);
+    const year = await drillIntoYear(user);
+
+    await user.click(screen.getByRole("button", { name: `Back to Statistics: ${year}` }));
+    await screen.findByRole("dialog", { name: /statistics/i });
+    // The page under the panel is inert; the lens is still on it.
+    expect(screen.getByRole("button", { name: `Clear statistics filter: ${year}`, hidden: true })).toBeTruthy();
   });
 });

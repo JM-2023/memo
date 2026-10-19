@@ -11,7 +11,14 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ShareDialog } from "../src/components/ShareDialog";
 import { LanguageProvider } from "../src/lib/i18n";
+import { downloadBlob } from "../src/lib/shareImage";
 import type { Memo } from "../src/lib/types";
+
+// jsdom can't rasterize: the export itself is stood in for, the rest is real.
+vi.mock("../src/lib/shareImage", async () => {
+  const actual = await vi.importActual<typeof import("../src/lib/shareImage")>("../src/lib/shareImage");
+  return { ...actual, nodeToPngBlob: vi.fn(async () => new Blob(["png"], { type: "image/png" })), downloadBlob: vi.fn() };
+});
 
 const memo: Memo = {
   id: "memo-share",
@@ -93,6 +100,19 @@ describe("share dialog", () => {
     expect(card.querySelector(".sc-date")?.textContent).toContain("·");
     expect(card.querySelector(".sc-brand")?.textContent).toBe("MEMO");
     expect(card.querySelector(".sc-seal")).not.toBeNull();
+  });
+
+  it("says Saved on the button itself, holds a beat, then closes — no toast repeating it", async () => {
+    const { onClose, onToast } = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Save image" }));
+    const saved = await screen.findByRole("button", { name: "Saved" });
+    expect(saved.querySelector(".busy-icon")?.hasAttribute("data-done")).toBe(true);
+    expect(saved.querySelector(".busy-icon")?.hasAttribute("data-busy")).toBe(false);
+    expect((saved as HTMLButtonElement).disabled).toBe(true);
+    expect(downloadBlob).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(onToast).not.toHaveBeenCalled();
   });
 
   it("focuses the primary action and closes on Escape", async () => {

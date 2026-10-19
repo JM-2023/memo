@@ -4,11 +4,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Editor, type EditorSubmission } from "../src/components/Editor";
+import { Editor, type ComposerControl, type EditorSubmission } from "../src/components/Editor";
 import { TipProvider } from "../src/components/Tip";
 import { LanguageProvider } from "../src/lib/i18n";
 import { LIVE_REGION_ATTR, mountLiveRegions } from "../src/lib/liveAnnouncer";
-import type { MemoImage } from "../src/lib/types";
+import type { MemoImage, NewImagePayload } from "../src/lib/types";
 
 function Providers({ children }: { children: ReactNode }) {
   return (
@@ -66,18 +66,20 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("Editor in-flight send", () => {
-  it("stops a send in flight on Esc and hands the field back as it was", async () => {
+// A send lands at once (App's outbox), so only a save in the inline editor
+// waits on the server — and only it is stopped with Esc.
+describe("Editor in-flight save", () => {
+  it("stops a save in flight on Esc and hands the field back as it was", async () => {
     const user = userEvent.setup();
     const { onSubmit, calls } = abortableSubmit("resolve-false");
     render(
       <Providers>
-        <Editor mode="create" knownTags={[]} busy={false} onSubmit={onSubmit} />
+        <Editor mode="edit" initialContent="" knownTags={[]} busy={false} onSubmit={onSubmit} onCancel={vi.fn()} />
       </Providers>
     );
     await user.type(field(), "half a thought");
     field().setSelectionRange(2, 6);
-    await user.click(screen.getByRole("button", { name: "Send" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(calls[0].signal?.aborted).toBe(false);
     // The field is busy: it takes no typing until the answer is in.
@@ -101,11 +103,11 @@ describe("Editor in-flight send", () => {
     const { onSubmit, calls } = abortableSubmit("reject");
     render(
       <Providers>
-        <Editor mode="create" knownTags={[]} busy={false} onSubmit={onSubmit} />
+        <Editor mode="edit" initialContent="" knownTags={[]} busy={false} onSubmit={onSubmit} onCancel={vi.fn()} />
       </Providers>
     );
     await user.type(field(), "draft");
-    await user.click(screen.getByRole("button", { name: "Send" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     fireEvent.keyDown(field(), { key: "Escape" });
     await waitFor(() => expect(field().readOnly).toBe(false));
@@ -115,7 +117,7 @@ describe("Editor in-flight send", () => {
     expect(spoken("alert")).toBe("");
     // The same draft goes again under the same id, so a request that got
     // through after all is found rather than doubled.
-    await user.click(screen.getByRole("button", { name: "Send" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
     expect(calls[1].clientId).toBe(calls[0].clientId);
   });
@@ -171,6 +173,71 @@ describe("Editor in-flight send", () => {
     // The next Esc is the usual one: the edit is discarded.
     fireEvent.keyDown(field(), { key: "Escape" });
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Editor as the composer after a send", () => {
+  it("takes a sent memo back in — text, pictures and caret — only into an empty composer", async () => {
+    const user = userEvent.setup();
+    // The composer owns the preview again, and releases it when it goes.
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    const control: { current: ComposerControl | null } = { current: null };
+    const onOccupiedChange = vi.fn();
+    render(
+      <Providers>
+        <Editor mode="create" knownTags={[]} busy={false} onSubmit={vi.fn(async () => true)} controlRef={control} onOccupiedChange={onOccupiedChange} />
+      </Providers>
+    );
+    expect(onOccupiedChange).toHaveBeenLastCalledWith(false);
+    const image: NewImagePayload = { id: "back-1", dataBase64: "AA==", mime: "image/webp", width: 1, height: 1, previewUrl: "blob:back-1" };
+    let taken = false;
+    act(() => {
+      taken = control.current?.recall({ content: "back again", newImages: [image], selectionStart: 2, selectionEnd: 4 }) ?? false;
+    });
+    expect(taken).toBe(true);
+    expect(field().value).toBe("back again");
+    expect([field().selectionStart, field().selectionEnd]).toEqual([2, 4]);
+    expect(document.activeElement).toBe(field());
+    expect(document.querySelector<HTMLElement>(".attachment[data-image-id='back-1'] img")?.getAttribute("src")).toBe("blob:back-1");
+    expect(onOccupiedChange).toHaveBeenLastCalledWith(true);
+
+    // A draft is never clobbered.
+    await user.type(field(), "!");
+    act(() => {
+      taken = control.current?.recall({ content: "another", newImages: [], selectionStart: 0, selectionEnd: 0 }) ?? false;
+    });
+    expect(taken).toBe(false);
+    expect(field().value).toBe("back again!");
+  });
+
+  it("hands ⌘Z to the owner only in the composer a send just emptied", async () => {
+    const user = userEvent.setup();
+    const onUndoSend = vi.fn(() => true);
+    const onSubmit = vi.fn(async (data: EditorSubmission) => {
+      data.onCommitted?.(false);
+      return true;
+    });
+    render(
+      <Providers>
+        <Editor mode="create" knownTags={[]} busy={false} onSubmit={onSubmit} onUndoSend={onUndoSend} />
+      </Providers>
+    );
+    // Nothing sent yet: the field's own undo.
+    expect(fireEvent.keyDown(field(), { key: "z", metaKey: true })).toBe(true);
+    expect(onUndoSend).not.toHaveBeenCalled();
+
+    await user.type(field(), "sent");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(field().value).toBe(""));
+    expect(onSubmit.mock.calls[0][0].selection).toEqual({ start: 4, end: 4 });
+    expect(fireEvent.keyDown(field(), { key: "z", metaKey: true })).toBe(false);
+    expect(onUndoSend).toHaveBeenCalledTimes(1);
+
+    // Typed into since: ⌘Z is the field's again.
+    await user.type(field(), "x");
+    await user.clear(field());
+    expect(fireEvent.keyDown(field(), { key: "z", ctrlKey: true })).toBe(true);
+    expect(onUndoSend).toHaveBeenCalledTimes(1);
   });
 });
 

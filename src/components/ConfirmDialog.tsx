@@ -1,22 +1,30 @@
-import { Loader2 } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
 import { useI18n } from "../lib/i18n";
+import { DONE_HOLD_MS } from "../lib/motion";
 
 /**
  * What a confirm handler may answer. `true` (or a promise of it) means the
  * action went through: the dialog plays its exit, still in its busy look,
- * and then calls `onDone`. Anything else leaves closing to the parent.
+ * and then calls `onDone`. Anything else leaves closing to the parent. A
+ * promise that went through first says so on the button (a check and the
+ * done label) for a beat before the exit.
  */
 export type ConfirmOutcome = void | boolean | Promise<boolean | void>;
 
 interface ConfirmDialogProps {
   title: string;
   body: string;
+  /** A line after the body for what this time costs (unsent memos a logout drops). */
+  note?: string;
   confirmLabel: string;
   busyLabel?: string;
+  /** Said on the button for a beat once a confirm that was under way went
+   * through. Without it the dialog leaves at once, as before. */
+  doneLabel?: string;
   busy?: boolean;
   /** `danger` for irreversible actions; `accent` for ones that only add. */
   tone?: "danger" | "accent";
@@ -44,8 +52,10 @@ interface BusyView {
 export function ConfirmDialog({
   title,
   body,
+  note,
   confirmLabel,
   busyLabel,
+  doneLabel,
   busy,
   tone = "danger",
   progress,
@@ -62,6 +72,9 @@ export function ConfirmDialog({
   // progress and Stop never flash back to the idle form in between.
   const [pending, setPending] = useState(false);
   const [settled, setSettled] = useState(false);
+  // A confirm that went through after a wait says so before the exit.
+  const [done, setDone] = useState(false);
+  const doneTimerRef = useRef(0);
   const mountedRef = useRef(true);
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
@@ -69,6 +82,7 @@ export function ConfirmDialog({
   doneRef.current = onDone;
   const titleId = useId();
   const bodyId = useId();
+  const noteId = useId();
 
   const liveBusy: BusyView = { label: busyLabel ?? tr("Processing…", "处理中…"), progress, stop: Boolean(onStop || stopping), stopping };
   const lastBusyRef = useRef<BusyView | null>(null);
@@ -94,10 +108,20 @@ export function ConfirmDialog({
     leave(() => cancelRef.current());
   }
 
-  function finish() {
+  /** `said`: the work took a while, so its success stands on the button for a beat first. */
+  function finish(said = false) {
     if (!mountedRef.current || closingRef.current) return;
     setSettled(true);
-    leave(() => (doneRef.current ?? cancelRef.current)());
+    const go = () => leave(() => (doneRef.current ?? cancelRef.current)());
+    if (!said) {
+      go();
+      return;
+    }
+    setDone(true);
+    window.clearTimeout(doneTimerRef.current);
+    doneTimerRef.current = window.setTimeout(() => {
+      if (mountedRef.current) go();
+    }, DONE_HOLD_MS);
   }
 
   function confirm() {
@@ -109,7 +133,9 @@ export function ConfirmDialog({
         if (mountedRef.current) setPending(false);
       };
       void outcome.then((value) => {
-        if (value === true) finish();
+        // Only a confirm that names its done state holds on it: logging out
+        // or an import already says what happened in the next screen or a toast.
+        if (value === true) finish(doneLabel !== undefined);
         else release();
       }, release);
     }
@@ -119,6 +145,7 @@ export function ConfirmDialog({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      window.clearTimeout(doneTimerRef.current);
     };
   }, []);
 
@@ -129,7 +156,7 @@ export function ConfirmDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
-      aria-describedby={bodyId}
+      aria-describedby={note ? `${bodyId} ${noteId}` : bodyId}
       aria-busy={busyLook || undefined}
       tabIndex={-1}
       {...backdrop}
@@ -137,6 +164,11 @@ export function ConfirmDialog({
       <div className="confirm-card" onClick={(event) => event.stopPropagation()}>
         <h2 id={titleId}>{title}</h2>
         <p id={bodyId}>{body}</p>
+        {note ? (
+          <p id={noteId} className="confirm-note">
+            {note}
+          </p>
+        ) : null}
         {/* Always in the card, folded shut it costs nothing (not even the
             card's row gap), so the first figures open it rather than mount it. */}
         <div className={`confirm-progress-fold${shownProgress ? " is-open" : ""}`}>
@@ -179,16 +211,23 @@ export function ConfirmDialog({
             onClick={confirm}
             disabled={busyLook}
           >
-            {/* Both labels share one cell, so turning busy never changes the
+            {/* The labels share one cell, so turning busy never changes the
                 button's width and slides Cancel along. The busy one wears
-                the spinner every busy action does (app.css, "busy-swap"). */}
-            <span className="busy-swap">
+                the spinner every busy action does, the done one its check
+                (app.css, "busy-swap"). */}
+            <span className="busy-swap" data-done={done || undefined}>
               <span aria-hidden={busyLook || undefined}>{confirmLabel}</span>
               {busyLabel !== undefined || busyLook ? (
-                <span aria-hidden={!busyLook || undefined}>
-                  <Loader2 size={14} className="spin busy-spinner" aria-hidden="true" />
-                  {view.label}
-                </span>
+                <>
+                  <span aria-hidden={!busyLook || done || undefined}>
+                    <Loader2 size={14} className="spin busy-spinner" aria-hidden="true" />
+                    {view.label}
+                  </span>
+                  <span aria-hidden={!done || undefined}>
+                    <Check size={14} className="busy-spinner" aria-hidden="true" />
+                    {doneLabel ?? tr("Done", "已完成")}
+                  </span>
+                </>
               ) : null}
             </span>
           </button>

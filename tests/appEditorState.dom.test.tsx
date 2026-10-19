@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
-import { Editor } from "../src/components/Editor";
+import { Editor, type EditorSubmission } from "../src/components/Editor";
 import { TipProvider } from "../src/components/Tip";
 import { ApiError } from "../src/lib/api";
 import { formatTime } from "../src/lib/dates";
@@ -161,6 +161,7 @@ beforeEach(() => {
     }))
   });
   Object.defineProperty(window, "scrollTo", { configurable: true, value: vi.fn() });
+  Object.defineProperty(window, "scrollBy", { configurable: true, value: vi.fn() });
   // The sidebar tag list cancels in-flight FLIP animations on every commit.
   Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: vi.fn(() => []) });
   vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([new DOMRect(0, 0, 20, 20)] as unknown as DOMRectList);
@@ -376,6 +377,43 @@ describe("App editor lifecycle", () => {
     expect((draft as HTMLTextAreaElement).value).toBe("draft survives feed updates");
     expect(within(secondCard).queryByRole("combobox")).toBeNull();
     expect(await screen.findByText("Save or cancel the open edit before editing another memo.", { selector: ".toast-text" })).not.toBeNull();
+    // The open edit is brought back to the eye, focused and flagged.
+    expect(document.activeElement).toBe(draft);
+    expect(firstCard.querySelector(".editor")?.className).toMatch(/is-attending-[ab]/);
+
+    // The toast offers the way through: drop that edit for this one…
+    await user.click(screen.getByRole("button", { name: "Discard & edit this" }));
+    const second = (await within(secondCard).findByRole("combobox")) as HTMLTextAreaElement;
+    expect(second.value).toBe("memo-80 original");
+    await waitFor(() => expect(within(firstCard).queryByRole("combobox")).toBeNull());
+    // …and the dropped draft is an Undo away, the untouched edit giving way to it.
+    await screen.findByText("Discarded your edits");
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    const restored = (await within(firstCard).findByRole("combobox")) as HTMLTextAreaElement;
+    expect(restored.value).toBe("draft survives feed updates");
+    await waitFor(() => expect(within(secondCard).queryByRole("combobox")).toBeNull());
+    expect(mocks.updateMemo).not.toHaveBeenCalled();
+  });
+
+  it("lets an untouched edit give way to another memo's Edit", async () => {
+    const user = userEvent.setup();
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+    const firstCard = (await screen.findByText("memo-81 original")).closest("article")!;
+    const secondCard = screen.getByText("memo-80 original").closest("article")!;
+    await user.click(within(firstCard).getByRole("button", { name: /^Memo actions/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    await within(firstCard).findByRole("combobox");
+
+    await user.click(within(secondCard).getByRole("button", { name: /^Memo actions/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    expect(((await within(secondCard).findByRole("combobox")) as HTMLTextAreaElement).value).toBe("memo-80 original");
+    await waitFor(() => expect(within(firstCard).queryByRole("combobox")).toBeNull());
+    expect(screen.queryByText("Save or cancel the open edit before editing another memo.", { selector: ".toast-text" })).toBeNull();
+    expect(screen.queryByText("Discarded your edits")).toBeNull();
   });
 });
 
@@ -903,12 +941,12 @@ describe("Memo menu tagging", () => {
 });
 
 describe("Editor attachment reservations", () => {
-  it("releases the preview URL after a create is confirmed", async () => {
+  it("hands a sent image's preview to the owner instead of releasing it", async () => {
     const user = userEvent.setup();
     mocks.compressImage.mockResolvedValue(pendingImage("created"));
     const revokeObjectURL = vi.fn();
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
-    const onSubmit = vi.fn(async () => true);
+    const onSubmit = vi.fn(async (_data: EditorSubmission) => true);
 
     const view = render(
       <Providers>
@@ -924,10 +962,14 @@ describe("Editor attachment reservations", () => {
     await screen.findByRole("button", { name: "Remove image" });
     await user.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:created");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Remove image" })).toBeNull());
+    // The card shows it until the server has it, and a memo taken back
+    // brings it into the composer again: the owner (App's outbox) lets go.
+    expect(onSubmit.mock.calls[0][0].newImages.map((image) => image.previewUrl)).toEqual(["blob:created"]);
+    expect(revokeObjectURL).not.toHaveBeenCalledWith("blob:created");
   });
 
-  it("shows image upload progress on the send button and names a full database", async () => {
+  it("shows a save's image upload progress on its button and names a full database", async () => {
     const user = userEvent.setup();
     mocks.compressImage.mockResolvedValue(pendingImage("uploading"));
     const finish = deferred<void>();
@@ -938,9 +980,10 @@ describe("Editor attachment reservations", () => {
       throw new ApiError("STORAGE_FULL", 507, "The D1 database is full.");
     });
 
+    // A save waits on its upload; a send lands at once (see below).
     const view = render(
       <Providers>
-        <Editor mode="create" knownTags={[]} busy={false} onSubmit={onSubmit} />
+        <Editor mode="edit" initialContent="memo" knownTags={[]} busy={false} onSubmit={onSubmit} onCancel={vi.fn()} />
       </Providers>
     );
     const fileInput = view.container.querySelector<HTMLInputElement>('input[type="file"]');
@@ -950,13 +993,13 @@ describe("Editor attachment reservations", () => {
 
     // The idle chip already reserves the widest figure, so it does not widen
     // when the label turns into a percentage.
-    const sendButton = screen.getByRole("button", { name: "Send" });
+    const sendButton = screen.getByRole("button", { name: "Save" });
     const sizers = () => [...sendButton.querySelectorAll(".send-percent-sizer")].map((node) => node.textContent);
     expect(sizers()).toEqual(["99%"]);
 
     await user.click(sendButton);
     await waitFor(() => expect(reportProgress).toBeTypeOf("function"));
-    expect(sizers()).toEqual(["Send", "99%"]);
+    expect(sizers()).toEqual(["Save", "99%"]);
     act(() => reportProgress?.(0.42));
 
     const progress = screen.getByRole("progressbar", { name: "Uploading images" });
@@ -972,8 +1015,29 @@ describe("Editor attachment reservations", () => {
     await act(async () => finish.resolve());
     expect(await screen.findByText(/The D1 database is full, so nothing new can be saved/)).not.toBeNull();
     expect(screen.queryByRole("progressbar")).toBeNull();
-    // The draft and its attachment stay in the composer for a retry.
+    // The draft and its attachment stay in the editor for a retry.
     expect(screen.getByRole("button", { name: "Remove image" })).not.toBeNull();
+  });
+
+  it("gives a send no upload progress: it lands at once and uploads in the background", async () => {
+    const user = userEvent.setup();
+    mocks.compressImage.mockResolvedValue(pendingImage("background"));
+    const onSubmit = vi.fn(async (_data: EditorSubmission) => true);
+    const view = render(
+      <Providers>
+        <Editor mode="create" knownTags={[]} busy={false} onSubmit={onSubmit} />
+      </Providers>
+    );
+    const fileInput = view.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("Image file input was not rendered");
+    fireEvent.change(fileInput, { target: { files: [new File(["a"], "a.png", { type: "image/png" })] } });
+    await screen.findByRole("button", { name: "Remove image" });
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].onUploadProgress).toBeUndefined();
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" }).classList.contains("is-uploading")).toBe(false);
   });
 
   it("leaves text-only saves on fetch without an upload progress callback", async () => {

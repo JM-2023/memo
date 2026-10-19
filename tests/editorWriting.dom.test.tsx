@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { flushSync } from "react-dom";
@@ -271,6 +271,67 @@ describe("Editor tag suggestions follow the caret", () => {
     expect(onSubmit.mock.calls[0][0].content).toBe("note #li");
   });
 
+  it("opens only where a tag can start: not inside a word, a number or a link", async () => {
+    const user = userEvent.setup();
+    const { area } = renderCreate(["csharp", "section"]);
+    for (const text of ["C#", "page#se", "2#", "https://x.com/#se"]) {
+      await user.clear(area);
+      await user.type(area, text);
+      expect(screen.queryByRole("listbox")).toBeNull();
+    }
+    // Space, punctuation (CJK too) or Chinese running straight into the tag.
+    for (const text of ["#se", "(#se", "a，#se", "今天#se"]) {
+      await user.clear(area);
+      await user.type(area, text);
+      expect(screen.getByRole("listbox", { name: "Tag suggestions" })).not.toBeNull();
+    }
+  });
+
+  it("lets Enter break the line after a bare #, while Tab, or ↓ then Enter, take a tag", async () => {
+    installExecCommand();
+    const user = userEvent.setup();
+    const { area } = renderCreate(["recent", "older"]);
+    await user.type(area, "#");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["#recent", "#older"]);
+    await user.keyboard("{Enter}");
+    expect(area.value).toBe("#\n");
+    expect(screen.queryByRole("listbox")).toBeNull();
+
+    await user.type(area, "#");
+    await user.keyboard("{Tab}");
+    expect(area.value).toBe("#\n#recent ");
+
+    await user.type(area, "#");
+    await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    expect(area.value).toBe("#\n#recent #older ");
+  });
+
+  it("offers a bare # the five tags used last, in the order they arrive", async () => {
+    const user = userEvent.setup();
+    renderCreate(["f", "e", "d", "c", "b", "a"]);
+    await user.type(field(), "#");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["#f", "#e", "#d", "#c", "#b"]);
+  });
+
+  it("offers guesses under an overline, and says a new tag is coming when nothing matches", async () => {
+    const user = userEvent.setup();
+    const { area } = renderCreate(["work/today", "travel"]);
+    await user.type(area, "#wkt");
+    const group = screen.getByRole("group", { name: "Did you mean" });
+    const [guess] = within(group).getAllByRole("option");
+    expect(guess.textContent).toBe("#work/today");
+    expect([...guess.querySelectorAll(".tag-suggest-hit")].map((hit) => hit.textContent)).toEqual(["w", "k", "t"]);
+
+    await user.type(area, "zz");
+    expect(screen.queryByRole("group")).toBeNull();
+    expect(screen.getByRole("listbox").textContent).toBe("Keep typing to create #wktzz");
+    expect(screen.getByRole("option").getAttribute("aria-disabled")).toBe("true");
+    expect(area.hasAttribute("aria-activedescendant")).toBe(false);
+    // Nothing to take: Enter is a new line.
+    await user.keyboard("{Enter}");
+    expect(area.value).toBe("#wktzz\n");
+  });
+
   it("breaks the line on Shift+↩ and leaves Shift+Tab its own job, closing the list either way", async () => {
     const user = userEvent.setup();
     const { area } = renderCreate(["life", "linux"]);
@@ -415,6 +476,19 @@ describe("Editor send", () => {
     await waitFor(() => expect(document.activeElement).toBe(area));
   });
 
+  it("flies the send glyph off and back once a send empties the composer", async () => {
+    const user = userEvent.setup();
+    const { area } = renderCreate();
+    expect(document.querySelector(".send-glyph")?.classList.contains("is-flying")).toBe(false);
+    await user.type(area, "note");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(area.value).toBe(""));
+    const glyph = document.querySelector(".send-glyph")!;
+    expect(glyph.classList.contains("is-flying")).toBe(true);
+    finishAnimation(glyph, "send-glyph-fly");
+    expect(document.querySelector(".send-glyph")?.classList.contains("is-flying")).toBe(false);
+  });
+
   it("accepts Send while an image compresses and sends once it lands", async () => {
     const image = deferred<NewImagePayload>();
     mocks.compressImage.mockImplementation(() => image.promise);
@@ -444,7 +518,8 @@ describe("Editor send", () => {
     fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(["a"], "a.png", { type: "image/png" })] } });
     await user.click(screen.getByRole("button", { name: "Send" }));
     await act(async () => image.reject(new Error("Decoder gave up")));
-    await waitFor(() => expect(shownError()?.textContent).toBe("Decoder gave up"));
+    // The complaint names the file it is about.
+    await waitFor(() => expect(shownError()?.textContent).toBe("a.png: Decoder gave up"));
     expect(screen.queryByText("Preparing image…")).toBeNull();
     expect(onSubmit).not.toHaveBeenCalled();
     expect(area.value).toBe("with a photo");
@@ -728,7 +803,60 @@ describe("Editor notes", () => {
   it("names the wrap shortcuts that have no button of their own", () => {
     const { area } = renderCreate();
     const keys = area.getAttribute("aria-keyshortcuts") ?? "";
-    for (const key of ["Meta+I", "Control+E", "Meta+Shift+S", "Control+Shift+H"]) expect(keys).toContain(key);
+    for (const key of ["Meta+I", "Control+E", "Meta+Shift+S", "Control+Shift+H", "Meta+K"]) expect(keys).toContain(key);
+  });
+});
+
+describe("Editor toolbar and shortcuts", () => {
+  it("links the selection on ⌘K and keeps the page's own ⌘K from hearing it", async () => {
+    installExecCommand();
+    const user = userEvent.setup();
+    const { area } = renderCreate();
+    await user.type(area, "see the docs");
+    area.setSelectionRange(4, 12);
+    const pageKeys = vi.fn();
+    window.addEventListener("keydown", pageKeys);
+    fireEvent.keyDown(area, { key: "k", metaKey: true });
+    window.removeEventListener("keydown", pageKeys);
+    expect(area.value).toBe("see [the docs](url)");
+    expect(area.value.slice(area.selectionStart, area.selectionEnd)).toBe("url");
+    expect(pageKeys).not.toHaveBeenCalled();
+  });
+
+  it("shows Bold and List pressed where the caret already is in bold text or on a list line", async () => {
+    const user = userEvent.setup();
+    const { area } = renderCreate();
+    await user.type(area, "- a **bold** word");
+    const bold = screen.getByRole("button", { name: "Bold" });
+    const list = screen.getByRole("button", { name: "Bullet list" });
+    expect(list.getAttribute("aria-pressed")).toBe("true");
+    expect(bold.getAttribute("aria-pressed")).toBe("false");
+    area.setSelectionRange(8, 8);
+    fireEvent.select(area);
+    expect(bold.getAttribute("aria-pressed")).toBe("true");
+    expect(bold.className).toContain("is-active-tool");
+  });
+
+  it("is one Tab stop, ←/→ moving along it, and says whether the link row is open", async () => {
+    const user = userEvent.setup();
+    renderCreate();
+    const toolbar = screen.getByRole("toolbar", { name: "Writing tools" });
+    const tools = within(toolbar).getAllByRole("button");
+    expect(tools.filter((tool) => tool.tabIndex === 0)).toEqual([tools[0]]);
+    act(() => tools[0].focus());
+    await user.keyboard("{ArrowRight}");
+    expect(document.activeElement).toBe(tools[1]);
+    expect(tools.filter((tool) => tool.tabIndex === 0)).toEqual([tools[1]]);
+    await user.keyboard("{ArrowLeft}{ArrowLeft}");
+    expect(document.activeElement).toBe(tools[tools.length - 1]);
+    await user.keyboard("{Home}");
+    expect(document.activeElement).toBe(tools[0]);
+
+    const link = within(toolbar).getByRole("button", { name: "Insert image link" });
+    expect(link.getAttribute("aria-expanded")).toBe("false");
+    await user.click(link);
+    expect(link.getAttribute("aria-expanded")).toBe("true");
+    expect(link.getAttribute("aria-controls")).toBe(document.querySelector(".link-pop")?.id);
   });
 });
 
@@ -867,5 +995,107 @@ describe("Editor attachment tiles", () => {
     expect(screen.getAllByRole("button", { name: /^Remove image/ })).toHaveLength(2);
     // Back to how it opened: nothing to save.
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("opens a tile in the viewer, an image not yet sent by its preview", async () => {
+    const user = userEvent.setup();
+    const onOpenImage = vi.fn();
+    mocks.compressImage.mockImplementation(async () => pending("p1"));
+    render(
+      <Providers>
+        <Editor
+          mode="edit"
+          initialContent="memo"
+          existingImages={[stored(1)]}
+          knownTags={[]}
+          busy={false}
+          onSubmit={vi.fn(async () => true)}
+          onCancel={vi.fn()}
+          onOpenImage={onOpenImage}
+        />
+      </Providers>
+    );
+    addFiles(1);
+    await user.click(await screen.findByRole("button", { name: "View image 2 of 2" }));
+    expect(onOpenImage).toHaveBeenCalledWith([{ src: "/api/images/stored-1", imageId: "stored-1" }, { src: "blob:p1" }], 1);
+  });
+
+  it("moves an image not yet sent with Alt+←/→, says where it now is, and sends that order", async () => {
+    const unmountRegions = mountLiveRegions();
+    const user = userEvent.setup();
+    let n = 0;
+    mocks.compressImage.mockImplementation(async () => pending(`p${++n}`));
+    const { area, onSubmit } = renderCreate();
+    addFiles(3);
+    await waitFor(() => expect(previews()).toEqual(["blob:p1", "blob:p2", "blob:p3"]));
+    act(() => screen.getByRole("button", { name: "Image 1 of 3" }).focus());
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    expect(previews()).toEqual(["blob:p2", "blob:p1", "blob:p3"]);
+    // Focus rides along with the moved tile.
+    expect(document.activeElement?.closest(".attachment")?.getAttribute("data-image-id")).toBe("p1");
+    expect(spoken("status")).toBe("Image 2 of 3");
+    await user.type(area, "three photos");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].newImages.map((image) => image.id)).toEqual(["p2", "p1", "p3"]);
+    unmountRegions();
+  });
+
+  it("drags a tile to a new place, showing the slot it would land in", async () => {
+    let n = 0;
+    mocks.compressImage.mockImplementation(async () => pending(`p${++n}`));
+    renderCreate();
+    addFiles(3);
+    await waitFor(() => expect(previews()).toEqual(["blob:p1", "blob:p2", "blob:p3"]));
+    // Tiles 64px wide, 8px apart, in one row at the row's origin.
+    const rects = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("attachment")) {
+        const at = [...document.querySelectorAll(".attachment")].indexOf(this);
+        return new DOMRect(at * 72, 0, 64, 64);
+      }
+      return new DOMRect(0, 0, 0, 0);
+    });
+    try {
+      const handle = screen.getByRole("button", { name: "Image 1 of 3" });
+      fireEvent.pointerDown(handle, { pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, clientX: 32, clientY: 32 });
+      fireEvent.pointerMove(handle, { pointerId: 1, pointerType: "mouse", isPrimary: true, clientX: 190, clientY: 32 });
+      expect(handle.closest(".attachment")?.classList.contains("is-lifted")).toBe(true);
+      // Past the last tile's middle: the bar stands after it.
+      expect((document.querySelector(".attachment-slot") as HTMLElement | null)?.style.left).toBe(`${2 * 72 + 64 + 3}px`);
+      fireEvent.pointerUp(handle, { pointerId: 1, pointerType: "mouse", isPrimary: true, clientX: 190, clientY: 32 });
+      expect(previews()).toEqual(["blob:p2", "blob:p3", "blob:p1"]);
+      expect(document.querySelector(".attachment-slot")).toBeNull();
+      expect(document.querySelector(".is-lifted")).toBeNull();
+    } finally {
+      rects.mockRestore();
+    }
+  });
+
+  it("keeps a tile that could not be made for a moment, marked, and names the file", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.compressImage.mockRejectedValue(new Error("Unable to read image"));
+      renderCreate();
+      fireEvent.change(document.querySelector('input[type="file"]')!, {
+        target: { files: [new File(["a"], "IMG_2041.HEIC", { type: "image/heic" })] }
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(document.querySelector(".attachment.is-failed")).not.toBeNull();
+      expect(shownError()?.textContent).toBe("IMG_2041.HEIC: this browser can’t read HEIC — export it as JPG first");
+      // It holds no place: another image can come in at once.
+      expect((screen.getByRole("button", { name: "Add image" }) as HTMLButtonElement).disabled).toBe(false);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(document.querySelector(".attachment.is-failed")?.classList.contains("is-leaving")).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(document.querySelector(".attachment")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

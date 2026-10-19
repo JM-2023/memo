@@ -1,6 +1,7 @@
 import { ChevronDown, Cpu, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sparkles, Sun, SunMoon, Trash2, Upload, type LucideIcon } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useI18n } from "../lib/i18n";
+import { loadPeriod, persistPeriod } from "../lib/sidebarMemory";
 import { dayKeyOf, rangeStats, totalStats, type PeriodKind } from "../lib/stats";
 import type { TagNode } from "../lib/tags";
 import type { Memo } from "../lib/types";
@@ -45,6 +46,8 @@ interface SidebarProps {
   /** Mobile drawer state; supplied by the shell so Escape can dismiss it. */
   drawerOpen?: boolean;
   onCloseDrawer?: () => void;
+  /** Trails the Daily review row: today's unseen dot, or its progress while open. */
+  reviewMark?: ReactNode;
 }
 
 const PERIODS: { kind: PeriodKind; en: string; zh: string }[] = [
@@ -174,7 +177,10 @@ function SidebarView(props: SidebarProps) {
   const { memos, tagTree, uniqueTagCount, countsByDay, activeTag, activeDay, filtersActive, view, trashCount, theme } = props;
   const { language, setLanguage, tr, count } = useI18n();
   const tip = useTip();
-  const [period, setPeriod] = useState<PeriodKind>("week");
+  // Kept across reloads (lib/sidebarMemory), so a reader who lives in the
+  // month calendar doesn't land back on the week every time.
+  const [period, setPeriod] = useState<PeriodKind>(loadPeriod);
+  useEffect(() => persistPeriod(period), [period]);
   // Where the reader is, as one sidebar row: Trash, Daily review, All memos
   // unfiltered, or a tag. A tag stays a lens behind Trash and review, but it
   // is not the place on screen there, so its row isn't marked.
@@ -535,6 +541,7 @@ function SidebarView(props: SidebarProps) {
           {view === "review" ? <span className="sel-glow" aria-hidden="true" /> : null}
           <Sparkles size={16} aria-hidden="true" />
           <span className="nav-label">{tr("Daily review", "每日回顾")}</span>
+          {props.reviewMark}
         </button>
         <button
           type="button"

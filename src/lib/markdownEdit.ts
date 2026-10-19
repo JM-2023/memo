@@ -170,10 +170,61 @@ export function setTaskMark(content: string, lineIndex: number, checked: boolean
 }
 
 /**
+ * The run of `marker` on one line that holds [start, end], as its open and
+ * close offsets. The line's marker runs are paired off in order, the way the
+ * card opens and closes them; only runs of exactly the marker's length
+ * count, so `**` never reads as two `*` (nor `***` as either).
+ */
+function enclosingRun(value: string, start: number, end: number, marker: string): { open: number; close: number } | null {
+  const line = lineRangeAt(value, start);
+  if (end > line.end) return null;
+  const m = marker.length;
+  const runs: number[] = [];
+  for (let i = line.start; i < line.end; ) {
+    if (value[i] !== marker[0]) {
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j < line.end && value[j] === marker[0]) j += 1;
+    if (j - i === m) runs.push(i);
+    i = j;
+  }
+  for (let k = 0; k + 1 < runs.length; k += 2) {
+    if (runs[k] < start && end < runs[k + 1] + m) return { open: runs[k], close: runs[k + 1] };
+  }
+  return null;
+}
+
+/** Letters and digits a collapsed ⌘B takes as one word. CJK runs on with no
+ * spaces, so there is no word to find there: the caret gets an empty pair. */
+const WORD_CHAR = /[\p{Script=Latin}\p{M}\p{N}_]/u;
+
+function isWordChar(char: string | undefined): boolean {
+  return char !== undefined && WORD_CHAR.test(char);
+}
+
+/** An apostrophe between two word characters keeps the word going (don't). */
+function joinsWord(value: string, at: number): boolean {
+  return (value[at] === "'" || value[at] === "’") && isWordChar(value[at - 1]) && isWordChar(value[at + 1]);
+}
+
+/** Whether [start, end] sits inside a `marker` run (the toolbar's pressed look). */
+export function wrapActiveAt(value: string, start: number, end: number, marker: string): boolean {
+  const m = marker.length;
+  const inner = value.slice(start, end);
+  if (start !== end && inner.length >= 2 * m && inner.startsWith(marker) && inner.endsWith(marker)) return true;
+  if (value.slice(start - m, start) === marker && value.slice(end, end + m) === marker) return true;
+  return enclosingRun(value, start, end, marker) !== null;
+}
+
+/**
  * Wrap/unwrap the selection with an inline marker (**, *, ~~, ==, `).
  * Edge whitespace is excluded first — "**text **" would not parse. A caret
- * with no selection gets an empty pair to type into (or removes one it is
- * already sitting in).
+ * (or a selection) inside a run of the same marker unwraps that run instead
+ * of nesting a second pair in it. A caret inside a Latin or number word
+ * wraps the whole word; anywhere else it gets an empty pair to type into
+ * (or removes one it is already sitting in).
  */
 export function toggleWrap(value: string, start: number, end: number, marker: string): EditPatch {
   const m = marker.length;
@@ -182,21 +233,73 @@ export function toggleWrap(value: string, start: number, end: number, marker: st
   while (s < e && /\s/.test(value[s])) s += 1;
   while (e > s && /\s/.test(value[e - 1])) e -= 1;
 
+  if (s === e && value.slice(s - m, s) === marker && value.slice(s, s + m) === marker) {
+    return { value: value.slice(0, s - m) + value.slice(s + m), start: s - m, end: s - m };
+  }
+
+  const inner = value.slice(s, e);
+  if (s !== e) {
+    if (inner.startsWith(marker) && inner.endsWith(marker) && inner.length >= 2 * m) {
+      return { value: value.slice(0, s) + inner.slice(m, inner.length - m) + value.slice(e), start: s, end: e - 2 * m };
+    }
+    if (value.slice(s - m, s) === marker && value.slice(e, e + m) === marker) {
+      return { value: value.slice(0, s - m) + inner + value.slice(e + m), start: s - m, end: e - m };
+    }
+  }
+
+  const run = enclosingRun(value, s, e, marker);
+  if (run) {
+    const { open, close } = run;
+    // Positions keep to the text they were on; one inside a marker lands
+    // where that marker was.
+    const map = (pos: number) =>
+      pos <= open ? pos : pos < open + m ? open : pos <= close ? pos - m : pos < close + m ? close - m : pos - 2 * m;
+    return { value: value.slice(0, open) + value.slice(open + m, close) + value.slice(close + m), start: map(s), end: map(e) };
+  }
+
   if (s === e) {
-    if (value.slice(s - m, s) === marker && value.slice(s, s + m) === marker) {
-      return { value: value.slice(0, s - m) + value.slice(s + m), start: s - m, end: s - m };
+    if (isWordChar(value[s - 1]) && isWordChar(value[s])) {
+      let from = s;
+      let to = s;
+      while (from > 0 && (isWordChar(value[from - 1]) || joinsWord(value, from - 1))) from -= 1;
+      while (to < value.length && (isWordChar(value[to]) || joinsWord(value, to))) to += 1;
+      return { value: value.slice(0, from) + marker + value.slice(from, to) + marker + value.slice(to), start: s + m, end: s + m };
     }
     return { value: value.slice(0, s) + marker + marker + value.slice(s), start: s + m, end: s + m };
   }
 
-  const inner = value.slice(s, e);
-  if (inner.startsWith(marker) && inner.endsWith(marker) && inner.length >= 2 * m) {
-    return { value: value.slice(0, s) + inner.slice(m, inner.length - m) + value.slice(e), start: s, end: e - 2 * m };
-  }
-  if (value.slice(s - m, s) === marker && value.slice(e, e + m) === marker) {
-    return { value: value.slice(0, s - m) + inner + value.slice(e + m), start: s - m, end: e - m };
-  }
   return { value: value.slice(0, s) + marker + inner + marker + value.slice(e), start: s + m, end: e + m };
+}
+
+/**
+ * ⌘K: the selection becomes a link's text, `[words](url)`, with the "url"
+ * placeholder selected so typing or pasting the address replaces it. A
+ * selected address goes inside the parentheses instead, the caret between
+ * the brackets for its text; with nothing selected `[](url)` lands with the
+ * caret between the brackets.
+ */
+export function wrapLink(value: string, start: number, end: number): EditPatch {
+  let s = start;
+  let e = end;
+  while (s < e && /\s/.test(value[s])) s += 1;
+  while (e > s && /\s/.test(value[e - 1])) e -= 1;
+  const selected = value.slice(s, e);
+  if (/^https?:\/\/\S+$/i.test(selected)) {
+    const link = `[](${selected.replace(/\(/g, "%28").replace(/\)/g, "%29")})`;
+    return { value: value.slice(0, s) + link + value.slice(e), start: s + 1, end: s + 1 };
+  }
+  if (s === e) {
+    return { value: value.slice(0, s) + "[](url)" + value.slice(s), start: s + 1, end: s + 1 };
+  }
+  const url = s + selected.length + 3;
+  return { value: `${value.slice(0, s)}[${selected}](url)${value.slice(e)}`, start: url, end: url + 3 };
+}
+
+/** Whether the caret's line is a list item (the List button's pressed look). */
+export function listLineAt(value: string, index: number): boolean {
+  const { start, end } = lineRangeAt(value, index);
+  const line = value.slice(start, end);
+  return TASK_PREFIX.test(line) || BULLET_PREFIX.test(line) || ORDERED_PREFIX.test(line);
 }
 
 /**

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { feedQueryForStatsDrilldown, memoMatchesStatsDrilldown, statsDrilldownLabel, type StatsDrilldown } from "../src/lib/statsDrilldown";
+import {
+  feedQueryForStatsDrilldown,
+  forgetStatsPlace,
+  memoMatchesStatsDrilldown,
+  recallStatsPlace,
+  rememberStatsPlace,
+  statsDrilldownLabel,
+  type StatsDrilldown
+} from "../src/lib/statsDrilldown";
 import type { Memo } from "../src/lib/types";
 
 function memoAt(id: string, localCreatedAt: Date, content = ""): Memo {
@@ -78,6 +86,18 @@ describe("stats drilldown search handoff", () => {
     const drilldown: StatsDrilldown = { kind: "year", year: 2026 };
     expect(feedQueryForStatsDrilldown(drilldown, "", "old feed query")).toBe("");
     expect(feedQueryForStatsDrilldown(drilldown, "new drilldown query", "")).toBe("new drilldown query");
+  });
+});
+
+describe("the statistics panel's place", () => {
+  it("is remembered for the session, last one wins, and forgotten on demand", () => {
+    forgetStatsPlace();
+    expect(recallStatsPlace()).toBeNull();
+    rememberStatsPlace({ year: 2025, scrollTop: 340 });
+    rememberStatsPlace({ year: 2024, scrollTop: 12 });
+    expect(recallStatsPlace()).toEqual({ year: 2024, scrollTop: 12 });
+    forgetStatsPlace();
+    expect(recallStatsPlace()).toBeNull();
   });
 });
 

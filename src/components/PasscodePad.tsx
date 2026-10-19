@@ -2,6 +2,7 @@ import { Check, Delete } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { useI18n } from "../lib/i18n";
+import { T_FAST } from "../lib/motion";
 
 const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "delete", "0", "submit"] as const;
 type PadKey = (typeof keys)[number] | "clear";
@@ -11,7 +12,7 @@ export const MAX_PIN_LENGTH = 18;
 
 /** A refused entry's dots stay up, red, through the shake before they go. */
 const ERROR_HOLD_MS = 320;
-const ERROR_FADE_MS = 120;
+const ERROR_FADE_MS = T_FAST;
 /** A hardware key's echo on its on-screen twin. */
 const KEY_ECHO_MS = 120;
 
