@@ -56,6 +56,7 @@ import { useKeyboardInset } from "./hooks/useKeyboardInset";
 import { useReviewSeen } from "./hooks/useReviewSeen";
 import { useSearchHighlight } from "./hooks/useSearchHighlight";
 import { useTopbarTuck } from "./hooks/useTopbarTuck";
+import { useOutbox } from "./hooks/useOutbox";
 import { useSemanticSearch } from "./hooks/useSemanticSearch";
 import {
   AuthRequiredError,
@@ -99,28 +100,12 @@ import { splitTaskLine } from "./lib/markdown";
 import { useModelDownloadPhase } from "./lib/modelDownload";
 import { storedModelState } from "./lib/modelLoader";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
-import { MAX_CONTENT_CHARS, rewriteIssue } from "./lib/memoRules";
+import { MAX_CONTENT_CHARS } from "./lib/memoRules";
 import { captureFeedPlace, createNavStore, isLayerState, isRootLens, lensesEqual, navIdOf, restoreFeedPlace, ROOT_LENS, type NavLens, type NavPlace, type NavStore } from "./lib/navHistory";
 import { applyOptimisticLayer, withOptimistic, withoutPatch, withPatch, type OptimisticLayer, type OptimisticPatch } from "./lib/optimisticMemos";
 import { RECENT_SEARCHES_KEY, loadRecentSearches, persistRecentSearches, rememberSearch } from "./lib/recentSearches";
-import {
-  failureOf,
-  freshImages,
-  holdPreviews,
-  mapEntries,
-  nextQueued,
-  optimisticMemo,
-  outboxRetryDelay,
-  SEND_UNDO_MS,
-  sendStatesOf,
-  unsentMemos,
-  withEntry,
-  withoutEntry,
-  type Outbox,
-  type OutboxEntry,
-  type OutboxFailure,
-  type SendState
-} from "./lib/outbox";
+import { freshImages, optimisticMemo, sendStatesOf, unsentMemos, type OutboxEntry, type SendState } from "./lib/outbox";
+import type { OutboxDeps, OutboxVoice } from "./lib/outboxQueue";
 import {
   buildReviewDay,
   clearReviewDay,
@@ -185,7 +170,7 @@ import { useSnapshotWriterLease } from "./lib/snapshotWriter";
 import { applySyncDelta, createSyncState, memosOf, purgedOf, tagsOfState, type PurgedMemo, type SyncState } from "./lib/syncState";
 import { flattenTags } from "./lib/tagJump";
 import { refusalOf, tagRewriteBlockers } from "./lib/tagRewriteBlockers";
-import { buildTagTree, inheritTagContext, isValidTagPath, renameTagInContent, tagMatches, tagRenamePathsOverlap, tagsByRecentUse, tagsOf, type TagNode } from "./lib/tags";
+import { buildTagTree, inheritTagContext, isValidTagPath, tagMatches, tagRenamePathsOverlap, tagsByRecentUse, tagsOf, type TagNode } from "./lib/tags";
 import { applyTaskFlips, freshestTaskMemo, type TaskFlipQueue } from "./lib/taskFlips";
 import { startToastSwipe, toastSwipeDirection } from "./lib/toastSwipe";
 import { applyTheme, loadTheme, type ThemeChoice } from "./lib/theme";
@@ -245,12 +230,6 @@ interface ToastOptions {
   detail?: string;
   /** Overrides the length-derived stay, in ms. */
   duration?: number;
-}
-
-/** The session a send went out in (sendSession in App). */
-interface SendSession {
-  epoch: number;
-  passcodeChanges: number;
 }
 
 /** Toasts up at once; past this the oldest steps off. */
@@ -1039,111 +1018,17 @@ export default function App() {
   const [optimisticMemos, setOptimisticMemos] = useState<OptimisticLayer>(() => new Map());
   const memoActionTokensRef = useRef(new Map<string, object>());
 
-  // Sends that landed as cards before the server had them (lib/outbox),
-  // delivered one at a time in the order they were sent, so their server
-  // times keep that order (a send that keeps failing steps aside, see
-  // pumpOutbox). Memory only, like the drafts above: a logout discards it,
-  // a lost session keeps it for the next sign-in. Async work reads the ref;
-  // the state is what renders.
-  const outboxRef = useRef<Outbox>(new Map());
-  const [outbox, setOutbox] = useState<Outbox>(outboxRef.current);
-  const writeOutbox = useCallback((change: (current: Outbox) => Outbox) => {
-    const next = change(outboxRef.current);
-    if (next === outboxRef.current) return;
-    outboxRef.current = next;
-    setOutbox(next);
-  }, []);
-  // The work around it, none of it rendered.
-  const outboxWorkRef = useRef({
-    pumping: false,
-    /** The request in flight, by memo id. */
-    controllers: new Map<string, AbortController>(),
-    /** Memos whose request may have reached the server. */
-    attempted: new Set<string>(),
-    /** Taken back or discarded after an attempt: should the server turn out
-        to have one, it goes to Trash (see the watch below). */
-    retracted: new Set<string>(),
-    /** Each entry's hold on its pictures in the image cache. */
-    previews: new Map<string, () => void>(),
-    /** Automatic retries each failed send has spent since the reader, the link or a sign-in last restarted it. */
-    retries: new Map<string, number>(),
-    /** Each failed send's own retry clock (retryLater). */
-    timers: new Map<string, number>(),
-    /** Tag renames and removals under way: the queue waits them out (holdOutbox). */
-    holds: 0,
-    /** Sends whose card the view hides: the toast speaking for the card, and whether it has said the send failed. */
-    hidden: new Map<string, { toast: number; failed: boolean }>(),
-    /** Discarded entries kept for their toast's Undo, oldest first. */
-    discarded: [] as OutboxEntry[],
-    /** The latest send, for ⌘Z in the composer it just emptied. */
-    last: null as { entry: OutboxEntry; confirmedAt: number | null; timer: number } | null
-  });
-  const resumeOutboxRef = useRef<(from: "reader" | "link" | "wake" | "timer", id?: string) => void>(() => undefined);
+  // Sends that landed as cards before the server had them: the queue
+  // (lib/outboxQueue) delivers them one at a time in the order they were
+  // sent, retries them and lets them be taken back or discarded. Memory
+  // only, like the drafts above: a logout discards it, a lost session keeps
+  // it for the next sign-in. `outbox` is what renders; App hands the queue
+  // its callbacks further down (sendQueue.connect).
+  const { outbox, queue: sendQueue } = useOutbox(TOAST_LIMIT);
   const composerControlRef = useRef<ComposerControl | null>(null);
   const [composerOccupied, setComposerOccupied] = useState(false);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
-
-  /** An entry's previews are the outbox's until the memo is stored, discarded for good or taken back. */
-  const revokePreviews = useCallback((entry: OutboxEntry) => {
-    for (const image of entry.images) URL.revokeObjectURL(image.previewUrl);
-  }, []);
-  const releaseHold = useCallback((id: string) => {
-    const work = outboxWorkRef.current;
-    work.previews.get(id)?.();
-    work.previews.delete(id);
-  }, []);
-
-  /** Stops every send's retry clock (a logout under way, the outbox discarded). */
-  const stopOutboxClocks = useCallback(() => {
-    const work = outboxWorkRef.current;
-    for (const timer of work.timers.values()) window.clearTimeout(timer);
-    work.timers.clear();
-  }, []);
-  /**
-   * The wipe a revoked session brings (clearLocalDeviceData) empties the
-   * image cache as it starts, under the unsent cards too — and those wait
-   * for the next sign-in: their pictures go back in from the payloads they
-   * carry, ahead of any card drawing them again.
-   */
-  const reholdPreviews = useCallback(() => {
-    const work = outboxWorkRef.current;
-    for (const entry of outboxRef.current.values()) {
-      work.previews.get(entry.id)?.();
-      work.previews.set(entry.id, holdPreviews(entry.images));
-    }
-  }, []);
-
-  /** Logout: unsent memos go with the drafts. */
-  const discardOutbox = useCallback(() => {
-    const work = outboxWorkRef.current;
-    stopOutboxClocks();
-    work.retries.clear();
-    work.hidden.clear();
-    for (const controller of work.controllers.values()) controller.abort();
-    work.controllers.clear();
-    for (const release of work.previews.values()) release();
-    work.previews.clear();
-    const owned = new Set([...outboxRef.current.values(), ...work.discarded]);
-    if (work.last) {
-      window.clearTimeout(work.last.timer);
-      owned.add(work.last.entry);
-    }
-    for (const entry of owned) revokePreviews(entry);
-    work.discarded = [];
-    work.last = null;
-    work.attempted.clear();
-    work.retracted.clear();
-    writeOutbox(() => new Map());
-  }, [revokePreviews, stopOutboxClocks, writeOutbox]);
-  useEffect(
-    () => () => {
-      const work = outboxWorkRef.current;
-      stopOutboxClocks();
-      if (work.last) window.clearTimeout(work.last.timer);
-    },
-    [stopOutboxClocks]
-  );
 
   const stampTaskFlip = useCallback((memoId: string, lineKey: number, checked: boolean) => {
     setPendingTaskFlips((current) => {
@@ -1504,8 +1389,8 @@ export default function App() {
     heldEditRef.current = null;
     setComposerSeed("");
     setEditSeed(null);
-    discardOutbox();
-  }, [discardOutbox]);
+    sendQueue.discardAll();
+  }, [sendQueue]);
 
   // Opening the drawer lands on where the reader is — the marked nav row,
   // the tag in force, the heatmap day — not on the account menu at its top.
@@ -1640,7 +1525,7 @@ export default function App() {
       setEditSeed(null);
       if (wipe) {
         void clearLocalDeviceData();
-        reholdPreviews();
+        sendQueue.rehold();
         resetLocalWorkspaceState();
       } else {
         forgetCacheKey();
@@ -1654,7 +1539,7 @@ export default function App() {
         "error"
       );
     },
-    [reholdPreviews, resetLocalWorkspaceState, resetSessionUi, showToast, tr]
+    [resetLocalWorkspaceState, resetSessionUi, sendQueue, showToast, tr]
   );
 
   const handlePeerLogout = useCallback(() => {
@@ -3097,7 +2982,7 @@ export default function App() {
   const revealMemo = useCallback(
     (id: string) => {
       // (Or a send the server does not have yet.)
-      const memo = syncStateRef.current.memos.get(id) ?? outboxRef.current.get(id)?.memo;
+      const memo = syncStateRef.current.memos.get(id) ?? sendQueue.get(id)?.memo;
       if (!memo || memo.deletedAt) return;
       const lens = lensRef.current;
       revealIdRef.current = id;
@@ -3121,7 +3006,7 @@ export default function App() {
         }
       });
     },
-    [changeFeed, swapQuery]
+    [changeFeed, sendQueue, swapQuery]
   );
   useEffect(() => {
     const id = revealIdRef.current;
@@ -3825,7 +3710,7 @@ export default function App() {
     // A send still on its way is no pick: starting with it would wipe the
     // selection under way, and pruning the pick out of view would then end
     // select mode altogether.
-    if (firstId && outboxRef.current.has(firstId) && !syncStateRef.current.memos.has(firstId)) return;
+    if (firstId && sendQueue.has(firstId) && !syncStateRef.current.memos.has(firstId)) return;
     if (holdForOpenEdit("select memos", "多选笔记")) return;
     selectAnchorRef.current = firstId ?? null;
     const active = document.activeElement;
@@ -3851,7 +3736,7 @@ export default function App() {
       document.querySelector<HTMLElement>(".select-all:not(:disabled)") ??
       document.querySelector<HTMLElement>(".select-exit");
     target?.focus({ preventScroll: true });
-  }, [holdForOpenEdit, moveFeed]);
+  }, [holdForOpenEdit, moveFeed, sendQueue]);
 
   const exitSelectMode = useCallback(() => {
     selectAnchorRef.current = null;
@@ -3973,7 +3858,7 @@ export default function App() {
     logoutBusyRef.current = true;
     leavingRef.current = true;
     // A retry answered after the server ended the session would read as an expired one.
-    stopOutboxClocks();
+    sendQueue.stopClocks();
     setLoggingOut(true);
     try {
       const result = await logout();
@@ -3982,7 +3867,7 @@ export default function App() {
       if (!(cause instanceof AuthRequiredError)) {
         // Still signed in: the sends go on, their stopped clocks included.
         leavingRef.current = false;
-        resumeOutbox("wake");
+        sendQueue.resume("wake");
         setLoggingOut(false);
         setConfirmLogout(false);
         showToast(tr("Logout wasn’t confirmed. Your session remains open.", "退出未得到服务器确认，当前登录仍然有效"), "error");
@@ -4194,9 +4079,9 @@ export default function App() {
   /**
    * Send. The memo lands as its card at the press — the composer→card morph
    * plays now, not after the round trip — and the composer is free for the
-   * next one at once. The outbox takes it to the server behind that
-   * (pumpOutbox): the card says "Sending…" only if the trip takes a while,
-   * and says so, with what can be done, if it fails.
+   * next one at once. The queue takes it to the server behind that
+   * (lib/outboxQueue): the card says "Sending…" only if the trip takes a
+   * while, and says so, with what can be done, if it fails.
    */
   async function handleCreate(data: EditorSubmission): Promise<boolean> {
     const tag = activeTag;
@@ -4215,7 +4100,6 @@ export default function App() {
     // The composer stays up under a search, a day or a filter, and a memo
     // those lenses exclude would just vanish as the editor clears — read
     // as a failed send. Say where it went and offer the way to it.
-    const work = outboxWorkRef.current;
     const id = entry.id;
     const inMemos = lensRef.current.view === "memos";
     const hidden = inMemos && !lensShows(entry.memo);
@@ -4227,224 +4111,22 @@ export default function App() {
         if (createdPlacementRef.current === id) createdPlacementRef.current = null;
       }, 1000);
     }
-    // Marked before it can go out: a send that settles first says so itself (landSent).
-    if (hidden) work.hidden.set(id, { toast: 0, failed: false });
-    // Before the landing: its morph decodes the pictures from the cache.
-    work.previews.set(id, holdPreviews(entry.images));
-    noteLastSend(entry);
-    await landCreated(entry.memo, data, () => writeOutbox((current) => withEntry(current, entry)));
-    // A small knock as the card lands under a finger.
-    if (window.matchMedia?.("(pointer: coarse)").matches) navigator.vibrate?.(8);
-    const said = work.hidden.get(id);
-    if (said && !said.toast && !said.failed) {
-      // Only on its way yet: the toast speaks for the hidden card until the
-      // send settles, saved (landSent) or not (sayHiddenFailure).
-      said.toast = showToast(tr("Sending — this view hides it", "正在发送，当前视图下看不到它"), "info", {
-        action: { label: tr("Show", "显示"), run: () => revealMemo(id) }
-      });
-    }
-    // A press is a fresh try for anything still waiting in front of it.
-    resumeOutbox("reader");
+    await sendQueue.send(entry, {
+      hidden,
+      land: async (admit) => {
+        await landCreated(entry.memo, data, admit);
+        // A small knock as the card lands under a finger.
+        if (window.matchMedia?.("(pointer: coarse)").matches) navigator.vibrate?.(8);
+      }
+    });
     return true;
   }
+
 
   /** Whether the feed as it stands shows `memo` (a send's card, or the memo it became). */
   function lensShows(memo: Memo): boolean {
     const lens = lensRef.current;
     return lens.view === "memos" && memoMatchesSearchScope(memo, lens) && memoMatchesQuery(memo, lens.parsedQuery);
-  }
-
-  /** The latest send, for ⌘Z: the one before it is out of reach now. */
-  function noteLastSend(entry: OutboxEntry) {
-    const work = outboxWorkRef.current;
-    const previous = work.last;
-    if (previous) {
-      window.clearTimeout(previous.timer);
-      if (previous.confirmedAt !== null) revokePreviews(previous.entry);
-    }
-    work.last = { entry, confirmedAt: null, timer: 0 };
-  }
-
-  /**
-   * Not now: while the cookie is changing hands (as useSync pauses), a
-   * logout is under way or a tag is being renamed or removed under the
-   * queue (holdOutbox).
-   */
-  function outboxPaused(): boolean {
-    return phaseRef.current !== "ready" || changingPasscodeRef.current || leavingRef.current || outboxWorkRef.current.holds > 0;
-  }
-
-  /**
-   * Deliver the outbox, oldest first, one request at a time. A lost session
-   * stops the queue (the next sign-in sends the rest), and so does a
-   * failure while the browser is offline: every send behind it would meet
-   * the same, and they all say so (blockOutbox). Any other failure is that
-   * one send's own: it tries again on its own clock (retryLater) while the
-   * queue goes on past it, so one send the server keeps failing never holds
-   * up the rest. The sends behind it may then reach the server first and
-   * take earlier server times: the order holds while sends go through,
-   * never at the cost of sending.
-   */
-  async function pumpOutbox() {
-    const work = outboxWorkRef.current;
-    if (work.pumping) return;
-    work.pumping = true;
-    try {
-      for (;;) {
-        if (outboxPaused()) return;
-        const entry = nextQueued(outboxRef.current);
-        if (!entry) return;
-        const failure = await deliverOutbox(entry);
-        if (failure === "auth" || (failure === "network" && navigator.onLine === false)) {
-          blockOutbox(failure);
-          return;
-        }
-        if (failure === "network") retryLater(entry.id);
-      }
-    } finally {
-      work.pumping = false;
-    }
-  }
-
-  /**
-   * The session a send went out in. Opening the passcode dialog renews the
-   * session epoch too, so that nothing answered with the old cookie can drop
-   * the tab to the gate — but the notebook after it is the same one, and a
-   * send answered across it is still this notebook's memo.
-   */
-  function sendSession(): SendSession {
-    return { epoch: sessionEpochRef.current, passcodeChanges: passcodeChangesRef.current };
-  }
-
-  /** The session ended since `from` (a logout, an expiry, a sign-in), not just a passcode change. */
-  function sessionLost(from: SendSession): boolean {
-    return sessionEpochRef.current - from.epoch !== passcodeChangesRef.current - from.passcodeChanges;
-  }
-
-  /** One send. Resolves to why it failed, or null once it is settled (sent, or gone from the outbox). */
-  async function deliverOutbox(entry: OutboxEntry): Promise<OutboxFailure | null> {
-    const work = outboxWorkRef.current;
-    const controller = new AbortController();
-    work.controllers.set(entry.id, controller);
-    work.attempted.add(entry.id);
-    const session = sendSession();
-    const imageIds = entry.images.map((image) => image.id);
-    try {
-      const result = await createMemo(entry.id, entry.content, entry.images, { signal: controller.signal });
-      let saved = result.memo;
-      // What the memo should say now: a tag renamed or removed while the
-      // request was out rewrote the entry after it left (retagOutbox).
-      const wanted = outboxRef.current.get(entry.id)?.content ?? entry.content;
-      if ((result.idempotent || wanted !== entry.content) && !memoMatchesSubmittedDraft(saved, wanted, imageIds)) {
-        // An earlier create committed but its answer was lost, and what is
-        // stored differs from this send — or the send was rewritten on its
-        // way: bring it level with a version-checked update instead of
-        // making a second memo.
-        const stored = new Set(saved.images.map((image) => image.id));
-        const kept = new Set(imageIds);
-        const resumed = await updateMemo(
-          saved.id,
-          {
-            expectedSeq: saved.seq,
-            content: wanted,
-            addImages: entry.images.filter((image) => !stored.has(image.id)),
-            removeImageIds: saved.images.filter((image) => !kept.has(image.id)).map((image) => image.id)
-          },
-          { signal: controller.signal }
-        );
-        if (resumed.memo) saved = resumed.memo;
-      }
-      landSent(entry, saved, session);
-      return null;
-    } catch (cause) {
-      // The memo reached the server before (its answer lost) and has
-      // changed there since — trashed or edited elsewhere, or by the
-      // recovery update above. It was sent; the server's version stands.
-      if (cause instanceof ApiError && cause.code === "VERSION_CONFLICT" && cause.current) {
-        landSent(entry, cause.current, session);
-        return null;
-      }
-      // Taken back, discarded or logged out meanwhile: nothing left to say.
-      if (!outboxRef.current.has(entry.id) || controller.signal.aborted) return null;
-      // Turned away as a logout ends the session: the gate is coming anyway,
-      // and a logout the server didn't confirm sends it again.
-      if (leavingRef.current) return null;
-      // The session changed under the request: the next sign-in sends it.
-      if (sessionLost(session)) return "auth";
-      if (cause instanceof AuthRequiredError) {
-        // Turned away with the cookie a passcode change replaced: it waits
-        // out the change (outboxPaused) and goes again with the new one.
-        if (session.epoch !== sessionEpochRef.current) return null;
-        dropToLogin();
-        return "auth";
-      }
-      // A sync brought the memo in meanwhile: the server had it all along.
-      const synced = syncStateRef.current.memos.get(entry.id);
-      if (synced) {
-        landSent(entry, synced, session);
-        return null;
-      }
-      if (cause instanceof ApiError && cause.code === "MEMO_ID_RETIRED") {
-        // Sent once already, then deleted for good elsewhere: there is
-        // nothing left to send.
-        moveFeed("purge", [entry.id], () => writeOutbox((current) => withoutEntry(current, entry.id)));
-        finishSent(entry);
-        showToast(tr("That memo was sent earlier and has since been deleted for good", "这条笔记之前已经发出，后来被彻底删除了"));
-        return null;
-      }
-      const failure = failureOf(cause);
-      if (failure === "refused") {
-        writeOutbox((current) => mapEntries(current, (item) => item.id === entry.id, (item) => ({ ...item, status: "failed", failure })));
-        // A card in view says it beside its Retry, and the toast gives the
-        // server's reason; a hidden one's toast says where it is.
-        if (!sayHiddenFailure(entry.id)) showToast(errorMessage(cause, "Couldn’t send the memo.", "笔记发送失败"), "error");
-      }
-      return failure;
-    } finally {
-      if (work.controllers.get(entry.id) === controller) work.controllers.delete(entry.id);
-    }
-  }
-
-  /**
-   * The server has the memo. It takes the card's place in the same slot —
-   * no second entrance; the stamp dissolves from the send's state to its
-   * time (MemoCard) — and the outbox lets go of it.
-   */
-  function landSent(entry: OutboxEntry, saved: Memo, session: SendSession) {
-    if (sessionLost(session)) {
-      // Answered across a change of session: the next sign-in's notebook
-      // (or a sync) brings the memo in.
-      if (outboxRef.current.has(entry.id)) {
-        writeOutbox((current) => withoutEntry(current, entry.id));
-        finishSent(entry);
-      }
-      return;
-    }
-    const current = outboxRef.current.get(entry.id);
-    if (!current) {
-      // Taken back or discarded while the answer was on its way: the memo
-      // is stored after all, so it shows, and the watch on taken-back ids
-      // moves it to Trash.
-      applyRemoteChanges([saved], [], []);
-      void runSync();
-      notifyPeers();
-      return;
-    }
-    // A memo stamped later than its card (a send that waited out a
-    // connection) can fall out of a day the card was in; one the view hid
-    // all along had a toast speaking for it.
-    const said = outboxWorkRef.current.hidden.get(entry.id);
-    const shows = lensShows(saved);
-    const leaves = lensShows(current.memo) && !shows;
-    // A later server time can also move it among its neighbours: it glides.
-    moveFeed("edit-save", new Set([entry.id, saved.id]), () => {
-      applySyncChanges([saved], [], []);
-      writeOutbox((outbox) => withoutEntry(outbox, entry.id));
-    });
-    finishSent(current);
-    void runSync();
-    notifyPeers();
-    saySent(saved, said, leaves);
   }
 
   /**
@@ -4464,126 +4146,6 @@ export default function App() {
     announce(tr("Sent", "已发送"));
   }
 
-  /** An entry the server has: its pictures leave the cache hold, and its previews go — once ⌘Z can no longer want them back. */
-  function finishSent(entry: OutboxEntry) {
-    const work = outboxWorkRef.current;
-    work.attempted.delete(entry.id);
-    forgetSend(entry.id);
-    releaseHold(entry.id);
-    const last = work.last;
-    if (!last || last.entry.id !== entry.id) {
-      revokePreviews(entry);
-      return;
-    }
-    last.entry = entry;
-    last.confirmedAt = Date.now();
-    window.clearTimeout(last.timer);
-    last.timer = window.setTimeout(() => {
-      if (work.last !== last) return;
-      work.last = null;
-      revokePreviews(last.entry);
-    }, SEND_UNDO_MS);
-  }
-
-  /** A send's retry clock stops, and the tries it has spent are forgotten. */
-  function stopRetrying(id: string) {
-    const work = outboxWorkRef.current;
-    window.clearTimeout(work.timers.get(id));
-    work.timers.delete(id);
-    work.retries.delete(id);
-  }
-
-  /** A send settled or gone (sent, taken back, discarded): nothing of its clock or its toast stays. */
-  function forgetSend(id: string) {
-    stopRetrying(id);
-    outboxWorkRef.current.hidden.delete(id);
-  }
-
-  /**
-   * A send failed whose card the view hides: nothing on screen says so, so
-   * a toast does — once, taking over the one that said it was on its way —
-   * with the way to the card and its Retry. True when the card is hidden
-   * (said now or before); false when it is in view and says it itself.
-   */
-  function sayHiddenFailure(id: string): boolean {
-    const work = outboxWorkRef.current;
-    const entry = outboxRef.current.get(id);
-    if (!entry || lensShows(entry.memo)) return false;
-    const said = work.hidden.get(id);
-    if (said?.failed) return true;
-    const toast = reviseToast(said?.toast ?? 0, tr("A memo didn’t send — this view hides it", "有一条笔记没发出去，当前视图下看不到它"), "error", {
-      action: { label: tr("Show", "显示"), run: () => revealMemo(id) }
-    });
-    work.hidden.set(id, { toast, failed: true });
-    return true;
-  }
-
-  /**
-   * A send that failed on its own while online: its card says it is trying
-   * again (MemoCard), and it does, on its own clock — a few quick retries,
-   * then one a minute for as long as it keeps failing. The clock waits
-   * while the page is out of sight or the connection is gone (resumeOutbox);
-   * coming back to the page, or online, sends it.
-   */
-  function retryLater(id: string) {
-    const work = outboxWorkRef.current;
-    const spent = work.retries.get(id) ?? 0;
-    writeOutbox((current) => mapEntries(current, (entry) => entry.id === id, (entry) => ({ ...entry, status: "failed", failure: "network" })));
-    // Said once; the retries after it stay quiet. (A hidden card's toast says it.)
-    if (spent === 0 && !sayHiddenFailure(id)) announce(tr("Not sent · retrying", "未发送 · 正在重试"), "assertive");
-    window.clearTimeout(work.timers.get(id));
-    work.retries.set(id, spent + 1);
-    work.timers.set(
-      id,
-      window.setTimeout(() => {
-        work.timers.delete(id);
-        resumeOutboxRef.current("timer", id);
-      }, outboxRetryDelay(spent))
-    );
-  }
-
-  /**
-   * The queue stopped on a failure every waiting send shares — the browser
-   * offline, or the session lost: they all say so. The connection coming
-   * back is the cue to go again (the online watch below), and a lost
-   * session's is the next sign-in, which says its own words on the gate.
-   */
-  function blockOutbox(failure: "network" | "auth") {
-    const waiting = [...outboxRef.current.values()].filter((entry) => entry.status === "sending").map((entry) => entry.id);
-    writeOutbox((current) => mapEntries(current, (entry) => entry.status === "sending", (entry) => ({ ...entry, status: "failed", failure })));
-    if (failure !== "network") return;
-    let inView = false;
-    for (const id of waiting) if (!sayHiddenFailure(id)) inView = true;
-    if (inView) announce(tr("Not sent · will retry when you’re online", "未发送 · 联网后会自动补发"), "assertive");
-  }
-
-  /**
-   * Send again what failed: on the reader's press (Send, Retry), the link
-   * coming back (online, sync recovering, a sign-in), a send's own retry
-   * clock, or a "wake" — the page back in view, a logout that didn't go
-   * through — that sends what the clocks held meanwhile. Only a press
-   * retries a refused memo — the one it was pressed on. A clock that runs
-   * out while the page is out of sight or offline sends nothing: coming
-   * back does.
-   */
-  function resumeOutbox(from: "reader" | "link" | "wake" | "timer", id?: string) {
-    if (phaseRef.current !== "ready" || leavingRef.current) return;
-    if ((from === "timer" || from === "wake") && (document.visibilityState === "hidden" || navigator.onLine === false)) return;
-    const work = outboxWorkRef.current;
-    const picked = (entry: OutboxEntry) =>
-      entry.status === "failed" &&
-      (from === "timer"
-        ? entry.id === id
-        : from === "wake"
-          ? entry.failure === "network" && !work.timers.has(entry.id)
-          : entry.failure !== "refused" || entry.id === id);
-    // A press or the link is a fresh start: the quick retries come first again.
-    if (from === "reader" || from === "link") for (const entry of outboxRef.current.values()) if (picked(entry)) stopRetrying(entry.id);
-    writeOutbox((current) => mapEntries(current, picked, (entry) => ({ ...entry, status: "sending", failure: null })));
-    void pumpOutbox();
-  }
-  resumeOutboxRef.current = resumeOutbox;
-
   /**
    * Put a sent memo back into the composer: the text as it was typed (with
    * the lens's tag written out if the lens has moved on), the pictures under
@@ -4602,96 +4164,8 @@ export default function App() {
     });
   }
 
-  /**
-   * 撤回 while sending, 编辑 once failed: the memo goes back into the
-   * composer — what Esc did to a send in flight before sends landed at the
-   * press — and its card lifts away toward it. Should the request have
-   * reached the server anyway, the memo is moved to Trash when it shows up.
-   */
-  function takeBackUnsent(id: string): boolean {
-    const entry = outboxRef.current.get(id);
-    if (!entry || syncStateRef.current.memos.has(id)) return false;
-    if (!recallIntoComposer(entry)) {
-      showToast(tr("Send or clear what’s in the composer first", "先发出或清空输入框里的内容"));
-      return false;
-    }
-    const work = outboxWorkRef.current;
-    work.controllers.get(id)?.abort();
-    forgetSend(id);
-    const reached = work.attempted.delete(id);
-    if (reached) work.retracted.add(id);
-    if (work.last?.entry.id === id) {
-      window.clearTimeout(work.last.timer);
-      work.last = null;
-    }
-    // The previews are the composer's again; only the cache hold goes.
-    releaseHold(id);
-    moveFeed("restore", [id], () => writeOutbox((current) => withoutEntry(current, id)));
-    announce(tr("Took the memo back into the composer", "已撤回到输入框"));
-    if (reached) void runSync();
-    // The queue behind it goes on.
-    void pumpOutbox();
-    return true;
-  }
-
-  /** 舍弃 on a failed card: it leaves, and its toast's Undo puts it back in its place. */
-  function discardUnsent(id: string) {
-    const entry = outboxRef.current.get(id);
-    if (!entry || syncStateRef.current.memos.has(id)) return;
-    const work = outboxWorkRef.current;
-    work.controllers.get(id)?.abort();
-    forgetSend(id);
-    const reached = work.attempted.delete(id);
-    if (reached) work.retracted.add(id);
-    if (work.last?.entry.id === id) {
-      window.clearTimeout(work.last.timer);
-      work.last = null;
-    }
-    releaseHold(id);
-    // Kept for the Undo, as many as the toast stack shows at once.
-    work.discarded.push(entry);
-    for (const stale of work.discarded.splice(0, Math.max(0, work.discarded.length - TOAST_LIMIT))) revokePreviews(stale);
-    const refocus = holdFeedFocus(id);
-    moveFeed("trash", [id], () => writeOutbox((current) => withoutEntry(current, id)));
-    refocus();
-    showToast(tr("Discarded the unsent memo", "已舍弃这条未发送的笔记"), "info", {
-      action: { label: tr("Undo", "撤销"), run: () => restoreDiscarded(entry, reached) }
-    });
-  }
-
-  function restoreDiscarded(entry: OutboxEntry, reached: boolean) {
-    const work = outboxWorkRef.current;
-    const at = work.discarded.indexOf(entry);
-    if (at < 0) return;
-    work.discarded.splice(at, 1);
-    work.retracted.delete(entry.id);
-    // The server had it all along (sync brought it in): it is there already.
-    if (syncStateRef.current.memos.has(entry.id)) {
-      revokePreviews(entry);
-      return;
-    }
-    if (reached) work.attempted.add(entry.id);
-    work.previews.set(entry.id, holdPreviews(entry.images));
-    moveFeed("restore", [entry.id], () => writeOutbox((current) => withEntry(current, entry)));
-    resumeOutbox("reader", entry.id);
-  }
-
-  /**
-   * ⌘Z in the composer a send just emptied: a send still on its way is
-   * taken back (撤回); one the server confirmed less than SEND_UNDO_MS ago
-   * goes to Trash, its text and pictures back in the composer.
-   */
-  function undoLastSend(): boolean {
-    const work = outboxWorkRef.current;
-    const last = work.last;
-    if (!last) return false;
-    if (last.confirmedAt === null) return outboxRef.current.get(last.entry.id)?.status === "sending" && takeBackUnsent(last.entry.id);
-    if (Date.now() - last.confirmedAt > SEND_UNDO_MS) return false;
-    const memo = syncStateRef.current.memos.get(last.entry.id);
-    if (!memo || memo.deletedAt || memoActionTokensRef.current.has(memo.id) || !recallIntoComposer(last.entry)) return false;
-    window.clearTimeout(last.timer);
-    work.last = null;
-    announce(tr("Took the memo back into the composer", "已撤回到输入框"));
+  /** ⌘Z on a send the server confirmed a moment ago: the memo goes to Trash (OutboxQueue.undoLast). */
+  function trashUndoneSend(memo: Memo) {
     void (async () => {
       try {
         await runOptimisticMemoAction(memo, { deletedAt: new Date().toISOString() }, async () => (await guard(() => trashMemo(memo.id, memo.seq)))?.memo ?? null);
@@ -4700,7 +4174,6 @@ export default function App() {
         showToast(errorMessage(cause, "Couldn’t delete the memo.", "删除笔记失败"), "error");
       }
     })();
-    return true;
   }
 
   /**
@@ -4725,48 +4198,63 @@ export default function App() {
     }
   }
 
-  // What sync says about the outbox. A memo it brings in that waits there
-  // with no request in flight was stored all along (its answer lost): sent.
-  // One taken back or discarded that it brings in goes to Trash.
+  // What the queue says, in App's words and places: the toast that speaks
+  // for a card the view hides, the live region for one in view.
+  const showSendAction = (id: string): ToastOptions => ({ action: { label: tr("Show", "显示"), run: () => revealMemo(id) } });
+  const sendVoice: OutboxVoice = {
+    sending: (id) => showToast(tr("Sending — this view hides it", "正在发送，当前视图下看不到它"), "info", showSendAction(id)),
+    failedHidden: (id, toast) => reviseToast(toast, tr("A memo didn’t send — this view hides it", "有一条笔记没发出去，当前视图下看不到它"), "error", showSendAction(id)),
+    sent: saySent,
+    retrying: () => announce(tr("Not sent · retrying", "未发送 · 正在重试"), "assertive"),
+    offline: () => announce(tr("Not sent · will retry when you’re online", "未发送 · 联网后会自动补发"), "assertive"),
+    refused: (cause) => void showToast(errorMessage(cause, "Couldn’t send the memo.", "笔记发送失败"), "error"),
+    purged: () => void showToast(tr("That memo was sent earlier and has since been deleted for good", "这条笔记之前已经发出，后来被彻底删除了")),
+    composerBusy: () => void showToast(tr("Send or clear what’s in the composer first", "先发出或清空输入框里的内容")),
+    tookBack: () => announce(tr("Took the memo back into the composer", "已撤回到输入框")),
+    discarded: (undo) => void showToast(tr("Discarded the unsent memo", "已舍弃这条未发送的笔记"), "info", { action: { label: tr("Undo", "撤销"), run: undo } })
+  };
+  // The queue reads these as it works, so they are this render's.
+  const sendDeps: OutboxDeps = {
+    create: createMemo,
+    update: updateMemo,
+    signedIn: () => phaseRef.current === "ready",
+    changingPasscode: () => changingPasscodeRef.current,
+    leaving: () => leavingRef.current,
+    session: () => ({ epoch: sessionEpochRef.current, passcodeChanges: passcodeChangesRef.current }),
+    dropToLogin: () => dropToLogin(),
+    stored: (id) => syncStateRef.current.memos.get(id),
+    store: (saved) => applySyncChanges([saved], [], []),
+    storeRemote: (saved) => applyRemoteChanges([saved], [], []),
+    sync: () => void runSync(),
+    notifyPeers: () => notifyPeers(),
+    shows: lensShows,
+    move: moveFeed,
+    holdFocus: (id) => holdFeedFocus(id),
+    recall: recallIntoComposer,
+    busy: (id) => memoActionTokensRef.current.has(id),
+    trashUndone: trashUndoneSend,
+    trashReturned: (memo) => void trashReturned(memo),
+    voice: sendVoice
+  };
+  sendQueue.connect(sendDeps);
+
+  // What sync says about the queue (OutboxQueue.settle): a memo it brings
+  // in that waits there with no request in flight was stored all along (its
+  // answer lost): sent. One taken back or discarded that it brings in goes
+  // to Trash.
   useEffect(() => {
-    const work = outboxWorkRef.current;
-    for (const entry of outboxRef.current.values()) {
-      const memo = syncState.memos.get(entry.id);
-      if (work.controllers.has(entry.id) || !memo) continue;
-      const said = work.hidden.get(entry.id);
-      writeOutbox((current) => withoutEntry(current, entry.id));
-      finishSent(entry);
-      saySent(memo, said, false);
-    }
-    for (const id of [...work.retracted]) {
-      const memo = syncState.memos.get(id);
-      if (!memo) continue;
-      work.retracted.delete(id);
-      if (!memo.deletedAt && !outboxRef.current.has(id)) void trashReturned(memo);
-    }
+    sendQueue.settle(syncState.memos);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs as the truth moves
   }, [syncState.memos]);
 
-  // The link coming back is the retry the reader would have pressed: the
-  // browser going online, pulls succeeding again, a sign-in, the end of a
-  // passcode change (sends pause while the cookie changes hands). The page
-  // coming back into view sends what its clocks held while it was hidden.
+  // The link coming back is the retry the reader would have pressed: pulls
+  // succeeding again, a sign-in, the end of a passcode change (sends pause
+  // while the cookie changes hands). The browser going online and the page
+  // coming back into view are the queue's own cues (useOutbox).
   const syncHealthy = syncStatus.online && !syncStatus.degraded;
   useEffect(() => {
-    const onOnline = () => resumeOutboxRef.current("link");
-    const onVisible = () => {
-      if (document.visibilityState === "visible") resumeOutboxRef.current("wake");
-    };
-    window.addEventListener("online", onOnline);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.removeEventListener("online", onOnline);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, []);
-  useEffect(() => {
-    if (phase === "ready" && !changingPasscode && !loggingOut && syncHealthy) resumeOutboxRef.current("link");
-  }, [phase, changingPasscode, loggingOut, syncHealthy]);
+    if (phase === "ready" && !changingPasscode && !loggingOut && syncHealthy) sendQueue.resume("link");
+  }, [phase, changingPasscode, loggingOut, syncHealthy, sendQueue]);
 
   function reconcileVersionConflict(cause: unknown, preserveDraft = false): boolean {
     if (!(cause instanceof ApiError) || cause.code !== "VERSION_CONFLICT") return false;
@@ -4915,7 +4403,7 @@ export default function App() {
         // A save that got through but whose answer never came back (a lost
         // response, or Esc once the request had left) meets its own version
         // on the next try: that is this edit, saved — not a change made
-        // elsewhere. The same recovery as a create's (handleCreate).
+        // elsewhere. The same recovery as a create's (OutboxQueue.deliver).
         const kept = memo.images.filter((image) => !data.removeImageIds.includes(image.id)).map((image) => image.id);
         if (
           cause instanceof ApiError &&
@@ -5088,7 +4576,7 @@ export default function App() {
     // conflict with the flip. (The card shows the editor then anyway.)
     if (editingIdRef.current === memo.id) return;
     // Nor is there a stored memo to tick before an unsent one arrives.
-    if (outboxRef.current.has(memo.id) && !syncStateRef.current.memos.has(memo.id)) return;
+    if (sendQueue.has(memo.id) && !syncStateRef.current.memos.has(memo.id)) return;
     stampTaskFlip(memo.id, lineKey, checked);
     let queue = taskFlipQueueRef.current.get(memo.id);
     if (!queue) {
@@ -5591,9 +5079,9 @@ export default function App() {
     toggleSelect,
     selectFrom: (memo: Memo) => enterSelectMode(memo.id),
     notice: (text: string, action?: ToastAction) => showToast(text, "info", action ? { action } : {}),
-    takeBack: (memo: Memo) => void takeBackUnsent(memo.id),
-    retrySend: (memo: Memo) => resumeOutbox("reader", memo.id),
-    discardUnsent: (memo: Memo) => discardUnsent(memo.id)
+    takeBack: (memo: Memo) => void sendQueue.takeBack(memo.id),
+    retrySend: (memo: Memo) => sendQueue.resume("reader", memo.id),
+    discardUnsent: (memo: Memo) => sendQueue.discard(memo.id)
   });
   feedActionsRef.current = {
     startEdit: handleStartEdit,
@@ -5620,9 +5108,9 @@ export default function App() {
     toggleSelect,
     selectFrom: (memo: Memo) => enterSelectMode(memo.id),
     notice: (text: string, action?: ToastAction) => showToast(text, "info", action ? { action } : {}),
-    takeBack: (memo: Memo) => void takeBackUnsent(memo.id),
-    retrySend: (memo: Memo) => resumeOutbox("reader", memo.id),
-    discardUnsent: (memo: Memo) => discardUnsent(memo.id)
+    takeBack: (memo: Memo) => void sendQueue.takeBack(memo.id),
+    retrySend: (memo: Memo) => sendQueue.resume("reader", memo.id),
+    discardUnsent: (memo: Memo) => sendQueue.discard(memo.id)
   };
   const feedHandlers = useMemo<FeedHandlers>(
     () => ({
@@ -5989,78 +5477,18 @@ export default function App() {
   }
 
   /**
-   * Hold the queue while a tag is renamed or removed on the server: a send
-   * stored half-way through would keep the old tag. Returns the release,
-   * which carries on with what waited.
-   */
-  function holdOutbox(): () => void {
-    const work = outboxWorkRef.current;
-    work.holds += 1;
-    let held = true;
-    return () => {
-      if (!held) return;
-      held = false;
-      work.holds -= 1;
-      if (work.holds === 0) void pumpOutbox();
-    };
-  }
-
-  /**
-   * The sends a tag rename or removal may rewrite: those waiting, kept for
-   * an Undo or for ⌘Z as it began — the ones refuseTagRewrite checked. A
-   * send made while the server works is the reader's text as typed.
-   */
-  function outboxScope(): ReadonlySet<string> {
-    const work = outboxWorkRef.current;
-    const ids = new Set(outboxRef.current.keys());
-    for (const entry of work.discarded) ids.add(entry.id);
-    if (work.last) ids.add(work.last.entry.id);
-    return ids;
-  }
-
-  /**
-   * A tag renamed (or removed: `to` null) reaches the sends on their way
-   * too, as the server's rewrite reached the stored memos — their text, the
-   * draft taken back from them, the lens tag they inherited and their
-   * cards — or a send stored later would bring the old tag back. A send
-   * already out is brought level as it lands (deliverOutbox). Only the
-   * sends in `scope` (outboxScope, taken as the change began) are touched,
-   * and none is rewritten into text the server would refuse: a send left
-   * empty would fail, and take its draft with it.
-   */
-  function retagOutbox(from: string, to: string | null, scope: ReadonlySet<string>) {
-    const moved = (tag: string | null) => (tag !== null && tagMatches(tag, from) ? (to === null ? null : to + tag.slice(from.length)) : tag);
-    const retag = (entry: OutboxEntry): OutboxEntry => {
-      const content = renameTagInContent(entry.content, from, to);
-      return { ...entry, content, draft: renameTagInContent(entry.draft, from, to), tag: moved(entry.tag), memo: { ...entry.memo, content } };
-    };
-    const changes = (entry: OutboxEntry) => {
-      if (!scope.has(entry.id)) return false;
-      const content = renameTagInContent(entry.content, from, to);
-      if (rewriteIssue(entry.content, content, entry.images.length)) return false;
-      return content !== entry.content || renameTagInContent(entry.draft, from, to) !== entry.draft || moved(entry.tag) !== entry.tag;
-    };
-    writeOutbox((current) => mapEntries(current, changes, retag));
-    // Kept for a toast's Undo and for ⌘Z: they would put the old tag back
-    // too. Rewritten in place, as the Undo finds its entry by identity.
-    const work = outboxWorkRef.current;
-    for (const entry of work.discarded) if (changes(entry)) Object.assign(entry, retag(entry));
-    if (work.last && changes(work.last.entry)) work.last.entry = retag(work.last.entry);
-  }
-
-  /**
    * Rename on the server, then carry every per-device reference along: the
    * open tag lens, saved presets, a stats drill-down, the review scope and
    * the sends still on their way.
    */
   async function performTagRename(from: string, to: string, onProgress?: (fraction: number) => void) {
-    const release = holdOutbox();
-    const scope = outboxScope();
+    const release = sendQueue.hold();
+    const scope = sendQueue.retagScope();
     try {
       const result = await guard(() => renameTag(from, to, onProgress));
       if (!result) return undefined;
       applySyncChanges(result.memos, [], result.tags);
-      retagOutbox(from, to, scope);
+      sendQueue.retag(from, to, scope);
       setActiveTag((current) => (current && tagMatches(current, from) ? to + current.slice(from.length) : current));
       setSavedFilters((current) => renameSavedFilterTags(current, from, to));
       setStatsDrilldown((current) =>
@@ -6096,8 +5524,8 @@ export default function App() {
 
   async function handleRemoveTag(path: string) {
     if (refuseTagRewrite(path, null)) return;
-    const release = holdOutbox();
-    const scope = outboxScope();
+    const release = sendQueue.hold();
+    const scope = sendQueue.retagScope();
     try {
       const result = await guard(() => removeTag(path));
       if (!result) return;
@@ -6111,7 +5539,7 @@ export default function App() {
         result.memos.map((memo) => memo.id),
         () => {
           applySyncChanges(result.memos, [], result.tags);
-          retagOutbox(path, null, scope);
+          sendQueue.retag(path, null, scope);
           if (resets) setActiveTag(null);
           setSavedFilters((current) => removeSavedFiltersForTag(current, path));
           setStatsDrilldown((current) => (current?.kind === "tag" && tagMatches(current.tag, path) ? null : current));
@@ -7457,7 +6885,7 @@ export default function App() {
             onOpenImage={feedHandlers.openImage}
             controlRef={composerControlRef}
             onOccupiedChange={setComposerOccupied}
-            onUndoSend={undoLastSend}
+            onUndoSend={() => sendQueue.undoLast()}
           />
         </div>
 
