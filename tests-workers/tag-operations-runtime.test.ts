@@ -183,8 +183,8 @@ describe("server tag operation validation", () => {
     );
   }
 
-  async function run(from: string, to: string | null, operationId: string): Promise<void> {
-    let after: string | null | undefined;
+  async function run(from: string, to: string | null, operationId: string, resume?: string): Promise<void> {
+    let after: string | null | undefined = resume;
     for (let guard = 0; guard < 50; guard += 1) {
       const result = await rewriteTag(context(), from, to, operationId, after);
       if (!result?.hasMore) return;
@@ -268,6 +268,72 @@ describe("server tag operation validation", () => {
     // Nothing was written, so the lock is free for the next global change.
     const lock = await env.DB.prepare("SELECT operation_id, completed FROM tag_operation_lock WHERE id = 1").first<{ operation_id: string; completed: number }>();
     expect(lock).toEqual({ operation_id: "remove-chore", completed: 1 });
+  });
+
+  /** A continuation as the previous release minted it: v3, part-way through its write pass. */
+  async function legacyWriteCursor(operationId: string, from: string, to: string | null, after: string, updated: number): Promise<string> {
+    const counter = await env.DB.prepare("SELECT n FROM sync_counter WHERE id = 1").first<{ n: number }>();
+    const max = await env.DB.prepare("SELECT MAX(id) AS id, COUNT(*) AS total FROM memos").first<{ id: string; total: number }>();
+    await env.DB
+      .prepare(
+        `INSERT INTO tag_operation_lock (id, operation_id, operation_kind, from_path, to_path, expires_at, completed)
+         VALUES (1, ?, ?, ?, ?, ?, 0)`
+      )
+      .bind(operationId, to === null ? "remove" : "rename", from, to, Date.now() + 60_000)
+      .run();
+    const cursor = {
+      v: 3,
+      op: to === null ? "remove" : "rename",
+      phase: "write",
+      operationId,
+      from,
+      to,
+      after,
+      maxId: max?.id ?? "",
+      snapshotSeq: Number(counter?.n ?? 0),
+      found: true,
+      updated,
+      retries: 0,
+      scanned: updated,
+      total: Number(max?.total ?? 0)
+    };
+    return btoa(JSON.stringify(cursor)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+
+  it("checks what an older release's removal has left before writing more, and says how much it had done", async () => {
+    // The older release removed #chore from the first two memos, then this
+    // one took over: the third would be left empty, so nothing more is written.
+    await seed(["one", "two", "#chore", "four #chore"]);
+    const after = await legacyWriteCursor("remove-legacy", "chore", null, idOf(1), 2);
+
+    // The resumed job validates the rest first, so "four #chore" — which
+    // the write pass would reach first — is never rewritten.
+    const refusal = await rewriteTag(context(), "chore", null, "remove-legacy", after).catch((cause: unknown) => cause);
+    expect(refusal).toBeInstanceOf(TagRewriteBlockedError);
+    expect((refusal as TagRewriteBlockedError).blocked).toEqual({ empty: 1, tooLong: 0, ids: [idOf(2)] });
+    expect((refusal as TagRewriteBlockedError).done).toBe(2);
+    expect(await contents()).toEqual(["one", "two", "#chore", "four #chore"]);
+  });
+
+  it("finishes an older release's rename from where it stopped once the rest checks out", async () => {
+    await seed(["one #life", "two #life", "three #work", "four #work/deep"]);
+    const after = await legacyWriteCursor("rename-legacy", "work", "life", idOf(1), 2);
+
+    await run("work", "life", "rename-legacy", after);
+    expect(await contents()).toEqual(["one #life", "two #life", "three #life", "four #life/deep"]);
+  });
+
+  it("restarts an older release's validation from the first memo", async () => {
+    await seed(["#chore", "four #chore"]);
+    const legacy = await legacyWriteCursor("remove-legacy-validate", "chore", null, idOf(1), 0);
+    const json = JSON.parse(atob(legacy.replace(/-/g, "+").replace(/_/g, "/"))) as Record<string, unknown>;
+    // As a v3 rename validation would have left it: past the empty memo already.
+    const cursor = btoa(JSON.stringify({ ...json, phase: "validate" })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+
+    const refusal = await run("chore", null, "remove-legacy-validate", cursor).catch((cause: unknown) => cause);
+    expect(refusal).toBeInstanceOf(TagRewriteBlockedError);
+    expect((refusal as TagRewriteBlockedError).blocked.ids).toEqual([idOf(0)]);
+    expect((refusal as TagRewriteBlockedError).done).toBe(0);
   });
 
   it("finishes in one request when no memo carries the tag", async () => {

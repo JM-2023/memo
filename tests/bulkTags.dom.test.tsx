@@ -328,6 +328,37 @@ describe("tag changes that would break a memo", () => {
     expect(mocks.renameTag).not.toHaveBeenCalled();
   });
 
+  it("leaves a send made while a removal runs as it was typed", async () => {
+    mocks.createMemo.mockImplementation(async (id: string, content: string) => ({ memo: { ...memo(id, content, 5) } }));
+    let finishRemoval: (value: unknown) => void = () => undefined;
+    mocks.removeTag.mockImplementationOnce(() => new Promise((resolve) => (finishRemoval = resolve)));
+    const user = userEvent.setup();
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+    await screen.findByText("alpha");
+
+    await user.click(await screen.findByRole("button", { name: "Actions for tag work" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove tag" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove tag" }));
+    await waitFor(() => expect(mocks.removeTag).toHaveBeenCalledTimes(1));
+
+    // Sent while the server is still working: the queue waits it out.
+    fireEvent.change(screen.getByRole("combobox", { name: "Memo content" }), { target: { value: "#work" } });
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(mocks.createMemo).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishRemoval({ memos: [{ ...WORK, content: "alpha", seq: 3 }], tags: [], updated: 1, hasMore: false, nextAfter: null });
+    });
+    expect(await screen.findByText("Removed #work from 1 memo", { selector: ".toast *" })).not.toBeNull();
+    // It goes out as typed instead of emptied and refused.
+    await waitFor(() => expect(mocks.createMemo).toHaveBeenCalledTimes(1));
+    expect(mocks.createMemo.mock.calls[0][1]).toBe("#work");
+  });
+
   it("tells the server's refusal the same way, naming the memos it lists", async () => {
     mocks.renameTag.mockRejectedValueOnce(
       new ApiError("TAG_REWRITE_BLOCKED", 409, "Some memos would be left empty or too long. Edit them first.", {
@@ -351,6 +382,35 @@ describe("tag changes that would break a memo", () => {
     const stamp = formatTime(WORK.createdAt, "en-US");
     expect(
       await screen.findByText(`Couldn’t rename #work: 2 memos would pass 40,000 characters (${stamp} and 1 more). Shorten them first.`, {
+        selector: ".toast *"
+      })
+    ).not.toBeNull();
+  });
+
+  it("says how far a job the previous release began had got before it was refused", async () => {
+    mocks.renameTag.mockRejectedValueOnce(
+      new ApiError("TAG_REWRITE_BLOCKED", 409, "Some memos would be left empty or too long. Edit them first.", {
+        empty: 0,
+        tooLong: 1,
+        max: 40_000,
+        ids: "m-work",
+        done: 3
+      })
+    );
+    const user = userEvent.setup();
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    const { dialog, input } = await openRename(user, "work");
+    await user.type(input, "job");
+    await user.click(within(dialog).getByRole("button", { name: "Rename" }));
+
+    const stamp = formatTime(WORK.createdAt, "en-US");
+    expect(
+      await screen.findByText(`Renamed #work to #job in 3 memos, then stopped: 1 memo would pass 40,000 characters (${stamp}). Shorten it first.`, {
         selector: ".toast *"
       })
     ).not.toBeNull();

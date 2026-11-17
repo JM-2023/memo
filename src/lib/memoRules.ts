@@ -16,12 +16,14 @@ export function memoBodyIssue(content: string, imageCount: number): MemoBodyIssu
 }
 
 /**
- * What a server-side rewrite (a global tag rename or removal) would break:
- * a memo storable before that the new text makes unstorable. A memo already
- * out of bounds before the rewrite is not the rewrite's doing.
+ * What a rewrite of a memo's text (a global tag rename or removal) would
+ * break. It may never leave a memo with no text and no image, and never
+ * grow one past the limit. A memo already past it — stored before the limit
+ * existed — may still shrink toward it, as long as it does not grow.
  */
 export function rewriteIssue(before: string, after: string, imageCount: number): MemoBodyIssue | null {
   if (after === before) return null;
-  const issue = memoBodyIssue(after, imageCount);
-  return issue && memoBodyIssue(before, imageCount) === null ? issue : null;
+  if (!after.trim() && imageCount === 0) return "MEMO_EMPTY";
+  if (after.length > MAX_CONTENT_CHARS && after.length > before.length) return "MEMO_CONTENT_TOO_LONG";
+  return null;
 }

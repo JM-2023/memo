@@ -151,6 +151,15 @@ export function primeImage(id: string, variant: ImageVariant, blob: Blob): void 
   store(keyOf(id, variant), blob);
 }
 
+/**
+ * Seed memory with bytes this device holds and take one reference in the
+ * same step (see admit): the cached entry when there is one, else these
+ * bytes. Give it back with releaseImage.
+ */
+export function admitImage(id: string, variant: ImageVariant, blob: Blob): string {
+  return admit(keyOf(id, variant), blob);
+}
+
 /** The image's bytes, fetched once however many tiles ask at the same time. */
 async function fetchBlob(id: string, variant: ImageVariant): Promise<Blob> {
   const key = keyOf(id, variant);

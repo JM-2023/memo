@@ -275,9 +275,14 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
             scheduleSync(0);
             return;
           }
-          // Ignore changes wholly covered by our own bootstrap/sync. For a
-          // page that straddles the local high-water, apply only its newer
-          // half. Either way it is a good answer from this tab's server.
+          // A page wholly behind this tab's cursor was fetched before what
+          // this tab already holds — possibly before the failure a Retry is
+          // waiting on — so it proves nothing about the server now. Leave the
+          // outcome to this tab's own retry.
+          if (data.cursor < localCursor) return;
+          // For a page that straddles the local high-water, apply only its
+          // newer half. Reaching at least this tab's cursor, it is a good
+          // answer from this tab's server.
           if (data.cursor > localCursor) {
             const delta = changesAfterCursor(data, localCursor);
             if (delta.memos.length > 0 || delta.purged.length > 0 || delta.tags.length > 0) {

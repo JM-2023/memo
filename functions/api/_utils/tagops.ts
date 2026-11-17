@@ -46,8 +46,16 @@ const MEMO_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 type TagOperation = "rename" | "remove";
 type TagPhase = "validate" | "write";
 
+/**
+ * v4: every job checks every memo in the frozen range against the body rules
+ * before its first write. A v3 cursor comes from releases that did not: a
+ * removal went straight to writing, a rename checked only tag-path sizes,
+ * and the write pass now skips a memo it may not rewrite — so a v3 job could
+ * report done with memos quietly left behind. upgradeCursor has what such a
+ * job has left checked before it writes again.
+ */
 interface TagCursor {
-  v: 3;
+  v: 4;
   op: TagOperation;
   phase: TagPhase;
   operationId: string;
@@ -68,6 +76,10 @@ interface TagCursor {
   blockedEmpty?: number;
   blockedLong?: number;
   blockedIds?: string[];
+  /** Where the write pass resumes, and the rows it had finished, once an
+   *  older job's remaining range is validated (upgradeCursor). */
+  writeFrom?: string;
+  writeScanned?: number;
 }
 
 interface BlockedMemos {
@@ -102,7 +114,8 @@ export class InvalidTagContinuationError extends Error {
 }
 
 export class InvalidTagTargetError extends Error {
-  constructor() {
+  /** `done`: memos an older release had already rewritten before the job was resumed and refused. */
+  constructor(readonly done = 0) {
     super("The renamed tag path would exceed the allowed size.");
     this.name = "InvalidTagTargetError";
   }
@@ -114,7 +127,11 @@ export class InvalidTagTargetError extends Error {
  * name. Nothing has been written; the client lists them so they can be fixed.
  */
 export class TagRewriteBlockedError extends Error {
-  constructor(readonly blocked: BlockedMemos) {
+  /** `done`: as for InvalidTagTargetError — zero for any job begun on this release. */
+  constructor(
+    readonly blocked: BlockedMemos,
+    readonly done = 0
+  ) {
     super("The tag change would leave memos the app cannot store.");
     this.name = "TagRewriteBlockedError";
   }
@@ -253,9 +270,10 @@ export async function abandonTagOperation(context: AppContext, operationId: stri
     .run();
 }
 
-/** The 409 body for a refused rewrite: how many memos, of which kind, and which. */
-export function tagRewriteBlockedParams(blocked: BlockedMemos): Record<string, string | number> {
-  return { empty: blocked.empty, tooLong: blocked.tooLong, max: MAX_CONTENT_CHARS, ids: blocked.ids.join(",") };
+/** The 409 body for a refused rewrite: how many memos, of which kind, which, and how many were already rewritten. */
+export function tagRewriteBlockedParams(error: TagRewriteBlockedError): Record<string, string | number> {
+  const { blocked, done } = error;
+  return { empty: blocked.empty, tooLong: blocked.tooLong, max: MAX_CONTENT_CHARS, ids: blocked.ids.join(","), done };
 }
 
 export function validTagPath(path: string): boolean {
@@ -274,9 +292,11 @@ function decodeCursor(value: string, operationId: string, op: TagOperation, from
   try {
     const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
     const binary = atob(padded);
-    const parsed = JSON.parse(new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)))) as Partial<TagCursor>;
+    const parsed = JSON.parse(new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)))) as Partial<
+      Omit<TagCursor, "v">
+    > & { v?: unknown };
     if (
-      parsed.v !== 3 ||
+      (parsed.v !== 3 && parsed.v !== 4) ||
       parsed.op !== op ||
       (parsed.phase !== "validate" && parsed.phase !== "write") ||
       parsed.operationId !== operationId ||
@@ -302,14 +322,30 @@ function decodeCursor(value: string, operationId: string, op: TagOperation, from
       (parsed.blockedIds !== undefined &&
         (!Array.isArray(parsed.blockedIds) ||
           parsed.blockedIds.length > MAX_BLOCKED_IDS ||
-          !parsed.blockedIds.every((id) => typeof id === "string" && MEMO_ID_PATTERN.test(id))))
+          !parsed.blockedIds.every((id) => typeof id === "string" && MEMO_ID_PATTERN.test(id)))) ||
+      (parsed.writeFrom !== undefined &&
+        (typeof parsed.writeFrom !== "string" || parsed.writeFrom.length > MAX_ID_CHARS || parsed.writeFrom > parsed.maxId)) ||
+      (parsed.writeScanned !== undefined && (!Number.isSafeInteger(parsed.writeScanned) || Number(parsed.writeScanned) < 0))
     ) {
       return null;
     }
-    return parsed as TagCursor;
+    return upgradeCursor(parsed as Omit<TagCursor, "v"> & { v: 3 | 4 });
   } catch {
     return null;
   }
+}
+
+/**
+ * A v3 job (see TagCursor) resumes on this release by validating first. A v3
+ * validation restarts from the beginning (nothing is written yet). A v3 write
+ * pass has the rows it has not reached checked, then writes on from where it
+ * stopped; a refusal reports `updated`, the memos it had already rewritten.
+ */
+function upgradeCursor(cursor: Omit<TagCursor, "v"> & { v: 3 | 4 }): TagCursor {
+  if (cursor.v === 4) return cursor as TagCursor;
+  const fresh = { ...cursor, v: 4 as const, retries: 0, blockedEmpty: undefined, blockedLong: undefined, blockedIds: undefined };
+  if (cursor.phase === "validate") return { ...fresh, after: "", scanned: 0, writeFrom: undefined, writeScanned: undefined };
+  return { ...fresh, phase: "validate", writeFrom: cursor.after, writeScanned: cursor.scanned ?? 0 };
 }
 
 function sourceRange(path: string): [string, string, string] {
@@ -343,7 +379,7 @@ async function initialCursor(
   const total = Number(boundary?.total ?? 0);
   const found = Boolean(metaResult.results?.[0]);
   return {
-    v: 3,
+    v: 4,
     op,
     phase: "validate",
     operationId,
@@ -717,7 +753,14 @@ export async function rewriteTag(
     const page = await scanPage(context, state, VALIDATE_PAGE_ROWS, VALIDATE_PAGE_CHARS);
     const blocked: BlockedMemos = { empty: state.blockedEmpty ?? 0, tooLong: state.blockedLong ?? 0, ids: [...(state.blockedIds ?? [])] };
     // Every page is validated, even after an earlier one found the tag.
-    const pageFound = await validateMemoPage(page.rows, page.imageful, from, to, context, blocked);
+    let pageFound: boolean;
+    try {
+      pageFound = await validateMemoPage(page.rows, page.imageful, from, to, context, blocked);
+    } catch (error) {
+      // A resumed older job may already have rewritten some memos: say so.
+      if (error instanceof InvalidTagTargetError) throw new InvalidTagTargetError(state.updated);
+      throw error;
+    }
     const found = state.found || pageFound;
     const scanned = (state.scanned ?? 0) + page.rows.length;
     if (page.hasMore) {
@@ -733,7 +776,7 @@ export async function rewriteTag(
       };
       return { memos: [], tags: [], updated: 0, hasMore: true, nextAfter: encodeCursor(next), progress: progressOf(next) };
     }
-    if (blocked.empty > 0 || blocked.tooLong > 0) throw new TagRewriteBlockedError(blocked);
+    if (blocked.empty > 0 || blocked.tooLong > 0) throw new TagRewriteBlockedError(blocked, state.updated);
     if (!found) {
       // No memo and no pinned row carries the tag: nothing to write.
       await releaseTagOperation(context, operationId);
@@ -742,17 +785,25 @@ export async function rewriteTag(
     // Validation covered the frozen sequence range. Start a second bounded
     // pass for writes; concurrent edits move above snapshotSeq and are left
     // for their author instead of invalidating an already-written prefix.
-    await assertTagMetaTargetsFit(context, { ...state, found });
+    try {
+      await assertTagMetaTargetsFit(context, { ...state, found });
+    } catch (error) {
+      if (error instanceof InvalidTagTargetError) throw new InvalidTagTargetError(state.updated);
+      throw error;
+    }
     const next: TagCursor = {
       ...state,
       phase: "write",
-      after: "",
+      // A fresh job writes from the start; a resumed one where it stopped.
+      after: state.writeFrom ?? "",
       found,
       retries: 0,
-      scanned: 0,
+      scanned: state.writeScanned ?? 0,
       blockedEmpty: undefined,
       blockedLong: undefined,
-      blockedIds: undefined
+      blockedIds: undefined,
+      writeFrom: undefined,
+      writeScanned: undefined
     };
     return { memos: [], tags: [], updated: 0, hasMore: true, nextAfter: encodeCursor(next), progress: progressOf(next) };
   }

@@ -193,6 +193,30 @@ describe("backup export across a change", () => {
   });
 });
 
+describe("backup export with memos the import would refuse", () => {
+  it("still downloads the file and names the memos to fix", async () => {
+    const user = userEvent.setup();
+    mocks.exportData.mockImplementationOnce(async ({ onUnrestorable }: { onUnrestorable: (memos: { count: number; ids: string[] }) => void }) => {
+      onUnrestorable({ count: 2, ids: ["memo-0"] });
+      return new Blob(["{}"], { type: "application/json" });
+    });
+    const createObjectURL = vi.fn(() => "blob:backup");
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    await renderApp();
+
+    await user.click(document.querySelector<HTMLButtonElement>(".user-button")!);
+    await user.click(await screen.findByRole("menuitem", { name: "Export Data" }));
+
+    expect(
+      await screen.findByText(/^Exported your backup, but 2 memos in it won’t import back: empty, or over 40,000 characters \(.+ and 1 more\)\. Edit them, then export again\.$/, {
+        selector: ".toast *"
+      })
+    ).toBeTruthy();
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("backup import failure hint", () => {
   function backupFile(count: number): File {
     const memos = Array.from({ length: count }, (_, index) => ({

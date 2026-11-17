@@ -32,6 +32,14 @@ describe("memo body rules", () => {
     expect(rewriteIssue("x".repeat(MAX_CONTENT_CHARS + 10), "x".repeat(MAX_CONTENT_CHARS + 5), 0)).toBeNull();
     expect(rewriteIssue("x".repeat(MAX_CONTENT_CHARS - 1), "x".repeat(MAX_CONTENT_CHARS + 1), 0)).toBe("MEMO_CONTENT_TOO_LONG");
   });
+
+  it("never lets a rewrite grow an over-long memo or empty it", () => {
+    // A 47,999-character memo stored before the limit existed.
+    const legacy = `${" ".repeat(47_994)}#tag`;
+    expect(rewriteIssue(legacy, " ".repeat(47_994), 0)).toBe("MEMO_EMPTY");
+    expect(rewriteIssue(legacy, `${" ".repeat(47_994)}#tag-much-longer`, 0)).toBe("MEMO_CONTENT_TOO_LONG");
+    expect(rewriteIssue(`${"x".repeat(47_994)}#tag`, "x".repeat(47_994), 0)).toBeNull();
+  });
 });
 
 describe("tag rewrite blockers", () => {
@@ -54,8 +62,9 @@ describe("tag rewrite blockers", () => {
   });
 
   it("reads a server refusal defensively", () => {
-    expect(refusalOf({ empty: 2, tooLong: 0, ids: "a,b" })).toEqual({ empty: 2, tooLong: 0, ids: ["a", "b"] });
-    expect(refusalOf({ empty: "2", ids: "" })).toEqual({ empty: 0, tooLong: 0, ids: [] });
-    expect(refusalOf(undefined)).toEqual({ empty: 0, tooLong: 0, ids: [] });
+    expect(refusalOf({ empty: 2, tooLong: 0, ids: "a,b" })).toEqual({ empty: 2, tooLong: 0, ids: ["a", "b"], done: 0 });
+    expect(refusalOf({ empty: "2", ids: "", done: -1 })).toEqual({ empty: 0, tooLong: 0, ids: [], done: 0 });
+    expect(refusalOf({ tooLong: 1, done: 5 })).toEqual({ empty: 0, tooLong: 1, ids: [], done: 5 });
+    expect(refusalOf(undefined)).toEqual({ empty: 0, tooLong: 0, ids: [], done: 0 });
   });
 });

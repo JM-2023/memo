@@ -81,7 +81,8 @@ import {
   trashMemo,
   updateMemo,
   type BootstrapResponse,
-  type MemoBatchFailure
+  type MemoBatchFailure,
+  type UnrestorableMemos
 } from "./lib/api";
 import { BackupFormatError, inspectBackup, readBackupItems } from "./lib/backupFile";
 import { startBoot, type BootStart } from "./lib/boot";
@@ -98,7 +99,7 @@ import { splitTaskLine } from "./lib/markdown";
 import { useModelDownloadPhase } from "./lib/modelDownload";
 import { storedModelState } from "./lib/modelLoader";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
-import { MAX_CONTENT_CHARS } from "./lib/memoRules";
+import { MAX_CONTENT_CHARS, rewriteIssue } from "./lib/memoRules";
 import { captureFeedPlace, createNavStore, isLayerState, isRootLens, lensesEqual, navIdOf, restoreFeedPlace, ROOT_LENS, type NavLens, type NavPlace, type NavStore } from "./lib/navHistory";
 import { applyOptimisticLayer, withOptimistic, withoutPatch, withPatch, type OptimisticLayer, type OptimisticPatch } from "./lib/optimisticMemos";
 import { RECENT_SEARCHES_KEY, loadRecentSearches, persistRecentSearches, rememberSearch } from "./lib/recentSearches";
@@ -5923,18 +5924,36 @@ export default function App() {
     return true;
   }
 
-  /** The server's TAG_REWRITE_BLOCKED, told as refuseTagRewrite tells it; false for any other failure. */
+  /**
+   * The server's TAG_REWRITE_BLOCKED, told as refuseTagRewrite tells it, and
+   * a too-long target found part-way through a job an older release began
+   * (TAG_INVALID with `done`); false for any other failure.
+   */
   function showTagRewriteRefusal(cause: unknown, from: string, to: string | null): boolean {
-    if (!(cause instanceof ApiError) || cause.code !== "TAG_REWRITE_BLOCKED") return false;
+    if (!(cause instanceof ApiError)) return false;
     const refusal = refusalOf(cause.params);
-    if (refusal.empty + refusal.tooLong === 0) return false;
+    if (cause.code === "TAG_INVALID" && to !== null && refusal.done > 0) {
+      showToast(
+        tr(
+          `Renamed #${from} to #${to} in ${count(refusal.done, "memo")}, then stopped: a tag under it would be too long. Pick a shorter name to finish.`,
+          `已在 ${count(refusal.done, "memo")}中将 #${from} 重命名为 #${to}，随后停止：其下有标签会超出长度上限，请换个更短的名称完成重命名`
+        ),
+        "error"
+      );
+      return true;
+    }
+    if (cause.code !== "TAG_REWRITE_BLOCKED" || refusal.empty + refusal.tooLong === 0) return false;
     const named = refusal.ids.flatMap((id) => syncState.memos.get(id) ?? []);
-    showTagRewriteBlocked(from, to, refusal.empty, refusal.tooLong, named);
+    showTagRewriteBlocked(from, to, refusal.empty, refusal.tooLong, named, refusal.done);
     return true;
   }
 
-  /** Names the memos in the way by their stamps (the first three), and what to do about them. */
-  function showTagRewriteBlocked(from: string, to: string | null, empty: number, tooLong: number, named: readonly Memo[]) {
+  /**
+   * Names the memos in the way by their stamps (the first three), and what to
+   * do about them. `done` (memos already rewritten, by a job an older release
+   * began) leads the toast, so a part-finished job never reads as untouched.
+   */
+  function showTagRewriteBlocked(from: string, to: string | null, empty: number, tooLong: number, named: readonly Memo[], done = 0) {
     const total = empty + tooLong;
     const stamps = named.slice(0, 3).map((memo) => formatTime(memo.createdAt, locale));
     const more = total - stamps.length;
@@ -5952,12 +5971,15 @@ export default function App() {
               `请先缩短内容`
             ]
           : [`would be left empty or too long`, `会变成空白或超出长度上限`, `Edit ${them} first.`, `请先编辑这些笔记`];
-    showToast(
-      to === null
-        ? tr(`Couldn’t remove #${from}: ${count(total, "memo")} ${reasonEn}${listEn}. ${fixEn}`, `无法移除 #${from}：${count(total, "memo")}${reasonZh}${listZh}，${fixZh}`)
-        : tr(`Couldn’t rename #${from}: ${count(total, "memo")} ${reasonEn}${listEn}. ${fixEn}`, `无法重命名 #${from}：${count(total, "memo")}${reasonZh}${listZh}，${fixZh}`),
-      "error"
-    );
+    const [leadEn, leadZh] =
+      done > 0
+        ? to === null
+          ? [`Removed #${from} from ${count(done, "memo")}, then stopped`, `已从 ${count(done, "memo")}中移除 #${from}，随后停止`]
+          : [`Renamed #${from} to #${to} in ${count(done, "memo")}, then stopped`, `已在 ${count(done, "memo")}中将 #${from} 重命名为 #${to}，随后停止`]
+        : to === null
+          ? [`Couldn’t remove #${from}`, `无法移除 #${from}`]
+          : [`Couldn’t rename #${from}`, `无法重命名 #${from}`];
+    showToast(tr(`${leadEn}: ${count(total, "memo")} ${reasonEn}${listEn}. ${fixEn}`, `${leadZh}：${count(total, "memo")}${reasonZh}${listZh}，${fixZh}`), "error");
   }
 
   /** True when `path` or a tag under it is on any memo, Trash and the sends on their way included — renaming onto it merges. */
@@ -5984,20 +6006,40 @@ export default function App() {
   }
 
   /**
+   * The sends a tag rename or removal may rewrite: those waiting, kept for
+   * an Undo or for ⌘Z as it began — the ones refuseTagRewrite checked. A
+   * send made while the server works is the reader's text as typed.
+   */
+  function outboxScope(): ReadonlySet<string> {
+    const work = outboxWorkRef.current;
+    const ids = new Set(outboxRef.current.keys());
+    for (const entry of work.discarded) ids.add(entry.id);
+    if (work.last) ids.add(work.last.entry.id);
+    return ids;
+  }
+
+  /**
    * A tag renamed (or removed: `to` null) reaches the sends on their way
    * too, as the server's rewrite reached the stored memos — their text, the
    * draft taken back from them, the lens tag they inherited and their
    * cards — or a send stored later would bring the old tag back. A send
-   * already out is brought level as it lands (deliverOutbox).
+   * already out is brought level as it lands (deliverOutbox). Only the
+   * sends in `scope` (outboxScope, taken as the change began) are touched,
+   * and none is rewritten into text the server would refuse: a send left
+   * empty would fail, and take its draft with it.
    */
-  function retagOutbox(from: string, to: string | null) {
+  function retagOutbox(from: string, to: string | null, scope: ReadonlySet<string>) {
     const moved = (tag: string | null) => (tag !== null && tagMatches(tag, from) ? (to === null ? null : to + tag.slice(from.length)) : tag);
     const retag = (entry: OutboxEntry): OutboxEntry => {
       const content = renameTagInContent(entry.content, from, to);
       return { ...entry, content, draft: renameTagInContent(entry.draft, from, to), tag: moved(entry.tag), memo: { ...entry.memo, content } };
     };
-    const changes = (entry: OutboxEntry) =>
-      renameTagInContent(entry.content, from, to) !== entry.content || renameTagInContent(entry.draft, from, to) !== entry.draft || moved(entry.tag) !== entry.tag;
+    const changes = (entry: OutboxEntry) => {
+      if (!scope.has(entry.id)) return false;
+      const content = renameTagInContent(entry.content, from, to);
+      if (rewriteIssue(entry.content, content, entry.images.length)) return false;
+      return content !== entry.content || renameTagInContent(entry.draft, from, to) !== entry.draft || moved(entry.tag) !== entry.tag;
+    };
     writeOutbox((current) => mapEntries(current, changes, retag));
     // Kept for a toast's Undo and for ⌘Z: they would put the old tag back
     // too. Rewritten in place, as the Undo finds its entry by identity.
@@ -6013,11 +6055,12 @@ export default function App() {
    */
   async function performTagRename(from: string, to: string, onProgress?: (fraction: number) => void) {
     const release = holdOutbox();
+    const scope = outboxScope();
     try {
       const result = await guard(() => renameTag(from, to, onProgress));
       if (!result) return undefined;
       applySyncChanges(result.memos, [], result.tags);
-      retagOutbox(from, to);
+      retagOutbox(from, to, scope);
       setActiveTag((current) => (current && tagMatches(current, from) ? to + current.slice(from.length) : current));
       setSavedFilters((current) => renameSavedFilterTags(current, from, to));
       setStatsDrilldown((current) =>
@@ -6054,6 +6097,7 @@ export default function App() {
   async function handleRemoveTag(path: string) {
     if (refuseTagRewrite(path, null)) return;
     const release = holdOutbox();
+    const scope = outboxScope();
     try {
       const result = await guard(() => removeTag(path));
       if (!result) return;
@@ -6067,7 +6111,7 @@ export default function App() {
         result.memos.map((memo) => memo.id),
         () => {
           applySyncChanges(result.memos, [], result.tags);
-          retagOutbox(path, null);
+          retagOutbox(path, null, scope);
           if (resets) setActiveTag(null);
           setSavedFilters((current) => removeSavedFiltersForTag(current, path));
           setStatsDrilldown((current) => (current?.kind === "tag" && tagMatches(current.tag, path) ? null : current));
@@ -6117,6 +6161,8 @@ export default function App() {
       dismissToast(job.toastId);
     };
     let blob: Blob | undefined;
+    // Set by the last page when some memos would not import back.
+    const report: { unrestorable: UnrestorableMemos | null } = { unrestorable: null };
     try {
       blob = await guard(() =>
         exportData({
@@ -6124,6 +6170,9 @@ export default function App() {
           onProgress: ({ done, total }) => {
             job.detail = tr(`${formatNumber(done)} of ${count(total, "memo")}`, `${formatNumber(done)} / ${count(total, "memo")}`);
             updateToastDetail(job.toastId, job.detail);
+          },
+          onUnrestorable: (memos) => {
+            report.unrestorable = memos;
           }
         })
       );
@@ -6148,7 +6197,28 @@ export default function App() {
     anchor.click();
     anchor.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 4000);
-    showToast(tr("Exported your backup", "已导出备份"));
+    const broken = report.unrestorable;
+    if (!broken) {
+      showToast(tr("Exported your backup", "已导出备份"));
+      return;
+    }
+    // Memos from before today's body rule: in the file, but its import
+    // would refuse them. Named by stamp so they can be found and fixed.
+    const stamps = broken.ids.flatMap((id) => {
+      const memo = syncState.memos.get(id);
+      return memo ? [formatTime(memo.createdAt, locale)] : [];
+    });
+    const more = broken.count - stamps.length;
+    const listEn = stamps.length > 0 ? ` (${stamps.join("; ")}${more > 0 ? ` and ${formatNumber(more)} more` : ""})` : "";
+    const listZh = stamps.length > 0 ? `（${stamps.join("、")}${more > 0 ? " 等" : ""}）` : "";
+    const them = broken.count === 1 ? "it" : "them";
+    showToast(
+      tr(
+        `Exported your backup, but ${count(broken.count, "memo")} in it won’t import back: empty, or over ${formatNumber(MAX_CONTENT_CHARS)} characters${listEn}. Edit ${them}, then export again.`,
+        `已导出备份，但其中 ${count(broken.count, "memo")}无法导回：内容为空或超过 ${formatNumber(MAX_CONTENT_CHARS)} 字${listZh}。请先编辑，再重新导出`
+      ),
+      "error"
+    );
   }
 
   // A toast's action outlives the render that created it; run the latest.

@@ -603,6 +603,12 @@ export interface ExportProgress {
   total: number;
 }
 
+/** Memos in a finished export that its import would refuse, and the first few of their ids. */
+export interface UnrestorableMemos {
+  count: number;
+  ids: string[];
+}
+
 export interface ImportTotals {
   imported: number;
   skipped: number;
@@ -624,13 +630,19 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
  * part, so the notebook never sits in the JS heap as strings or objects.
  */
 export async function exportData(
-  options: { signal?: AbortSignal; onProgress?: (progress: ExportProgress) => void } = {}
+  options: {
+    signal?: AbortSignal;
+    onProgress?: (progress: ExportProgress) => void;
+    /** Called once, after the last page, when some memos would not import back. */
+    onUnrestorable?: (memos: UnrestorableMemos) => void;
+  } = {}
 ): Promise<Blob> {
-  const { signal, onProgress } = options;
+  const { signal, onProgress, onUnrestorable } = options;
   const parts: Blob[] = [];
   let after: string | null = null;
   let done = 0;
   let total = 0;
+  const unrestorable: UnrestorableMemos = { count: 0, ids: [] };
   for (;;) {
     throwIfAborted(signal);
     const query: string = after ? `&after=${encodeURIComponent(after)}` : "";
@@ -644,14 +656,19 @@ export async function exportData(
       if (!Number.isSafeInteger(count)) {
         throw new ApiError("EXPORT_FORMAT_UNSUPPORTED", response.status, "The server sent an export page in an unsupported format.");
       }
+      const rawUnrestorable = response.headers.get("X-Export-Unrestorable");
       return {
         body: await response.blob(),
         next: response.headers.get("X-Export-Next"),
         count,
-        total: response.headers.get("X-Export-Total")
+        total: response.headers.get("X-Export-Total"),
+        unrestorable: rawUnrestorable !== null && /^\d+$/.test(rawUnrestorable) ? Number(rawUnrestorable) : 0,
+        unrestorableIds: (response.headers.get("X-Export-Unrestorable-Ids") ?? "").split(",").filter(Boolean)
       };
     });
     parts.push(page.body);
+    unrestorable.count += page.unrestorable;
+    for (const id of page.unrestorableIds) if (unrestorable.ids.length < 3) unrestorable.ids.push(id);
     if (page.total !== null) total = Number(page.total) || 0;
     done += page.count;
     onProgress?.({ done, total: Math.max(total, done) });
@@ -659,6 +676,7 @@ export async function exportData(
     if (page.next === after) throw new Error("Export page did not advance");
     after = page.next;
   }
+  if (unrestorable.count > 0) onUnrestorable?.(unrestorable);
   return new Blob(parts, { type: "application/json" });
 }
 

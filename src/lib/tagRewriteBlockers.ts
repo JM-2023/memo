@@ -30,9 +30,13 @@ export function tagRewriteBlockers(memos: Iterable<Memo>, from: string, to: stri
   return blockers;
 }
 
-/** A server refusal (TAG_REWRITE_BLOCKED): its counts and the ids it names, which may be a prefix of all of them. */
-export function refusalOf(params: Record<string, unknown> | undefined): { empty: number; tooLong: number; ids: string[] } {
+/**
+ * A server refusal (TAG_REWRITE_BLOCKED, or TAG_INVALID part-way): its counts,
+ * the ids it names (which may be a prefix of all of them), and `done`, the
+ * memos already rewritten — non-zero only for a job an older release began.
+ */
+export function refusalOf(params: Record<string, unknown> | undefined): { empty: number; tooLong: number; ids: string[]; done: number } {
   const countOf = (value: unknown) => (typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0);
   const ids = typeof params?.ids === "string" && params.ids ? params.ids.split(",").filter(Boolean) : [];
-  return { empty: countOf(params?.empty), tooLong: countOf(params?.tooLong), ids };
+  return { empty: countOf(params?.empty), tooLong: countOf(params?.tooLong), ids, done: countOf(params?.done) };
 }

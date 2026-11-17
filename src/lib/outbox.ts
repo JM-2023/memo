@@ -1,5 +1,5 @@
 import { ApiError, AuthRequiredError, isTransientImportFailure } from "./api";
-import { primeImage, releaseImage, retainImage, type ImageVariant } from "./imageCache";
+import { admitImage, releaseImage, retainImage, type ImageVariant } from "./imageCache";
 import type { Memo, MemoImage, NewImagePayload } from "./types";
 
 /**
@@ -167,11 +167,13 @@ export function holdPreviews(images: readonly NewImagePayload[]): () => void {
       if (!url) {
         const thumb = variant === "thumb" && image.thumbBase64 ? image.thumbBase64 : null;
         try {
-          primeImage(image.id, variant, blobOf(thumb ?? image.dataBase64, thumb ? image.thumbMime ?? image.mime : image.mime));
+          // Stored and held in one step: with the budget full of pictures
+          // other tiles are drawing, bytes stored first and retained after
+          // would be the one entry free to evict in between.
+          url = admitImage(image.id, variant, blobOf(thumb ?? image.dataBase64, thumb ? image.thumbMime ?? image.mime : image.mime));
         } catch {
           // No copy to draw from: the tile loads it once it is stored.
         }
-        url = retainImage(image.id, variant);
       }
       if (url) held.push([image.id, variant, url]);
     }

@@ -70,16 +70,18 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
     }
     if (error instanceof InvalidTagTargetError) {
       await releaseTagOperation(context, operationId);
-      return apiError(400, "TAG_INVALID", "The renamed tag path is too long.");
+      return apiError(400, "TAG_INVALID", "The renamed tag path is too long.", error.done > 0 ? { done: error.done } : undefined);
     }
     if (error instanceof TagRewriteBlockedError) {
-      // Refused at the end of validation, before any page was written.
+      // Refused at the end of validation. A job begun on this release has
+      // written nothing; one an older release began reports what it had
+      // (params.done). Either way the job ends here and is retried afresh.
       await releaseTagOperation(context, operationId);
       return apiError(
         409,
         "TAG_REWRITE_BLOCKED",
         "Some memos would be left empty or too long. Edit them first.",
-        tagRewriteBlockedParams(error.blocked)
+        tagRewriteBlockedParams(error)
       );
     }
     if (error instanceof TagOperationConflictError) {

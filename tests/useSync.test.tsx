@@ -134,7 +134,7 @@ describe("useSync cross-tab coordination", () => {
     unmount();
   });
 
-  it("treats a peer page this tab already holds as a good answer", async () => {
+  it("treats a peer page that reaches this tab's cursor as a good answer", async () => {
     const { result, unmount } = renderHook(() =>
       useSync({ enabled: true, applyChanges: vi.fn(), onAuthLost: vi.fn(), onPeerLogout: vi.fn(), onServerReset: vi.fn() })
     );
@@ -157,6 +157,33 @@ describe("useSync cross-tab coordination", () => {
       await Promise.resolve();
     });
     expect(retried).toBe(true);
+    unmount();
+  });
+
+  it("does not take a page from before what this tab holds as an answer", async () => {
+    const { result, unmount } = renderHook(() =>
+      useSync({ enabled: true, applyChanges: vi.fn(), onAuthLost: vi.fn(), onPeerLogout: vi.fn(), onServerReset: vi.fn() })
+    );
+    act(() => {
+      result.current.setCursor(900);
+      result.current.setSyncEpoch("epoch-a");
+    });
+    let retried: boolean | undefined;
+    act(() => {
+      void result.current.retryNow().then((ok) => {
+        retried = ok;
+      });
+    });
+    // A sibling broadcasts a pull it made long ago, before this tab caught up.
+    await act(async () => {
+      TestBroadcastChannel.instances[0].emit({
+        type: "delta",
+        since: 1,
+        data: { memos: [], purged: [], tags: [], cursor: 2, syncEpoch: "epoch-a", serverTime: "2026-01-01T00:00:00.000Z", hasMore: false }
+      });
+      await Promise.resolve();
+    });
+    expect(retried).toBeUndefined();
     unmount();
   });
 

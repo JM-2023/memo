@@ -1,3 +1,4 @@
+import { memoBodyIssue } from "../../src/lib/memoRules";
 import { requireAuth } from "./_utils/auth";
 import { openContentRows } from "./_utils/crypto";
 import { MEMO_COLUMNS, type MemoRow, type TagMetaRow } from "./_utils/memos";
@@ -49,6 +50,8 @@ interface ExportMemo {
 const MAX_CURSOR_CHARS = 1_024;
 const MAX_ID_CHARS = 128;
 const MAX_MEMOS_PER_PAGE = 50;
+/** Ids per page of memos the import would refuse, for the client to name. */
+const MAX_UNRESTORABLE_IDS = 3;
 const TARGET_IMAGE_BYTES_PER_PAGE = 6_000_000;
 
 function encodeCursor(cursor: ExportCursor): string {
@@ -272,6 +275,17 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
   }
   headers["X-Export-Count"] = String(memos.length);
   if (total !== null) headers["X-Export-Total"] = String(total);
+  // Memos stored before today's body rule (over 40,000 characters, or left
+  // with no text and no image) export as they are, but the import refuses
+  // them; say which, so the reader can fix them before relying on the file.
+  const unrestorable = memos.filter((memo) => memoBodyIssue(memo.content, memo.images.length) !== null);
+  if (unrestorable.length > 0) {
+    headers["X-Export-Unrestorable"] = String(unrestorable.length);
+    headers["X-Export-Unrestorable-Ids"] = unrestorable
+      .slice(0, MAX_UNRESTORABLE_IDS)
+      .map((memo) => memo.id)
+      .join(",");
+  }
   if (nextAfter) headers["X-Export-Next"] = nextAfter;
   return new Response(
     streamedPage(continuation ? "" : `${objectHead},"tags":${tags},"memos":[`, memos, state.wrote === 1, hasMore ? "" : "]}"),

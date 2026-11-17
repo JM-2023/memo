@@ -180,6 +180,25 @@ describe("paged export", () => {
     ]);
   });
 
+  it("adds up the memos the import would refuse across pages and reports them once", async () => {
+    exportFetch([
+      {
+        body: '{"format":"memo-backup","version":1,"exportedAt":"t","tags":[],"memos":[{"id":"a"}',
+        headers: { "X-Export-Count": "1", "X-Export-Next": "c1", "X-Export-Unrestorable": "2", "X-Export-Unrestorable-Ids": "a,b" }
+      },
+      { body: ',{"id":"c"}]}', headers: { "X-Export-Count": "1", "X-Export-Unrestorable": "3", "X-Export-Unrestorable-Ids": "c,d,e" } }
+    ]);
+    const onUnrestorable = vi.fn();
+    await exportData({ onUnrestorable });
+    expect(onUnrestorable).toHaveBeenCalledTimes(1);
+    expect(onUnrestorable).toHaveBeenCalledWith({ count: 5, ids: ["a", "b", "c"] });
+
+    exportFetch([{ body: '{"format":"memo-backup","version":1,"exportedAt":"t","tags":[],"memos":[]}', headers: { "X-Export-Count": "0" } }]);
+    const quiet = vi.fn();
+    await exportData({ onUnrestorable: quiet });
+    expect(quiet).not.toHaveBeenCalled();
+  });
+
   it("refuses a legacy page from a server that ignored parts mode instead of saving it truncated", async () => {
     exportFetch([
       {

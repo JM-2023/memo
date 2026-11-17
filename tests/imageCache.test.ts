@@ -13,6 +13,7 @@ import {
   releaseImage
 } from "../src/lib/imageCache";
 import { derivePreview } from "../src/lib/imageEncode";
+import { holdPreviews } from "../src/lib/outbox";
 import { clearLocalDeviceData } from "../src/lib/logoutCleanup";
 import type { Memo } from "../src/lib/types";
 
@@ -143,6 +144,26 @@ describe("eviction", () => {
 
     releaseImage("next", "thumb", url);
     held.forEach((heldUrl, index) => releaseImage(`held-${index}`, "full", heldUrl));
+  });
+
+  it("holds an unsent memo's pictures even when drawn images fill the budget", async () => {
+    fetchMock.mockImplementation(async () => new Response(new Uint8Array(9 * 1024 * 1024), { status: 200, headers: { "Content-Type": "image/webp" } }));
+    const held: string[] = [];
+    for (let index = 0; index < 6; index += 1) held.push(await acquireImage(`drawn-${index}`, "full"));
+
+    // Not in memory (sent again under fresh ids): stored from the payload
+    // and held in the same step, so neither copy is the entry evicted.
+    const release = holdPreviews([
+      { id: "queued", dataBase64: btoa("\x01\x02"), mime: "image/webp", width: 1, height: 1, thumbBase64: btoa("\x03"), thumbMime: "image/webp", previewUrl: "" }
+    ]);
+    const thumb = peekImage("queued", "thumb");
+    const full = peekImage("queued", "full");
+    expect(thumb && (await bytesAt(thumb))).toEqual([3]);
+    expect(full && (await bytesAt(full))).toEqual([1, 2]);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+
+    release();
+    held.forEach((url, index) => releaseImage(`drawn-${index}`, "full", url));
   });
 
   it("keeps a peeked URL alive until its holder can retain it", async () => {

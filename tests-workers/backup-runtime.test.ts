@@ -221,6 +221,29 @@ describe("backup export pages", () => {
     }
   });
 
+  it("names memos from before the body rule that the import would refuse", async () => {
+    const cookie = await authenticatedCookie();
+    await seed(cookie, 2);
+    // Stored before the 40,000-character rule, and one left empty by an
+    // older tag removal: both export, neither imports back.
+    await env.DB.batch([
+      env.DB
+        .prepare("INSERT INTO memos (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)")
+        .bind("legacy-long", "x".repeat(47_999), "2026-07-16T00:00:00.000Z", "2026-07-16T00:00:00.000Z"),
+      env.DB
+        .prepare("INSERT INTO memos (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)")
+        .bind("legacy-empty", "  ", "2026-07-16T00:00:00.000Z", "2026-07-16T00:00:00.000Z")
+    ]);
+    const response = await exportBackup(context(get(cookie, "/api/export?parts=1")));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("X-Export-Unrestorable")).toBe("2");
+    expect(response.headers.get("X-Export-Unrestorable-Ids")).toBe("legacy-empty,legacy-long");
+
+    const file = JSON.parse(await response.text()) as { memos: { id: string }[] };
+    const rejected = await importBackup(context(post(cookie, backup(file.memos.filter((item) => item.id === "legacy-long")))));
+    expect(rejected.status).toBe(400);
+  });
+
   it("closes an empty notebook in one page", async () => {
     const cookie = await authenticatedCookie();
     const response = await exportBackup(context(get(cookie, "/api/export?parts=1")));
