@@ -651,7 +651,11 @@ describe("search and jump", () => {
     expect(tag.querySelector(".jump-hit")?.textContent).toBe("jour");
     expect(tag.textContent).toContain("Tab");
     // Enter still means "search": the search row is the one in hand.
-    expect(search.getAttribute("aria-activedescendant")).toBe(within(list).getByRole("option", { name: "Search “jour”" }).id);
+    const searchRow = within(list).getByRole("option", { name: /^Search “jour”/ });
+    expect(search.getAttribute("aria-activedescendant")).toBe(searchRow.id);
+    // The row says what the feed beneath it shows.
+    const shown = screen.getAllByRole("article").length;
+    await waitFor(() => expect(searchRow.getAttribute("aria-label")).toBe(`Search “jour”, ${shown} memo${shown === 1 ? "" : "s"}`));
     await user.keyboard("{Tab}");
     expect(search.value).toBe("#journal");
     expect(document.activeElement).toBe(search);

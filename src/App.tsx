@@ -6258,6 +6258,9 @@ export default function App() {
     saved: savedFilters,
     recent: recentSearches,
     meaningAvailable: !semanticOn && modelOnDevice && !modelBusy,
+    // The feed's figure for exactly the typed text; null while a deferred
+    // keystroke is still on its way to the feed.
+    searchCount: statsDrilldown === null && feedQuery === trimmedQuery ? visibleMemos.length : null,
     onAct: actOnJump,
     onComplete: (text) => {
       setJumpOpen(true);

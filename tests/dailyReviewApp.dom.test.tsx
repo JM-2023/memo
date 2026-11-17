@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { TipProvider } from "../src/components/Tip";
-import { REVIEW_SEEN_MS } from "../src/hooks/useReviewSeen";
+import { REVIEW_SEEN_MAX_MS, REVIEW_SEEN_MS } from "../src/hooks/useReviewSeen";
 import { LanguageProvider } from "../src/lib/i18n";
 import type { Memo } from "../src/lib/types";
 
@@ -222,9 +222,11 @@ describe("Daily review", () => {
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
 
     // The rest are read on screen.
+    // One at a time: the two left take two readings.
     showReviewCards();
     await new Promise((resolve) => setTimeout(resolve, REVIEW_SEEN_MS + 100));
-    await waitFor(() => expect(banner()).toMatch(/ · 3 of 3 revisited$/));
+    expect(banner()).toMatch(/ · 2 of 3 revisited$/);
+    await waitFor(() => expect(banner()).toMatch(/ · 3 of 3 revisited$/), { timeout: REVIEW_SEEN_MAX_MS + 500 });
     expect(screen.getByRole("progressbar", { name: "Revisited today" }).getAttribute("aria-valuenow")).toBe("3");
     expect(screen.getByText("All three revisited for today")).toBeTruthy();
     expect(screen.getByText("A new set tomorrow")).toBeTruthy();

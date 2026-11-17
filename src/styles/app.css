@@ -1894,12 +1894,12 @@ button.heat-cell[aria-disabled="true"]:active { filter: none; }
 }
 .crumb.is-current { color: var(--ink); font-weight: 600; }
 .crumb-home { flex: none; padding: 6px 8px; color: var(--muted); }
-/* Trash location crumb: same geometry as a tag crumb, danger-tinted icon. */
-.crumb-trash { gap: 5px; }
-.crumb-trash svg { flex: none; color: var(--danger); }
-/* Daily-review location crumb: same geometry, sage-tinted spark. */
-.crumb-review { gap: 5px; }
-.crumb-review svg { flex: none; color: var(--leaf); }
+/* Location crumbs (Trash, Daily review): same geometry as a tag crumb, and the
+   icon in the sage the sidebar gives the current place. Red is not a place:
+   in Trash it belongs to Empty Trash alone, which on a phone folds to a bare
+   bin right beside this one, and two red bins there meant two things. */
+.crumb-trash, .crumb-review { gap: 5px; }
+.crumb-trash svg, .crumb-review svg { flex: none; color: var(--leaf); }
 @media (hover: hover) {
   button.crumb:hover { background: var(--wash); color: var(--ink); }
 }

@@ -8,7 +8,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatReviewAge, ReviewActions, ReviewBanner, ReviewContext, ReviewFinish, ReviewSeenMark } from "../src/components/DailyReview";
-import { REVIEW_SEEN_MS, useReviewSeen } from "../src/hooks/useReviewSeen";
+import { REVIEW_SEEN_MAX_MS, REVIEW_SEEN_MS, REVIEW_SEEN_MS_PER_CHAR, reviewReadingMs, useReviewSeen } from "../src/hooks/useReviewSeen";
 import { LanguageProvider } from "../src/lib/i18n";
 import type { ReviewPick } from "../src/lib/review";
 
@@ -310,8 +310,55 @@ describe("when a card counts as seen", () => {
     show("a", 0.7);
     show("b", 0.9);
     act(() => vi.advanceTimersByTime(REVIEW_SEEN_MS));
+    expect(onSeen.mock.calls.map(([id]) => id)).toEqual(["a"]);
+    act(() => vi.advanceTimersByTime(REVIEW_SEEN_MS));
     expect(onSeen.mock.calls.map(([id]) => id)).toEqual(["a", "b"]);
     expect(observers[0].observed.size).toBe(0);
+  });
+
+  it("reads one card at a time, in feed order, whatever order they show in", () => {
+    const onSeen = vi.fn();
+    render(<Feed ids={["a", "b", "c"]} seen={new Set()} onSeen={onSeen} />);
+    show("c", 1);
+    show("b", 1);
+    show("a", 1);
+    // c showed first, so its clock runs; a and b wait their turn.
+    act(() => vi.advanceTimersByTime(REVIEW_SEEN_MS));
+    expect(onSeen.mock.calls.map(([id]) => id)).toEqual(["c"]);
+    act(() => vi.advanceTimersByTime(REVIEW_SEEN_MS));
+    // Next in feed order is a, above b.
+    expect(onSeen.mock.calls.map(([id]) => id)).toEqual(["c", "a"]);
+    // Scrolling b away before its reading ends leaves it unseen.
+    act(() => vi.advanceTimersByTime(REVIEW_SEEN_MS - 200));
+    show("b", 0.2);
+    act(() => vi.advanceTimersByTime(REVIEW_SEEN_MS * 3));
+    expect(onSeen.mock.calls.map(([id]) => id)).toEqual(["c", "a"]);
+  });
+
+  it("gives a longer memo a longer reading, up to a cap", () => {
+    const short = document.createElement("div");
+    short.innerHTML = `<div class="memo-content">${"x".repeat(10)}</div>`;
+    const mid = document.createElement("div");
+    mid.innerHTML = `<div class="memo-content">${"x".repeat(100)}</div><span>${"y".repeat(400)}</span>`;
+    const long = document.createElement("div");
+    long.innerHTML = `<div class="memo-content">${"字".repeat(1000)}</div>`;
+    expect(reviewReadingMs(short)).toBe(REVIEW_SEEN_MS);
+    expect(reviewReadingMs(mid)).toBe(100 * REVIEW_SEEN_MS_PER_CHAR);
+    expect(reviewReadingMs(long)).toBe(REVIEW_SEEN_MAX_MS);
+  });
+
+  it("moves on to the next card when the one being read is pressed", () => {
+    const onSeen = vi.fn();
+    render(<Feed ids={["a", "b"]} seen={new Set()} onSeen={onSeen} />);
+    show("a", 1);
+    show("b", 1);
+    act(() => vi.advanceTimersByTime(REVIEW_SEEN_MS - 300));
+    fireEvent.click(screen.getByRole("button", { name: "⋯ a" }));
+    expect(onSeen.mock.calls.map(([id]) => id)).toEqual(["a"]);
+    act(() => vi.advanceTimersByTime(REVIEW_SEEN_MS - 300));
+    expect(onSeen.mock.calls.map(([id]) => id)).toEqual(["a"]);
+    act(() => vi.advanceTimersByTime(300));
+    expect(onSeen.mock.calls.map(([id]) => id)).toEqual(["a", "b"]);
   });
 
   it("counts a card taller than the screen once it fills most of it", () => {

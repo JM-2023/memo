@@ -33,6 +33,10 @@ interface SearchJumpOptions {
   recent: readonly string[];
   /** Offer "search by meaning" (the model is on this device and the lens is off). */
   meaningAvailable: boolean;
+  /** How many memos the feed shows for the typed text, or null while the
+      feed has not caught up with it. The search row says it, so the list and
+      the feed beneath it never disagree. */
+  searchCount?: number | null;
   onAct: (row: JumpRow) => void;
   /** Tab: the field takes this text. */
   onComplete: (text: string) => void;
@@ -89,7 +93,7 @@ function markedPath(path: string, marks: readonly number[]): ReactNode[] {
  * tag into the field, ⇧Enter searches by meaning.
  */
 export function useSearchJump(options: SearchJumpOptions): SearchJump {
-  const { query, open, tags, pinned, saved, recent, meaningAvailable } = options;
+  const { query, open, tags, pinned, saved, recent, meaningAvailable, searchCount = null } = options;
   const { count, formatNumber, locale, tr } = useI18n();
   const listId = useId();
   const popRef = useRef<HTMLDivElement>(null);
@@ -267,7 +271,22 @@ export function useSearchJump(options: SearchJumpOptions): SearchJump {
         return {
           icon: <Search size={15} aria-hidden="true" />,
           body: <span className="jump-text">{tr(`Search “${row.text}”`, `搜索「${row.text}」`)}</span>,
-          aside: keycap("↩")
+          aside: (
+            <>
+              {searchCount === null ? null : searchCount === 0 ? (
+                <span className="jump-aside">{tr("No matches", "没有匹配")}</span>
+              ) : (
+                <span className="jump-count">{formatNumber(searchCount)}</span>
+              )}
+              {keycap("↩")}
+            </>
+          ),
+          label:
+            searchCount === null
+              ? undefined
+              : searchCount === 0
+                ? tr(`Search “${row.text}”, no matches`, `搜索「${row.text}」，没有匹配`)
+                : tr(`Search “${row.text}”, ${count(searchCount, "memo")}`, `搜索「${row.text}」，${count(searchCount, "memo")}`)
         };
       case "meaning":
         return {
