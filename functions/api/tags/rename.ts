@@ -11,6 +11,8 @@ import {
   tagOperationBusyParams,
   TagOperationBusyError,
   TagOperationConflictError,
+  tagRewriteBlockedParams,
+  TagRewriteBlockedError,
   validTagOperationId,
   validTagPath
 } from "../_utils/tagops";
@@ -69,6 +71,16 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
     if (error instanceof InvalidTagTargetError) {
       await releaseTagOperation(context, operationId);
       return apiError(400, "TAG_INVALID", "The renamed tag path is too long.");
+    }
+    if (error instanceof TagRewriteBlockedError) {
+      // Refused at the end of validation, before any page was written.
+      await releaseTagOperation(context, operationId);
+      return apiError(
+        409,
+        "TAG_REWRITE_BLOCKED",
+        "Some memos would be left empty or too long. Edit them first.",
+        tagRewriteBlockedParams(error.blocked)
+      );
     }
     if (error instanceof TagOperationConflictError) {
       await abandonTagOperation(context, operationId);

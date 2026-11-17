@@ -1,6 +1,8 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import { rewriteTag } from "../functions/api/_utils/tagops";
+import { claimInitialPassword, createSessionCookie } from "../functions/api/_utils/auth";
+import { InvalidTagTargetError, rewriteTag, TagRewriteBlockedError } from "../functions/api/_utils/tagops";
+import { onRequestPost as removeTagEndpoint } from "../functions/api/tags/remove";
 import type { AppContext, AppEnv } from "../functions/api/_utils/types";
 
 const appEnv: AppEnv = env;
@@ -142,7 +144,8 @@ describe("server tag operation paging", () => {
   it("stops a write page before the change that would exceed the per-invocation budget", async () => {
     await seed(Array.from({ length: 45 }, (_, index) => `dense ${index} #dense`));
     const results = await pages("dense", null, "remove-dense");
-    expect(results.map((page) => page.updated)).toEqual([30, 15]);
+    // One validation page writes nothing, then two capped write pages.
+    expect(results.map((page) => page.updated)).toEqual([0, 30, 15]);
     expect((await contents()).every((content) => !content.includes("#dense"))).toBe(true);
   });
 
@@ -150,8 +153,128 @@ describe("server tag operation paging", () => {
     const long = "x".repeat(150_000);
     await seed(Array.from({ length: 5 }, (_, index) => `${long} ${index} #long`));
     const results = await pages("long", null, "remove-long");
-    // 400k characters per write page: three 150k memos start before the cut.
-    expect(results.map((page) => page.updated)).toEqual([3, 2]);
+    // Validation first (800k per page holds all five), then 400k characters
+    // per write page: three 150k memos start before the cut. Memos already
+    // past the length limit are not the removal's doing and do not block it.
+    expect(results.map((page) => page.updated)).toEqual([0, 3, 2]);
     expect((await contents()).every((content) => !content.includes("#long"))).toBe(true);
+  });
+});
+
+describe("server tag operation validation", () => {
+  const PREFIX = "tag-valid-";
+  const stamp = "2026-07-26T00:00:00.000Z";
+
+  beforeEach(async () => {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM memo_images WHERE memo_id LIKE ?").bind(`${PREFIX}%`),
+      env.DB.prepare("DELETE FROM memos WHERE id LIKE ?").bind(`${PREFIX}%`),
+      env.DB.prepare("DELETE FROM tag_operation_lock")
+    ]);
+  });
+
+  const idOf = (index: number) => `${PREFIX}${String(index).padStart(4, "0")}`;
+
+  async function seed(contents: string[]): Promise<void> {
+    await env.DB.batch(
+      contents.map((content, index) =>
+        env.DB.prepare("INSERT INTO memos (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(idOf(index), content, stamp, stamp)
+      )
+    );
+  }
+
+  async function run(from: string, to: string | null, operationId: string): Promise<void> {
+    let after: string | null | undefined;
+    for (let guard = 0; guard < 50; guard += 1) {
+      const result = await rewriteTag(context(), from, to, operationId, after);
+      if (!result?.hasMore) return;
+      after = result.nextAfter;
+    }
+    throw new Error("Tag operation did not finish");
+  }
+
+  async function contents(): Promise<string[]> {
+    const result = await env.DB.prepare("SELECT content FROM memos WHERE id LIKE ? ORDER BY id").bind(`${PREFIX}%`).all<{ content: string }>();
+    return (result.results ?? []).map((row) => row.content);
+  }
+
+  it("validates every page, so a too-long target on a later page stops the rename before any write", async () => {
+    // 410 memos: the first validation page (400 rows) finds the tag; the
+    // second holds a descendant whose renamed path would pass 128 bytes.
+    const deep = `work/${"d".repeat(60)}`;
+    const seeded = Array.from({ length: 410 }, (_, index) => (index === 0 ? "first #work" : index === 405 ? `late #${deep}` : `plain ${index}`));
+    await seed(seeded);
+
+    await expect(run("work", "w".repeat(70), "rename-late-long")).rejects.toBeInstanceOf(InvalidTagTargetError);
+    // Nothing was written: the first memo still carries the old name.
+    expect(await contents()).toEqual(seeded);
+  });
+
+  it("refuses a removal that would leave a text-only memo empty, naming it, and writes nothing", async () => {
+    await seed(["#todo", "buy milk #todo", "  #todo  "]);
+    // A memo whose only text is the tag but which carries a picture stays storable.
+    await env.DB
+      .prepare("INSERT INTO memos (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)")
+      .bind(`${PREFIX}photo`, "#todo", stamp, stamp)
+      .run();
+    await env.DB
+      .prepare("INSERT INTO memo_images (id, memo_id, ord, mime, data_base64, created_at) VALUES (?, ?, 0, 'image/webp', 'AAAA', ?)")
+      .bind(`${PREFIX}img`, `${PREFIX}photo`, stamp)
+      .run();
+
+    const refusal = await run("todo", null, "remove-to-empty").catch((cause: unknown) => cause);
+    expect(refusal).toBeInstanceOf(TagRewriteBlockedError);
+    expect((refusal as TagRewriteBlockedError).blocked).toEqual({ empty: 2, tooLong: 0, ids: [idOf(0), idOf(2)] });
+    expect(await contents()).toEqual(["#todo", "buy milk #todo", "  #todo  ", "#todo"]);
+  });
+
+  it("refuses a rename that would push a memo past the length limit", async () => {
+    const near = `${"x".repeat(39_990)} #a`;
+    await seed(["short #a", near]);
+
+    const refusal = await run("a", "a-much-longer-name", "rename-too-long").catch((cause: unknown) => cause);
+    expect(refusal).toBeInstanceOf(TagRewriteBlockedError);
+    expect((refusal as TagRewriteBlockedError).blocked).toEqual({ empty: 0, tooLong: 1, ids: [idOf(1)] });
+    expect(await contents()).toEqual(["short #a", near]);
+  });
+
+  it("answers a blocked removal with 409, the memos it names, and a released lock", async () => {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM auth_state"),
+      env.DB.prepare("DELETE FROM app_settings WHERE key IN ('local_password_hash', 'session_generation')")
+    ]);
+    const auth = await claimInitialPassword(appEnv, "tag-runtime-hash");
+    if (!auth) throw new Error("Test authentication state was not created");
+    const cookie = (await createSessionCookie(appEnv, auth.sessionGeneration)).split(";", 1)[0];
+    await seed(["#chore", "wash up #chore"]);
+
+    const post = (body: unknown) =>
+      removeTagEndpoint({
+        ...context(),
+        request: new Request("https://memo.example/api/tags/remove", {
+          method: "POST",
+          headers: { Cookie: cookie, Origin: "https://memo.example", "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        })
+      } as AppContext);
+
+    const response = await post({ path: "chore", operationId: "remove-chore" });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "TAG_REWRITE_BLOCKED",
+      params: { empty: 1, tooLong: 0, ids: idOf(0) }
+    });
+    expect(await contents()).toEqual(["#chore", "wash up #chore"]);
+    // Nothing was written, so the lock is free for the next global change.
+    const lock = await env.DB.prepare("SELECT operation_id, completed FROM tag_operation_lock WHERE id = 1").first<{ operation_id: string; completed: number }>();
+    expect(lock).toEqual({ operation_id: "remove-chore", completed: 1 });
+  });
+
+  it("finishes in one request when no memo carries the tag", async () => {
+    await seed(["nothing here"]);
+    await expect(rewriteTag(context(), "absent", null, "remove-absent")).resolves.toBeNull();
+    await expect(rewriteTag(context(), "absent", "present", "rename-absent")).resolves.toBeNull();
+    const lock = await env.DB.prepare("SELECT completed FROM tag_operation_lock WHERE id = 1").first<{ completed: number }>();
+    expect(lock?.completed).toBe(1);
   });
 });

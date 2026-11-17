@@ -85,6 +85,20 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
     for (const waiter of waiters) waiter(ok);
   }, []);
 
+  /**
+   * The server answered: fetched by this tab, or by a peer whose broadcast
+   * this tab could take. Both end the same way — the backoff starts over, a
+   * pending retry is cancelled, the stale-feed notice clears and a reader's
+   * Retry hears it got through. A tab whose pulls a peer keeps answering
+   * would otherwise go on saying it can't connect while its feed updates.
+   */
+  const markSynced = useCallback(() => {
+    failureCountRef.current = 0;
+    cancelRetry();
+    setStatus((current) => (current.degraded ? { ...current, degraded: false } : current));
+    settleOutcome(true);
+  }, [cancelRetry, settleOutcome]);
+
   const runSyncRef = useRef<() => Promise<void>>(async () => undefined);
 
   const scheduleRetry = useCallback(() => {
@@ -142,10 +156,7 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
           } catch {
             // Sibling tabs retain their own focus/heartbeat fallback.
           }
-          failureCountRef.current = 0;
-          cancelRetry();
-          setStatus((current) => (current.degraded ? { ...current, degraded: false } : current));
-          settleOutcome(true);
+          markSynced();
           if (data.hasMore) {
             // A paginated endpoint must make progress or it would hot-loop.
             if (nextCursor <= requestedCursor) throw new Error("Sync page did not advance its cursor");
@@ -176,7 +187,7 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
     } finally {
       busyRef.current = false;
     }
-  }, [cancelRetry, scheduleRetry, settleOutcome]);
+  }, [cancelRetry, markSynced, scheduleRetry, settleOutcome]);
 
   const runSync = useCallback(async () => {
     if (!enabledRef.current) return;
@@ -264,15 +275,18 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
             scheduleSync(0);
             return;
           }
-          // Ignore pages wholly covered by our own bootstrap/sync. For a page
-          // that straddles the local high-water, apply only its newer half.
-          if (data.cursor <= localCursor) return;
-          const delta = changesAfterCursor(data, localCursor);
-          if (delta.memos.length > 0 || delta.purged.length > 0 || delta.tags.length > 0) {
-            applyRef.current(delta.memos, delta.purged, delta.tags, data.cursor);
+          // Ignore changes wholly covered by our own bootstrap/sync. For a
+          // page that straddles the local high-water, apply only its newer
+          // half. Either way it is a good answer from this tab's server.
+          if (data.cursor > localCursor) {
+            const delta = changesAfterCursor(data, localCursor);
+            if (delta.memos.length > 0 || delta.purged.length > 0 || delta.tags.length > 0) {
+              applyRef.current(delta.memos, delta.purged, delta.tags, data.cursor);
+            }
+            cursorRef.current = data.cursor;
+            if (data.hasMore) scheduleSync(0);
           }
-          cursorRef.current = data.cursor;
-          if (data.hasMore) scheduleSync(0);
+          markSynced();
         }
       };
       channelRef.current = channel;
@@ -323,7 +337,7 @@ export function useSync({ enabled, applyChanges, onAuthLost, onPeerLogout, onSer
       channel?.close();
       settleOutcome(false);
     };
-  }, [enabled, scheduleSync, cancelRetry, settleOutcome]);
+  }, [enabled, scheduleSync, cancelRetry, markSynced, settleOutcome]);
 
   /**
    * The reader's own "try again": restarts the backoff from zero. Resolves

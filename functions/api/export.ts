@@ -15,12 +15,25 @@ interface ImageDataRow {
 }
 
 interface ExportCursor {
-  v: 1;
+  v: 2;
   after: string;
   maxId: string;
   exportedAt: string;
+  /**
+   * The database history and change counter the first page read. Every
+   * mutation claims a seq in its own transaction, so a later page that reads
+   * the same pair in its own read transaction sees exactly the first page's
+   * notebook; any other pair means a write landed in between.
+   */
+  epoch: string;
+  seq: number;
   /** Set once a page has written a memo, so the next one opens with a comma. */
   wrote?: 1;
+}
+
+interface CounterRow {
+  n?: unknown;
+  sync_epoch?: unknown;
 }
 
 interface ExportMemo {
@@ -52,7 +65,7 @@ function decodeCursor(value: string | null): ExportCursor | null {
     const binary = atob(padded);
     const parsed = JSON.parse(new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)))) as Partial<ExportCursor>;
     if (
-      parsed.v !== 1 ||
+      parsed.v !== 2 ||
       typeof parsed.after !== "string" ||
       typeof parsed.maxId !== "string" ||
       typeof parsed.exportedAt !== "string" ||
@@ -62,6 +75,10 @@ function decodeCursor(value: string | null): ExportCursor | null {
       parsed.after > parsed.maxId ||
       parsed.exportedAt.length > 40 ||
       Number.isNaN(Date.parse(parsed.exportedAt)) ||
+      typeof parsed.epoch !== "string" ||
+      parsed.epoch.length > MAX_ID_CHARS ||
+      !Number.isSafeInteger(parsed.seq) ||
+      Number(parsed.seq) < 0 ||
       (parsed.wrote !== undefined && parsed.wrote !== 1)
     ) {
       return null;
@@ -70,6 +87,12 @@ function decodeCursor(value: string | null): ExportCursor | null {
   } catch {
     return null;
   }
+}
+
+function counterOf(row: CounterRow | null | undefined): { seq: number; epoch: string } | null {
+  const seq = Number(row?.n);
+  const epoch = row?.sync_epoch;
+  return Number.isSafeInteger(seq) && seq >= 0 && typeof epoch === "string" ? { seq, epoch } : null;
 }
 
 /** Serialize one bounded page with backpressure instead of one giant string. */
@@ -136,10 +159,18 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
   if (continuation) {
     state = continuation;
   } else {
+    // One statement, so the boundary and the counter describe one moment.
     const boundary = await db
-      .prepare("SELECT COALESCE(MAX(id), '') AS max_id, COUNT(*) AS total FROM memos")
-      .first<{ max_id: string; total: number }>();
-    state = { v: 1, after: "", maxId: boundary?.max_id ?? "", exportedAt: nowIso() };
+      .prepare(
+        `SELECT COALESCE((SELECT MAX(id) FROM memos), '') AS max_id,
+                (SELECT COUNT(*) FROM memos) AS total,
+                n, sync_epoch
+         FROM sync_counter WHERE id = 1`
+      )
+      .first<{ max_id: string; total: number } & CounterRow>();
+    const counter = counterOf(boundary);
+    if (!counter) throw new Error("sync_counter row missing — run migrations");
+    state = { v: 2, after: "", maxId: boundary?.max_id ?? "", exportedAt: nowIso(), epoch: counter.epoch, seq: counter.seq };
     total = Number(boundary?.total ?? 0);
   }
 
@@ -167,7 +198,10 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
 
   const lastId = selected.length > 0 ? selected[selected.length - 1].id : state.after;
   const hasMore = selected.length > 0 && (selected.length < candidates.length || lastId < state.maxId);
-  const statements: D1PreparedStatement[] = [];
+  // The counter is read in the same batch (one read transaction) as the rows
+  // it vouches for; the candidate query above ran after the snapshot began,
+  // so an unchanged counter here covers it too.
+  const statements: D1PreparedStatement[] = [db.prepare("SELECT n, sync_epoch FROM sync_counter WHERE id = 1")];
   if (selected.length > 0) {
     const ids = selected.map((candidate) => candidate.id);
     const placeholders = ids.map(() => "?").join(", ");
@@ -186,8 +220,15 @@ export async function onRequestGet(context: AppContext): Promise<Response> {
     statements.push(db.prepare("SELECT path, pinned_at, seq FROM tag_meta WHERE pinned_at IS NOT NULL ORDER BY path COLLATE BINARY"));
   }
 
-  const results = statements.length > 0 ? await db.batch(statements) : [];
+  const results = await db.batch(statements);
   let resultIndex = 0;
+  const counter = counterOf(results[resultIndex++]?.results?.[0] as CounterRow | undefined);
+  if (!counter || counter.epoch !== state.epoch || counter.seq !== state.seq) {
+    // A memo, image or pinned tag changed after the export began. Pages
+    // already sent show the notebook before it, this one after: refuse
+    // rather than hand over a file no moment of the notebook matches.
+    return apiError(409, "BACKUP_CHANGED", "The notebook changed during the export. Export again.");
+  }
   const memoRows = selected.length > 0 ? ((results[resultIndex++]?.results ?? []) as unknown as MemoRow[]) : [];
   const imageRows = selected.length > 0 ? ((results[resultIndex++]?.results ?? []) as unknown as ImageDataRow[]) : [];
   const tagRows = !continuation ? ((results[resultIndex++]?.results ?? []) as unknown as TagMetaRow[]) : [];

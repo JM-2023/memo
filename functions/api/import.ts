@@ -4,7 +4,8 @@ import { claimSeq, claimedSeq, CURRENT_SEQ_SQL } from "./_utils/memos";
 import { validTagPath } from "./_utils/tagops";
 import { apiError, json, nowIso, readJson, requireSameOrigin } from "./_utils/response";
 import type { AppContext } from "./_utils/types";
-import { base64Bytes, MAX_CONTENT_CHARS, validateImages } from "./memos/index";
+import { memoBodyIssue } from "../../src/lib/memoRules";
+import { base64Bytes, MAX_CONTENT_CHARS, memoBodyError, validateImages } from "./memos/index";
 
 interface BackupMemo {
   id?: unknown;
@@ -140,11 +141,7 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
       return apiError(400, "BACKUP_MEMO_INVALID", "Every backup memo must contain text content.");
     }
     const content = raw.content;
-    if (content.length > MAX_CONTENT_CHARS) {
-      return apiError(400, "MEMO_CONTENT_TOO_LONG", `A memo can contain up to ${MAX_CONTENT_CHARS} characters.`, {
-        max: MAX_CONTENT_CHARS
-      });
-    }
+    if (content.length > MAX_CONTENT_CHARS) return memoBodyError("MEMO_CONTENT_TOO_LONG");
     if (!Array.isArray(raw.images)) {
       return apiError(400, "BACKUP_IMAGE_INVALID", "Every backup memo must contain an image list.");
     }
@@ -165,9 +162,13 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
         height: imageDimension(image.height)
       });
     }
-    if (!content.trim() && images.length === 0) {
+    // The same body rule as create and edit (src/lib/memoRules.ts): what the
+    // app can store, a backup of it can bring back.
+    const issue = memoBodyIssue(content, images.length);
+    if (issue === "MEMO_EMPTY") {
       return apiError(400, "BACKUP_MEMO_INVALID", "A backup memo must contain text or at least one image.");
     }
+    if (issue) return memoBodyError(issue);
     rawMemos.push({
       id,
       content,

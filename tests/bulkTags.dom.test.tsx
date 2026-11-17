@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { TipProvider } from "../src/components/Tip";
 import { ApiError } from "../src/lib/api";
+import { formatTime } from "../src/lib/dates";
 import { LanguageProvider } from "../src/lib/i18n";
 import type { Memo } from "../src/lib/types";
 
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   bootstrap: vi.fn(),
   syncSince: vi.fn(),
   renameTag: vi.fn(),
+  removeTag: vi.fn(),
   batchMemos: vi.fn(),
   createMemo: vi.fn(),
   syncApi: {
@@ -36,6 +38,7 @@ vi.mock("../src/lib/api", async () => {
     bootstrap: mocks.bootstrap,
     syncSince: mocks.syncSince,
     renameTag: mocks.renameTag,
+    removeTag: mocks.removeTag,
     batchMemos: mocks.batchMemos,
     createMemo: mocks.createMemo
   };
@@ -266,6 +269,91 @@ describe("tag rename follow-ups", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Filter memos" }));
     expect(await screen.findByRole("button", { name: "Life" })).not.toBeNull();
+  });
+});
+
+describe("tag changes that would break a memo", () => {
+  function bootWith(memos: Memo[]) {
+    mocks.bootstrap.mockResolvedValue({
+      memos,
+      tags: [],
+      cursor: memos.length,
+      syncEpoch: "epoch-a",
+      serverTime: memos[memos.length - 1].createdAt,
+      hasMore: false,
+      nextAfter: null
+    });
+  }
+
+  it("names a text-only memo a removal would leave empty, and sends nothing", async () => {
+    const lone = memo("m-lone", "#todo", 1);
+    bootWith([lone, memo("m-more", "buy milk #todo", 2)]);
+    const user = userEvent.setup();
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Actions for tag todo" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove tag" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove tag" }));
+
+    const stamp = formatTime(lone.createdAt, "en-US");
+    expect(
+      await screen.findByText(`Couldn’t remove #todo: 1 memo would be left empty (${stamp}). Add some text to it first.`, { selector: ".toast *" })
+    ).not.toBeNull();
+    expect(mocks.removeTag).not.toHaveBeenCalled();
+  });
+
+  it("names a memo a rename would push past the length limit, before the request", async () => {
+    // 39,996 characters; "#workshops" adds five.
+    const near = memo("m-near", `${"x".repeat(39_990)} #work`, 1);
+    bootWith([near]);
+    const user = userEvent.setup();
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    const { dialog, input } = await openRename(user, "work");
+    await user.type(input, "workshops");
+    await user.click(within(dialog).getByRole("button", { name: "Rename" }));
+
+    const stamp = formatTime(near.createdAt, "en-US");
+    expect(
+      await screen.findByText(`Couldn’t rename #work: 1 memo would pass 40,000 characters (${stamp}). Shorten it first.`, { selector: ".toast *" })
+    ).not.toBeNull();
+    expect(mocks.renameTag).not.toHaveBeenCalled();
+  });
+
+  it("tells the server's refusal the same way, naming the memos it lists", async () => {
+    mocks.renameTag.mockRejectedValueOnce(
+      new ApiError("TAG_REWRITE_BLOCKED", 409, "Some memos would be left empty or too long. Edit them first.", {
+        empty: 0,
+        tooLong: 2,
+        max: 40_000,
+        ids: "m-work"
+      })
+    );
+    const user = userEvent.setup();
+    render(
+      <Providers>
+        <App />
+      </Providers>
+    );
+
+    const { dialog, input } = await openRename(user, "work");
+    await user.type(input, "job");
+    await user.click(within(dialog).getByRole("button", { name: "Rename" }));
+
+    const stamp = formatTime(WORK.createdAt, "en-US");
+    expect(
+      await screen.findByText(`Couldn’t rename #work: 2 memos would pass 40,000 characters (${stamp} and 1 more). Shorten them first.`, {
+        selector: ".toast *"
+      })
+    ).not.toBeNull();
   });
 });
 

@@ -10,6 +10,7 @@ import {
   type MemoJson,
   type MemoRow
 } from "../_utils/memos";
+import { MAX_CONTENT_CHARS, memoBodyIssue, type MemoBodyIssue } from "../../../src/lib/memoRules";
 import { apiError, json, nowIso, readJson, requireSameOrigin } from "../_utils/response";
 import type { AppContext } from "../_utils/types";
 
@@ -30,9 +31,10 @@ interface CreateBody {
   images?: ImagePayload[];
 }
 
-// Mirrored by the composer (src/components/Editor.tsx); encrypted 40k CJK is
-// ~160KB base64, far under the D1 parameter sizes images already exercise.
-export const MAX_CONTENT_CHARS = 40_000;
+// Defined with the rest of the body rules in src/lib/memoRules.ts; encrypted
+// 40k CJK is ~160KB base64, far under the D1 parameter sizes images already
+// exercise.
+export { MAX_CONTENT_CHARS };
 export const MAX_IMAGES_PER_MEMO = 9;
 // Client compresses to ≤900KB binary; base64 inflates 4/3. Anything past this
 // means the client-side pipeline was bypassed, so reject rather than risk D1
@@ -151,6 +153,13 @@ export function validateImages(images: unknown, options: ImageValidationOptions 
   return { error: null, images: cleaned };
 }
 
+/** The 400 for a body memoBodyIssue refuses, worded the same by every endpoint. */
+export function memoBodyError(issue: MemoBodyIssue): Response {
+  return issue === "MEMO_CONTENT_TOO_LONG"
+    ? apiError(400, "MEMO_CONTENT_TOO_LONG", `A memo can contain up to ${MAX_CONTENT_CHARS} characters.`, { max: MAX_CONTENT_CHARS })
+    : apiError(400, "MEMO_EMPTY", "A memo must contain text or at least one image.");
+}
+
 export function base64Bytes(data: string): number {
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
   return Math.floor((data.length * 3) / 4) - padding;
@@ -192,18 +201,14 @@ export async function onRequestPost(context: AppContext): Promise<Response> {
     return apiError(400, "INVALID_REQUEST_BODY", "Memo id is invalid.");
   }
   const content = String(body.content ?? "");
-  if (content.length > MAX_CONTENT_CHARS) {
-    return apiError(400, "MEMO_CONTENT_TOO_LONG", `A memo can contain up to ${MAX_CONTENT_CHARS} characters.`, {
-      max: MAX_CONTENT_CHARS
-    });
-  }
+  // Text first, so an over-long memo is refused before its images are read.
+  if (content.length > MAX_CONTENT_CHARS) return memoBodyError("MEMO_CONTENT_TOO_LONG");
   const { error, images } = validateImages(body.images);
   if (error) {
     return apiError(400, error.code, error.error, error.params);
   }
-  if (!content.trim() && images.length === 0) {
-    return apiError(400, "MEMO_EMPTY", "A memo must contain text or at least one image.");
-  }
+  const issue = memoBodyIssue(content, images.length);
+  if (issue) return memoBodyError(issue);
 
   const now = nowIso();
   // Sealed at rest, plaintext in the response — the client never sees ciphertext.

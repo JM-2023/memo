@@ -55,7 +55,7 @@ interface Entry {
 
 /** Insertion order doubles as recency: a hit re-inserts its entry. */
 const entries = new Map<string, Entry>();
-const pending = new Map<string, Promise<void>>();
+const pending = new Map<string, Promise<Blob>>();
 let heldBytes = 0;
 /** Images whose tile last ended in the failed state, for inert ghost copies. */
 const failed = new Set<string>();
@@ -91,6 +91,22 @@ function retain(key: string): string | null {
   entry.refs += 1;
   entries.delete(key);
   entries.set(key, entry);
+  return entry.url;
+}
+
+/**
+ * Store bytes a caller asked for with its reference already taken, then
+ * evict. With the budget full of images other tiles are drawing, the only
+ * unreferenced entry would otherwise be the one just stored: evicted before
+ * its requester could retain it, a load that succeeded would read as failed.
+ */
+function admit(key: string, blob: Blob): string {
+  const held = retain(key);
+  if (held) return held;
+  const entry: Entry = { url: URL.createObjectURL(blob), bytes: blob.size, refs: 1, shieldUntil: 0 };
+  entries.set(key, entry);
+  heldBytes += blob.size;
+  evict();
   return entry.url;
 }
 
@@ -135,7 +151,8 @@ export function primeImage(id: string, variant: ImageVariant, blob: Blob): void 
   store(keyOf(id, variant), blob);
 }
 
-async function fetchInto(id: string, variant: ImageVariant): Promise<void> {
+/** The image's bytes, fetched once however many tiles ask at the same time. */
+async function fetchBlob(id: string, variant: ImageVariant): Promise<Blob> {
   const key = keyOf(id, variant);
   let task = pending.get(key);
   if (!task) {
@@ -161,7 +178,7 @@ async function fetchInto(id: string, variant: ImageVariant): Promise<void> {
         if (variant === "thumb" && started === epoch) void persistSealed(id, blob);
       }
       if (started !== epoch) throw new ImageLoadError(0);
-      store(key, blob);
+      return blob;
     })();
     const current = task.finally(() => {
       if (pending.get(key) === current) pending.delete(key);
@@ -169,22 +186,21 @@ async function fetchInto(id: string, variant: ImageVariant): Promise<void> {
     task = current;
     pending.set(key, current);
   }
-  await task;
+  return task;
 }
 
 /** Resolve a blob: URL for the image and hold one reference to it. */
 export async function acquireImage(id: string, variant: ImageVariant): Promise<string> {
   const key = keyOf(id, variant);
-  // Two passes: a burst of other loads may evict an unreferenced entry
-  // between its store and this continuation.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const hit = retain(key);
-    if (hit) return hit;
-    await fetchInto(id, variant);
-  }
   const hit = retain(key);
   if (hit) return hit;
-  throw new ImageLoadError(0);
+  const started = epoch;
+  const blob = await fetchBlob(id, variant);
+  // Logged out while the bytes were on their way: keep nothing.
+  if (started !== epoch) throw new ImageLoadError(0);
+  // Every tile that waited on the same request admits the same bytes: the
+  // first stores them, the rest retain that entry.
+  return admit(key, blob);
 }
 
 /** Remember (or forget) that an image's tile ended in the failed state. */

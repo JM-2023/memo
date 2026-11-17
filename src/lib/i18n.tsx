@@ -228,6 +228,11 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           return localized("The backup contains an invalid memo. Nothing from this chunk was imported.", "备份中包含无效笔记，本批次未导入任何内容");
         case "BACKUP_IMAGE_INVALID":
           return localized("The backup contains an invalid image attachment. Nothing from this chunk was imported.", "备份中包含无效图片，本批次未导入任何内容");
+        case "BACKUP_CHANGED":
+          return localized(
+            "Your notebook changed while the backup was exporting. Export again for a copy that matches one moment.",
+            "导出期间笔记有改动，请重新导出，以得到同一时刻的完整备份"
+          );
         case "EXPORT_FORMAT_UNSUPPORTED":
           return localized(
             "The server sent the backup in a format this page can’t read. Reload the page and export again.",
@@ -241,6 +246,11 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
           return localized("Tag not found.", "标签不存在");
         case "TAG_OPERATION_BUSY":
           return localized("Another tag rename or removal is still running. Try again shortly.", "另一个标签重命名或删除仍在进行，请稍后重试");
+        case "TAG_REWRITE_BLOCKED":
+          return localized(
+            "Some memos would be left empty or too long. Edit them first — nothing was changed.",
+            "部分笔记会变成空白或超出长度上限，请先编辑这些笔记，本次未做任何修改"
+          );
         case "IMAGE_NOT_FOUND":
           return localized("Image not found.", "图片不存在");
         case "INVALID_ORIGIN":

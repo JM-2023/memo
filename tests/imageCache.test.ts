@@ -121,6 +121,30 @@ describe("in-memory image cache", () => {
 });
 
 describe("eviction", () => {
+  it("hands a new image to its requester even when drawn images fill the budget", async () => {
+    // Cards draw six 9 MiB originals: 54 MiB, past the 48 MiB idle budget,
+    // so from the sixth on every new entry lands over budget.
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) =>
+      String(input).includes("held-")
+        ? new Response(new Uint8Array(9 * 1024 * 1024), { status: 200, headers: { "Content-Type": "image/webp" } })
+        : imageResponse([9, 9, 9])
+    );
+    const held: string[] = [];
+    for (let index = 0; index < 6; index += 1) held.push(await acquireImage(`held-${index}`, "full"));
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+
+    // A successful download must reach the card that asked for it, not be
+    // evicted as the only unreferenced entry before the card can hold it.
+    const url = await acquireImage("next", "thumb");
+    expect(await bytesAt(url)).toEqual([9, 9, 9]);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
+    // The drawn images are all still alive too.
+    for (const heldUrl of held) expect(resolveObjectURL(heldUrl)).toBeDefined();
+
+    releaseImage("next", "thumb", url);
+    held.forEach((heldUrl, index) => releaseImage(`held-${index}`, "full", heldUrl));
+  });
+
   it("keeps a peeked URL alive until its holder can retain it", async () => {
     const big = () => new Blob([new Uint8Array(30 * 1024 * 1024)], { type: "image/webp" });
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);

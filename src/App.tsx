@@ -86,7 +86,7 @@ import {
 import { BackupFormatError, inspectBackup, readBackupItems } from "./lib/backupFile";
 import { startBoot, type BootStart } from "./lib/boot";
 import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, saveSnapshot } from "./lib/cache";
-import { dateFormat, dateKey, formatDayLabel } from "./lib/dates";
+import { dateFormat, dateKey, formatDayLabel, formatTime } from "./lib/dates";
 import { forgetFolds } from "./lib/foldMemory";
 import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow } from "./lib/feedSafety";
 import { EXIT_MS, T_FAST } from "./lib/motion";
@@ -98,6 +98,7 @@ import { splitTaskLine } from "./lib/markdown";
 import { useModelDownloadPhase } from "./lib/modelDownload";
 import { storedModelState } from "./lib/modelLoader";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
+import { MAX_CONTENT_CHARS } from "./lib/memoRules";
 import { captureFeedPlace, createNavStore, isLayerState, isRootLens, lensesEqual, navIdOf, restoreFeedPlace, ROOT_LENS, type NavLens, type NavPlace, type NavStore } from "./lib/navHistory";
 import { applyOptimisticLayer, withOptimistic, withoutPatch, withPatch, type OptimisticLayer, type OptimisticPatch } from "./lib/optimisticMemos";
 import { RECENT_SEARCHES_KEY, loadRecentSearches, persistRecentSearches, rememberSearch } from "./lib/recentSearches";
@@ -182,6 +183,7 @@ import { feedQueryForStatsDrilldown, memoMatchesStatsDrilldown, statsDrilldownLa
 import { useSnapshotWriterLease } from "./lib/snapshotWriter";
 import { applySyncDelta, createSyncState, memosOf, purgedOf, tagsOfState, type PurgedMemo, type SyncState } from "./lib/syncState";
 import { flattenTags } from "./lib/tagJump";
+import { refusalOf, tagRewriteBlockers } from "./lib/tagRewriteBlockers";
 import { buildTagTree, inheritTagContext, isValidTagPath, renameTagInContent, tagMatches, tagRenamePathsOverlap, tagsByRecentUse, tagsOf, type TagNode } from "./lib/tags";
 import { applyTaskFlips, freshestTaskMemo, type TaskFlipQueue } from "./lib/taskFlips";
 import { startToastSwipe, toastSwipeDirection } from "./lib/toastSwipe";
@@ -1199,6 +1201,7 @@ export default function App() {
   // Share of the server's scan finished while a rename runs (0–1).
   const [renameProgress, setRenameProgress] = useState<number | null>(null);
   const tagRenameUndoRef = useRef<(from: string, to: string) => Promise<void>>(async () => undefined);
+  const exportAgainRef = useRef<() => Promise<void>>(async () => undefined);
   const [dialogBusy, setDialogBusy] = useState(false);
   // Two-step Empty Trash: first click arms the button, second click fires.
   const [confirmEmptyTrash, setConfirmEmptyTrash] = useState(false);
@@ -5878,6 +5881,7 @@ export default function App() {
       showToast(tr("A tag cannot be renamed to its own parent or child path.", "标签不能重命名到自身的上级或下级路径"), "error");
       return false;
     }
+    if (refuseTagRewrite(from, to)) return false;
     // Onto a path already in use the two tags merge, and their memos can no
     // longer be told apart — no Undo for that. A plain rename reverses exactly.
     const merges = tagPathInUse(to);
@@ -5896,12 +5900,64 @@ export default function App() {
     } catch (cause) {
       void runSync();
       notifyPeers();
-      showToast(errorMessage(cause, "Couldn’t rename the tag.", "重命名标签失败"), "error");
+      if (!showTagRewriteRefusal(cause, from, to)) showToast(errorMessage(cause, "Couldn’t rename the tag.", "重命名标签失败"), "error");
       return false;
     } finally {
       setDialogBusy(false);
       setRenameProgress(null);
     }
+  }
+
+  /**
+   * Say which memos a tag rename (or removal: `to` null) would leave empty
+   * or over-long, before anything is sent; true when it refused. The server
+   * runs the same check over the whole notebook, so a device still loading
+   * its memos is caught there (showTagRewriteRefusal).
+   */
+  function refuseTagRewrite(from: string, to: string | null): boolean {
+    const blockers = tagRewriteBlockers([...memos, ...unsent], from, to);
+    const empty = blockers.empty.length;
+    const tooLong = blockers.tooLong.length;
+    if (empty + tooLong === 0) return false;
+    showTagRewriteBlocked(from, to, empty, tooLong, [...blockers.empty, ...blockers.tooLong]);
+    return true;
+  }
+
+  /** The server's TAG_REWRITE_BLOCKED, told as refuseTagRewrite tells it; false for any other failure. */
+  function showTagRewriteRefusal(cause: unknown, from: string, to: string | null): boolean {
+    if (!(cause instanceof ApiError) || cause.code !== "TAG_REWRITE_BLOCKED") return false;
+    const refusal = refusalOf(cause.params);
+    if (refusal.empty + refusal.tooLong === 0) return false;
+    const named = refusal.ids.flatMap((id) => syncState.memos.get(id) ?? []);
+    showTagRewriteBlocked(from, to, refusal.empty, refusal.tooLong, named);
+    return true;
+  }
+
+  /** Names the memos in the way by their stamps (the first three), and what to do about them. */
+  function showTagRewriteBlocked(from: string, to: string | null, empty: number, tooLong: number, named: readonly Memo[]) {
+    const total = empty + tooLong;
+    const stamps = named.slice(0, 3).map((memo) => formatTime(memo.createdAt, locale));
+    const more = total - stamps.length;
+    const listEn = stamps.length > 0 ? ` (${stamps.join("; ")}${more > 0 ? ` and ${formatNumber(more)} more` : ""})` : "";
+    const listZh = stamps.length > 0 ? `（${stamps.join("、")}${more > 0 ? ` 等` : ""}）` : "";
+    const them = total === 1 ? "it" : "them";
+    const [reasonEn, reasonZh, fixEn, fixZh] =
+      tooLong === 0
+        ? [`would be left empty`, `会变成空白`, `Add some text to ${them} first.`, `请先补充内容`]
+        : empty === 0
+          ? [
+              `would pass ${formatNumber(MAX_CONTENT_CHARS)} characters`,
+              `会超过 ${formatNumber(MAX_CONTENT_CHARS)} 字`,
+              `Shorten ${them} first.`,
+              `请先缩短内容`
+            ]
+          : [`would be left empty or too long`, `会变成空白或超出长度上限`, `Edit ${them} first.`, `请先编辑这些笔记`];
+    showToast(
+      to === null
+        ? tr(`Couldn’t remove #${from}: ${count(total, "memo")} ${reasonEn}${listEn}. ${fixEn}`, `无法移除 #${from}：${count(total, "memo")}${reasonZh}${listZh}，${fixZh}`)
+        : tr(`Couldn’t rename #${from}: ${count(total, "memo")} ${reasonEn}${listEn}. ${fixEn}`, `无法重命名 #${from}：${count(total, "memo")}${reasonZh}${listZh}，${fixZh}`),
+      "error"
+    );
   }
 
   /** True when `path` or a tag under it is on any memo, Trash and the sends on their way included — renaming onto it merges. */
@@ -5982,19 +6038,21 @@ export default function App() {
       showToast(tr(`Couldn’t undo: #${from} is in use again`, `无法撤销：#${from} 已重新使用`), "error");
       return;
     }
+    if (refuseTagRewrite(to, from)) return;
     try {
       const result = await performTagRename(to, from);
       if (result) showToast(tr(`Renamed #${to} back to #${from}`, `已将 #${to} 改回 #${from}`));
     } catch (cause) {
       void runSync();
       notifyPeers();
-      showToast(errorMessage(cause, "Couldn’t undo the rename.", "撤销重命名失败"), "error");
+      if (!showTagRewriteRefusal(cause, to, from)) showToast(errorMessage(cause, "Couldn’t undo the rename.", "撤销重命名失败"), "error");
     }
   }
   // A toast's Undo outlives the render that created it; read the latest state.
   tagRenameUndoRef.current = undoTagRename;
 
   async function handleRemoveTag(path: string) {
+    if (refuseTagRewrite(path, null)) return;
     const release = holdOutbox();
     try {
       const result = await guard(() => removeTag(path));
@@ -6022,7 +6080,7 @@ export default function App() {
     } catch (cause) {
       void runSync();
       notifyPeers();
-      showToast(errorMessage(cause, "Couldn’t remove the tag.", "移除标签失败"), "error");
+      if (!showTagRewriteRefusal(cause, path, null)) showToast(errorMessage(cause, "Couldn’t remove the tag.", "移除标签失败"), "error");
     } finally {
       release();
     }
@@ -6072,7 +6130,12 @@ export default function App() {
     } catch (cause) {
       finish();
       if (controller.signal.aborted) showToast(tr("Stopped exporting your backup", "已停止导出备份"));
-      else showToast(errorMessage(cause, "Couldn’t export the backup.", "导出备份失败"), "error");
+      else if (cause instanceof ApiError && cause.code === "BACKUP_CHANGED") {
+        // A write landed between two pages; a fresh run reads one moment.
+        showToast(errorMessage(cause, "Couldn’t export the backup.", "导出备份失败"), "error", {
+          action: { label: tr("Export again", "重新导出"), run: () => void exportAgainRef.current() }
+        });
+      } else showToast(errorMessage(cause, "Couldn’t export the backup.", "导出备份失败"), "error");
       return;
     }
     finish();
@@ -6087,6 +6150,9 @@ export default function App() {
     window.setTimeout(() => URL.revokeObjectURL(url), 4000);
     showToast(tr("Exported your backup", "已导出备份"));
   }
+
+  // A toast's action outlives the render that created it; run the latest.
+  exportAgainRef.current = handleExport;
 
   async function handleImportFile(file: File) {
     try {

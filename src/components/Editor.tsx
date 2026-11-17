@@ -21,6 +21,7 @@ import { ImageSlotLedger } from "../lib/imageSlots";
 import { compressImage } from "../lib/images";
 import { useI18n } from "../lib/i18n";
 import { announce } from "../lib/liveAnnouncer";
+import { MAX_CONTENT_CHARS } from "../lib/memoRules";
 import { BUSY_HOLD_MS, EASE_OUT, EXIT_MS, T_BASE, T_SLOW } from "../lib/motion";
 import { inheritTagContext } from "../lib/tags";
 import {
@@ -43,8 +44,6 @@ import { StoredImg } from "./StoredImage";
 import { useTip } from "./Tip";
 
 const MAX_IMAGES = 9;
-/** Mirrors MAX_CONTENT_CHARS in functions/api/memos/index.ts. */
-const MAX_CONTENT_CHARS = 40_000;
 /** Hard input cap: lets pastes overshoot the limit (so the overflow can be
  * shown) without ever asking the mirror layer to render megabytes. */
 const HARD_INPUT_CAP = 100_000;

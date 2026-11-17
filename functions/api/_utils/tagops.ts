@@ -2,6 +2,7 @@
 // the tag source of truth, so encrypted rows must be scanned in small keyset
 // pages. The opaque cursor freezes the initial max id and makes retries finite.
 
+import { MAX_CONTENT_CHARS, rewriteIssue } from "../../../src/lib/memoRules";
 import { extractTags, isValidTagPath, renameTagInContent, tagMatches } from "../../../src/lib/tags";
 import { openContentRows, sealContent, type ContentFormat } from "./crypto";
 import {
@@ -24,7 +25,9 @@ export const MAX_TAG_PATH_BYTES = 128;
 // CPU scales with bytes, not rows), so short memos travel hundreds at a time
 // while a run of 40k-character memos still stays small. Most pages hold no
 // match at all and cost one round trip; validation never writes, so its pages
-// are larger.
+// are larger. Rename and remove both run a full validation pass before the
+// first write: every page is checked, so nothing is written unless every
+// target path and every rewritten memo is known to be storable.
 const VALIDATE_PAGE_ROWS = 400;
 const VALIDATE_PAGE_CHARS = 800_000;
 const WRITE_PAGE_ROWS = 200;
@@ -34,8 +37,11 @@ const WRITE_PAGE_CHARS = 400_000;
 // page under the Free plan's 50 queries per invocation; a page with more
 // matches stops just before the first one that does not fit.
 const MAX_WRITES_PER_PAGE = 30;
-const MAX_CURSOR_CHARS = 2_048;
+const MAX_CURSOR_CHARS = 4_096;
 const MAX_ID_CHARS = 128;
+/** Memos a refused rewrite names back to the client, so it can list them. */
+const MAX_BLOCKED_IDS = 8;
+const MEMO_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 type TagOperation = "rename" | "remove";
 type TagPhase = "validate" | "write";
@@ -57,6 +63,17 @@ interface TagCursor {
    *  so a continuation minted before progress existed still resumes. */
   scanned?: number;
   total?: number;
+  /** Validation so far: memos the rewrite would leave empty or push past the
+   *  length limit, and the first few of their ids. Optional, as above. */
+  blockedEmpty?: number;
+  blockedLong?: number;
+  blockedIds?: string[];
+}
+
+interface BlockedMemos {
+  empty: number;
+  tooLong: number;
+  ids: string[];
 }
 
 interface RewriteResult {
@@ -88,6 +105,18 @@ export class InvalidTagTargetError extends Error {
   constructor() {
     super("The renamed tag path would exceed the allowed size.");
     this.name = "InvalidTagTargetError";
+  }
+}
+
+/**
+ * Validation found memos the rewrite would make unstorable — text-only memos
+ * left empty by a removal, or memos pushed past the length limit by a longer
+ * name. Nothing has been written; the client lists them so they can be fixed.
+ */
+export class TagRewriteBlockedError extends Error {
+  constructor(readonly blocked: BlockedMemos) {
+    super("The tag change would leave memos the app cannot store.");
+    this.name = "TagRewriteBlockedError";
   }
 }
 
@@ -224,6 +253,11 @@ export async function abandonTagOperation(context: AppContext, operationId: stri
     .run();
 }
 
+/** The 409 body for a refused rewrite: how many memos, of which kind, and which. */
+export function tagRewriteBlockedParams(blocked: BlockedMemos): Record<string, string | number> {
+  return { empty: blocked.empty, tooLong: blocked.tooLong, max: MAX_CONTENT_CHARS, ids: blocked.ids.join(",") };
+}
+
 export function validTagPath(path: string): boolean {
   return isValidTagPath(path) && new TextEncoder().encode(path).byteLength <= MAX_TAG_PATH_BYTES;
 }
@@ -262,7 +296,13 @@ function decodeCursor(value: string, operationId: string, op: TagOperation, from
       Number(parsed.retries) < 0 ||
       Number(parsed.retries) > 3 ||
       (parsed.scanned !== undefined && (!Number.isSafeInteger(parsed.scanned) || Number(parsed.scanned) < 0)) ||
-      (parsed.total !== undefined && (!Number.isSafeInteger(parsed.total) || Number(parsed.total) < 0))
+      (parsed.total !== undefined && (!Number.isSafeInteger(parsed.total) || Number(parsed.total) < 0)) ||
+      (parsed.blockedEmpty !== undefined && (!Number.isSafeInteger(parsed.blockedEmpty) || Number(parsed.blockedEmpty) < 0)) ||
+      (parsed.blockedLong !== undefined && (!Number.isSafeInteger(parsed.blockedLong) || Number(parsed.blockedLong) < 0)) ||
+      (parsed.blockedIds !== undefined &&
+        (!Array.isArray(parsed.blockedIds) ||
+          parsed.blockedIds.length > MAX_BLOCKED_IDS ||
+          !parsed.blockedIds.every((id) => typeof id === "string" && MEMO_ID_PATTERN.test(id))))
     ) {
       return null;
     }
@@ -305,7 +345,7 @@ async function initialCursor(
   return {
     v: 3,
     op,
-    phase: to === null ? "write" : "validate",
+    phase: "validate",
     operationId,
     from,
     to,
@@ -320,12 +360,11 @@ async function initialCursor(
   };
 }
 
-/** Overall progress: a rename's write pass follows a full validation pass. */
+/** Overall progress: the write pass follows a full validation pass. */
 function progressOf(state: TagCursor): { done: number; total: number } {
   const total = state.total ?? 0;
-  const passes = state.to === null ? 1 : 2;
-  const done = (state.phase === "write" && state.to !== null ? total : 0) + Math.min(state.scanned ?? 0, total);
-  return { done: Math.min(done, total * passes), total: total * passes };
+  const done = (state.phase === "write" ? total : 0) + Math.min(state.scanned ?? 0, total);
+  return { done: Math.min(done, total * 2), total: total * 2 };
 }
 
 /**
@@ -338,11 +377,13 @@ async function scanPage(
   state: TagCursor,
   rowLimit: number,
   charBudget: number
-): Promise<{ rows: MemoRow[]; hasMore: boolean }> {
+): Promise<{ rows: MemoRow[]; imageful: Set<string>; hasMore: boolean }> {
   const result = await context.env.DB
     .prepare(
       `WITH page AS MATERIALIZED (
-         SELECT ${MEMO_COLUMNS} FROM memos
+         SELECT ${MEMO_COLUMNS},
+                EXISTS (SELECT 1 FROM memo_images i WHERE i.memo_id = memos.id) AS has_images
+         FROM memos
          WHERE id > ? AND id <= ? AND seq <= ?
          ORDER BY id COLLATE BINARY LIMIT ?
        ),
@@ -352,27 +393,61 @@ async function scanPage(
          ), 0) AS chars_before
          FROM page
        )
-       SELECT ${MEMO_COLUMNS}, (SELECT COUNT(*) FROM page) AS page_rows
+       SELECT ${MEMO_COLUMNS}, has_images, (SELECT COUNT(*) FROM page) AS page_rows
        FROM sized WHERE chars_before < ? ORDER BY id COLLATE BINARY`
     )
     .bind(state.after, state.maxId, state.snapshotSeq, rowLimit + 1, charBudget)
-    .all<MemoRow & { page_rows: number }>();
+    .all<MemoRow & { has_images: number; page_rows: number }>();
   const fetched = result.results ?? [];
   const pageRows = Number(fetched[0]?.page_rows ?? 0);
-  const rows = fetched.slice(0, rowLimit).map(({ page_rows: _pageRows, ...row }) => row);
-  return { rows, hasMore: pageRows > rows.length };
+  const kept = fetched.slice(0, rowLimit);
+  const imageful = new Set(kept.filter((row) => Number(row.has_images) > 0).map((row) => row.id));
+  const rows = kept.map(({ page_rows: _pageRows, has_images: _hasImages, ...row }) => row);
+  return { rows, imageful, hasMore: pageRows > rows.length };
 }
 
-/** Read-only first pass: no rename page is committed until every target path is known to fit. */
-async function validateMemoPage(rows: MemoRow[], from: string, to: string, context: AppContext): Promise<boolean> {
+/** Whether a rewrite of this memo would be refused: a target path too long, or a body memoRules rejects. */
+function rewriteProblem(
+  row: MemoRow,
+  next: string,
+  hasImages: boolean,
+  from: string,
+  to: string | null
+): "path" | "MEMO_EMPTY" | "MEMO_CONTENT_TOO_LONG" | null {
+  if (to !== null) {
+    for (const tag of extractTags(row.content)) {
+      if (tagMatches(tag, from) && !validTagPath(`${to}${tag.slice(from.length)}`)) return "path";
+    }
+  }
+  return rewriteIssue(row.content, next, hasImages ? 1 : 0);
+}
+
+/**
+ * Read-only first pass over one page, run on every page whatever earlier
+ * pages found: no page is committed until every target path fits and every
+ * rewritten memo is still one the app can store and restore from a backup.
+ * A path that does not fit stops the job at once; unstorable memos are
+ * counted to the end so the refusal can name them all.
+ */
+async function validateMemoPage(
+  rows: MemoRow[],
+  imageful: Set<string>,
+  from: string,
+  to: string | null,
+  context: AppContext,
+  blocked: BlockedMemos
+): Promise<boolean> {
   await openContentRows(context.env, rows);
   let found = false;
   for (const row of rows) {
-    for (const tag of extractTags(row.content)) {
-      if (!tagMatches(tag, from)) continue;
-      found = true;
-      if (!validTagPath(`${to}${tag.slice(from.length)}`)) throw new InvalidTagTargetError();
-    }
+    const next = renameTagInContent(row.content, from, to);
+    if (next !== row.content || extractTags(row.content).some((tag) => tagMatches(tag, from))) found = true;
+    const problem = rewriteProblem(row, next, imageful.has(row.id), from, to);
+    if (problem === "path") throw new InvalidTagTargetError();
+    if (!problem) continue;
+    if (problem === "MEMO_EMPTY") blocked.empty += 1;
+    else blocked.tooLong += 1;
+    if (blocked.ids.length < MAX_BLOCKED_IDS && MEMO_ID_PATTERN.test(row.id)) blocked.ids.push(row.id);
   }
   return found;
 }
@@ -384,22 +459,20 @@ async function validateMemoPage(rows: MemoRow[], from: string, to: string, conte
  */
 async function prepareChanged(
   pageRows: MemoRow[],
+  imageful: Set<string>,
   from: string,
   to: string | null,
   context: AppContext
 ): Promise<{ prepared: PreparedMemo[]; rows: MemoRow[] }> {
   const key = await openContentRows(context.env, pageRows);
   const now = nowIso();
-  if (to !== null) {
-    for (const row of pageRows) {
-      for (const tag of extractTags(row.content)) {
-        if (tagMatches(tag, from) && !validTagPath(`${to}${tag.slice(from.length)}`)) throw new InvalidTagTargetError();
-      }
-    }
-  }
+  // Validation already passed every row of this frozen snapshot, and a memo
+  // edited since has moved above snapshotSeq and is not scanned. Should a
+  // row still fail here, it is left as it is: throwing now would end a job
+  // whose earlier pages are already written.
   let changed = pageRows
     .map((row) => ({ row, next: renameTagInContent(row.content, from, to) }))
-    .filter(({ row, next }) => next !== row.content);
+    .filter(({ row, next }) => next !== row.content && rewriteProblem(row, next, imageful.has(row.id), from, to) === null);
   let rows = pageRows;
   if (changed.length > MAX_WRITES_PER_PAGE) {
     rows = pageRows.slice(0, pageRows.indexOf(changed[MAX_WRITES_PER_PAGE].row));
@@ -641,24 +714,51 @@ export async function rewriteTag(
 
 
   if (state.phase === "validate") {
-    if (to === null) throw new InvalidTagContinuationError();
     const page = await scanPage(context, state, VALIDATE_PAGE_ROWS, VALIDATE_PAGE_CHARS);
-    const found = state.found || (await validateMemoPage(page.rows, from, to, context));
+    const blocked: BlockedMemos = { empty: state.blockedEmpty ?? 0, tooLong: state.blockedLong ?? 0, ids: [...(state.blockedIds ?? [])] };
+    // Every page is validated, even after an earlier one found the tag.
+    const pageFound = await validateMemoPage(page.rows, page.imageful, from, to, context, blocked);
+    const found = state.found || pageFound;
     const scanned = (state.scanned ?? 0) + page.rows.length;
     if (page.hasMore) {
-      const next: TagCursor = { ...state, after: page.rows[page.rows.length - 1]?.id ?? state.after, found, retries: 0, scanned };
+      const next: TagCursor = {
+        ...state,
+        after: page.rows[page.rows.length - 1]?.id ?? state.after,
+        found,
+        retries: 0,
+        scanned,
+        blockedEmpty: blocked.empty,
+        blockedLong: blocked.tooLong,
+        blockedIds: blocked.ids
+      };
       return { memos: [], tags: [], updated: 0, hasMore: true, nextAfter: encodeCursor(next), progress: progressOf(next) };
+    }
+    if (blocked.empty > 0 || blocked.tooLong > 0) throw new TagRewriteBlockedError(blocked);
+    if (!found) {
+      // No memo and no pinned row carries the tag: nothing to write.
+      await releaseTagOperation(context, operationId);
+      return null;
     }
     // Validation covered the frozen sequence range. Start a second bounded
     // pass for writes; concurrent edits move above snapshotSeq and are left
     // for their author instead of invalidating an already-written prefix.
     await assertTagMetaTargetsFit(context, { ...state, found });
-    const next: TagCursor = { ...state, phase: "write", after: "", found, retries: 0, scanned: 0 };
+    const next: TagCursor = {
+      ...state,
+      phase: "write",
+      after: "",
+      found,
+      retries: 0,
+      scanned: 0,
+      blockedEmpty: undefined,
+      blockedLong: undefined,
+      blockedIds: undefined
+    };
     return { memos: [], tags: [], updated: 0, hasMore: true, nextAfter: encodeCursor(next), progress: progressOf(next) };
   }
 
   const page = await scanPage(context, state, WRITE_PAGE_ROWS, WRITE_PAGE_CHARS);
-  const { prepared, rows: pageRows } = await prepareChanged(page.rows, from, to, context);
+  const { prepared, rows: pageRows } = await prepareChanged(page.rows, page.imageful, from, to, context);
   const hasScanMore = page.hasMore || pageRows.length < page.rows.length;
   const writeResult = await writeMemoPage(context, prepared, operationId);
   const imagesByMemo = await imageMetaFor(context, writeResult.rows.map((row) => row.id));

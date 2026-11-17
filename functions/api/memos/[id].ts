@@ -12,7 +12,8 @@ import {
 } from "../_utils/memos";
 import { apiError, json, nowIso, readJson, requireSameOrigin } from "../_utils/response";
 import type { AppContext } from "../_utils/types";
-import { base64Bytes, MAX_CONTENT_CHARS, MAX_IMAGES_PER_MEMO, validateImages, type ImagePayload } from "./index";
+import { memoBodyIssue } from "../../../src/lib/memoRules";
+import { base64Bytes, MAX_IMAGES_PER_MEMO, memoBodyError, validateImages, type ImagePayload } from "./index";
 
 interface UpdateBody {
   expectedSeq?: unknown;
@@ -159,14 +160,8 @@ export async function onRequestPut(context: AppContext): Promise<Response> {
   }
 
   const nextContent = body.content === undefined ? memo.content : String(body.content);
-  if (nextContent.length > MAX_CONTENT_CHARS) {
-    return apiError(400, "MEMO_CONTENT_TOO_LONG", `A memo can contain up to ${MAX_CONTENT_CHARS} characters.`, {
-      max: MAX_CONTENT_CHARS
-    });
-  }
-  if (!nextContent.trim() && surviving.length + addImages.length === 0) {
-    return apiError(400, "MEMO_EMPTY", "A memo must contain text or at least one image.");
-  }
+  const issue = memoBodyIssue(nextContent, surviving.length + addImages.length);
+  if (issue) return memoBodyError(issue);
 
   const contentChanged = nextContent !== memo.content;
   const imagesChanged = actuallyRemoved.length > 0 || addImages.length > 0;

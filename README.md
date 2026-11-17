@@ -101,7 +101,9 @@ about sync, search, or encryption has to know Markdown exists.
 Write `#life/cooking` and the hierarchy appears. Navigate by breadcrumb, pin the
 paths you use daily (they get a quiet rail in the margin rather than a badge in the
 row), and rename or remove a tag everywhere at once — a bounded, resumable rewrite
-that syncs to your other devices.
+that syncs to your other devices. It checks the whole notebook before its first
+write: a change that would leave a memo empty or past the length limit is refused,
+naming those memos, and nothing is half-renamed.
 
 ![The sidebar tag tree expanded, with #life/cooking selected and its memos in the feed](docs/screenshots/tags.png)
 
@@ -187,7 +189,9 @@ browser. The layout collapses to a single column with a drawer on phones.
 Deleting a memo moves it to Trash with its attachments intact; permanent deletion
 leaves only a small tombstone so other devices learn about it. The whole notebook —
 Trash, inline images, and pinned tags included — exports to a readable JSON file and
-imports back, skipping ids that already exist.
+imports back, skipping ids that already exist. An export is one moment of the
+notebook: if a memo changes while its pages are downloading, the export stops and
+asks to be run again rather than mixing old and new versions.
 
 ---
 

@@ -180,6 +180,47 @@ describe("backup export pages", () => {
     expect(file.tags).toEqual([{ path: "pinned", pinnedAt: "2026-07-16T00:00:00.000Z" }]);
   });
 
+  it("refuses a later page once the notebook changed after the export began", async () => {
+    const cookie = await authenticatedCookie();
+    const ids = await seed(cookie, 51);
+    const first = await exportBackup(context(get(cookie, "/api/export?parts=1")));
+    expect(first.status).toBe(200);
+    const next = first.headers.get("X-Export-Next");
+    expect(next).toBeTruthy();
+
+    // Any mutation claims a seq in its own transaction; here, an edit of the
+    // last memo — the one the second page would carry.
+    await env.DB.batch([
+      env.DB.prepare("UPDATE sync_counter SET n = n + 1 WHERE id = 1"),
+      env.DB
+        .prepare("UPDATE memos SET content = 'edited', seq = (SELECT n FROM sync_counter WHERE id = 1) WHERE id = ?")
+        .bind(ids[ids.length - 1])
+    ]);
+
+    const second = await exportBackup(context(get(cookie, `/api/export?parts=1&after=${encodeURIComponent(next as string)}`)));
+    expect(second.status).toBe(409);
+    await expect(second.json()).resolves.toMatchObject({ code: "BACKUP_CHANGED" });
+
+    // A fresh export reads the notebook as it now is.
+    const again = await exportBackup(context(get(cookie, "/api/export?parts=1")));
+    expect(again.status).toBe(200);
+  });
+
+  it("refuses a later page once the database history changed", async () => {
+    const cookie = await authenticatedCookie();
+    await seed(cookie, 51);
+    const first = await exportBackup(context(get(cookie, "/api/export?parts=1")));
+    const next = first.headers.get("X-Export-Next") as string;
+    const epoch = await env.DB.prepare("SELECT sync_epoch FROM sync_counter WHERE id = 1").first<{ sync_epoch: string }>();
+    await env.DB.prepare("UPDATE sync_counter SET sync_epoch = 'replaced' WHERE id = 1").run();
+    try {
+      const second = await exportBackup(context(get(cookie, `/api/export?parts=1&after=${encodeURIComponent(next)}`)));
+      expect(second.status).toBe(409);
+    } finally {
+      await env.DB.prepare("UPDATE sync_counter SET sync_epoch = ? WHERE id = 1").bind(epoch?.sync_epoch ?? "").run();
+    }
+  });
+
   it("closes an empty notebook in one page", async () => {
     const cookie = await authenticatedCookie();
     const response = await exportBackup(context(get(cookie, "/api/export?parts=1")));

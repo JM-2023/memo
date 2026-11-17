@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { TipProvider } from "../src/components/Tip";
-import type { ExportProgress } from "../src/lib/api";
+import { ApiError, type ExportProgress } from "../src/lib/api";
 import { LanguageProvider } from "../src/lib/i18n";
 import type { Memo } from "../src/lib/types";
 
@@ -165,6 +165,31 @@ describe("backup export toast", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
     expect(await screen.findByText("Stopped exporting your backup", { selector: ".toast *" })).toBeTruthy();
+  });
+});
+
+describe("backup export across a change", () => {
+  it("says the notebook changed mid-export and offers to export again", async () => {
+    const user = userEvent.setup();
+    mocks.exportData
+      .mockRejectedValueOnce(new ApiError("BACKUP_CHANGED", 409, "The notebook changed during the export. Export again."))
+      .mockImplementationOnce(() => new Promise(() => undefined));
+    const createObjectURL = vi.fn(() => "blob:unused");
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    await renderApp();
+
+    await user.click(document.querySelector<HTMLButtonElement>(".user-button")!);
+    await user.click(await screen.findByRole("menuitem", { name: "Export Data" }));
+
+    expect(
+      await screen.findByText("Your notebook changed while the backup was exporting. Export again for a copy that matches one moment.", {
+        selector: ".toast *"
+      })
+    ).toBeTruthy();
+    // Nothing half-made was handed over as a download.
+    expect(createObjectURL).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Export again" }));
+    await waitFor(() => expect(mocks.exportData).toHaveBeenCalledTimes(2));
   });
 });
 
