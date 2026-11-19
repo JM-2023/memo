@@ -55,10 +55,12 @@ export function reviewContextText(pick: ReviewPick, createdAt: string, tr: Trans
           : pick.span === "halfYear"
             ? tr("Six months ago", "半年前")
             : tr("A year ago", "一年前");
-    default: {
-      const age = formatReviewAge(createdAt, locale, now);
-      return tr(`Random · ${age}`, `随机 · ${age}`);
-    }
+    default:
+      // A random pick has no reason worth naming — the masthead already
+      // counts them ("Random 10") — so it says only how old it is. Spelling
+      // "Random" on every card would bury the named reasons ("1 year ago
+      // today") that should stand out among them.
+      return formatReviewAge(createdAt, locale, now);
   }
 }
 
@@ -202,11 +204,11 @@ export function ReviewBanner({ day, seen, total, breakdown }: ReviewBannerProps)
     <div className="review-banner">
       <div className="review-banner-row">
         <Sparkles size={14} aria-hidden="true" />
-        <span className="review-banner-title">
+        <h2 className="review-banner-title">
           {/* The figure rolls; the sentence is read from a plain copy. */}
           <span className="sr-only">{fillText(template, { date, seen: formatNumber(shown), n })}</span>
           <span aria-hidden="true">{fill(template, { date, seen: <RollingText value={shown} />, n })}</span>
-        </span>
+        </h2>
         {mix.length > 0 ? <span className="review-banner-mix">{mix.join(" · ")}</span> : null}
       </div>
       <div

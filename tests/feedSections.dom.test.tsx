@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   getAuthStatus: vi.fn(),
   bootstrap: vi.fn(),
   syncSince: vi.fn(),
+  updateMemo: vi.fn(),
   syncApi: {
     setCursor: vi.fn(),
     setSyncEpoch: vi.fn(),
@@ -34,7 +35,8 @@ vi.mock("../src/lib/api", async () => {
     ...actual,
     getAuthStatus: mocks.getAuthStatus,
     bootstrap: mocks.bootstrap,
-    syncSince: mocks.syncSince
+    syncSince: mocks.syncSince,
+    updateMemo: mocks.updateMemo
   };
 });
 
@@ -144,16 +146,42 @@ afterEach(() => {
 });
 
 describe("the pinned run", () => {
-  it("opens under an overline counting it, inside its first slot, and ends a beat before the rest", async () => {
+  it("opens under a real heading row counting it before its first slot, and ends a beat before the rest", async () => {
     renderApp();
     await screen.findByText("pinned note");
     const [first, second] = slots();
     expect(within(first).getByText("pinned note")).toBeTruthy();
-    expect(first.getAttribute("data-lead")).toBe("pinned");
-    expect(first.querySelector(".feed-lead")?.textContent).toBe("Pinned · 1");
+    const lead = screen.getByRole("heading", { level: 2, name: "Pinned · 1" });
+    expect(lead.classList.contains("feed-lead")).toBe(true);
+    expect(lead.classList.contains("is-pinned")).toBe(true);
+    // Its own feed row before the first pinned card, not inside the card's slot.
+    expect(lead.closest(".memo-slot")).toBeNull();
+    expect(lead.parentElement?.classList.contains("memo-feed")).toBe(true);
+    expect(lead.nextElementSibling).toBe(first);
     expect(first.hasAttribute("data-pin-end")).toBe(true);
-    expect(second.hasAttribute("data-lead")).toBe(false);
     expect(second.hasAttribute("data-pin-end")).toBe(false);
+  });
+
+  it("keeps the same heading row and rolls its count when another card is pinned from mid-feed", async () => {
+    const user = userEvent.setup();
+    mocks.updateMemo.mockResolvedValue({
+      memoPatch: { id: "memo-1", pinnedAt: "2026-01-03T00:00:00.000Z", seq: 10 }
+    });
+    renderApp();
+    await screen.findByText("pinned note");
+    const lead = screen.getByRole("heading", { level: 2, name: "Pinned · 1" });
+
+    // Pin a card from the middle of the list.
+    const card = screen.getByText("second").closest("article")!;
+    await user.click(card.querySelector<HTMLElement>(".memo-menu-trigger")!);
+    await user.click(await screen.findByRole("menuitem", { name: "Pin" }));
+
+    const updated = await screen.findByRole("heading", { level: 2, name: "Pinned · 2" });
+    // Same DOM heading element: it stays put while cards glide underneath.
+    expect(updated).toBe(lead);
+    // Its figure rolled via RollingText (1 out, 2 in).
+    expect(lead.querySelector(".roll-char-out")?.textContent).toBe("1");
+    expect(lead.querySelector(".roll-char-in")?.textContent).toBe("2");
   });
 
   it("has no line where every memo is pinned, nor where none is", async () => {

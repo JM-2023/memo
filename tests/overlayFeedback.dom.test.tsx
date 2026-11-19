@@ -188,7 +188,7 @@ describe("irreversible deletes need a deliberate second click", () => {
     mocks.batchMemos.mockResolvedValue({ patches: [], memos: [], purged: [{ id: "memo-2", seq: 20 }], unchanged: [], failed: [] });
     await openTrash();
     fireEvent.click(screen.getByRole("button", { name: "Select memos" }));
-    fireEvent.click(screen.getAllByRole("button", { name: "Select this memo" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: /^Select memo/ })[0]);
 
     fireEvent.click(screen.getByRole("button", { name: "Delete selected memos forever" }), { detail: 1 });
     const armed = screen.getByRole("button", { name: "Delete 1 memo forever?" });

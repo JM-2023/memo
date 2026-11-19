@@ -196,7 +196,11 @@ describe("a cold load still in progress", () => {
     await act(async () => rest.resolve(page([memo(2), memo(1)])));
     await screen.findByText("memo-1 body");
     expect(feed().hasAttribute("aria-busy")).toBe(false);
-    expect(feedEnd()).toBeNull();
+    // FeedEnd plays its exit (hidden from assistive tech) before unmounting.
+    const slot = document.querySelector<HTMLElement>(".feed-end-slot");
+    expect(slot?.classList.contains("is-leaving")).toBe(true);
+    expect(slot?.getAttribute("aria-hidden")).toBe("true");
+    await waitFor(() => expect(feedEnd()).toBeNull());
   });
 
   it("does not call Trash empty before every page is in", async () => {

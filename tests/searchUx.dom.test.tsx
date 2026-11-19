@@ -2,12 +2,15 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { TipProvider } from "../src/components/Tip";
 import { ApiError } from "../src/lib/api";
 import { LanguageProvider } from "../src/lib/i18n";
+import { SCROLL_JUMP_EVENT } from "../src/lib/navHistory";
 import type { Memo } from "../src/lib/types";
 
 const mocks = vi.hoisted(() => ({
@@ -15,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   bootstrap: vi.fn(),
   syncSince: vi.fn(),
   createMemo: vi.fn(),
+  trashMemo: vi.fn(),
   // The ranked map a semantic query would hand back (null: no ranking).
   semanticResults: null as ReadonlyMap<string, number> | null,
   // The ranking was made for an earlier query (held while this one ranks).
@@ -37,7 +41,8 @@ vi.mock("../src/lib/api", async () => {
     getAuthStatus: mocks.getAuthStatus,
     bootstrap: mocks.bootstrap,
     syncSince: mocks.syncSince,
-    createMemo: mocks.createMemo
+    createMemo: mocks.createMemo,
+    trashMemo: mocks.trashMemo
   };
 });
 
@@ -161,6 +166,7 @@ afterEach(() => {
   cleanup();
   delete (Element.prototype as Element & { getAnimations?: () => Animation[] }).getAnimations;
   delete (Element.prototype as Element & { scrollIntoView?: () => void }).scrollIntoView;
+  Reflect.deleteProperty(window, "visualViewport");
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -313,7 +319,7 @@ describe("search with meaning", () => {
     await waitFor(() => expect(document.querySelector(".search-sr[role='status']")?.textContent).toBe("Found 3 memos · 1 related by meaning"), { timeout: 1500 });
   });
 
-  it("badges what meaning alone found and heads its run with a line, in its slot", async () => {
+  it("badges what meaning alone found and heads its run with a heading row", async () => {
     localStorage.setItem("memo:semantic-search", "1");
     // memo-0 and memo-1 match "fruit" literally; memo-2 only by meaning.
     mocks.semanticResults = new Map([
@@ -326,8 +332,11 @@ describe("search with meaning", () => {
     await screen.findByText("Found 3 memos · 1 related by meaning", { selector: ".search-summary > .sr-only" });
 
     const related = screen.getByText("Window seat").closest(".memo-slot") as HTMLElement;
-    expect(related.getAttribute("data-lead")).toBe("related");
-    expect(related.querySelector(".feed-lead")?.textContent).toBe("Related by meaning — these don’t contain “fruit”");
+    const lead = screen.getByRole("heading", { level: 2, name: "Related by meaning — these don’t contain “fruit”" });
+    expect(lead.classList.contains("feed-lead")).toBe(true);
+    expect(lead.classList.contains("is-related")).toBe(true);
+    expect(lead.closest(".memo-slot")).toBeNull();
+    expect(lead.nextElementSibling).toBe(related);
     expect(within(related.querySelector("article")!).getByText("Related").classList.contains("memo-related")).toBe(true);
     // The keyword hits carry neither, and the line heads the run once.
     const hit = screen.getByText("Fruit salad").closest(".memo-slot") as HTMLElement;
@@ -482,28 +491,109 @@ describe("search hit highlighting", () => {
 });
 
 describe("creating under a lens", () => {
-  it("says when the current search hides the new memo and reveals it on request", async () => {
+  it("says when the current search hides the new memo, skips the Sending toast on fast sends, and reveals + focuses the card on Show", async () => {
     const user = userEvent.setup();
     const created = memo(9, "Tomorrow: call the plumber");
     // The server stores the memo under the id the client sent.
     mocks.createMemo.mockImplementation(async (id: string) => ({ memo: { ...created, id } }));
+    const jumps: Event[] = [];
+    window.addEventListener(SCROLL_JUMP_EVENT, (event) => jumps.push(event));
+    const scrollTo = vi.mocked(window.scrollTo);
+    const focusSpy = vi.spyOn(HTMLElement.prototype, "focus");
+    const rectOrig = Element.prototype.getBoundingClientRect;
+    let slotTop = 900;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.classList.contains("memo-slot") && this.textContent?.includes("Tomorrow: call the plumber")) {
+        return { top: slotTop, bottom: slotTop + 100, left: 0, right: 600, width: 600, height: 100, x: 0, y: slotTop, toJSON: () => ({}) } as DOMRect;
+      }
+      return rectOrig.call(this);
+    });
+
     renderApp();
     const search = await screen.findByRole("combobox", { name: "Search memos" });
     await user.type(search, "fruit");
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
 
-    await user.type(screen.getByRole("combobox", { name: "Memo content" }), "Tomorrow: call the plumber");
+    const composer = screen.getByRole("combobox", { name: "Memo content" });
+    await user.type(composer, "Tomorrow: call the plumber");
     await user.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(mocks.createMemo).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText("Saved the memo — this view hides it")).toBeTruthy();
+    // Fast round trip: goes straight to Sent without flashing Sending….
+    expect(await screen.findByText("Sent — this view hides it")).toBeTruthy();
+    expect(screen.queryByText("Sending… — this view hides it")).toBeNull();
 
+    scrollTo.mockClear();
+    focusSpy.mockClear();
+    vi.mocked(Element.prototype.scrollIntoView).mockClear();
     await user.click(screen.getByRole("button", { name: "Show" }));
-    await waitFor(() => expect(screen.getByText("Tomorrow: call the plumber")).toBeTruthy());
+    const card = (await screen.findByText("Tomorrow: call the plumber")).closest("article") as HTMLElement;
     expect((search as HTMLInputElement).value).toBe("");
+    await waitFor(() => expect(document.activeElement).toBe(card));
+    // Focus moved to the revealed card (never back to the composer) with preventScroll: true.
+    expect(document.activeElement).not.toBe(composer);
+    expect(focusSpy.mock.calls.some(([options], index) => focusSpy.mock.contexts[index] === card && (options as FocusOptions | undefined)?.preventScroll === true)).toBe(true);
+    // Controlled re-aiming scroll (window.scrollTo + SCROLL_JUMP_EVENT), never native scrollIntoView.
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    expect(jumps.length).toBeGreaterThanOrEqual(1);
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    // Simulate layout drift (content-visibility settling): re-aim tracks the new top.
+    const callsBeforeDrift = scrollTo.mock.calls.length;
+    slotTop = 1040;
     await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 10));
+      await new Promise((resolve) => window.setTimeout(resolve, 40));
     });
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect(scrollTo.mock.calls.length).toBeGreaterThan(callsBeforeDrift);
+  });
+
+  it("glides to a revealed card under full motion using controlled per-frame scrollTo and yields on reader input", async () => {
+    vi.mocked(window.matchMedia).mockImplementation(
+      (query: string) =>
+        ({
+          matches: false,
+          media: query,
+          onchange: null,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          dispatchEvent: vi.fn()
+        }) as unknown as MediaQueryList
+    );
+    const user = userEvent.setup();
+    const created = memo(9, "Glide target memo");
+    mocks.createMemo.mockImplementation(async (id: string) => ({ memo: { ...created, id } }));
+    const scrollTo = vi.mocked(window.scrollTo);
+    const rectOrig = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.classList.contains("memo-slot") && this.textContent?.includes("Glide target memo")) {
+        return { top: 900, bottom: 1000, left: 0, right: 600, width: 600, height: 100, x: 0, y: 900, toJSON: () => ({}) } as DOMRect;
+      }
+      return rectOrig.call(this);
+    });
+
+    renderApp();
+    const search = await screen.findByRole("combobox", { name: "Search memos" });
+    await user.type(search, "fruit");
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
+    await user.type(screen.getByRole("combobox", { name: "Memo content" }), "Glide target memo");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Sent — this view hides it")).toBeTruthy();
+
+    scrollTo.mockClear();
+    vi.mocked(Element.prototype.scrollIntoView).mockClear();
+    await user.click(screen.getByRole("button", { name: "Show" }));
+    const card = (await screen.findByText("Glide target memo")).closest("article") as HTMLElement;
+    await waitFor(() => expect(document.activeElement).toBe(card));
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+
+    // Reader input cancels the controlled glide immediately.
+    window.dispatchEvent(new Event("wheel"));
+    const afterWheel = scrollTo.mock.calls.length;
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 60));
+    });
+    expect(scrollTo.mock.calls.length).toBe(afterWheel);
   });
 
   it("lifts only the day that hides the new memo, keeping a query it matches", async () => {
@@ -537,7 +627,7 @@ describe("creating under a lens", () => {
 
     await user.type(screen.getByRole("combobox", { name: "Memo content" }), "More fruit");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    expect(await screen.findByText("Saved the memo — this view hides it")).toBeTruthy();
+    expect(await screen.findByText("Sent — this view hides it")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Show" }));
     // The day is gone; the query that the memo matches stays.
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(4));
@@ -564,17 +654,17 @@ describe("creating under a lens", () => {
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(80));
     await user.type(screen.getByRole("combobox", { name: "Memo content" }), "The newest note");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    expect(await screen.findByText("Saved the memo — it’s further down this list", { selector: ".toast *" })).toBeTruthy();
+    expect(await screen.findByText("Sent — it’s further down this list", { selector: ".toast *" })).toBeTruthy();
     expect(screen.queryByText("The newest note")).toBeNull();
     expect(screen.queryByRole("button", { name: "Show" })).toBeNull();
   });
 
-  it("says a send the search hides is only on its way, and says so again if it fails", async () => {
-    let fail: () => void = () => undefined;
+  it("waits out the 150ms hold before showing a hidden Sending toast, uses calm info tone for retrying and error tone only for refused", async () => {
+    let fail: (err: Error) => void = () => undefined;
     mocks.createMemo.mockImplementation(
       () =>
         new Promise((_resolve, reject) => {
-          fail = () => reject(new ApiError("INTERNAL_ERROR", 503, "The server is having trouble."));
+          fail = reject;
         })
     );
     const user = userEvent.setup();
@@ -584,17 +674,65 @@ describe("creating under a lens", () => {
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
     await user.type(screen.getByRole("combobox", { name: "Memo content" }), "Tomorrow: call the plumber");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    expect(await screen.findByText("Sending — this view hides it")).toBeTruthy();
-    expect(screen.queryByText("Saved the memo — this view hides it")).toBeNull();
+    // Immediately inside the 150ms hold, no Sending toast has flashed yet.
+    expect(screen.queryByText("Sending… — this view hides it")).toBeNull();
+    // After the 150ms hold, Sending… appears through the shared <SendStatus>.
+    expect(await screen.findByText("Sending… — this view hides it")).toBeTruthy();
+    expect(screen.queryByText("Sent — this view hides it")).toBeNull();
 
-    await act(async () => fail());
-    // The same toast says it now: nothing else on screen could.
-    expect(await screen.findByText("A memo didn’t send — this view hides it")).toBeTruthy();
-    expect(screen.queryByText("Sending — this view hides it")).toBeNull();
+    await act(async () => fail(new ApiError("INTERNAL_ERROR", 503, "The server is having trouble.")));
+    // The same toast transitions in place with calm neutral tone (no red error styling for retrying).
+    expect(await screen.findByText("Not sent · retrying — this view hides it")).toBeTruthy();
+    const toast = document.querySelector(".toast") as HTMLElement;
     expect(document.querySelectorAll(".toast")).toHaveLength(1);
+    expect(toast.classList.contains("is-error")).toBe(false);
+    expect(toast.querySelector(".toast-mark")).toBeNull();
+
     await user.click(screen.getByRole("button", { name: "Show" }));
     const card = (await screen.findByText("Tomorrow: call the plumber")).closest("article") as HTMLElement;
     expect(within(card).getByText("Not sent · retrying")).toBeTruthy();
+    expect(card.classList.contains("is-send-refused")).toBe(false);
+  });
+
+  it("uses error tone on the hidden-view toast when the server refuses the send, and revises a hidden Sent toast on ⌘Z", async () => {
+    const user = userEvent.setup();
+    mocks.createMemo
+      .mockImplementationOnce(async () => {
+        throw new ApiError("STORAGE_FULL", 507, "The database is full.");
+      })
+      .mockImplementationOnce(async (id: string, content: string) => ({ memo: { ...memo(9, content), id } }));
+    mocks.trashMemo.mockImplementation(async (id: string) => ({
+      ok: true,
+      memo: { ...memo(9, "Hidden oops"), id, seq: 11, deletedAt: "2026-01-01T00:05:00.000Z" }
+    }));
+    renderApp();
+    const search = await screen.findByRole("combobox", { name: "Search memos" });
+    await user.type(search, "fruit");
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
+
+    const composer = screen.getByRole("combobox", { name: "Memo content" }) as HTMLTextAreaElement;
+    await user.type(composer, "Rejected hidden note");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Not sent · the server refused it — this view hides it")).toBeTruthy();
+    const refusedToast = screen.getByText("Not sent · the server refused it — this view hides it").closest(".toast") as HTMLElement;
+    expect(refusedToast.classList.contains("is-error")).toBe(true);
+    expect(refusedToast.querySelector(".toast-mark")).not.toBeNull();
+
+    // Dismiss the refused toast, then send a second hidden memo that succeeds and press ⌘Z within 6s.
+    await user.click(within(refusedToast).getByRole("button", { name: "Dismiss" }));
+    await user.type(composer, "Hidden oops");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    const sentToast = (await screen.findByText("Sent — this view hides it")).closest(".toast") as HTMLElement;
+    expect(sentToast).not.toBeNull();
+
+    expect(fireEvent.keyDown(composer, { key: "z", ctrlKey: true })).toBe(false);
+    expect(composer.value).toBe("Hidden oops");
+    // The hidden "Sent" toast is revised in place to explain that the sent copy moved to Trash.
+    const undoneNode = await screen.findByText("Back in the composer — the sent copy moved to Trash", { selector: ".toast *" });
+    expect(undoneNode.closest(".toast")).toBe(sentToast);
+    expect(document.querySelectorAll(".toast:not(.is-leaving)")).toHaveLength(1);
+    expect(within(sentToast).queryByRole("button", { name: "Show" })).toBeNull();
+    await waitFor(() => expect(mocks.trashMemo).toHaveBeenCalledTimes(1));
   });
 
   it("stays quiet when the new memo shows in the current view", async () => {
@@ -606,7 +744,7 @@ describe("creating under a lens", () => {
     await user.type(screen.getByRole("combobox", { name: "Memo content" }), "More fruit");
     await user.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(3));
-    expect(screen.queryByText("Saved the memo — this view hides it")).toBeNull();
+    expect(screen.queryByText("Sent — this view hides it")).toBeNull();
   });
 });
 
@@ -687,6 +825,196 @@ describe("search and jump", () => {
     expect(search.value).toBe("");
     await user.keyboard("{ArrowDown}");
     expect(within(screen.getByRole("listbox", { name: "Search suggestions" })).getByRole("option", { name: "fruit" })).toBeTruthy();
+  });
+
+  it("holds the suggestion list steady while an IME composes pinyin and re-ranks once on commit", async () => {
+    const chineseNotebook = [
+      memo(0, "读书笔记 #zhongwen #中文"),
+      memo(1, "周记 #zhou #journal"),
+      memo(2, "Fruit salad #ideas")
+    ];
+    mocks.bootstrap.mockResolvedValue({
+      memos: chineseNotebook,
+      tags: [],
+      cursor: chineseNotebook.length,
+      syncEpoch: "epoch-a",
+      serverTime: "2026-01-01T00:02:00.000Z",
+      hasMore: false,
+      nextAfter: null
+    });
+    localStorage.setItem("memo:recent-searches", JSON.stringify(["window"]));
+    renderApp();
+    const search = (await screen.findByRole("combobox", { name: "Search memos" })) as HTMLInputElement;
+    await screen.findAllByRole("article");
+
+    fireEvent.focus(search);
+    const list = screen.getByRole("listbox", { name: "Search suggestions" });
+    expect(within(list).getByRole("option", { name: "window" })).toBeTruthy();
+
+    // Typing pinyin "z" -> "zh" -> "zho" -> "zhong" must hold the pre-composition list.
+    fireEvent.compositionStart(search);
+    for (const pinyin of ["z", "zh", "zho", "zhon", "zhong"]) {
+      fireEvent.change(search, { target: { value: pinyin } });
+      expect(search.value).toBe(pinyin);
+      expect(within(list).getByRole("option", { name: "window" })).toBeTruthy();
+      expect(within(list).queryByRole("option", { name: /#zhongwen/ })).toBeNull();
+      expect(within(list).queryByRole("option", { name: /#zhou/ })).toBeNull();
+      expect(within(list).queryByRole("option", { name: /^Search “z/ })).toBeNull();
+    }
+
+    // Committing "中文" updates the suggestion list once, for the composed text.
+    fireEvent.change(search, { target: { value: "中文" } });
+    fireEvent.compositionEnd(search);
+    await waitFor(() => expect(within(list).getByRole("option", { name: "Go to #中文, 1 memo" })).toBeTruthy());
+    expect(within(list).getByRole("option", { name: /^Search “中文”/ })).toBeTruthy();
+    expect(within(list).queryByRole("option", { name: "window" })).toBeNull();
+
+    // Composing after existing text also holds the current tag matches until commit (WebKit order).
+    fireEvent.change(search, { target: { value: "jour" } });
+    await waitFor(() => expect(within(list).getByRole("option", { name: "Go to #journal, 1 memo" })).toBeTruthy());
+    fireEvent.compositionStart(search);
+    fireEvent.change(search, { target: { value: "jour zh" } });
+    expect(within(list).getByRole("option", { name: "Go to #journal, 1 memo" })).toBeTruthy();
+    expect(within(list).queryByRole("option", { name: /#zhongwen/ })).toBeNull();
+    // WebKit order: compositionend then plain input with the committed word.
+    fireEvent.compositionEnd(search);
+    fireEvent.change(search, { target: { value: "jour 中文" } });
+    await waitFor(() => expect(within(list).getByRole("option", { name: "Go to #中文, 1 memo" })).toBeTruthy());
+  });
+
+  it("shrinks its max-height above a phone's virtual keyboard via --kb-inset", async () => {
+    localStorage.setItem("memo:recent-searches", JSON.stringify(["window", "fruit"]));
+    const listeners = new Map<string, Set<() => void>>();
+    const viewport = {
+      height: 500,
+      offsetTop: 0,
+      scale: 1,
+      addEventListener: (type: string, fn: () => void) => {
+        const set = listeners.get(type) ?? new Set();
+        set.add(fn);
+        listeners.set(type, set);
+      },
+      removeEventListener: (type: string, fn: () => void) => {
+        listeners.get(type)?.delete(fn);
+      }
+    };
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: viewport });
+    try {
+      renderApp();
+      const search = await screen.findByRole("combobox", { name: "Search memos" });
+      await screen.findAllByRole("article");
+      fireEvent.focus(search);
+      const pop = document.querySelector<HTMLElement>(".search-jump-pop");
+      expect(pop).not.toBeNull();
+      expect(pop?.style.getPropertyValue("--kb-inset")).toBe("300px");
+
+      // Keyboard resizes dynamically.
+      viewport.height = 460;
+      act(() => listeners.get("resize")?.forEach((fn) => fn()));
+      await waitFor(() => expect(pop?.style.getPropertyValue("--kb-inset")).toBe("340px"));
+
+      // Pinch zoom is not a keyboard: inset drops to 0px.
+      viewport.scale = 2;
+      act(() => listeners.get("resize")?.forEach((fn) => fn()));
+      await waitFor(() => expect(pop?.style.getPropertyValue("--kb-inset")).toBe("0px"));
+
+      const css = readFileSync(resolve(process.cwd(), "src/styles/app.css"), "utf8");
+      expect(css).toMatch(/\.search-jump-list \{[^}]*max-height:[^;]*var\(--kb-inset, 0px\)/);
+    } finally {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: originalInnerHeight });
+    }
+  });
+
+  it("removes a single recent search by button or Delete/Shift+Backspace and persists the change", async () => {
+    localStorage.setItem("memo:recent-searches", JSON.stringify(["window", "fruit", "apple"]));
+    const user = userEvent.setup();
+    renderApp();
+    const search = (await screen.findByRole("combobox", { name: "Search memos" })) as HTMLInputElement;
+    await screen.findAllByRole("article");
+    await user.click(search);
+    const list = screen.getByRole("listbox", { name: "Search suggestions" });
+
+    // Pointer ✕ removes only that entry, keeps focus, hands highlight to the next row, and does not apply the search.
+    const removeFruit = within(list).getByRole("button", { name: "Remove “fruit” from recent searches" });
+    await user.click(removeFruit);
+    expect(search.value).toBe("");
+    expect(document.activeElement).toBe(search);
+    expect(within(list).queryByRole("option", { name: "fruit" })).toBeNull();
+    const appleRow = within(list).getByRole("option", { name: "apple" });
+    const windowRow = within(list).getByRole("option", { name: "window" });
+    expect(search.getAttribute("aria-activedescendant")).toBe(appleRow.id);
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("memo:recent-searches") ?? "[]")).toEqual(["window", "apple"]));
+    expect(document.querySelector('[data-live-region] [role="status"]')?.textContent).toBe("Removed “fruit” from recent searches");
+
+    // Keyboard navigation highlights a recent row and Delete removes it, handing highlight to the neighbour.
+    await user.keyboard("{ArrowUp}");
+    expect(search.getAttribute("aria-activedescendant")).toBe(windowRow.id);
+    expect(windowRow.getAttribute("aria-keyshortcuts")).toContain("Delete");
+    expect(document.querySelector(".search-jump-foot")?.textContent).toContain("remove");
+
+    // Plain Backspace must not delete a recent search.
+    await user.keyboard("{Backspace}");
+    expect(within(list).getByRole("option", { name: "window" })).toBeTruthy();
+
+    await user.keyboard("{Delete}");
+    expect(within(list).queryByRole("option", { name: "window" })).toBeNull();
+    expect(search.getAttribute("aria-activedescendant")).toBe(within(list).getByRole("option", { name: "apple" }).id);
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("memo:recent-searches") ?? "[]")).toEqual(["apple"]));
+
+    // Shift+Backspace also removes the active recent row (for laptop keyboards without forward-delete).
+    await user.keyboard("{Shift>}{Backspace}{/Shift}");
+    await waitFor(() => expect(localStorage.getItem("memo:recent-searches")).toBeNull());
+    expect(search.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(search);
+  });
+
+  it("clears all recent searches by click or keyboard while keeping other sections open", async () => {
+    localStorage.setItem("memo:recent-searches", JSON.stringify(["window", "fruit"]));
+    localStorage.setItem(
+      "memo-saved-filters",
+      JSON.stringify([{ id: "s1", name: "Ideas", query: "", tag: "ideas", day: null, filters: { noTags: false, hasImage: false, hasLink: false, hasOpenTask: false, dateFrom: null, dateTo: null } }])
+    );
+    const user = userEvent.setup();
+    renderApp();
+    const search = (await screen.findByRole("combobox", { name: "Search memos" })) as HTMLInputElement;
+    await screen.findAllByRole("article");
+    await user.click(search);
+    const list = screen.getByRole("listbox", { name: "Search suggestions" });
+
+    // Reach Clear via arrow keys and Enter.
+    await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
+    const clearRow = within(list).getByRole("option", { name: "Clear recent searches" });
+    expect(search.getAttribute("aria-activedescendant")).toBe(clearRow.id);
+    await user.keyboard("{Enter}");
+
+    expect(within(list).queryByRole("group", { name: "Recent searches" })).toBeNull();
+    expect(within(list).getByRole("option", { name: "Ideas, #ideas" })).toBeTruthy();
+    expect(search.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(search);
+    await waitFor(() => expect(localStorage.getItem("memo:recent-searches")).toBeNull());
+    expect(document.querySelector('[data-live-region] [role="status"]')?.textContent).toBe("Recent searches cleared");
+  });
+
+  it("uses Chinese accessible names and announcements for recent search deletion and clear", async () => {
+    localStorage.setItem("memo:language", "zh-CN");
+    localStorage.setItem("memo:recent-searches", JSON.stringify(["窗户", "水果"]));
+    const user = userEvent.setup();
+    renderApp();
+    const search = (await screen.findByRole("combobox", { name: "搜索笔记" })) as HTMLInputElement;
+    await screen.findAllByRole("article");
+    await user.click(search);
+    const list = screen.getByRole("listbox", { name: "搜索建议" });
+
+    await user.click(within(list).getByRole("button", { name: "从最近搜索中删除「窗户」" }));
+    expect(document.querySelector('[data-live-region] [role="status"]')?.textContent).toBe("已从最近搜索中删除「窗户」");
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("memo:recent-searches") ?? "[]")).toEqual(["水果"]));
+
+    await user.click(within(list).getByRole("option", { name: "清空最近搜索" }));
+    expect(document.querySelector('[data-live-region] [role="status"]')?.textContent).toBe("已清空最近搜索");
+    await waitFor(() => expect(localStorage.getItem("memo:recent-searches")).toBeNull());
+    expect(search.getAttribute("aria-expanded")).toBe("false");
   });
 });
 

@@ -5,11 +5,12 @@
 // in trash cards and select mode, and the optimistic pending layer overrides
 // what the box shows while a toggle is in flight.
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoCard } from "../src/components/MemoCard";
 import { LanguageProvider } from "../src/lib/i18n";
+import { EXIT_MS } from "../src/lib/motion";
 import type { Memo } from "../src/lib/types";
 
 const memo: Memo = {
@@ -25,36 +26,46 @@ const memo: Memo = {
 
 function renderCard(overrides: Partial<Parameters<typeof MemoCard>[0]> = {}) {
   const onToggleTask = vi.fn();
-  render(
+  const baseProps: Parameters<typeof MemoCard>[0] = {
+    memo,
+    variant: "normal",
+    knownTags: [],
+    editing: false,
+    savingEdit: false,
+    editConflict: false,
+    selecting: false,
+    selected: false,
+    onToggleSelect: vi.fn(),
+    onStartEdit: vi.fn(),
+    onCancelEdit: vi.fn(),
+    onSaveEdit: vi.fn(async () => true),
+    onAcceptEditConflict: vi.fn(),
+    onTogglePin: vi.fn(),
+    onAddTag: vi.fn(),
+    onCopy: vi.fn(),
+    onShare: vi.fn(),
+    onDelete: vi.fn(),
+    onRestore: vi.fn(),
+    onPurge: vi.fn(),
+    onPickTag: vi.fn(),
+    onOpenImage: vi.fn(),
+    onToggleTask,
+    ...overrides
+  };
+  const view = render(
     <LanguageProvider>
-      <MemoCard
-        memo={memo}
-        variant="normal"
-        knownTags={[]}
-        editing={false}
-        savingEdit={false}
-        editConflict={false}
-        selecting={false}
-        selected={false}
-        onToggleSelect={vi.fn()}
-        onStartEdit={vi.fn()}
-        onCancelEdit={vi.fn()}
-        onSaveEdit={vi.fn(async () => true)}
-        onAcceptEditConflict={vi.fn()}
-        onTogglePin={vi.fn()}
-        onCopy={vi.fn()}
-        onShare={vi.fn()}
-        onDelete={vi.fn()}
-        onRestore={vi.fn()}
-        onPurge={vi.fn()}
-        onPickTag={vi.fn()}
-        onOpenImage={vi.fn()}
-        onToggleTask={onToggleTask}
-        {...overrides}
-      />
+      <MemoCard {...baseProps} />
     </LanguageProvider>
   );
-  return { onToggleTask };
+  return {
+    onToggleTask,
+    rerender: (next: Partial<Parameters<typeof MemoCard>[0]>) =>
+      view.rerender(
+        <LanguageProvider>
+          <MemoCard {...baseProps} {...next} />
+        </LanguageProvider>
+      )
+  };
 }
 
 beforeEach(() => {
@@ -75,6 +86,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -130,6 +142,54 @@ describe("feed task checkboxes", () => {
     const progress = document.querySelector(".memo-view-surface .memo-head .memo-progress");
     expect(progress?.querySelector("[aria-hidden='true']")?.textContent).toBe("2/3");
     expect(progress?.querySelector(".sr-only")?.textContent).toBe("2 of 3 tasks done");
+  });
+
+  it("places the completion check after the figure and plays both its entrance and exit", () => {
+    vi.useFakeTimers();
+    const { rerender } = renderCard({
+      pendingTaskFlips: new Map([
+        [1, true],
+        [3, false]
+      ])
+    });
+    const progress = () => document.querySelector(".memo-view-surface .memo-head .memo-progress")!;
+    const figure = () => progress().querySelector(".memo-progress-figure")!;
+    expect(figure().querySelector(".memo-progress-check")).toBeNull();
+
+    // Ticking the last box pops the check AFTER "3/3" so the digits never jump.
+    rerender({
+      pendingTaskFlips: new Map([
+        [1, true],
+        [3, true]
+      ])
+    });
+    expect(progress().classList.contains("is-complete")).toBe(true);
+    const entered = figure().querySelector(".memo-progress-check")!;
+    expect(entered.classList.contains("is-new")).toBe(true);
+    expect(figure().lastElementChild).toBe(entered);
+    expect(figure().firstChild?.nodeType).toBe(Node.TEXT_NODE);
+    expect(figure().textContent).toBe("3/3");
+
+    // Unchecking plays the check's exit before removing it.
+    rerender({
+      pendingTaskFlips: new Map([
+        [1, true],
+        [3, false]
+      ])
+    });
+    expect(progress().classList.contains("is-complete")).toBe(false);
+    const leaving = figure().querySelector(".memo-progress-check");
+    expect(leaving?.classList.contains("is-leaving")).toBe(true);
+    expect(figure().lastElementChild).toBe(leaving);
+    act(() => vi.advanceTimersByTime(EXIT_MS));
+    expect(figure().querySelector(".memo-progress-check")).toBeNull();
+  });
+
+  it("does not pop the completion check on an already-complete card's initial mount", () => {
+    renderCard({ memo: { ...memo, content: "- [x] alpha\n- [x] beta" } });
+    const check = document.querySelector(".memo-view-surface .memo-head .memo-progress-check");
+    expect(check).not.toBeNull();
+    expect(check?.classList.contains("is-new")).toBe(false);
   });
 
   it("keeps trash cards and select mode inert (boxes render, controls do not)", () => {

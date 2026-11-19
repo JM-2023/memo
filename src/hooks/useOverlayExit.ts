@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { useReducedMotion } from "./useReducedMotion";
-import { EXIT_MS } from "../lib/motion";
+import { EASE, EXIT_MS } from "../lib/motion";
 
 /**
  * The standard overlay exit, for an engine that can't report its own (no
@@ -115,7 +115,7 @@ export function continueFrom(element: Element | null | undefined, from: PaintedF
     start.transform = from.transform;
     end.transform = String(last?.transform ?? "none");
   }
-  element.animate([start, end], { duration, easing: frames[0]?.easing ?? "ease" });
+  element.animate([start, end], { duration, easing: frames[0]?.easing ?? EASE });
 }
 
 export interface OverlayExit {

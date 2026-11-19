@@ -1,9 +1,10 @@
 import { CloudOff, Loader2 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../lib/i18n";
+import { EXIT_MS } from "../lib/motion";
 import { RollingText } from "./RollingText";
 
-interface FeedEndProps {
+export interface FeedEndState {
   /** Memos in hand so far, capped at the cold start's frozen total. */
   loaded: number;
   /** Memos at the frozen cursor; null if the first page didn't say. */
@@ -22,11 +23,37 @@ interface FeedEndProps {
  * the Retry stays the notice's own (one button, not two on a short list),
  * and the load keeps trying by itself meanwhile.
  *
+ * Kept mounted (passed null once the load ends or the list moves on) so the
+ * line folds its height away on exit the way SyncNotice does, rather than
+ * cutting out in a frame. Under reduced motion it fades out where it stands
+ * before its room closes.
+ *
  * Not a live region: the count ticks per page, and a stalled load is
  * already spoken (App announces it).
  */
-export function FeedEnd({ loaded, total, failed }: FeedEndProps) {
+export function FeedEnd({ state }: { state: FeedEndState | null }) {
   const { formatNumber, tr } = useI18n();
+  const [leaving, setLeaving] = useState<FeedEndState | null>(null);
+  const lastRef = useRef<FeedEndState | null>(state);
+
+  if (state) {
+    lastRef.current = state;
+    if (leaving) setLeaving(null);
+  } else if (lastRef.current && !leaving) {
+    setLeaving(lastRef.current);
+    lastRef.current = null;
+  }
+
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = window.setTimeout(() => setLeaving(null), EXIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [leaving]);
+
+  const shown = state ?? leaving;
+  if (!shown) return null;
+  const exiting = state === null;
+  const { loaded, total, failed } = shown;
 
   let text: string;
   // The same words with the count on the odometer, as the sync notice's.
@@ -60,7 +87,7 @@ export function FeedEnd({ loaded, total, failed }: FeedEndProps) {
   }
 
   return (
-    <div className="feed-end-slot">
+    <div className={`feed-end-slot${exiting ? " is-leaving" : ""}`} aria-hidden={exiting || undefined}>
       <div className="feed-end-clip">
         <div className={`feed-end${failed ? " is-failed" : ""}`}>
           {failed ? (

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type AnimationEvent, type CSSProperties } from "react";
 import { useI18n, type CountUnit } from "../lib/i18n";
+import { T_MORPH } from "../lib/motion";
 
 interface RollingTextProps {
   /** Numeric value behind the text; its change decides the roll direction. */
@@ -118,16 +119,18 @@ export function RollingText({ value, text, align = "right", className }: Rolling
             }
           : state
       );
-    }, 320 + Math.max(0, ...st.slots.map((slot) => slot.key)) * 20 + 100);
+    }, T_MORPH + Math.max(0, ...st.slots.map((slot) => slot.key)) * 20 + 100);
     return () => window.clearTimeout(timer);
   }, [st.serial]);
 
   function onAnimationEnd(event: AnimationEvent<HTMLSpanElement>) {
-    const name = event.animationName;
-    const isOut = name.startsWith("roll-char-out");
-    const isIn = name.startsWith("roll-char-in");
-    if (!isOut && !isIn) return;
     const target = event.target as HTMLElement;
+    const name = event.animationName;
+    // Under reduced motion the drum's roll-char-* names swap to fade-in/out;
+    // match those on our own faces so ghosts still clear as soon as the fade ends.
+    const isOut = name.startsWith("roll-char-out") || (name === "fade-out" && target.classList.contains("roll-char-out"));
+    const isIn = name.startsWith("roll-char-in") || (name === "fade-in" && target.classList.contains("roll-char-in"));
+    if (!isOut && !isIn) return;
     const key = Number(target.dataset.rollKey);
     const serial = Number(target.dataset.rollSerial);
     if (Number.isNaN(key) || Number.isNaN(serial)) return;

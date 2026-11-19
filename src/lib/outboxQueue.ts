@@ -1,6 +1,7 @@
 import { ApiError, AuthRequiredError } from "./api";
 import { memoMatchesSubmittedDraft } from "./memoRecovery";
 import { rewriteIssue } from "./memoRules";
+import { BUSY_HOLD_MS } from "./motion";
 import {
   failureOf,
   holdPreviews,
@@ -8,11 +9,13 @@ import {
   nextQueued,
   outboxRetryDelay,
   SEND_UNDO_MS,
+  sendStateOf,
   withEntry,
   withoutEntry,
   type Outbox,
   type OutboxEntry,
-  type OutboxFailure
+  type OutboxFailure,
+  type SendState
 } from "./outbox";
 import { renameTagInContent, tagMatches } from "./tags";
 import type { Memo, NewImagePayload } from "./types";
@@ -46,16 +49,24 @@ export type OutboxMove = "edit-save" | "purge" | "restore" | "trash";
 
 /** What the queue has to say. The words, and where they go, are App's. */
 export interface OutboxVoice {
-  /** A send whose card the view hides is on its way. Returns the toast speaking for the card. */
+  /**
+   * A send whose card the view hides is still on its way once the busy
+   * hold (BUSY_HOLD_MS) has passed — a fast one never says it. Returns the
+   * toast speaking for the card.
+   */
   sending(id: string): number;
-  /** A send whose card the view hides failed. `toast` is the one speaking for it (0: none); returns the one that says so now. */
-  failedHidden(id: string, toast: number): number;
+  /**
+   * A send whose card the view hides failed. `toast` is the one speaking
+   * for it (0: none), `state` is its failure state (offline, retrying or
+   * refused); returns the toast that says so now.
+   */
+  failedHidden(id: string, toast: number, state: SendState): number;
   /**
    * The server has the memo. `said`: the toast that spoke for a hidden
    * card, if any; `leaves`: its server time moved it out of the view its
-   * card was in.
+   * card was in. Returns the toast that says so, if one does (⌘Z revises it).
    */
-  sent(saved: Memo, said: { toast: number } | undefined, leaves: boolean): void;
+  sent(saved: Memo, said: { toast: number } | undefined, leaves: boolean): number | void;
   /** A send in view failed on its own while online and is trying again (said once per run of tries). */
   retrying(): void;
   /** The queue stopped with the browser offline, a card in view among those waiting. */
@@ -66,10 +77,10 @@ export interface OutboxVoice {
   purged(): void;
   /** Nothing goes back into a composer that holds a draft. */
   composerBusy(): void;
-  /** A memo went back into the composer. */
-  tookBack(): void;
-  /** A failed send was discarded; `undo` puts it back in its place. */
-  discarded(undo: () => void): void;
+  /** A memo still on its way went back into the composer. `said`: the toast that spoke for it while the view hid it. */
+  tookBack(said?: { toast: number }): void;
+  /** A failed send was discarded; `undo` puts it back in its place. `said`: the toast that spoke for it while the view hid it. */
+  discarded(undo: () => void, said?: { toast: number }): void;
 }
 
 export interface OutboxDeps {
@@ -119,8 +130,13 @@ export interface OutboxDeps {
   recall(entry: OutboxEntry): boolean;
   /** Whether a pin, trash or restore of the memo is in flight. */
   busy(id: string): boolean;
-  /** ⌘Z after the server confirmed the send: the memo goes to Trash. */
-  trashUndone(memo: Memo): void;
+  /**
+   * ⌘Z after the server confirmed the send: its text and pictures are back
+   * in the composer, so the stored memo goes to Trash — and the words say
+   * so, or the reader sends the text again unaware a copy sits in Trash.
+   * `said`: the toast that spoke for the send (a hidden card's), to revise.
+   */
+  trashUndone(memo: Memo, said?: { toast: number }): void;
   /** A send taken back or discarded that reached the server after all: it goes to Trash. */
   trashReturned(memo: Memo): void;
 
@@ -149,6 +165,8 @@ interface LastSend {
   entry: OutboxEntry;
   confirmedAt: number | null;
   timer: Timer | undefined;
+  /** The toast that said it was sent (a hidden card's), for ⌘Z to revise. */
+  toast?: number;
 }
 
 function browserOnline(): boolean {
@@ -185,8 +203,10 @@ export class OutboxQueue {
   private readonly timers = new Map<string, Timer>();
   /** Tag renames and removals under way: the queue waits them out (hold). */
   private holds = 0;
-  /** Sends whose card the view hides: the toast speaking for the card, and whether it has said the send failed. */
-  private readonly hidden = new Map<string, { toast: number; failed: boolean }>();
+  /** Sends whose card the view hides: the toast speaking for the card, and the last failure state said (null if none). */
+  private readonly hidden = new Map<string, { toast: number; failed: SendState | null }>();
+  /** A hidden card's busy hold: its "Sending…" toast waits this out, so a fast send only ever says how it settled. */
+  private readonly toastHolds = new Map<string, Timer>();
   /** Discarded entries kept for their toast's Undo, oldest first. */
   private discarded: OutboxEntry[] = [];
   /** The latest send, for ⌘Z in the composer it just emptied. */
@@ -253,7 +273,7 @@ export class OutboxQueue {
   async send(entry: OutboxEntry, options: { hidden?: boolean; land?: (admit: () => void) => Promise<void> } = {}): Promise<void> {
     const id = entry.id;
     // Marked before it can go out: a send that settles first says so itself (landSent).
-    if (options.hidden) this.hidden.set(id, { toast: 0, failed: false });
+    if (options.hidden) this.hidden.set(id, { toast: 0, failed: null });
     // Before the landing: its morph decodes the pictures from the cache.
     this.previews.set(id, this.holdImages(entry.images));
     this.noteLastSend(entry);
@@ -263,8 +283,18 @@ export class OutboxQueue {
     const said = this.hidden.get(id);
     if (said && !said.toast && !said.failed) {
       // Only on its way yet: the toast speaks for the hidden card until the
-      // send settles, saved (landSent) or not (sayHiddenFailure).
-      said.toast = this.voice.sending(id);
+      // send settles, sent (landSent) or not (sayHiddenFailure) — once the
+      // busy hold has passed, as the card's own Sending… waits it out.
+      // A send that settles inside the hold says only how it settled.
+      clearTimeout(this.toastHolds.get(id));
+      this.toastHolds.set(
+        id,
+        setTimeout(() => {
+          this.toastHolds.delete(id);
+          const still = this.hidden.get(id);
+          if (still && !still.toast && !still.failed && this.outbox.has(id)) still.toast = this.voice.sending(id);
+        }, BUSY_HOLD_MS)
+      );
     }
     // A press is a fresh try for anything still waiting in front of it.
     this.resume("reader");
@@ -409,7 +439,7 @@ export class OutboxQueue {
       }
       const failure = failureOf(cause, this.online());
       if (failure === "refused") {
-        this.write((current) => mapEntries(current, (item) => item.id === entry.id, (item) => ({ ...item, status: "failed", failure })));
+        this.write((current) => mapEntries(current, (item) => item.id === entry.id, (item) => ({ ...item, status: "failed", failure, auto: false })));
         // A card in view says it beside its Retry, and the voice gives the
         // server's reason; a hidden one's toast says where it is.
         if (!this.sayHiddenFailure(entry.id)) this.voice.refused(cause);
@@ -459,7 +489,12 @@ export class OutboxQueue {
     this.finishSent(current);
     this.deps.sync();
     this.deps.notifyPeers();
-    this.voice.sent(saved, said, leaves);
+    this.noteSentToast(entry.id, this.voice.sent(saved, said, leaves));
+  }
+
+  /** The toast that said a send was stored, kept for ⌘Z: taking the send back revises it rather than leaving it saying Sent. */
+  private noteSentToast(id: string, toast: number | void): void {
+    if (this.last?.entry.id === id && typeof toast === "number" && toast > 0) this.last.toast = toast;
   }
 
   /** An entry the server has: its pictures leave the cache hold, and its previews go — once ⌘Z can no longer want them back. */
@@ -493,21 +528,28 @@ export class OutboxQueue {
   private forgetSend(id: string): void {
     this.stopRetrying(id);
     this.hidden.delete(id);
+    clearTimeout(this.toastHolds.get(id));
+    this.toastHolds.delete(id);
   }
 
   /**
    * A send failed whose card the view hides: nothing on screen says so, so
-   * a toast does — once, taking over the one that said it was on its way —
-   * with the way to the card and its Retry. True when the card is hidden
+   * a toast does — once per state, taking over the one that said it was on
+   * its way — with the way to the card and its Retry. Escalating from
+   * retrying/offline to refused updates the toast so a permanent refusal is
+   * never hidden behind an earlier quiet state. True when the card is hidden
    * (said now or before); false when it is in view and says it itself.
    */
   private sayHiddenFailure(id: string): boolean {
     const entry = this.outbox.get(id);
     if (!entry || this.deps.shows(entry.memo)) return false;
+    const state = sendStateOf(entry, this.online());
     const said = this.hidden.get(id);
-    if (said?.failed) return true;
-    const toast = this.voice.failedHidden(id, said?.toast ?? 0);
-    this.hidden.set(id, { toast, failed: true });
+    if (said?.failed === state) return true;
+    clearTimeout(this.toastHolds.get(id));
+    this.toastHolds.delete(id);
+    const toast = this.voice.failedHidden(id, said?.toast ?? 0, state);
+    this.hidden.set(id, { toast, failed: state });
     return true;
   }
 
@@ -520,7 +562,7 @@ export class OutboxQueue {
    */
   private retryLater(id: string): void {
     const spent = this.retries.get(id) ?? 0;
-    this.write((current) => mapEntries(current, (entry) => entry.id === id, (entry) => ({ ...entry, status: "failed", failure: "network" })));
+    this.write((current) => mapEntries(current, (entry) => entry.id === id, (entry) => ({ ...entry, status: "failed", failure: "network", auto: false })));
     // Said once; the retries after it stay quiet. (A hidden card's toast says it.)
     if (spent === 0 && !this.sayHiddenFailure(id)) this.voice.retrying();
     clearTimeout(this.timers.get(id));
@@ -542,7 +584,7 @@ export class OutboxQueue {
    */
   private block(failure: "network" | "auth"): void {
     const waiting = [...this.outbox.values()].filter((entry) => entry.status === "sending").map((entry) => entry.id);
-    this.write((current) => mapEntries(current, (entry) => entry.status === "sending", (entry) => ({ ...entry, status: "failed", failure })));
+    this.write((current) => mapEntries(current, (entry) => entry.status === "sending", (entry) => ({ ...entry, status: "failed", failure, auto: false })));
     if (failure !== "network") return;
     let inView = false;
     for (const id of waiting) if (!this.sayHiddenFailure(id)) inView = true;
@@ -551,22 +593,37 @@ export class OutboxQueue {
 
   /**
    * Send again what failed (see ResumeCue). Only a press retries a refused
-   * memo — the one it was pressed on. A clock that runs out while the page
-   * is out of sight or offline sends nothing: coming back does.
+   * memo — the one it was pressed on — and only a press on that card turns
+   * it back to "Sending…": automatic tries (the clock, the link returning,
+   * the page waking, or another send carrying a failed one along) keep
+   * `auto: true` so the failed card's buttons never swap out from under the
+   * reader. A clock that runs out while the page is out of sight or offline
+   * sends nothing: coming back does.
    */
   resume(from: ResumeCue, id?: string): void {
     if (!this.deps.signedIn() || this.deps.leaving()) return;
     if ((from === "timer" || from === "wake") && (!this.visible() || !this.online())) return;
+    // Retry pressed on a card while an automatic try is under way (it still
+    // reads "retrying" and keeps its buttons): the press takes that try over
+    // as the reader's own — "Sending…", and the quick retries first again.
+    const joined = (entry: OutboxEntry) => from === "reader" && entry.id === id && entry.status === "sending" && entry.auto === true;
     const picked = (entry: OutboxEntry) =>
-      entry.status === "failed" &&
-      (from === "timer"
-        ? entry.id === id
-        : from === "wake"
-          ? entry.failure === "network" && !this.timers.has(entry.id)
-          : entry.failure !== "refused" || entry.id === id);
+      joined(entry) ||
+      (entry.status === "failed" &&
+        (from === "timer"
+          ? entry.id === id
+          : from === "wake"
+            ? entry.failure === "network" && !this.timers.has(entry.id)
+            : entry.failure !== "refused" || entry.id === id));
     // A press or the link is a fresh start: the quick retries come first again.
     if (from === "reader" || from === "link") for (const entry of this.outbox.values()) if (picked(entry)) this.stopRetrying(entry.id);
-    this.write((current) => mapEntries(current, picked, (entry) => ({ ...entry, status: "sending", failure: null })));
+    this.write((current) =>
+      mapEntries(current, picked, (entry) =>
+        from === "reader" && entry.id === id
+          ? { ...entry, status: "sending", failure: null, auto: false }
+          : { ...entry, status: "sending", auto: true }
+      )
+    );
     void this.pump();
   }
 
@@ -585,6 +642,7 @@ export class OutboxQueue {
       return false;
     }
     this.controllers.get(id)?.abort();
+    const said = this.hidden.get(id);
     this.forgetSend(id);
     const reached = this.attempted.delete(id);
     if (reached) this.retracted.add(id);
@@ -595,7 +653,7 @@ export class OutboxQueue {
     // The previews are the composer's again; only the cache hold goes.
     this.releaseHold(id);
     this.deps.move("restore", [id], () => this.write((current) => withoutEntry(current, id)));
-    this.voice.tookBack();
+    this.voice.tookBack(said);
     if (reached) this.deps.sync();
     // The queue behind it goes on.
     void this.pump();
@@ -607,6 +665,7 @@ export class OutboxQueue {
     const entry = this.outbox.get(id);
     if (!entry || this.deps.stored(id)) return;
     this.controllers.get(id)?.abort();
+    const said = this.hidden.get(id);
     this.forgetSend(id);
     const reached = this.attempted.delete(id);
     if (reached) this.retracted.add(id);
@@ -621,7 +680,7 @@ export class OutboxQueue {
     const refocus = this.deps.holdFocus(id);
     this.deps.move("trash", [id], () => this.write((current) => withoutEntry(current, id)));
     refocus();
-    this.voice.discarded(() => this.restoreDiscarded(entry, reached));
+    this.voice.discarded(() => this.restoreDiscarded(entry, reached), said);
   }
 
   private restoreDiscarded(entry: OutboxEntry, reached: boolean): void {
@@ -643,19 +702,22 @@ export class OutboxQueue {
   /**
    * ⌘Z in the composer a send just emptied: a send still on its way is
    * taken back (撤回); one the server confirmed less than SEND_UNDO_MS ago
-   * goes to Trash, its text and pictures back in the composer.
+   * goes to Trash, its text and pictures back in the composer, and
+   * `trashUndone` tells the reader the sent copy moved to Trash.
    */
   undoLast(): boolean {
     const last = this.last;
     if (!last) return false;
-    if (last.confirmedAt === null) return this.outbox.get(last.entry.id)?.status === "sending" && this.takeBack(last.entry.id);
+    if (last.confirmedAt === null) {
+      const current = this.outbox.get(last.entry.id);
+      return current?.status === "sending" && !current.auto && this.takeBack(last.entry.id);
+    }
     if (Date.now() - last.confirmedAt > SEND_UNDO_MS) return false;
     const memo = this.deps.stored(last.entry.id);
     if (!memo || memo.deletedAt || this.deps.busy(memo.id) || !this.deps.recall(last.entry)) return false;
     clearTimeout(last.timer);
     this.last = null;
-    this.voice.tookBack();
-    this.deps.trashUndone(memo);
+    this.deps.trashUndone(memo, last.toast ? { toast: last.toast } : undefined);
     return true;
   }
 
@@ -672,7 +734,7 @@ export class OutboxQueue {
       const said = this.hidden.get(entry.id);
       this.write((current) => withoutEntry(current, entry.id));
       this.finishSent(entry);
-      this.voice.sent(memo, said, false);
+      this.noteSentToast(entry.id, this.voice.sent(memo, said, false));
     }
     for (const id of [...this.retracted]) {
       const memo = memos.get(id);
@@ -739,10 +801,12 @@ export class OutboxQueue {
     if (this.last && changes(this.last.entry)) this.last.entry = retag(this.last.entry);
   }
 
-  /** Stops every send's retry clock (a logout under way, the queue discarded). */
+  /** Stops every send's retry clock and pending hidden-toast hold (a logout under way, the queue discarded). */
   stopClocks(): void {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
+    for (const timer of this.toastHolds.values()) clearTimeout(timer);
+    this.toastHolds.clear();
   }
 
   /**

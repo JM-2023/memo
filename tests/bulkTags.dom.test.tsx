@@ -9,6 +9,7 @@ import { TipProvider } from "../src/components/Tip";
 import { ApiError } from "../src/lib/api";
 import { formatTime } from "../src/lib/dates";
 import { LanguageProvider } from "../src/lib/i18n";
+import { LIVE_REGION_ATTR } from "../src/lib/liveAnnouncer";
 import type { Memo } from "../src/lib/types";
 
 const mocks = vi.hoisted(() => ({
@@ -468,15 +469,51 @@ describe("select-mode keys and ranges", () => {
     });
     const user = userEvent.setup();
     await enterSelect(user);
-    const overlays = () => screen.getAllByRole("button", { name: /^(Select|Deselect) this memo$/ });
+    const overlays = () => screen.getAllByRole("button", { name: /^Select memo: / });
     expect(overlays()).toHaveLength(4);
     await user.click(overlays()[0]);
     fireEvent.click(overlays()[2], { shiftKey: true });
     const picked = () => Array.from(document.querySelectorAll(".memo-card")).map((card) => card.classList.contains("is-selected"));
     expect(picked()).toEqual([true, true, true, false]);
+    // Cards far off screen may have changed too: the outcome is said aloud.
+    const status = () => document.querySelector(`[${LIVE_REGION_ATTR}] [role='status']`)?.textContent ?? "";
+    expect(status()).toBe("Selected 3 memos, 3 in all");
     // From that pick, a shift-click on a picked card takes the range back out.
+    const names = overlays().map((overlay) => overlay.getAttribute("aria-label"));
     fireEvent.click(overlays()[1], { shiftKey: true });
     expect(picked()).toEqual([true, false, false, false]);
+    expect(status()).toBe("Deselected 2 memos, 1 still selected");
+    // The names never flip with the state; aria-pressed carries it.
+    expect(overlays().map((overlay) => overlay.getAttribute("aria-label"))).toEqual(names);
+    expect(overlays().map((overlay) => overlay.getAttribute("aria-pressed"))).toEqual(["true", "false", "false", "false"]);
+    expect(new Set(names).size).toBe(4);
+  });
+
+  it("takes the same range on a long press, the touch twin of Shift-click", async () => {
+    mocks.bootstrap.mockResolvedValue({
+      memos: [WORK, LIFE, memo("m-third", "gamma", 3), memo("m-fourth", "delta", 4)],
+      tags: [],
+      cursor: 4,
+      syncEpoch: "epoch-a",
+      serverTime: LIFE.createdAt,
+      hasMore: false,
+      nextAfter: null
+    });
+    const user = userEvent.setup();
+    await enterSelect(user);
+    const overlays = () => screen.getAllByRole("button", { name: /^Select memo: / });
+    const picked = () => Array.from(document.querySelectorAll(".memo-card")).map((card) => card.classList.contains("is-selected"));
+    fireEvent.click(overlays()[3]);
+    const finger = { pointerId: 21, pointerType: "touch", isPrimary: true, clientX: 40, clientY: 40 };
+    fireEvent.pointerDown(overlays()[1], finger);
+    await waitFor(() => expect(picked()).toEqual([false, true, true, true]), { timeout: 1500 });
+    expect(document.querySelector(`[${LIVE_REGION_ATTR}] [role='status']`)?.textContent).toBe("Selected 3 memos, 3 in all");
+    // The lift's tap is swallowed: the range stands.
+    fireEvent.pointerUp(overlays()[1], finger);
+    fireEvent.click(overlays()[1]);
+    expect(picked()).toEqual([false, true, true, true]);
+    // Let the lift's guard stand down before the next test clicks.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 400)));
   });
 });
 

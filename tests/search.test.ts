@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { setTaskMark } from "../src/lib/markdownEdit";
+import { forgetSearch, rememberSearch } from "../src/lib/recentSearches";
 import { parseSavedFilters, removeSavedFiltersForTag, renameSavedFilterTags, type SavedFilter } from "../src/lib/savedFilters";
 import {
   EMPTY_FILTERS,
@@ -262,5 +263,19 @@ describe("saved filter storage", () => {
       { id: "sibling", tag: "workshop" },
       { id: "untagged", tag: null }
     ]);
+  });
+});
+
+describe("recent search list helpers", () => {
+  it("forgets one entry matching case and collapsed whitespace without mutating the input", () => {
+    const items = ["Window seat", "fruit", "中文笔记"];
+    expect(forgetSearch(items, "  window   SEAT ")).toEqual(["fruit", "中文笔记"]);
+    expect(forgetSearch(items, "中文笔记")).toEqual(["Window seat", "fruit"]);
+    expect(forgetSearch(items, "missing")).toEqual(items);
+    expect(forgetSearch(items, "   ")).toEqual(items);
+    expect(items).toEqual(["Window seat", "fruit", "中文笔记"]);
+    // Round-trips cleanly with rememberSearch.
+    const next = rememberSearch(forgetSearch(items, "fruit"), "Fruit");
+    expect(next).toEqual(["Fruit", "Window seat", "中文笔记"]);
   });
 });

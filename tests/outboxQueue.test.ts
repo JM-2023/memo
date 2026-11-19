@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, AuthRequiredError } from "../src/lib/api";
-import { optimisticMemo, SEND_UNDO_MS, sendStatesOf, type Outbox, type OutboxEntry } from "../src/lib/outbox";
+import { BUSY_HOLD_MS } from "../src/lib/motion";
+import { optimisticMemo, SEND_UNDO_MS, sendStatesOf, type Outbox, type OutboxEntry, type SendState } from "../src/lib/outbox";
 import { OutboxQueue, type OutboxDeps, type OutboxVoice } from "../src/lib/outboxQueue";
 import type { Memo, NewImagePayload } from "../src/lib/types";
 
@@ -71,8 +72,8 @@ function harness(overrides: Partial<OutboxDeps> = {}) {
   }));
   const voice = {
     sending: vi.fn((_id: string) => 41),
-    failedHidden: vi.fn((_id: string, toast: number) => toast || 42),
-    sent: vi.fn(),
+    failedHidden: vi.fn((_id: string, toast: number, _state: SendState) => toast || 42),
+    sent: vi.fn((_saved: Memo, said: { toast: number } | undefined, _leaves: boolean) => said?.toast || 0),
     retrying: vi.fn(),
     offline: vi.fn(),
     refused: vi.fn(),
@@ -444,18 +445,125 @@ describe("retries", () => {
     expect(h.create.mock.calls.filter(([id]) => id === "stuck").length).toBe(before + 1);
   });
 
-  it("says a hidden card's failure in its toast, once, in place of the one that said it was on its way", async () => {
+  it("says a hidden card's failure in its toast, once per state, after waiting out the busy hold", async () => {
+    vi.useFakeTimers();
     const h = harness();
     h.deps.shows.mockReturnValue(false);
     h.server.reply = () => "hold";
     await h.queue.send(entry("a", 1), { hidden: true });
+    // Inside the 150ms busy hold, no "Sending…" toast appears yet.
+    expect(h.voice.sending).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(BUSY_HOLD_MS - 1);
+    expect(h.voice.sending).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(h.voice.sending).toHaveBeenCalledWith("a");
 
-    h.held[0].reject(new ApiError("STORAGE_FULL", 507, "The database is full."));
+    h.held[0].reject(struggling());
     await flush();
-    expect(h.voice.failedHidden).toHaveBeenCalledWith("a", 41);
+    expect(h.voice.failedHidden).toHaveBeenCalledWith("a", 41, "retrying");
+    // Escalating from retrying to a permanent server refusal updates the same toast.
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flush();
+    h.held[1].reject(new ApiError("STORAGE_FULL", 507, "The database is full."));
+    await flush();
+    expect(h.voice.failedHidden).toHaveBeenCalledWith("a", 41, "refused");
     // The toast speaks for the card: no second error on top.
     expect(h.voice.refused).not.toHaveBeenCalled();
+  });
+
+  it("never flashes a hidden Sending… toast when a fast send settles inside the busy hold", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.deps.shows.mockReturnValue(false);
+    h.server.reply = () => "hold";
+    await h.queue.send(entry("fast", 1), { hidden: true });
+    expect(h.voice.sending).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(BUSY_HOLD_MS - 20);
+    const saved = storedMemo("fast", "fast text");
+    h.held[0].resolve({ memo: saved });
+    await flush();
+    await vi.advanceTimersByTimeAsync(BUSY_HOLD_MS * 2);
+    expect(h.voice.sending).not.toHaveBeenCalled();
+    expect(h.voice.sent).toHaveBeenCalledWith(saved, { toast: 0, failed: null }, false);
+  });
+
+  it("keeps automatic retries in retrying/failed state and only flips back to sending on a manual Retry press", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.server.reply = () => struggling();
+    await h.queue.send(entry("a", 1));
+    await flush();
+    expect(h.states()).toEqual({ a: "retrying" });
+
+    // Timer auto-retry: while in flight, the entry is marked auto and stays "retrying".
+    h.server.reply = () => "hold";
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flush();
+    expect(h.create).toHaveBeenCalledTimes(2);
+    expect(h.queue.get("a")?.status).toBe("sending");
+    expect(h.queue.get("a")?.auto).toBe(true);
+    expect(h.states()).toEqual({ a: "retrying" });
+    // ⌘Z won't hijack a failed send mid-auto-retry.
+    expect(h.queue.undoLast()).toBe(false);
+
+    // Fails again, then another send piggybacks it (resume("reader") without id): still auto -> "retrying".
+    h.held[0].reject(struggling());
+    await flush();
+    expect(h.states()).toEqual({ a: "retrying" });
+    await h.queue.send(entry("b", 2));
+    await flush();
+    expect(h.queue.get("a")?.auto).toBe(true);
+    expect(h.states().a).toBe("retrying");
+    expect(h.states().b).toBe("sending");
+
+    // Fails again; now the reader explicitly clicks Retry on card "a" -> manual -> "sending".
+    h.held[1].reject(struggling());
+    await flush();
+    h.held[2].resolve({ memo: storedMemo("b", "b text") });
+    await flush();
+    h.queue.resume("reader", "a");
+    await flush();
+    expect(h.queue.get("a")?.status).toBe("sending");
+    expect(h.queue.get("a")?.auto).toBe(false);
+    expect(h.states()).toEqual({ a: "sending" });
+  });
+
+  it("lets a Retry press take over an automatic try already under way, and restarts the quick retries", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.server.reply = () => struggling();
+    await h.queue.send(entry("a", 1));
+    await flush();
+    // Fail through two automatic tries so the clock has backed off.
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flush();
+    expect(h.create).toHaveBeenCalledTimes(2);
+
+    // The third automatic try hangs; the card still reads "retrying" with Retry live.
+    h.server.reply = () => "hold";
+    await vi.advanceTimersByTimeAsync(6_000);
+    await flush();
+    expect(h.create).toHaveBeenCalledTimes(3);
+    expect(h.queue.get("a")?.auto).toBe(true);
+    expect(h.states()).toEqual({ a: "retrying" });
+
+    // The press joins that try: no second request, but it is the reader's now.
+    h.queue.resume("reader", "a");
+    await flush();
+    expect(h.create).toHaveBeenCalledTimes(3);
+    expect(h.queue.get("a")?.status).toBe("sending");
+    expect(h.queue.get("a")?.auto).toBe(false);
+    expect(h.states()).toEqual({ a: "sending" });
+
+    // It fails: the next automatic try comes on the first, quick step again.
+    h.server.reply = () => struggling();
+    h.held[0].reject(struggling());
+    await flush();
+    expect(h.states()).toEqual({ a: "retrying" });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flush();
+    expect(h.create).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -579,27 +687,42 @@ describe("taking back and discarding", () => {
 
     expect(h.queue.undoLast()).toBe(true);
     expect(h.deps.recall).toHaveBeenCalledWith(sent);
-    expect(h.deps.trashUndone).toHaveBeenCalledWith(h.notebook.get("a"));
-    expect(h.voice.tookBack).toHaveBeenCalledTimes(1);
+    expect(h.deps.trashUndone).toHaveBeenCalledWith(h.notebook.get("a"), undefined);
+    // trashUndone speaks the honest Trash toast itself; tookBack is only for unsent sends.
+    expect(h.voice.tookBack).not.toHaveBeenCalled();
     expect(h.queue.undoLast()).toBe(false);
 
-    await h.queue.send(entry("b", 2, "fine", [picture("img-b")]));
+    // Hidden confirmed send: ⌘Z passes the sent toast id so App revises it in place.
+    h.deps.shows.mockReturnValue(false);
+    h.voice.sent.mockReturnValueOnce(77);
+    await h.queue.send(entry("h", 2, "hidden oops"), { hidden: true });
+    await flush();
+    expect(h.queue.undoLast()).toBe(true);
+    expect(h.deps.trashUndone).toHaveBeenCalledWith(h.notebook.get("h"), { toast: 77 });
+
+    h.deps.shows.mockReturnValue(true);
+    await h.queue.send(entry("b", 3, "fine", [picture("img-b")]));
     await flush();
     await vi.advanceTimersByTimeAsync(SEND_UNDO_MS + 1);
     expect(h.queue.undoLast()).toBe(false);
-    expect(h.deps.trashUndone).toHaveBeenCalledTimes(1);
+    expect(h.deps.trashUndone).toHaveBeenCalledTimes(2);
     // Out of ⌘Z's reach, its previews go.
     expect(h.images.revoked).toEqual(["blob:img-b"]);
   });
 
-  it("takes back a send still on its way on ⌘Z", async () => {
+  it("takes back a send still on its way on ⌘Z, and dismisses its hidden toast if one appeared", async () => {
+    vi.useFakeTimers();
     const h = harness();
+    h.deps.shows.mockReturnValue(false);
     h.server.reply = () => "hold";
-    await h.queue.send(entry("a", 1));
-    await flush();
+    await h.queue.send(entry("a", 1), { hidden: true });
+    await vi.advanceTimersByTimeAsync(BUSY_HOLD_MS);
+    expect(h.voice.sending).toHaveBeenCalledWith("a");
     expect(h.queue.undoLast()).toBe(true);
     expect(h.held[0].signal.aborted).toBe(true);
     expect(h.queue.entries.size).toBe(0);
+    expect(h.voice.tookBack).toHaveBeenCalledWith({ toast: 41, failed: null });
+    expect(h.deps.trashUndone).not.toHaveBeenCalled();
   });
 });
 
@@ -615,17 +738,20 @@ describe("a reload", () => {
 
   it("counts a send whose answer was lost as sent once the next sync brings its memo in", async () => {
     const h = harness();
+    h.deps.shows.mockReturnValue(false);
     h.server.reply = () => unreachable();
     h.state.online = false;
     await h.queue.send(entry("a", 1), { hidden: true });
     await flush();
-    expect(h.voice.sending).toHaveBeenCalledWith("a");
+    // Offline failure happened immediately inside the 150ms hold: never flashed Sending….
+    expect(h.voice.sending).not.toHaveBeenCalled();
+    expect(h.voice.failedHidden).toHaveBeenCalledWith("a", 0, "failed");
 
     const synced = storedMemo("a", "a text");
     h.queue.settle(new Map([["a", synced]]));
     expect(h.queue.entries.size).toBe(0);
-    // The toast that spoke for the hidden card is the one that says it was saved.
-    expect(h.voice.sent).toHaveBeenCalledWith(synced, expect.objectContaining({ toast: 41 }), false);
+    // The toast that spoke for the hidden card is the one that says it was sent.
+    expect(h.voice.sent).toHaveBeenCalledWith(synced, expect.objectContaining({ toast: 42 }), false);
   });
 });
 

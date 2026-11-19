@@ -34,6 +34,157 @@ afterEach(() => {
   Reflect.deleteProperty(window, "visualViewport");
 });
 
+/**
+ * jsdom lays nothing out: give the picture a size at fit (its centre lands
+ * at half of it, the frame sitting at 0,0) so a magnified pan has edges.
+ */
+function giveLayout(image: HTMLElement, width: number, height: number) {
+  Object.defineProperty(image, "offsetWidth", { configurable: true, value: width });
+  Object.defineProperty(image, "offsetHeight", { configurable: true, value: height });
+}
+
+/** A sideways wheel on the viewer, as a trackpad's two-finger swipe sends it. */
+function wheelX(deltaX: number, init: WheelEventInit = {}) {
+  const event = new WheelEvent("wheel", { deltaX, bubbles: true, cancelable: true, ...init });
+  act(() => {
+    overlay().dispatchEvent(event);
+  });
+  return event;
+}
+
+describe("Lightbox trackpad swipe", () => {
+  it("pages once per sideways swipe, claiming its wheels from the browser's Back gesture", () => {
+    vi.useFakeTimers();
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    expect([20, 20].map((dx) => wheelX(dx).defaultPrevented)).toEqual([true, true]);
+    expect(screen.getByRole("img", { name: "Image 1 of 3" })).not.toBeNull();
+    wheelX(30);
+    const second = screen.getByRole("img", { name: "Image 2 of 3" });
+    expect(second.classList.contains("dir-fwd")).toBe(true);
+    // The rest of the stroke and its inertial tail: still one page.
+    for (const dx of [40, 30, 20, 12, 6, 3, 1]) {
+      vi.advanceTimersByTime(16);
+      expect(wheelX(dx).defaultPrevented).toBe(true);
+    }
+    expect(screen.getByRole("img", { name: "Image 2 of 3" })).toBe(second);
+    // Fingers lift; a new swipe the other way goes back.
+    vi.advanceTimersByTime(400);
+    wheelX(-50);
+    wheelX(-50);
+    expect(screen.getByRole("img", { name: "Image 1 of 3" }).classList.contains("dir-back")).toBe(true);
+  });
+
+  it("leaves vertical scrolls alone, and claims a lone picture's sideways wheel without paging", () => {
+    renderLocalized(<Lightbox items={[{ src: "/only.png" }]} index={0} onClose={vi.fn()} />);
+    expect(wheelX(5, { deltaY: 40 }).defaultPrevented).toBe(false);
+    expect(wheelX(200).defaultPrevented).toBe(true);
+    expect(screen.getByRole("img", { name: "Image 1 of 1" }).classList.contains("dir-fwd")).toBe(false);
+  });
+
+  it("keeps Ctrl/⌘ + wheel a zoom, and leaves a browser-zoomed page its own sideways pans", () => {
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    const first = screen.getByRole("img", { name: "Image 1 of 3" });
+    fireEvent.load(first);
+    expect(wheelX(200, { deltaY: -100, ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(screen.getByRole("img", { name: "Image 1 of 3" })).toBe(first);
+    expect(Number(first.style.getPropertyValue("--lb-zs"))).toBeGreaterThan(1);
+    cleanup();
+
+    Object.defineProperty(window, "visualViewport", {
+      configurable: true,
+      value: { scale: 2, addEventListener: vi.fn(), removeEventListener: vi.fn() }
+    });
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    expect(wheelX(200).defaultPrevented).toBe(false);
+    expect(screen.getByRole("img", { name: "Image 1 of 3" })).not.toBeNull();
+  });
+
+  it("stops the browser swiping Back past the viewer, and says the picture zooms", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/styles/app.css"), "utf8");
+    expect(css).toMatch(/\.lightbox \{[^}]*overscroll-behavior-x: none;/);
+    expect(css).toMatch(/:root:has\(\.lightbox\) \{ overscroll-behavior-x: none; \}/);
+    expect(css).toMatch(/\.lightbox \{[^}]*cursor: zoom-out;/);
+    expect(css).toMatch(/\.lightbox:not\(\.is-magnified, \.is-zoomed\) \.lightbox-image:not\([^)]*\.is-pending[^)]*\) \{ cursor: zoom-in; \}/);
+    expect(css).toMatch(/\.lightbox\.is-magnified \.lightbox-image:not\(\.is-leaving, \.is-peek\) \{ cursor: grab; \}/);
+    expect(css).toMatch(/\.lightbox\.is-magnified\.is-dragging \.lightbox-image:not\(\.is-leaving, \.is-peek\) \{ cursor: grabbing; \}/);
+  });
+
+  it("gates the zoom-in cursor on readiness, fit size, and an unzoomed page", () => {
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    const first = screen.getByRole("img", { name: "Image 1 of 3" });
+    // Loading: still pending, so no zoom-in cursor yet.
+    expect(first.classList.contains("is-pending")).toBe(true);
+    expect(overlay().classList.contains("is-magnified")).toBe(false);
+    expect(overlay().classList.contains("is-zoomed")).toBe(false);
+    // Loaded at fit: eligible for zoom-in.
+    fireEvent.load(first);
+    expect(first.classList.contains("is-pending")).toBe(false);
+    // Magnified: switches to grab (and grabbing while dragging).
+    fireEvent.keyDown(window, { key: "+" });
+    expect(overlay().classList.contains("is-magnified")).toBe(true);
+  });
+});
+
+describe("Lightbox edge hand-off", () => {
+  /** Magnify the first picture (800×600 at fit) 2.5× about (300, 200): its pan runs −376…600 sideways. */
+  function magnified() {
+    renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
+    const first = screen.getByRole("img", { name: "Image 1 of 3" });
+    giveLayout(first, 800, 600);
+    fireEvent.load(first);
+    for (let press = 0; press < 2; press += 1) {
+      const base = { pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, clientX: 300, clientY: 200 };
+      fireEvent.pointerDown(first, base);
+      fireEvent.pointerUp(first, base);
+    }
+    fireEvent.doubleClick(first, { clientX: 300, clientY: 200 });
+    expect(first.style.getPropertyValue("--lb-zx")).toBe("150px");
+    return first;
+  }
+
+  /** A sideways drag: the first move locks the axis, then `travel` px of pan. */
+  function drag(target: Element, travel: number, pointerType = "touch") {
+    const base = { pointerId: 5, pointerType, isPrimary: true, button: 0, clientY: 300 };
+    const start = travel < 0 ? 900 : 100;
+    const lock = start + Math.sign(travel) * 20;
+    fireEvent.pointerDown(target, { ...base, clientX: start });
+    fireEvent.pointerMove(target, { ...base, clientX: lock });
+    fireEvent.pointerMove(target, { ...base, clientX: lock + travel });
+    fireEvent.pointerUp(target, { ...base, clientX: lock + travel });
+  }
+
+  it("pans to an edge and settles there, without paging", () => {
+    const first = magnified();
+    drag(first, -500);
+    expect(screen.getByRole("img", { name: "Image 1 of 3" })).toBe(first);
+    expect(first.style.getPropertyValue("--lb-zx")).toBe("-350px");
+    expect(overlay().classList.contains("is-magnified")).toBe(true);
+  });
+
+  it("hands over to the next picture when the finger pulls on past the edge, leaving this one framed", () => {
+    const first = magnified();
+    drag(first, -680);
+    const second = screen.getByRole("img", { name: "Image 2 of 3" });
+    expect(second.classList.contains("dir-fwd")).toBe(true);
+    expect(first.classList.contains("is-leaving")).toBe(true);
+    expect(first.style.getPropertyValue("--lb-zs")).toBe("2.5");
+    expect(overlay().classList.contains("is-magnified")).toBe(false);
+  });
+
+  it("hands back to the previous picture off the other edge", () => {
+    const first = magnified();
+    drag(first, 600);
+    expect(screen.getByRole("img", { name: "Image 3 of 3" }).classList.contains("dir-back")).toBe(true);
+  });
+
+  it("leaves a mouse pan a pan, however far past the edge", () => {
+    const first = magnified();
+    drag(first, -900, "mouse");
+    expect(screen.getByRole("img", { name: "Image 1 of 3" })).toBe(first);
+    expect(first.style.getPropertyValue("--lb-zx")).toBe("-376px");
+  });
+});
+
 describe("Lightbox gestures", () => {
   it("pages forward on a left swipe and wraps backward on a right swipe", () => {
     renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
@@ -179,6 +330,8 @@ describe("Lightbox zoom", () => {
   it("toggles fit ↔ 2.5× on a double-click, and stands the swipes down while magnified", () => {
     renderLocalized(<Lightbox items={ITEMS} index={0} onClose={vi.fn()} />);
     const first = screen.getByRole("img", { name: "Image 1 of 3" });
+    // Wide enough, magnified, to pan sideways without reaching an edge.
+    giveLayout(first, 800, 600);
     // Nothing to zoom before it can be seen.
     doubleClick(first);
     expect(zoomOf(first)).toBe("");

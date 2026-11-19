@@ -12,7 +12,7 @@ import { edgeSwipeOpens } from "../src/hooks/useDrawerEdgeSwipe";
 import { addDays, dateKey } from "../src/lib/dates";
 import { LanguageProvider } from "../src/lib/i18n";
 import { EASE_OUT } from "../src/lib/motion";
-import { RECENT_SEARCHES_LIMIT, parseRecentSearches, rememberSearch } from "../src/lib/recentSearches";
+import { RECENT_SEARCHES_KEY, RECENT_SEARCHES_LIMIT, forgetSearch, loadRecentSearches, parseRecentSearches, persistRecentSearches, rememberSearch } from "../src/lib/recentSearches";
 import { cubicBezier, globalShortcutOf, isTextEntry, isUndoLabel } from "../src/lib/shortcuts";
 import { OPEN_TAGS_KEY, PERIOD_KEY, loadPeriod, parseOpenTagPaths } from "../src/lib/sidebarMemory";
 import { completeTag, flattenTags, matchTags, tagNeedle } from "../src/lib/tagJump";
@@ -153,6 +153,17 @@ describe("recent searches", () => {
     expect(parseRecentSearches('["a", 3, "", "A", "b"]')).toEqual(["a", "b"]);
     expect(parseRecentSearches("{")).toEqual([]);
     expect(parseRecentSearches(null)).toEqual([]);
+  });
+
+  it("forgets individual entries and drops storage when cleared", () => {
+    persistRecentSearches(["fruit", "window seat"]);
+    expect(loadRecentSearches()).toEqual(["fruit", "window seat"]);
+    const remaining = forgetSearch(loadRecentSearches(), "  WINDOW   seat ");
+    persistRecentSearches(remaining);
+    expect(loadRecentSearches()).toEqual(["fruit"]);
+    persistRecentSearches([]);
+    expect(localStorage.getItem(RECENT_SEARCHES_KEY)).toBeNull();
+    expect(loadRecentSearches()).toEqual([]);
   });
 });
 

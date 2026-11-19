@@ -71,7 +71,15 @@ export function ScrollTopButton() {
 
   useLayoutEffect(() => {
     if (slotRef.current) slotRef.current.inert = !shown;
+    // Let the wide-screen toast stack clear the disc while it is visible (app.css).
+    document.documentElement.toggleAttribute("data-scroll-top-shown", shown);
   }, [shown]);
+  useLayoutEffect(
+    () => () => {
+      document.documentElement.removeAttribute("data-scroll-top-shown");
+    },
+    []
+  );
 
   const endFlight = () => {
     if (flightFrameRef.current !== null) {

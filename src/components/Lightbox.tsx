@@ -9,6 +9,7 @@ import { announce } from "../lib/liveAnnouncer";
 import type { LightboxItem } from "../lib/types";
 import { withViewTransition } from "../lib/viewTransition";
 import { EASE, EXIT_MS, SPRING_MS, T_BASE } from "../lib/motion";
+import { createWheelPager, edgeHandoff } from "../lib/lightboxGestures";
 
 interface LightboxProps {
   items: LightboxItem[];
@@ -278,13 +279,16 @@ function useLightboxSource(item: LightboxItem, attempt: number) {
  * directional slide per page; closing shrinks the photo back into the tile
  * of the picture shown last. Paging by ←/→ (Home/End for the ends), the
  * arrow buttons, or a horizontal swipe, during which the next picture
- * slides in with the finger; a downward swipe dismisses.
+ * slides in with the finger — or a trackpad's two-finger sideways swipe,
+ * one page per swipe; a downward swipe dismisses.
  *
  * The picture zooms on its own (`touch-action: none` claims every touch):
  * a double-click or double-tap toggles fit ↔ 2.5× at the pointer, a pinch,
  * Ctrl/⌘ + wheel (a trackpad pinch) or + / − / 0 go anywhere from 1× to 4×.
- * Magnified, a drag pans it and the swipes stand down. A page the browser
- * itself zoomed before the viewer opened keeps its own pans.
+ * Magnified, a drag pans it and the swipes stand down — until a finger
+ * holds the picture against a side and pulls on past it, which hands over
+ * to the neighbour. A page the browser itself zoomed before the viewer
+ * opened keeps its own pans.
  *
  * A page change never cuts to black: the outgoing picture stays on its own
  * aria-hidden layer until the incoming one can be seen, then the two swap.
@@ -527,6 +531,18 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
     paintZoom({ s: zoom.s, x: band(x, limits.x), y: band(y, limits.y) }, "live");
   }
 
+  /**
+   * Whether a finger's pan, let go, pages instead of settling (edgeHandoff):
+   * the way Photos hands a magnified picture held at its edge over to the
+   * next one. A mouse only pans, as at fit it never swipes.
+   */
+  function handoffStep(drag: Drag, vx: number): 1 | -1 | 0 {
+    const image = imageRef.current;
+    if (!image || items.length < 2 || drag.pointerType === "mouse") return 0;
+    const limits = panLimits(restBox(image, overlayRef.current), zoomRef.current.s);
+    return edgeHandoff(drag.zx + drag.dx, limits.x, { dx: drag.dx, dy: drag.dy, vx }, FLICK_SPEED);
+  }
+
   /** Let go: back inside the edges, or to fit when a pinch closed below it. */
   function settleZoom() {
     const image = imageRef.current;
@@ -613,24 +629,50 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
   // Ctrl/⌘ + wheel — a trackpad pinch arrives as one — zooms about the
   // pointer instead of the page; a magnified picture pans under a plain
   // scroll. Not React's wheel: that one is passive and can't claim it.
+  // At fit, a sideways two-finger swipe pages (one page per swipe, see
+  // createWheelPager). Every sideways wheel is claimed there, paging or
+  // not: left to the browser, it chains to the page, and on a Mac that
+  // overscroll is history Back, which would take the viewer away with it.
+  const wheelPagerRef = useRef<ReturnType<typeof createWheelPager> | null>(null);
   const wheelRef = useRef<(event: WheelEvent) => void>(() => undefined);
   wheelRef.current = (event) => {
-    if (!canZoom()) return;
     if (event.ctrlKey || event.metaKey) {
+      if (!canZoom()) return;
       event.preventDefault();
+      wheelPagerRef.current?.reset();
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
       const delta = Math.max(-100, Math.min(100, event.deltaY * unit));
       zoomAround(zoomRef.current.s * 2 ** (-delta / 200), event.clientX, event.clientY, "live");
       return;
     }
-    if (zoomRef.current.s <= 1.01) return;
+    if (zoomRef.current.s <= 1.01) {
+      pageByWheel(event);
+      return;
+    }
+    if (!canZoom()) return;
     event.preventDefault();
+    wheelPagerRef.current?.reset();
     const image = imageRef.current;
     const zoom = zoomRef.current;
     if (!image) return;
     const limits = panLimits(restBox(image, overlayRef.current), zoom.s);
     paintZoom({ s: zoom.s, x: clampTo(zoom.x - event.deltaX, limits.x), y: clampTo(zoom.y - event.deltaY, limits.y) }, "live");
   };
+
+  /** A plain wheel at fit: sideways it is a swipe to page; up and down are left alone. */
+  function pageByWheel(event: WheelEvent) {
+    // A page the browser zoomed pans itself sideways; a closing viewer is done.
+    if (zoomed || closingRef.current) return;
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerWidth : 1;
+    const dx = event.deltaX * unit;
+    if (Math.abs(dx) <= Math.abs(event.deltaY * unit)) return;
+    event.preventDefault();
+    if (items.length < 2) return;
+    wheelPagerRef.current ??= createWheelPager();
+    // Fingers moving left scroll right (deltaX > 0): the next picture.
+    const step = wheelPagerRef.current.push(dx, event.timeStamp);
+    if (step !== 0) page(step);
+  }
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay) return;
@@ -883,14 +925,18 @@ export function Lightbox({ items, index, onClose, closeSignal = 0 }: LightboxPro
       return;
     }
     suppressClickUntil.current = event.timeStamp + 400;
-    if (drag.mode === "pan") {
-      settleZoom();
-      return;
-    }
     const first = drag.samples.find((sample) => event.timeStamp - sample.t <= 100) ?? drag.samples[0];
     const elapsed = Math.max(1, event.timeStamp - first.t);
     const vx = (event.clientX - first.x) / elapsed;
     const vy = (event.clientY - first.y) / elapsed;
+    if (drag.mode === "pan") {
+      // Held against a side and pulled on past it, the picture hands over to
+      // its neighbour, leaving framed as it was; else it settles inside.
+      const step = handoffStep(drag, vx);
+      if (step !== 0) page(step);
+      else settleZoom();
+      return;
+    }
     if (drag.axis === "x") {
       const far = Math.abs(drag.dx) > window.innerWidth * 0.25;
       const flick = Math.abs(vx) > FLICK_SPEED && Math.abs(drag.dx) > 30 && Math.sign(vx) === Math.sign(drag.dx);

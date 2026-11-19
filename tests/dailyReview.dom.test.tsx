@@ -71,7 +71,9 @@ describe("why a card came back", () => {
     const random = renderContext({ reason: "random" }, new Date(Date.now() - 3 * 86_400_000).toISOString());
     expect(random.container.querySelector(".review-context")?.classList.contains("is-dated")).toBe(false);
     expect(random.container.querySelector("svg")).toBeNull();
-    expect(screen.getByText("Random · 3 days ago")).toBeTruthy();
+    // Only the age: the masthead already counts the random picks.
+    expect(random.container.querySelector(".review-context-text")?.textContent).toBe("3 days ago");
+    expect(random.container.textContent).not.toMatch(/Random/);
   });
 
   it("reads naturally in Chinese", () => {
@@ -84,6 +86,10 @@ describe("why a card came back", () => {
     cleanup();
     renderContext({ reason: "anniversary", span: "week" });
     expect(screen.getByText("一周前")).toBeTruthy();
+    cleanup();
+    const random = renderContext({ reason: "random" }, new Date(Date.now() - 3 * 86_400_000).toISOString());
+    expect(random.container.querySelector(".review-context-text")?.textContent).toBe("3 天前");
+    expect(random.container.textContent).not.toMatch(/随机/);
   });
 });
 
@@ -157,6 +163,7 @@ describe("the day's masthead and its end", () => {
         <ReviewBanner day="2026-10-19" seen={3} total={10} breakdown={{ onThisDay: 1, anniversary: 0, random: 9 }} />
       </Providers>
     );
+    expect(screen.getByRole("heading", { level: 2, name: "Oct 19 · 3 of 10 revisited" })).toBeTruthy();
     expect(view.container.querySelector(".sr-only")?.textContent).toBe("Oct 19 · 3 of 10 revisited");
     expect(view.container.querySelector(".review-banner-mix")?.textContent).toBe("On this day 1 · Random 9");
     const bar = screen.getByRole("progressbar", { name: "Revisited today" });

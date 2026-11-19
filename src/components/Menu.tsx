@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useLayer } from "../hooks/useLayer";
 import { afterExit, continueFrom, paintedFrameOf, type PaintedFrame } from "../hooks/useOverlayExit";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { EXIT_MS, T_EXIT, T_FAST } from "../lib/motion";
@@ -54,6 +55,13 @@ interface MenuProps {
    * Falls back to the usual first control when nothing matches.
    */
   openSignalFocus?: string;
+  /**
+   * Viewport coordinates for an openSignal open (e.g. a card's context menu).
+   * When set, the panel portals to document.body at this point and clamps
+   * inside the visible viewport below any sticky topbar instead of anchoring
+   * on the trigger button (which may be scrolled off-screen).
+   */
+  openSignalAnchor?: { x: number; y: number } | null;
 }
 
 interface PortalPos {
@@ -64,6 +72,7 @@ interface PortalPos {
   bottom?: number;
   left: number;
   up: boolean;
+  originX: "left" | "right";
 }
 
 /** Type-ahead keeps its letters this long between presses. */
@@ -102,13 +111,17 @@ const PAGE_FOCUSABLE = [
  * Closing holds the panel one beat in a "closing" phase so it can play the
  * reverse morph before unmounting.
  */
-export function Menu({ trigger, children, align = "right", className, panelClassName, portal = false, kind = "menu", panelLabel, openSignal, openSignalFocus }: MenuProps) {
+export function Menu({ trigger, children, align = "right", className, panelClassName, portal = false, kind = "menu", panelLabel, openSignal, openSignalFocus, openSignalAnchor }: MenuProps) {
   const [phase, setPhase] = useState<"closed" | "open" | "closing">("closed");
   // No row cascade (.is-instant): the keyboard wants the rows now, and a
   // menu reopened within a beat of closing has nothing new to introduce.
   const [instant, setInstant] = useState(false);
   const closedAtRef = useRef(Number.NEGATIVE_INFINITY);
   const [pos, setPos] = useState<PortalPos | null>(null);
+  // Explicit viewport coordinates for a context-menu open: portals the panel
+  // away from an off-screen trigger while staying cleared for trigger clicks.
+  const [pointAnchor, setPointAnchor] = useState<{ x: number; y: number } | null>(null);
+  const portaled = portal || pointAnchor !== null;
   // In-flow (non-portal) panels open downward unless that would run past the
   // viewport bottom while the space above has room — see the flip effect.
   const [flipUp, setFlipUp] = useState(false);
@@ -186,6 +199,11 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     setPhase("open");
   }
 
+  // On the layer stack while open: Back closes the menu (or panel) the way
+  // Escape does, focus back on its trigger, instead of changing the view
+  // behind it. A closing panel has already left the stack.
+  useLayer(open, () => requestClose(true));
+
   // Only a bump after mount opens: a menu that (re)mounts while the counter
   // already stands at 3 was not asked to open — the view it lives in was.
   const seenOpenSignalRef = useRef(openSignal);
@@ -194,9 +212,14 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     if (openSignal === seenOpenSignalRef.current) return;
     seenOpenSignalRef.current = openSignal;
     if (openSignal) {
-      // Already open (a second chip's edit half): just move to its control.
-      if (phase === "open") focusSignalTarget(openSignalFocus ?? null);
-      else requestOpen("first", openSignalFocus ?? null);
+      setPointAnchor(openSignalAnchor ?? null);
+      // Already open (a second chip's edit half, or a second right-click):
+      // move to its control or new anchor instead of re-entering.
+      if (phase === "open") {
+        if (openSignalFocus) focusSignalTarget(openSignalFocus);
+      } else {
+        requestOpen("first", openSignalFocus ?? null);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one open per bump
   }, [openSignal]);
@@ -378,25 +401,47 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     };
   }, [open, kind]);
 
-  // Portal mode: measure, then place — the layout effect runs before paint,
-  // so the panel never flashes at a wrong position.
+  // Portal mode (explicit `portal` or a context-menu `pointAnchor`): measure,
+  // then place before paint so the panel never flashes at a wrong position.
   useLayoutEffect(() => {
-    if (!open || !portal) return;
+    if (!open || !portaled) return;
     const anchor = rootRef.current;
     const panel = panelRef.current;
     if (!anchor || !panel) return;
-    const rect = anchor.getBoundingClientRect();
     const panelWidth = panel.offsetWidth;
     const panelHeight = panel.offsetHeight;
+    if (pointAnchor) {
+      const band = !anchor.closest(".topbar, .overlay, .sidebar") ? document.querySelector(".topbar") : null;
+      const ceiling = band ? Math.max(0, band.getBoundingClientRect().bottom) : 0;
+      const minTop = ceiling + 8;
+      const maxBottom = window.innerHeight - 8;
+      const spaceBelow = maxBottom - pointAnchor.y;
+      const spaceAbove = pointAnchor.y - minTop;
+      const up = pointAnchor.y + panelHeight > maxBottom && spaceAbove > spaceBelow && panelHeight <= maxBottom - minTop;
+      const top = up ? undefined : Math.max(minTop, Math.min(pointAnchor.y, maxBottom - panelHeight));
+      const bottom = up ? window.innerHeight - Math.min(maxBottom, Math.max(minTop + panelHeight, pointAnchor.y)) : undefined;
+      const flipLeft = pointAnchor.x + panelWidth > window.innerWidth - 8 && pointAnchor.x - panelWidth >= 8;
+      const rawLeft = flipLeft ? pointAnchor.x - panelWidth : pointAnchor.x;
+      setPos({
+        top,
+        bottom,
+        left: Math.max(8, Math.min(rawLeft, window.innerWidth - 8 - panelWidth)),
+        up,
+        originX: flipLeft ? "right" : "left"
+      });
+      return;
+    }
+    const rect = anchor.getBoundingClientRect();
     const up = rect.bottom + 6 + panelHeight > window.innerHeight - 8 && rect.top - panelHeight - 6 > 8;
     const rawLeft = align === "right" ? rect.right - panelWidth : rect.left;
     setPos({
       top: up ? undefined : rect.bottom + 6,
       bottom: up ? window.innerHeight - rect.top + 6 : undefined,
       left: Math.min(Math.max(rawLeft, 8), window.innerWidth - 8 - panelWidth),
-      up
+      up,
+      originX: align === "right" ? "right" : "left"
     });
-  }, [open, portal, align]);
+  }, [open, portaled, align, pointAnchor]);
 
   // In-flow mode: same before-paint measurement, but the answer is only a
   // direction. The panel stays inside .menu-root (so scrolling keeps it open
@@ -406,7 +451,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   // menu sits under the band (app.css, .memo-slot's lift), so an upward panel
   // measured to the viewport top would open behind it.
   useLayoutEffect(() => {
-    if (!open || portal) return;
+    if (!open || portaled) return;
     const anchor = rootRef.current;
     const panel = panelRef.current;
     if (!anchor || !panel) return;
@@ -420,10 +465,10 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     const spaceBelow = viewportHeight - 8 - (rect.bottom + 6);
     const spaceAbove = rect.top - 6 - 8 - ceiling;
     setFlipUp(panelHeight > spaceBelow && (panelHeight <= spaceAbove || spaceAbove > spaceBelow));
-  }, [open, portal]);
+  }, [open, portaled]);
 
   useEffect(() => {
-    if (!open || !portal) return;
+    if (!open || !portaled) return;
     const close = () => requestClose(false);
     window.addEventListener("scroll", close, { capture: true, passive: true });
     window.addEventListener("resize", close);
@@ -431,11 +476,12 @@ export function Menu({ trigger, children, align = "right", className, panelClass
       window.removeEventListener("scroll", close, { capture: true });
       window.removeEventListener("resize", close);
     };
-  }, [open, portal]);
+  }, [open, portaled]);
 
   useEffect(() => {
     if (phase !== "closed") return;
     setPos(null);
+    setPointAnchor(null);
     setFlipUp(false);
     if (restoreTriggerRef.current) triggerElement()?.focus({ preventScroll: true });
     restoreTriggerRef.current = false;
@@ -444,7 +490,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   // right: "auto" neutralises the class-based `.align-right { right: 0 }` —
   // combined with the inline fixed `left` it would otherwise double-constrain
   // the panel and stretch it to a viewport-spanning width.
-  const panelStyle: CSSProperties | undefined = portal
+  const panelStyle: CSSProperties | undefined = portaled
     ? pos
       ? {
           position: "fixed",
@@ -452,7 +498,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
           bottom: pos.up ? pos.bottom : "auto",
           left: pos.left,
           right: "auto",
-          transformOrigin: `${pos.up ? "bottom" : "top"} ${align === "right" ? "right" : "left"}`
+          transformOrigin: `${pos.up ? "bottom" : "top"} ${pos.originX}`
         }
       : { position: "fixed", top: -9999, left: -9999, right: "auto", visibility: "hidden" }
     : undefined;
@@ -462,7 +508,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
       <div
         ref={panelRef}
         id={panelId}
-        className={`action-menu align-${align}${portal ? " is-portal" : ""}${flipUp ? " is-up" : ""}${instant ? " is-instant" : ""}${phase === "closing" ? " is-closing" : ""}${panelClassName ? ` ${panelClassName}` : ""}`}
+        className={`action-menu align-${align}${portaled ? " is-portal" : ""}${flipUp ? " is-up" : ""}${instant ? " is-instant" : ""}${phase === "closing" ? " is-closing" : ""}${panelClassName ? ` ${panelClassName}` : ""}`}
         style={panelStyle}
         role={kind === "panel" ? "dialog" : "menu"}
         aria-label={panelLabel}
@@ -477,10 +523,18 @@ export function Menu({ trigger, children, align = "right", className, panelClass
       <div
         className="menu-trigger-slot"
         // A click with no presses behind it (detail 0) is Enter or Space.
-        onClick={(event) => (open ? requestClose(true) : requestOpen("first", null, event.detail === 0))}
+        onClick={(event) => {
+          if (open) {
+            requestClose(true);
+            return;
+          }
+          setPointAnchor(null);
+          requestOpen("first", null, event.detail === 0);
+        }}
         onKeyDown={(event) => {
           if (kind === "panel" || open || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
           event.preventDefault();
+          setPointAnchor(null);
           requestOpen(event.key === "ArrowUp" ? "last" : "first", null, true);
         }}
       >
@@ -491,7 +545,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
           "aria-controls": phase !== "closed" ? panelId : undefined
         })}
       </div>
-      {portal ? (panel ? createPortal(panel, document.body) : null) : panel}
+      {portaled ? (panel ? createPortal(panel, document.body) : null) : panel}
     </div>
   );
 }

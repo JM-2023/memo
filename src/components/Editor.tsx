@@ -1,9 +1,8 @@
-import { Bold, Hash, Image as ImageIcon, ImageOff, ImagePlus, Link2, List, Loader2, Plus, Table, X } from "lucide-react";
+import { Bold, Hash, Image as ImageIcon, ImageOff, ImagePlus, Link2, List, Plus, Table } from "lucide-react";
 import {
   useEffect,
   useId,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type ClipboardEvent,
@@ -11,18 +10,17 @@ import {
   type FocusEvent as ReactFocusEvent,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode
 } from "react";
-import { ApiError } from "../lib/api";
+import { MAX_IMAGES, useAttachmentTiles } from "../hooks/useAttachmentTiles";
+import { extractTypedDelta, useSubmission } from "../hooks/useSubmission";
 import { isImageUrl } from "../lib/content";
-import { htmlCarriesText, htmlToMarkdown } from "../lib/htmlToMarkdown";
-import { ImageSlotLedger } from "../lib/imageSlots";
-import { compressImage } from "../lib/images";
+import { fileDragKind, isFileDrag, pasteTakesImages, registerDropTarget, type FileDragKind } from "../lib/editorDropGuard";
+import { htmlToMarkdown } from "../lib/htmlToMarkdown";
 import { useI18n } from "../lib/i18n";
+import { layerCount } from "../lib/layerStack";
 import { announce } from "../lib/liveAnnouncer";
 import { MAX_CONTENT_CHARS } from "../lib/memoRules";
-import { BUSY_HOLD_MS, EASE_OUT, EXIT_MS, T_BASE, T_SLOW } from "../lib/motion";
 import { inheritTagContext } from "../lib/tags";
 import {
   backspaceListMarker,
@@ -39,11 +37,10 @@ import {
 } from "../lib/markdownEdit";
 import { caretPoint } from "../lib/textareaCaret";
 import type { LightboxItem, MemoImage, NewImagePayload } from "../lib/types";
-import { openLightboxFrom } from "./Lightbox";
-import { StoredImg } from "./StoredImage";
+import { AttachmentTiles } from "./AttachmentTiles";
+import { EditorActions } from "./EditorActions";
 import { useTip } from "./Tip";
 
-const MAX_IMAGES = 9;
 /** Hard input cap: lets pastes overshoot the limit (so the overflow can be
  * shown) without ever asking the mirror layer to render megabytes. */
 const HARD_INPUT_CAP = 100_000;
@@ -55,16 +52,6 @@ const COUNTER_FROM = MAX_CONTENT_CHARS - 2_000;
  * where the bar below it would go under the keys (see autoGrow). */
 const GROW_SHARE = 0.7;
 const GROW_FLOOR = 200;
-/** Removed attachments held for their toast's Undo — as many as the toast
- * stack shows at once (TOAST_LIMIT in App); an older one's Undo is gone. */
-const UNDO_HOLD = 3;
-/** A tile that could not be made stays this long, marked, before it fades. */
-const FAILED_TILE_MS = 2_000;
-/** A finger lifts a tile to reorder after holding still this long (a mouse
- * lifts it as soon as it moves), so a swipe across the row still scrolls. */
-const TOUCH_LIFT_MS = 300;
-/** The other tiles' glide into place once a reordered one is let go. */
-const REORDER_MS = T_SLOW;
 
 /**
  * An edit discarded by Esc / Cancel, held in memory only (drafts are never
@@ -125,167 +112,6 @@ function subsequenceHits(tag: string, query: string): number[] | null {
     at += 1;
   }
   return hits;
-}
-
-/**
- * What a file drag carries, read from its item types (dragenter cannot read
- * the files themselves). A browser that keeps the types back until the drop
- * counts as images: the veil must never refuse what it cannot see.
- */
-type FileDragKind = "images" | "other";
-
-function isFileDrag(event: { dataTransfer: DataTransfer | null }): boolean {
-  return [...(event.dataTransfer?.types ?? [])].includes("Files");
-}
-
-function fileDragKind(data: DataTransfer | null): FileDragKind {
-  const files = [...(data?.items ?? [])].filter((item) => item.kind === "file");
-  return files.length > 0 && files.every((item) => item.type && !item.type.startsWith("image/")) ? "other" : "images";
-}
-
-/**
- * Whether a paste that carries image files adds them as attachments. Office
- * apps (Excel, PowerPoint, Word) put a rendered picture of the selection
- * beside its HTML and plain text: the words are what was copied, so they
- * win, and the HTML converter turns copied cells into a table. The picture
- * wins when the HTML is only that picture (a browser's "Copy image"), when
- * there is no text at all (a screenshot), or when the only text is the
- * files' own names (a file copied in Finder or Explorer).
- */
-function pasteTakesImages(data: DataTransfer, files: File[]): boolean {
-  const html = data.getData("text/html");
-  if (html.trim()) return !htmlCarriesText(html);
-  const names = new Set(files.map((file) => file.name));
-  return data
-    .getData("text/plain")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .every((line) => !line || names.has(line.split(/[\\/]/).pop() ?? line));
-}
-
-/** A preview URL for a file still compressing (null where none can be made). */
-function previewOf(file: File): string | null {
-  try {
-    return typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Window-level file-drop guard, shared by every mounted editor. A file let
- * go anywhere but on an editor — a few pixels off the composer, over a card
- * or the sidebar — would open in the tab and take the in-memory draft and
- * any open edit with it. So file drags are claimed window-wide and land in
- * the active editor: the open inline edit, else the visible composer, whose
- * veil lights for as long as the drag is over the window.
- */
-interface DropTarget {
-  mode: "create" | "edit";
-  root: () => HTMLElement | null;
-  /** Whether a drop of this kind would add anything (room left, images). */
-  accepts: (kind: FileDragKind) => boolean;
-  /** Light the veil for a drag elsewhere in the window, or put it out. */
-  light: (kind: FileDragKind | null) => void;
-  take: (files: File[]) => void;
-}
-
-const dropTargets = new Set<DropTarget>();
-let releaseDropGuard: (() => void) | null = null;
-
-function activeDropTarget(): DropTarget | null {
-  let composer: DropTarget | null = null;
-  for (const target of dropTargets) {
-    const root = target.root();
-    if (!root || root.closest("[hidden]")) continue;
-    if (target.mode === "edit") return target;
-    composer ??= target;
-  }
-  return composer;
-}
-
-function installDropGuard(): () => void {
-  // Counter, not boolean: dragenter/leave fire per element crossed.
-  let depth = 0;
-  let lit: DropTarget | null = null;
-  let idle = 0;
-  const reset = () => {
-    depth = 0;
-    window.clearTimeout(idle);
-    lit?.light(null);
-    lit = null;
-  };
-  const onEnter = (event: globalThis.DragEvent) => {
-    if (!isFileDrag(event)) return;
-    depth += 1;
-    if (lit) return;
-    lit = activeDropTarget();
-    lit?.light(fileDragKind(event.dataTransfer));
-  };
-  const onLeave = (event: globalThis.DragEvent) => {
-    if (!isFileDrag(event)) return;
-    depth = Math.max(0, depth - 1);
-    if (depth === 0) reset();
-  };
-  const onOver = (event: globalThis.DragEvent) => {
-    if (!isFileDrag(event)) return;
-    // Some browsers skip the last dragleave when a drag leaves the window;
-    // dragover repeats while it is still here, so its silence puts the
-    // veil out.
-    window.clearTimeout(idle);
-    idle = window.setTimeout(reset, 1000);
-    // An editor under the pointer has already answered for itself.
-    if (event.defaultPrevented) return;
-    event.preventDefault();
-    const target = activeDropTarget();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = target?.accepts(fileDragKind(event.dataTransfer)) ? "copy" : "none";
-  };
-  const onDrop = (event: globalThis.DragEvent) => {
-    reset();
-    if (!isFileDrag(event) || event.defaultPrevented) return;
-    event.preventDefault();
-    activeDropTarget()?.take([...(event.dataTransfer?.files ?? [])]);
-  };
-  window.addEventListener("dragenter", onEnter, true);
-  window.addEventListener("dragleave", onLeave, true);
-  window.addEventListener("dragover", onOver);
-  window.addEventListener("drop", onDrop);
-  window.addEventListener("dragend", reset, true);
-  return () => {
-    window.removeEventListener("dragenter", onEnter, true);
-    window.removeEventListener("dragleave", onLeave, true);
-    window.removeEventListener("dragover", onOver);
-    window.removeEventListener("drop", onDrop);
-    window.removeEventListener("dragend", reset, true);
-    reset();
-  };
-}
-
-function registerDropTarget(target: DropTarget): () => void {
-  dropTargets.add(target);
-  releaseDropGuard ??= installDropGuard();
-  return () => {
-    dropTargets.delete(target);
-    if (dropTargets.size > 0) return;
-    releaseDropGuard?.();
-    releaseDropGuard = null;
-  };
-}
-
-/**
- * The Send/Save glyph: a solid paper dart, level with the label so the two
- * read as one direction. Drawn here rather than taken from lucide — the
- * outline plane sat at 45° in the accent green and read as a second, lighter
- * object beside the 600-weight label. The stroke only rounds the corners.
- */
-function SendGlyph({ flying = false, onFlown }: { flying?: boolean; onFlown?: () => void }) {
-  // `flying`: the composer just cleared after a send, and the dart flies
-  // off and comes back round (app.css, .send-glyph.is-flying).
-  return (
-    <svg className={`send-glyph${flying ? " is-flying" : ""}`} width="17" height="17" viewBox="0 0 24 24" aria-hidden="true" onAnimationEnd={onFlown}>
-      <path fill="currentColor" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" d="M3.6 3.7 20.9 12 3.6 20.3 6.7 13.25 13.4 12 6.7 10.75Z" />
-    </svg>
-  );
 }
 
 /** `text` with the characters at `hits` (sorted offsets into it) set in
@@ -384,42 +210,6 @@ export interface ComposerControl {
   recall: (draft: ComposerDraft) => boolean;
 }
 
-/** One attachment tile: an image on the memo, one ready to upload, or one
- * still being compressed (shown from the original file meanwhile). */
-type AttachmentTile =
-  | { kind: "stored"; key: string; image: MemoImage }
-  | { kind: "pending"; key: string; image: NewImagePayload }
-  | ({ kind: "preparing" } & PreparingImage);
-
-/** An image being compressed: its tile's key and a preview of the original.
- * One that failed keeps its tile a moment, marked, then fades (`leaving`). */
-interface PreparingImage {
-  key: string;
-  url: string | null;
-  failed?: boolean;
-  leaving?: boolean;
-}
-
-/** A pending tile being dragged to a new place in the row. */
-interface TileDrag {
-  id: string;
-  pointerId: number;
-  touch: boolean;
-  x0: number;
-  y0: number;
-  lifted: boolean;
-  holdTimer: number;
-  tile: HTMLElement;
-  handle: HTMLElement;
-  /** The movable tiles' boxes when it lifted, relative to the row. */
-  slots: Array<{ id: string; left: number; top: number; right: number; bottom: number }>;
-  /** Where letting go would put it: before this image, at the end (null),
-   * or nowhere new (undefined). */
-  before: string | null | undefined;
-  /** Stops listening for a release the tile itself never hears. */
-  unlisten: () => void;
-}
-
 /** The toolbar's buttons, in order (its one Tab stop roves among them). */
 type ToolKey = "tag" | "bold" | "list" | "table" | "image" | "link";
 const TOOL_ORDER: ToolKey[] = ["tag", "bold", "list", "table", "image", "link"];
@@ -495,7 +285,7 @@ export function Editor({
   onOccupiedChange,
   onUndoSend
 }: EditorProps) {
-  const { errorMessage, formatNumber, tr } = useI18n();
+  const { errorMessage, tr } = useI18n();
   const tip = useTip();
   const [content, setContent] = useState(initialDraft?.content ?? initialContent);
   const onDraftChangeRef = useRef(onDraftChange);
@@ -506,24 +296,6 @@ export function Editor({
   // What "unchanged" means for Cancel: the text this editor opened on (a
   // remote update arriving mid-edit does not make an untouched edit dirty).
   const [openedOn] = useState(initialContent);
-  const [newImages, setNewImages] = useState<NewImagePayload[]>(() => initialDraft?.newImages ?? []);
-  const [removedIds, setRemovedIds] = useState<string[]>(() => initialDraft?.removedIds ?? []);
-  // Images still compressing, in the order they were added. Each already
-  // has the tile it keeps once it lands (tileKeysRef carries the key over).
-  const [preparing, setPreparing] = useState<PreparingImage[]>([]);
-  const compressing = preparing.filter((item) => !item.failed).length;
-  const tileKeysRef = useRef(new Map<string, string>());
-  const preparingUrlsRef = useRef(new Set<string>());
-  // Tiles the editor opened with (the memo's images, a reopened draft's):
-  // they are already on screen in the card, so they do not pop in again.
-  const [settledTiles] = useState(
-    () => new Set([...existingImages.map((image) => image.id), ...(initialDraft?.newImages ?? []).map((image) => image.id)])
-  );
-  const [submitting, setSubmitting] = useState(false);
-  // Whole percent of the image upload sent so far; null while none is running.
-  // Held at 99 until the server answers: the last bytes leaving the browser
-  // is not the memo being saved.
-  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   // The list as it was when it closed, held while it plays its exit (the
   // same element: it leaves from where it stood).
@@ -554,40 +326,16 @@ export function Editor({
   // A file drag elsewhere in the window, when this is the editor it would land in.
   const [windowDrag, setWindowDrag] = useState<FileDragKind | null>(null);
   const veilRef = useRef({ label: "", refused: false });
-  // Send pressed while an image was still compressing: it goes out on its own
-  // once the last one lands.
-  const [sendQueued, setSendQueued] = useState(false);
-  const sendQueuedRef = useRef(false);
-  sendQueuedRef.current = sendQueued;
-  const [spinnerShown, setSpinnerShown] = useState(false);
-  // Bumped when a confirmed create clears the composer; the layout effect
-  // below then sizes the emptied field in that same commit.
+  // Bumped when a confirmed create clears (or hands off) the composer; the
+  // layout effect below sizes the emptied field in that same commit.
   const [clears, setClears] = useState(0);
   const clearGrowRef = useRef<"instant" | "smooth" | null>(null);
-  // Attachments play their exit animation before the state actually drops
-  // them — keyed by image id, stored or pending.
-  const [removingKeys, setRemovingKeys] = useState<ReadonlySet<string>>(new Set());
-  const onNoticeRef = useRef(onNotice);
-  onNoticeRef.current = onNotice;
-  // Pending images removed with an Undo on offer: their previews stay alive
-  // until the Undo is spent or out of reach (UNDO_HOLD), the draft is sent,
-  // or the editor closes. A send bumps the epoch, so an Undo raised before
-  // it cannot put an image into the next memo.
-  const heldRemovalsRef = useRef<NewImagePayload[]>([]);
-  const undoEpochRef = useRef(0);
+  // Caret target after typing during `landing` pivots the field to the next draft.
+  const landingCaretRef = useRef<number | null>(null);
+  // If `onCommitted` fires mid-IME composition during `landing`, hold the
+  // sent text baseline until compositionend so the browser's IME isn't aborted.
+  const pendingLandingStripRef = useRef<string | null>(null);
   const addImageRef = useRef<HTMLButtonElement>(null);
-  // A pending tile lifted to reorder, and the insertion bar's spot in the
-  // row while letting go would move it.
-  const [reorder, setReorder] = useState<{ id: string; bar: { left: number; top: number; height: number } | null } | null>(null);
-  const tileDragRef = useRef<TileDrag | null>(null);
-  // The click that trails a drag's release is not a tap to open the tile.
-  const tileClickFloorRef = useRef(0);
-  // Tile centres taken just before the order changes; the layout effect
-  // after it glides each tile from there (FLIP). `flips` asks for that pass.
-  const flipFromRef = useRef<Map<string, { x: number; y: number }> | null>(null);
-  const refocusTileRef = useRef<string | null>(null);
-  const [flips, setFlips] = useState(0);
-  const attachmentsRef = useRef<HTMLDivElement>(null);
   // Bold and List show whether the caret already sits in bold text or on a
   // list line (aria-pressed).
   const [pressed, setPressed] = useState({ bold: false, list: false });
@@ -595,8 +343,6 @@ export function Editor({
   const [toolStop, setToolStop] = useState<ToolKey>("tag");
   // Bumped when another memo's Edit is refused: the field's border pulses.
   const [attention, setAttention] = useState(0);
-  // Sends whose cleared composer the glyph has already flown for.
-  const [flown, setFlown] = useState(0);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
@@ -616,92 +362,29 @@ export function Editor({
   const contextTagDescriptionId = useId();
   const countId = useId();
   const linkPopId = useId();
-  // Stable across ambiguous network failures; rotate only after a confirmed
-  // create so retrying the same draft remains idempotent.
-  const draftIdRef = useRef(crypto.randomUUID());
-  const submittingRef = useRef(false);
-  // The send in flight, until the owner lands it (onCommitted) or it settles:
-  // Esc aborts it through this.
-  const abortRef = useRef<AbortController | null>(null);
   // Create mode: a send has just emptied the composer and nothing has been
   // typed since, so ⌘Z means the send (onUndoSend), not the field's history.
   const freshClearRef = useRef(false);
   const onUndoSendRef = useRef(onUndoSend);
   onUndoSendRef.current = onUndoSend;
   const mountedRef = useRef(true);
-  const [imageSlots] = useState(() => new ImageSlotLedger(MAX_IMAGES, existingImages.length));
+  // Bridges useAttachmentTiles and useSubmission without circular init order.
+  const submissionRef = useRef<{
+    isLocked: () => boolean;
+    handoffLanding: () => boolean;
+    cancelQueued: () => void;
+    clearError: () => void;
+  }>({
+    isLocked: () => busy,
+    handoffLanding: () => false,
+    cancelQueued: () => undefined,
+    clearError: () => undefined
+  });
 
-  const keptExisting = useMemo(() => existingImages.filter((image) => !removedIds.includes(image.id)), [existingImages, removedIds]);
-
-  /**
-   * Start an attachment's exit. Focus on its × would fall to <body> once the
-   * tile unmounts, so it moves on first: to the next tile's ×, else the one
-   * before, else Add image (or, for a keyboard reader, the field).
-   */
-  function beginRemove(id: string, button: HTMLButtonElement) {
-    if (busy || submittingRef.current || sendQueuedRef.current) return;
-    if (document.activeElement === button) {
-      const others = [...(rootRef.current?.querySelectorAll<HTMLButtonElement>(".attachment:not(.is-removing) .attachment-remove") ?? [])];
-      const at = others.indexOf(button);
-      let keyboard = false;
-      try {
-        keyboard = button.matches(":focus-visible");
-      } catch {
-        keyboard = false;
-      }
-      const add = addImageRef.current;
-      const target = others[at + 1] ?? others[at - 1] ?? (add && !add.disabled ? add : keyboard ? areaRef.current : null);
-      target?.focus({ preventScroll: true });
-    }
-    // A tile coming back through Undo pops in like any new one.
-    settledTiles.delete(id);
-    setRemovingKeys((value) => new Set(value).add(id));
-  }
-  function settleRemove(key: string, drop: () => void) {
-    setRemovingKeys((value) => {
-      if (!value.has(key)) return value;
-      const next = new Set(value);
-      next.delete(key);
-      return next;
-    });
-    drop();
-    clearError("limit");
-  }
-  /** Raise the "Removed the image" toast; its Undo runs `restore` if it still can. */
-  function offerUndo(restore: () => void) {
-    const notice = onNoticeRef.current;
-    if (!notice) return;
-    const epoch = undoEpochRef.current;
-    notice(tr("Removed the image", "已移除图片"), {
-      label: tr("Undo", "撤销"),
-      run: () => {
-        if (!mountedRef.current || epoch !== undoEpochRef.current || submittingRef.current || sendQueuedRef.current) return;
-        restore();
-      }
-    });
-  }
-  /** Claim a slot for an image coming back; false (and says so) when full. */
-  function reclaimSlot(): boolean {
-    if (imageSlots.reserve(1) < 1) {
-      fail(tr(`You can add up to ${MAX_IMAGES} images`, `最多 ${MAX_IMAGES} 张图片`), "limit");
-      return false;
-    }
-    imageSlots.settle(true);
-    return true;
-  }
-  /** Hold a removed pending image for its Undo; the oldest beyond UNDO_HOLD is released. */
-  function holdRemoval(image: NewImagePayload) {
-    const held = [...heldRemovalsRef.current, image];
-    for (const stale of held.splice(0, Math.max(0, held.length - UNDO_HOLD))) URL.revokeObjectURL(stale.previewUrl);
-    heldRemovalsRef.current = held;
-  }
-  function releaseHeldRemovals() {
-    for (const image of heldRemovalsRef.current) URL.revokeObjectURL(image.previewUrl);
-    heldRemovalsRef.current = [];
-  }
   function fail(text: string, cause: "link" | "limit" | "other" = "other") {
     errorSeqRef.current += 1;
     setError({ text, cause, seq: errorSeqRef.current });
+    submissionRef.current.clearError();
     // Spoken through the standing region: a line mounted already filled
     // (the note below) is often skipped by screen readers.
     announce(text, "assertive");
@@ -709,27 +392,141 @@ export function Editor({
   function clearError(cause: "link" | "limit" | "other") {
     setError((current) => (current?.cause === cause ? null : current));
   }
-  const totalImages = keptExisting.length + newImages.length;
-  const sending = submitting || sendQueued;
-  const locked = busy || sending;
+  // The pictures: the memo's own, the draft's, and those still preparing.
+  const attachments = useAttachmentTiles({
+    existingImages,
+    initialDraft,
+    isLocked: () => submissionRef.current.isLocked(),
+    notes: {
+      fail,
+      clear: clearError,
+      reset: () => {
+        setError(null);
+        submissionRef.current.clearError();
+      }
+    },
+    rootRef,
+    areaRef,
+    addImageRef,
+    mountedRef,
+    onNotice,
+    onAdd: () => {
+      freshClearRef.current = false;
+      // Dropping/picking images during create `landing` pivots to the next draft
+      // first, clearing the old memo's sent tiles and resetting the 9-slot ledger.
+      if (submissionRef.current.handoffLanding()) {
+        // The emptied field shrinks back from the sent text's height now,
+        // not at the next keystroke ([clears] below).
+        clearGrowRef.current = "smooth";
+        setContent("");
+      }
+    },
+    // The draft is not what Send was pressed on any more: hold it back.
+    onImageRejected: () => submissionRef.current.cancelQueued()
+  });
+  const { newImages, compressing, totalImages, keptNewImages, removedImageIds } = attachments;
   const imageLimitExceeded = totalImages > MAX_IMAGES;
   const submittedContent = content.trim();
   const effectiveContent = mode === "create" && contextTag ? inheritTagContext(submittedContent, contextTag) : submittedContent;
   const effectiveContentLength = effectiveContent.length;
   const overLimit = effectiveContentLength > MAX_CONTENT_CHARS;
-  // Attachments mid-exit-animation count as removed already.
-  const keptNewImages = newImages.filter((image) => !removingKeys.has(image.id));
-  const removedImageIds = [...removedIds, ...existingImages.filter((image) => removingKeys.has(image.id)).map((image) => image.id)];
   // An edit is clean until its text or images differ from what it opened on
-  // (an image still compressing counts as a change). Save rests until then,
+  // (an image still preparing counts as a change). Save rests until then,
   // and ⌘↩ on a clean edit just closes it, like Esc.
   const dirty =
     mode === "create" || content.trim() !== openedOn.trim() || keptNewImages.length > 0 || removedImageIds.length > 0 || compressing > 0;
   const hasPayload = submittedContent.length > 0 || totalImages > 0;
-  const ready = !busy && !submitting && !conflictMessage && !overLimit && !imageLimitExceeded && dirty;
-  const canSubmit = ready && !sendQueued && compressing === 0 && hasPayload;
-  // Send pressed mid-compression is accepted and held (see submit).
-  const canQueue = ready && !sendQueued && compressing > 0;
+  const ready = !busy && !conflictMessage && !overLimit && !imageLimitExceeded && dirty;
+
+  const submission = useSubmission({
+    mode,
+    busy,
+    compressing,
+    dirty,
+    ready,
+    hasPayload,
+    mountedRef,
+    readDraft: () => {
+      const area = areaRef.current;
+      const held = area ? { start: area.selectionStart, end: area.selectionEnd, scrollTop: area.scrollTop } : null;
+      const sent = content.trim();
+      const lead = content.length - content.trimStart().length;
+      const caret = (offset: number) => Math.max(0, Math.min(sent.length, offset - lead));
+      return {
+        rawContent: content,
+        content: sent,
+        newImages: keptNewImages,
+        removeImageIds: removedImageIds,
+        selection: held ? { start: caret(held.start), end: caret(held.end) } : { start: sent.length, end: sent.length },
+        held
+      };
+    },
+    onSubmit,
+    onCloseClean: cancel,
+    onBeforeStart: () => setError(null),
+    onQueued: () => {
+      setError(null);
+      announce(tr("Preparing image…", "正在处理图片…"));
+    },
+    onStoppedQueued: () => {
+      const area = areaRef.current;
+      const active = document.activeElement;
+      if (!area || !mountedRef.current) return;
+      const fromStop = active instanceof HTMLElement && active.closest(".editor-stop") !== null;
+      if (fromStop || window.matchMedia?.("(pointer: fine)").matches) area.focus({ preventScroll: true });
+    },
+    onCommitEmpty: (animated, rawContent) => {
+      // The sent images' previews went with the memo: the owner releases
+      // them, or hands them back if the memo is taken back.
+      attachments.clearSent();
+      setSuggestion(null);
+      setLinkOpen(false);
+      setLinkValue("");
+      if (composingRef.current) {
+        // An IME composition started during `landing`: wait for compositionend
+        // before stripping the sent text so the browser doesn't abort the IME.
+        pendingLandingStripRef.current = rawContent;
+        freshClearRef.current = false;
+        return;
+      }
+      freshClearRef.current = true;
+      setContent("");
+      // A view transition morphs the composer shut itself; without one the
+      // field eases down on its own height transition.
+      clearGrowRef.current = animated ? "instant" : "smooth";
+      setClears((value) => value + 1);
+    },
+    onHandoff: () => {
+      attachments.clearSent();
+      freshClearRef.current = false;
+      setSuggestion(null);
+      setLinkOpen(false);
+      setLinkValue("");
+      setClears((value) => value + 1);
+    },
+    onRestoreField: (held) => {
+      const field = areaRef.current;
+      if (!field || !held || !mountedRef.current) return;
+      field.focus({ preventScroll: true });
+      field.setSelectionRange(held.start, held.end);
+      field.scrollTop = held.scrollTop;
+      quietSelectRef.current = { start: held.start, end: held.end };
+    },
+    onReturnFocus: returnFocusToField,
+    onError: (cause) => {
+      const text = errorMessage(cause, "Couldn’t save the memo", "保存失败");
+      if (mode === "edit") {
+        errorSeqRef.current += 1;
+        setError(null);
+        announce(text, "assertive");
+        return { text, seq: errorSeqRef.current };
+      }
+      fail(text);
+      return { text, seq: errorSeqRef.current };
+    }
+  });
+  submissionRef.current = submission;
+  const { locked, sending, canSubmit, canQueue, uploadPercent } = submission;
 
   // The owner's handle on this edit (see EditHandle): one stable object
   // reading the latest render through a ref, so App can hold it across
@@ -758,10 +555,6 @@ export function Editor({
     report?.(handle, true);
     return () => report?.(handle, false);
   }, [handle]);
-
-  useLayoutEffect(() => {
-    imageSlots.syncCommitted(totalImages);
-  }, [imageSlots, totalImages]);
 
   // Too many images (an accepted remote base can bring more) is said like any
   // complaint; fail() speaks the others.
@@ -846,51 +639,6 @@ export function Editor({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(syncPressed, [content]);
 
-  // A reorder just landed: each tile glides from where it was to its new
-  // place (under reduced motion a tile that moved fades in there instead),
-  // and a tile moved from the keyboard keeps focus through its DOM move.
-  useLayoutEffect(() => {
-    const from = flipFromRef.current;
-    flipFromRef.current = null;
-    if (from) {
-      const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-      const to = tileCentres();
-      for (const tile of attachmentsRef.current?.querySelectorAll<HTMLElement>(".attachment[data-image-id]") ?? []) {
-        const was = from.get(tile.dataset.imageId ?? "");
-        const now = to.get(tile.dataset.imageId ?? "");
-        if (!was || !now || typeof tile.animate !== "function") continue;
-        const dx = was.x - now.x;
-        const dy = was.y - now.y;
-        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
-        tile.animate(reduced ? [{ opacity: 0 }, { opacity: 1 }] : [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], {
-          duration: reduced ? T_BASE : REORDER_MS,
-          easing: EASE_OUT
-        });
-      }
-    }
-    const refocus = refocusTileRef.current;
-    refocusTileRef.current = null;
-    if (refocus) {
-      const row = [...(attachmentsRef.current?.querySelectorAll<HTMLElement>(".attachment[data-image-id]") ?? [])];
-      row.find((tile) => tile.dataset.imageId === refocus)?.querySelector<HTMLElement>(".attachment-open")?.focus({ preventScroll: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flips]);
-
-  // A finger that lifted a tile drags it, not the page. Registered up front
-  // (and not passive): a browser decides whether a touch may scroll as it
-  // starts, so a listener added mid-drag would come too late.
-  const hasTiles = keptExisting.length + newImages.length + preparing.length > 0;
-  useEffect(() => {
-    const row = attachmentsRef.current;
-    if (!row) return;
-    const hold = (event: TouchEvent) => {
-      if (tileDragRef.current?.lifted) event.preventDefault();
-    };
-    row.addEventListener("touchmove", hold, { passive: false });
-    return () => row.removeEventListener("touchmove", hold);
-  }, [hasTiles]);
-
   /**
    * The tag list opens at the "#" being typed, not pinned under the field:
    * just below that line (above it when the viewport has no room below),
@@ -933,25 +681,29 @@ export function Editor({
     setSuggestion(null);
   }, [locked]);
 
-  // Sending reads the same as resting for a beat (the busy hold, --t-hold):
-  // a fast send never flashes the spinner, a slow one fades it in.
+  // Esc stops an in-flight save or queued send even if focus left the field
+  // (e.g. clicking Send/Stop, or the disabled Send button dropping focus to body).
+  // Not while anything sits over the page (lib/layerStack: a menu, the search
+  // list, the filter panel, the drawer, a dialog) or select mode is on: that
+  // Esc is the top layer's, and stopping the send under it too would spend
+  // one press on two things.
   useEffect(() => {
-    if (!sending) {
-      setSpinnerShown(false);
-      return;
-    }
-    const timer = window.setTimeout(() => setSpinnerShown(true), BUSY_HOLD_MS);
-    return () => window.clearTimeout(timer);
-  }, [sending]);
-
-  // A queued send goes out as soon as the last image has landed; one that
-  // can no longer go (a compression failed, a conflict arrived) is dropped.
-  useEffect(() => {
-    if (!sendQueued || compressing > 0) return;
-    setSendQueued(false);
-    if (ready && hasPayload) void submit(true);
+    if (!submission.canStop) return;
+    const onWindowKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      if (layerCount() > 0 || document.querySelector(".memo-feed.is-select")) return;
+      if (document.querySelector(".overlay:not(.is-closing), .passcode-overlay:not(.is-closing), .action-menu:not(.is-closing)")) return;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) {
+        const other = active.closest(".editor");
+        if (other && other !== rootRef.current) return;
+      }
+      if (submission.stop()) event.preventDefault();
+    };
+    window.addEventListener("keydown", onWindowKey);
+    return () => window.removeEventListener("keydown", onWindowKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sendQueued, compressing]);
+  }, [submission.canStop]);
 
   // A confirmed create emptied the field: size it in the same commit, so a
   // view transition captures the composer at its final height.
@@ -962,6 +714,20 @@ export function Editor({
     autoGrow(grow === "instant");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clears]);
+
+  // Typing during create `landing` pivoted the field straight to the next
+  // draft: seat the caret at the end of the newly typed characters.
+  useLayoutEffect(() => {
+    const caret = landingCaretRef.current;
+    const area = areaRef.current;
+    if (caret === null || !area) return;
+    landingCaretRef.current = null;
+    const clamped = Math.min(caret, area.value.length);
+    area.setSelectionRange(clamped, clamped);
+    quietSelectRef.current = { start: clamped, end: clamped };
+    autoGrow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content]);
 
   // The window-wide file-drop guard (see installDropGuard). The callbacks
   // read the latest render through refs; the registration lives as long as
@@ -981,36 +747,11 @@ export function Editor({
     []
   );
 
-  // If an update committed but its response was lost, the conflict payload
-  // will contain our stable image ids. Retire the matching local payloads so
-  // accepting the new base does not try to insert the same attachments again.
-  useEffect(() => {
-    if (newImages.length === 0 || existingImages.length === 0) return;
-    const storedIds = new Set(existingImages.map((image) => image.id));
-    const committed = newImages.filter((image) => storedIds.has(image.id));
-    if (committed.length === 0) return;
-    for (const image of committed) URL.revokeObjectURL(image.previewUrl);
-    setNewImages((current) => current.filter((image) => !storedIds.has(image.id)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [existingImages]);
-
-  // Object URLs for pending attachments leak unless revoked; only revoke on
-  // unmount (successful submit unmounts or clears the list). Previews of
-  // images still compressing and of removals held for Undo go too.
-  const previewUrls = useRef<string[]>([]);
-  useEffect(() => {
-    previewUrls.current = newImages.map((image) => image.previewUrl);
-  }, [newImages]);
   useEffect(() => {
     mountedRef.current = true;
-    const preparingUrls = preparingUrlsRef.current;
     return () => {
       mountedRef.current = false;
-      for (const url of previewUrls.current) URL.revokeObjectURL(url);
-      for (const url of preparingUrls) URL.revokeObjectURL(url);
-      releaseHeldRemovals();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
@@ -1090,7 +831,7 @@ export function Editor({
   }
 
   function refreshSuggestion(value: string, caret: number) {
-    if (busy || submittingRef.current || sendQueuedRef.current) return;
+    if (submission.isLocked()) return;
     const token = tagTokenAt(value, caret);
     if (!token || knownTags.length === 0) {
       setSuggestion(null);
@@ -1139,9 +880,25 @@ export function Editor({
    * that costs the undo history, never the text. Focus is taken right here,
    * inside the click or key handler, so iOS keeps its keyboard up.
    */
+  /**
+   * Pivots a create-mode field mid-`landing` straight into the next draft with
+   * `next` (and caret at `selStart..selEnd`), so neither typing nor a toolbar
+   * press mixes into the already-sent text or gets wiped when it commits.
+   */
+  function pivotLanding(next: string, selStart = next.length, selEnd = selStart, suggest = true) {
+    submission.handoffLanding();
+    setContent(next);
+    landingCaretRef.current = selEnd;
+    clearError("other");
+    submission.clearError();
+    if (suggest) refreshSuggestion(next, selStart);
+    else setSuggestion(null);
+    autoGrow();
+  }
+
   function landValue(next: string, selStart: number, selEnd = selStart, suggest = true) {
     const area = areaRef.current;
-    if (!area || sendQueuedRef.current) return;
+    if (!area || submission.isLocked()) return;
     const prev = area.value;
     area.focus({ preventScroll: true });
     let landed = prev === next;
@@ -1164,7 +921,10 @@ export function Editor({
       landed = landed && area.value === next;
     }
     setContent(next);
-    if (next !== prev) clearError("other");
+    if (next !== prev) {
+      clearError("other");
+      submission.clearError();
+    }
     if (!suggest) setSuggestion(null);
     const settle = () => {
       area.setSelectionRange(selStart, selEnd);
@@ -1187,7 +947,7 @@ export function Editor({
    * a line break); the caret lands after it.
    */
   function applySuggestion(tag: string) {
-    if (busy || submittingRef.current) return;
+    if (submission.isLocked()) return;
     const area = areaRef.current;
     if (!area || !suggestion) return;
     const value = area.value;
@@ -1244,9 +1004,15 @@ export function Editor({
 
   /** Insert text at the caret (textareas keep their selection while blurred). */
   function insertAtCaret(text: string, padded = false) {
-    if (busy || submittingRef.current) return;
+    if (submission.isLocked()) return;
     const area = areaRef.current;
     if (!area) return;
+    if (submission.landingRawContent() !== null) {
+      area.focus({ preventScroll: true });
+      const inserted = padded ? `${text} ` : text;
+      pivotLanding(inserted, inserted.length);
+      return;
+    }
     const start = area.selectionStart;
     const end = area.selectionEnd;
     const before = padded && start > 0 && !/\s/.test(content[start - 1]) ? " " : "";
@@ -1258,8 +1024,14 @@ export function Editor({
   }
 
   function insertHash() {
+    if (submission.isLocked()) return;
     const area = areaRef.current;
     if (!area) return;
+    if (submission.landingRawContent() !== null) {
+      area.focus({ preventScroll: true });
+      pivotLanding("#", 1);
+      return;
+    }
     const start = area.selectionStart;
     const needsSpace = start > 0 && !/\s/.test(content[start - 1]);
     insertAtCaret(`${needsSpace ? " " : ""}#`);
@@ -1271,17 +1043,25 @@ export function Editor({
   function keepFieldFocus(event: ReactMouseEvent) {
     event.preventDefault();
   }
-  /** Send keeps the caret for a mouse too, so a failed send (or the next
-   * memo) goes on in the field. A tap still lets the keyboard go: sending
-   * on a phone hands the screen back to the feed. */
-  function keepSendFocus(event: ReactMouseEvent) {
-    if (window.matchMedia?.("(pointer: fine)").matches) event.preventDefault();
-  }
 
   /** Land a markdown edit: new value plus an exact selection to restore. */
   function applyPatch(patch: EditPatch) {
-    if (busy || submittingRef.current) return;
+    if (submission.isLocked()) return;
     landValue(patch.value, patch.start, patch.end);
+  }
+
+  /** Apply a formatting helper cleanly, starting fresh if mid-`landing`. */
+  function applyTool(make: (value: string, start: number, end: number) => EditPatch) {
+    if (submission.isLocked()) return;
+    const area = areaRef.current;
+    if (!area) return;
+    if (submission.landingRawContent() !== null) {
+      area.focus({ preventScroll: true });
+      const patch = make("", 0, 0);
+      pivotLanding(patch.value, patch.start, patch.end);
+      return;
+    }
+    applyPatch(make(content, area.selectionStart, area.selectionEnd));
   }
 
   /** Read Bold's and List's pressed state off the caret. */
@@ -1331,205 +1111,15 @@ export function Editor({
     if (key && TOOL_ORDER.includes(key)) setToolStop(key);
   }
 
-  /* ---- Attachment tiles: open, reorder ---- */
-
-  /** Each tile's centre on screen, by image id. */
-  function tileCentres(): Map<string, { x: number; y: number }> {
-    const centres = new Map<string, { x: number; y: number }>();
-    for (const tile of attachmentsRef.current?.querySelectorAll<HTMLElement>(".attachment[data-image-id]") ?? []) {
-      const box = tile.getBoundingClientRect();
-      centres.set(tile.dataset.imageId ?? "", { x: box.left + box.width / 2, y: box.top + box.height / 2 });
-    }
-    return centres;
-  }
-
-  /** Change the tile order with every tile gliding on from where it is now. */
-  function glideTiles(change: () => void) {
-    flipFromRef.current = tileCentres();
-    change();
-    setFlips((value) => value + 1);
-  }
-
-  /** Put a pending image before `before` (null: at the end). The order is the one sent. */
-  function moveImage(id: string, before: string | null) {
-    setNewImages((value) => {
-      const moving = value.find((image) => image.id === id);
-      if (!moving) return value;
-      const rest = value.filter((image) => image !== moving);
-      const at = before === null ? rest.length : rest.findIndex((image) => image.id === before);
-      return at < 0 ? value : [...rest.slice(0, at), moving, ...rest.slice(at)];
-    });
-  }
-
-  /** The photo viewer, on the tiles that stay (a preview for an image not yet sent). */
-  function openTile(event: ReactMouseEvent<HTMLButtonElement>, id: string) {
-    if (!onOpenImage || event.timeStamp < tileClickFloorRef.current) return;
-    const shown = tiles.filter(
-      (tile): tile is Exclude<AttachmentTile, { kind: "preparing" }> => tile.kind !== "preparing" && !removingKeys.has(tile.image.id)
-    );
-    const items: LightboxItem[] = shown.map((tile) =>
-      tile.kind === "stored" ? { src: `/api/images/${tile.image.id}`, imageId: tile.image.id } : { src: tile.image.previewUrl }
-    );
-    const index = Math.max(0, shown.findIndex((tile) => tile.image.id === id));
-    openLightboxFrom(event.currentTarget.closest<HTMLElement>(".attachment"), () => onOpenImage(items, index));
-  }
-
-  /** The pending images in the row's order, those leaving left out. */
-  function movableIds(): string[] {
-    return newImages.filter((image) => !removingKeys.has(image.id)).map((image) => image.id);
-  }
-
-  /** Alt+←/→ moves the focused tile one place and says where it now is. */
-  function onTileKeyDown(event: KeyboardEvent<HTMLButtonElement>, id: string) {
-    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    // Alt+← is Back in some browsers: never leave the page from here.
-    event.preventDefault();
-    if (locked) return;
-    const order = movableIds();
-    const at = order.indexOf(id);
-    if (at < 0) return;
-    const to = Math.min(order.length - 1, Math.max(0, at + (event.key === "ArrowRight" ? 1 : -1)));
-    if (to !== at) {
-      refocusTileRef.current = id;
-      glideTiles(() => moveImage(id, event.key === "ArrowRight" ? (order[to + 1] ?? null) : order[to]));
-    }
-    // The memo's own images stay first; the moved one is counted after them.
-    const position = removable.length - order.length + to + 1;
-    announce(tr(`Image ${position} of ${removable.length}`, `第 ${position} 张，共 ${removable.length} 张`));
-  }
-
-  function onTilePointerDown(event: ReactPointerEvent<HTMLButtonElement>, id: string) {
-    // A fresh press is a new gesture: only the click trailing a drag is held back.
-    tileClickFloorRef.current = 0;
-    if (!event.isPrimary || event.button !== 0 || locked || tileDragRef.current) return;
-    const tile = event.currentTarget.closest<HTMLElement>(".attachment");
-    if (!tile) return;
-    const drag: TileDrag = {
-      id,
-      pointerId: event.pointerId,
-      touch: event.pointerType !== "mouse",
-      x0: event.clientX,
-      y0: event.clientY,
-      lifted: false,
-      holdTimer: 0,
-      tile,
-      handle: event.currentTarget,
-      slots: [],
-      before: undefined,
-      unlisten: () => undefined
-    };
-    tileDragRef.current = drag;
-    if (drag.touch) drag.holdTimer = window.setTimeout(() => liftTile(drag), TOUCH_LIFT_MS);
-  }
-
-  /** Lift the pressed tile: it follows the pointer from here, and the row's
-   * movable tiles are measured once as the slots it can land between. */
-  function liftTile(drag: TileDrag) {
-    const row = attachmentsRef.current;
-    if (tileDragRef.current !== drag || drag.lifted || !row) return;
-    drag.lifted = true;
-    try {
-      drag.handle.setPointerCapture?.(drag.pointerId);
-    } catch {
-      // Capture is a nicety; the drag still tracks without it.
-    }
-    // Without capture a release off the tile goes elsewhere: the window
-    // still hears it (after the tile's own handlers, which end it first).
-    const release = (event: PointerEvent) => {
-      if (event.pointerId === drag.pointerId) endTileDrag(drag, event.type === "pointerup", event.timeStamp);
-    };
-    window.addEventListener("pointerup", release);
-    window.addEventListener("pointercancel", release);
-    drag.unlisten = () => {
-      window.removeEventListener("pointerup", release);
-      window.removeEventListener("pointercancel", release);
-    };
-    const origin = row.getBoundingClientRect();
-    drag.slots = [...row.querySelectorAll<HTMLElement>(".attachment[data-movable]")].map((tile) => {
-      const box = tile.getBoundingClientRect();
-      return { id: tile.dataset.imageId ?? "", left: box.left - origin.left, top: box.top - origin.top, right: box.right - origin.left, bottom: box.bottom - origin.top };
-    });
-    setReorder({ id: drag.id, bar: null });
-  }
-
-  function onTilePointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
-    const drag = tileDragRef.current;
-    const row = attachmentsRef.current;
-    if (!drag || drag.pointerId !== event.pointerId || !row) return;
-    const dx = event.clientX - drag.x0;
-    const dy = event.clientY - drag.y0;
-    if (!drag.lifted) {
-      // A finger that moves before its hold is up is scrolling the page.
-      if (drag.touch) {
-        if (Math.hypot(dx, dy) > 8) endTileDrag(drag, false);
-        return;
-      }
-      if (Math.hypot(dx, dy) < 4) return;
-      liftTile(drag);
-      if (!drag.lifted) return;
-    }
-    // Written straight to the tile: a render per pointer move would be waste.
-    drag.tile.style.translate = `${dx}px ${dy}px`;
-    const origin = row.getBoundingClientRect();
-    const x = event.clientX - origin.left;
-    const y = event.clientY - origin.top;
-    let nearest = -1;
-    let distance = Infinity;
-    drag.slots.forEach((slot, index) => {
-      const away = Math.hypot(x - (slot.left + slot.right) / 2, y - (slot.top + slot.bottom) / 2);
-      if (away < distance) {
-        distance = away;
-        nearest = index;
-      }
-    });
-    if (nearest < 0) return;
-    const target = drag.slots[nearest];
-    const index = nearest + (x > (target.left + target.right) / 2 ? 1 : 0);
-    const from = drag.slots.findIndex((slot) => slot.id === drag.id);
-    // Either side of the tile's own place is where it already is.
-    const before = index === from || index === from + 1 ? undefined : index < drag.slots.length ? drag.slots[index].id : null;
-    if (before === drag.before) return;
-    drag.before = before;
-    const anchor = before === undefined ? null : before === null ? drag.slots[drag.slots.length - 1] : drag.slots[index];
-    // The bar stands in the 8px gap: before its tile, or after the last.
-    const bar = anchor ? { left: before === null ? anchor.right + 3 : anchor.left - 5, top: anchor.top, height: anchor.bottom - anchor.top } : null;
-    setReorder({ id: drag.id, bar });
-  }
-
-  /** Let the tile go — into its new place when `drop` (and one was found), else home. */
-  function endTileDrag(drag: TileDrag, drop: boolean, timeStamp = 0) {
-    window.clearTimeout(drag.holdTimer);
-    drag.unlisten();
-    if (tileDragRef.current !== drag) return;
-    tileDragRef.current = null;
-    if (!drag.lifted) return;
-    tileClickFloorRef.current = timeStamp + 400;
-    glideTiles(() => {
-      drag.tile.style.translate = "";
-      setReorder(null);
-      if (drop && drag.before !== undefined && !locked) moveImage(drag.id, drag.before);
-    });
-  }
-
-  /** What a file that could not be added says, by name. */
-  function failureText(file: File, cause: unknown): string {
-    const name = file.name;
-    if (/^image\/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(name)) {
-      return tr(`${name}: this browser can’t read HEIC — export it as JPG first`, `${name}：这个浏览器读不出 HEIC，可以先导出成 JPG 再拖进来`);
-    }
-    const reason = errorMessage(cause, "Couldn’t process the image", "图片处理失败");
-    return name ? tr(`${name}: ${reason}`, `${name}：${reason}`) : reason;
-  }
-
   function confirmLink() {
-    if (busy || submittingRef.current) return;
+    if (submission.isLocked()) return;
     const url = linkValue.trim();
     if (!/^https?:\/\/\S+$/i.test(url)) {
       fail(tr("Enter an image URL beginning with http(s)://", "请输入以 http(s):// 开头的图片链接"), "link");
       return;
     }
     setError(null);
+    submission.clearError();
     // ![](url) forces image rendering for any URL; the image itself stays
     // external and is never uploaded.
     insertAtCaret(`![](${url})`, true);
@@ -1537,84 +1127,8 @@ export function Editor({
     setLinkOpen(false);
   }
 
-  async function addFiles(files: File[]) {
-    if (busy || submittingRef.current || sendQueuedRef.current) return;
-    freshClearRef.current = false;
-    const images = files.filter((file) => file.type.startsWith("image/"));
-    if (images.length === 0) {
-      if (files.length > 0) fail(tr("Only images can be added", "只能添加图片"));
-      return;
-    }
-    const acceptedCount = imageSlots.reserve(images.length);
-    if (acceptedCount <= 0) {
-      fail(tr(`You can add up to ${MAX_IMAGES} images`, `最多 ${MAX_IMAGES} 张图片`), "limit");
-      return;
-    }
-    setError(null);
-    // Each image gets its tile at once, showing the file itself while it
-    // compresses; the compressed image then takes over that same tile
-    // (tileKeysRef), so it pops in once and never trades places with a
-    // spinner.
-    const batch = images.slice(0, acceptedCount).map((file) => ({ file, key: crypto.randomUUID(), url: previewOf(file) }));
-    for (const { url } of batch) if (url) preparingUrlsRef.current.add(url);
-    setPreparing((value) => [...value, ...batch.map(({ key, url }) => ({ key, url }))]);
-    let added = 0;
-    for (const { file, key, url } of batch) {
-      let reservationOpen = true;
-      let failed = false;
-      try {
-        if (!mountedRef.current) continue;
-        const payload = await compressImage(file);
-        if (!mountedRef.current) {
-          URL.revokeObjectURL(payload.previewUrl);
-          continue;
-        }
-        const accepted = imageSlots.settle(true);
-        reservationOpen = false;
-        if (!accepted) {
-          URL.revokeObjectURL(payload.previewUrl);
-          fail(tr(`You can add up to ${MAX_IMAGES} images`, `最多 ${MAX_IMAGES} 张图片`), "limit");
-          // The draft is not what Send was pressed on any more: hold it back.
-          setSendQueued(false);
-          continue;
-        }
-        tileKeysRef.current.set(payload.id, key);
-        setNewImages((value) => [...value, payload]);
-        added += 1;
-      } catch (cause) {
-        if (mountedRef.current) {
-          failed = true;
-          fail(failureText(file, cause));
-          // A queued send would go out without the image it was waiting for.
-          setSendQueued(false);
-        }
-      } finally {
-        if (reservationOpen) imageSlots.settle(false);
-        if (url) {
-          URL.revokeObjectURL(url);
-          preparingUrlsRef.current.delete(url);
-        }
-        if (mountedRef.current && failed) {
-          // The tile it would have been stays a moment, marked, so the
-          // reader sees which one it was; then it fades out. Timers, not
-          // animationend: an edit scrolled off screen runs no animations.
-          setPreparing((value) => value.map((item) => (item.key === key ? { ...item, url: null, failed: true } : item)));
-          window.setTimeout(() => {
-            if (!mountedRef.current) return;
-            setPreparing((value) => value.map((item) => (item.key === key ? { ...item, leaving: true } : item)));
-            window.setTimeout(() => {
-              if (mountedRef.current) setPreparing((value) => value.filter((item) => item.key !== key));
-            }, EXIT_MS);
-          }, FAILED_TILE_MS);
-        } else if (mountedRef.current) setPreparing((value) => value.filter((item) => item.key !== key));
-      }
-    }
-    // The tiles are silent to a screen reader until they land: say so then.
-    if (added > 0 && mountedRef.current) announce(added === 1 ? tr("Added the image", "已添加图片") : tr(`Added ${added} images`, `已添加 ${added} 张图片`));
-  }
-
   function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    if (busy || submittingRef.current) return;
+    if (submission.isLocked()) return;
     const plainOnly = plainPasteRef.current;
     plainPasteRef.current = false;
     const files = [...event.clipboardData.items]
@@ -1625,7 +1139,16 @@ export function Editor({
     const takesImages = plainOnly ? !event.clipboardData.getData("text/plain").trim() : pasteTakesImages(event.clipboardData, files);
     if (files.length > 0 && takesImages) {
       event.preventDefault();
-      void addFiles(files);
+      void attachments.addFiles(files);
+      return;
+    }
+    const landingBase = submission.landingRawContent();
+    if (landingBase !== null) {
+      if (plainOnly) return;
+      const markdown = htmlToMarkdown(event.clipboardData.getData("text/html"));
+      if (markdown === null) return;
+      event.preventDefault();
+      pivotLanding(markdown, markdown.length);
       return;
     }
     const area = event.currentTarget;
@@ -1662,7 +1185,7 @@ export function Editor({
   function acceptsDrop(kind: FileDragKind) {
     return !locked && kind === "images" && totalImages + compressing < MAX_IMAGES;
   }
-  addFilesRef.current = (files) => void addFiles(files);
+  addFilesRef.current = (files) => void attachments.addFiles(files);
   acceptsRef.current = acceptsDrop;
 
   // Files light the veil and are claimed here. Links and plain text are
@@ -1698,7 +1221,7 @@ export function Editor({
     if (isFileDrag(event)) {
       // Never the browser's: it would open the file in the tab.
       event.preventDefault();
-      if (!locked) void addFiles([...(event.dataTransfer?.files ?? [])]);
+      if (!locked) void attachments.addFiles([...(event.dataTransfer?.files ?? [])]);
       return;
     }
     if (locked) return;
@@ -1748,18 +1271,15 @@ export function Editor({
     // keydown but retain the conventional 229 keyCode, so honor both signals
     // before tag suggestions or markdown shortcuts see the event.
     if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-    if (busy || submittingRef.current || sendQueued) {
-      // A send is under way — held for a compressing image, or out on the
-      // wire: Esc takes it back (the draft stays as it was); nothing else
-      // may change the draft before it goes.
-      if (event.key === "Escape") {
-        event.preventDefault();
-        if (sendQueued) setSendQueued(false);
-        else abortRef.current?.abort();
-      }
+    // One stop() for Esc: halts a queued send (`preparing`), an edit save
+    // (`saving`), or a create still landing before commit.
+    if (event.key === "Escape" && submission.stop()) {
+      event.preventDefault();
       return;
     }
+    if (submission.isLocked()) return;
     const area = event.currentTarget;
+    const landingPending = submission.landingRawContent() !== null;
     if (
       mode === "create" &&
       freshClearRef.current &&
@@ -1820,10 +1340,9 @@ export function Editor({
         return;
       }
     }
-    // Markdown aids. Plain Enter continues a list/task/quote line (an empty
-    // item exits instead); Shift+Enter stays a plain newline escape hatch,
-    // and Enter while the IME is composing must never be intercepted.
-    if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey && !event.nativeEvent.isComposing) {
+    // Markdown aids (skipped against the already-sent text while `landing`
+    // hasn't handed off yet, so the keystroke pivots into a clean new draft).
+    if (!landingPending && event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey && !event.nativeEvent.isComposing) {
       if (area.selectionStart === area.selectionEnd) {
         const patch = continueListOnEnter(content, area.selectionStart);
         if (patch) {
@@ -1835,7 +1354,7 @@ export function Editor({
     }
     // Backspace right after an empty item's marker takes the whole marker
     // (or one level of indent), not one character of it.
-    if (event.key === "Backspace" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (!landingPending && event.key === "Backspace" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
       const patch = backspaceListMarker(content, area.selectionStart, area.selectionEnd);
       if (patch) {
         event.preventDefault();
@@ -1845,7 +1364,7 @@ export function Editor({
     }
     // Tab hops table cells and indents list lines (every selected one);
     // anywhere else it keeps moving focus.
-    if (event.key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (!landingPending && event.key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) {
       const dir = event.shiftKey ? -1 : 1;
       const patch = tableTabStop(content, area.selectionStart, dir) ?? shiftListIndent(content, area.selectionStart, dir, area.selectionEnd);
       if (patch) {
@@ -1860,20 +1379,20 @@ export function Editor({
         // The field's own: the page's ⌘K (search) must not hear it too.
         event.preventDefault();
         event.stopPropagation();
-        applyPatch(wrapLink(content, area.selectionStart, area.selectionEnd));
+        applyTool((value, start, end) => wrapLink(value, start, end));
         return;
       }
       const marker =
         key === "b" ? "**" : key === "i" ? "*" : key === "e" ? "`" : key === "s" && event.shiftKey ? "~~" : key === "h" && event.shiftKey ? "==" : null;
       if (marker) {
         event.preventDefault();
-        applyPatch(toggleWrap(content, area.selectionStart, area.selectionEnd, marker));
+        applyTool((value, start, end) => toggleWrap(value, start, end, marker));
         return;
       }
     }
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
       event.preventDefault();
-      void submit();
+      void submission.submit();
     }
     // Paste-and-match-style: the paste handler below skips the HTML path.
     plainPasteRef.current = (event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "v";
@@ -1901,18 +1420,15 @@ export function Editor({
    * ones leave with the draft, so their preview URLs must outlive unmount.
    */
   function cancel() {
-    if (!onCancel || locked) return;
+    if (!onCancel || submission.isLocked()) return;
     const area = areaRef.current;
     if (!dirty) {
       onCancel(null);
       return;
     }
-    const handedOff = new Set(keptNewImages.map((image) => image.previewUrl));
-    previewUrls.current = previewUrls.current.filter((url) => !handedOff.has(url));
     onCancel({
       content,
-      newImages: keptNewImages,
-      removedIds: removedImageIds,
+      ...attachments.handOff(),
       selectionStart: area?.selectionStart ?? content.length,
       selectionEnd: area?.selectionEnd ?? content.length
     });
@@ -1932,150 +1448,19 @@ export function Editor({
     if (stayed && window.matchMedia?.("(pointer: fine)").matches) area.focus({ preventScroll: true });
   }
 
-  /**
-   * Send / Save. Pressed while an image is still compressing, the press is
-   * held (`sendQueued`) and the save goes out by itself once the last image
-   * lands; `fromQueue` is that deferred run. ⌘↩ on an untouched edit has
-   * nothing to save and closes it quietly, like Esc.
-   */
-  async function submit(fromQueue = false) {
-    if (submittingRef.current) return;
-    if (!fromQueue) {
-      if (mode === "edit" && !dirty && !locked) {
-        cancel();
-        return;
-      }
-      if (canQueue) {
-        setSendQueued(true);
-        setError(null);
-        announce(tr("Preparing image…", "正在处理图片…"));
-        return;
-      }
-      if (!canSubmit) return;
-    }
-    submittingRef.current = true;
-    setSubmitting(true);
-    setError(null);
-    const controller = new AbortController();
-    abortRef.current = controller;
-    // Where the caret was when Send went: a stopped send hands the field
-    // back exactly so (text and images never left it).
-    const area = areaRef.current;
-    const held = area ? { start: area.selectionStart, end: area.selectionEnd, scrollTop: area.scrollTop } : null;
-    const restoreField = () => {
-      const field = areaRef.current;
-      if (!field || !held || !mountedRef.current) return;
-      field.focus({ preventScroll: true });
-      field.setSelectionRange(held.start, held.end);
-      field.scrollTop = held.scrollTop;
-      quietSelectRef.current = { start: held.start, end: held.end };
-    };
-    // Set once the composer is cleared — by the owner through onCommitted,
-    // inside the update that lands the memo, or else right after.
-    let cleared = false;
-    const clearComposer = (animated: boolean) => {
-      if (cleared || !mountedRef.current) return;
-      cleared = true;
-      // Landed: from here Esc has nothing left to stop.
-      if (abortRef.current === controller) abortRef.current = null;
-      draftIdRef.current = crypto.randomUUID();
-      imageSlots.syncCommitted(existingImages.length);
-      // The sent images' previews went with the memo: the owner releases
-      // them, or hands them back if the memo is taken back. Only a tile
-      // still playing its exit stays behind.
-      for (const image of newImages) if (removingKeys.has(image.id)) URL.revokeObjectURL(image.previewUrl);
-      freshClearRef.current = true;
-      // An Undo still on a toast belongs to the memo just sent, not the next.
-      undoEpochRef.current += 1;
-      releaseHeldRemovals();
-      tileKeysRef.current.clear();
-      setContent("");
-      setNewImages([]);
-      setRemovingKeys(new Set());
-      previewUrls.current = [];
-      setSuggestion(null);
-      setLinkOpen(false);
-      setLinkValue("");
-      // A view transition morphs the composer shut itself; without one the
-      // field eases down on its own height transition.
-      clearGrowRef.current = animated ? "instant" : "smooth";
-      setClears((value) => value + 1);
-    };
-    try {
-      const uploading = keptNewImages;
-      // Only a save waits on its upload; a send lands at once and goes out
-      // in the background (App's outbox).
-      const tracksUpload = mode === "edit" && uploading.length > 0;
-      if (tracksUpload) setUploadPercent(0);
-      const sent = content.trim();
-      const lead = content.length - content.trimStart().length;
-      const caret = (offset: number) => Math.max(0, Math.min(sent.length, offset - lead));
-      const ok = await onSubmit({
-        clientId: draftIdRef.current,
-        content: sent,
-        newImages: uploading,
-        removeImageIds: removedImageIds,
-        selection: held ? { start: caret(held.start), end: caret(held.end) } : { start: sent.length, end: sent.length },
-        onUploadProgress:
-          tracksUpload
-            ? (fraction) => {
-                if (mountedRef.current) setUploadPercent(Math.min(99, Math.round(fraction * 100)));
-              }
-            : undefined,
-        signal: controller.signal,
-        onCommitted: mode === "create" ? clearComposer : undefined
-      });
-      if (ok && mode === "create") {
-        clearComposer(false);
-        returnFocusToField();
-      } else if (!ok && controller.signal.aborted) {
-        restoreField();
-      }
-    } catch (cause) {
-      // Stopped with Esc: the owner says so; the draft is as it was.
-      if (controller.signal.aborted && !cleared) {
-        restoreField();
-        return;
-      }
-      // The draft is still here to fix and send again.
-      returnFocusToField();
-      const rotateCreateId =
-        mode === "create" && cause instanceof ApiError && (cause.code === "MEMO_ID_RETIRED" || cause.code === "VERSION_CONFLICT");
-      if (rotateCreateId) {
-        // Keep the draft, but rotate the stable create id so another save can
-        // neither resurrects a purge nor overwrites an edited existing memo.
-        draftIdRef.current = crypto.randomUUID();
-        fail(
-          tr(
-            "The existing memo was kept. Your draft is safe; save again to create it as a new memo.",
-            "现有笔记已保留。草稿仍然安全；再次保存会另建一条笔记。"
-          )
-        );
-        return;
-      }
-      fail(errorMessage(cause, "Couldn’t save the memo", "保存失败"));
-    } finally {
-      submittingRef.current = false;
-      if (abortRef.current === controller) abortRef.current = null;
-      if (mountedRef.current) {
-        setSubmitting(false);
-        setUploadPercent(null);
-      }
-    }
-  }
-
   // Create mode: a sent memo taken back from the feed (App's outbox) comes
   // back in here — only into an empty, idle composer, never over a draft.
   const recallRef = useRef<{ start: number; end: number } | null>(null);
   function recall(draft: ComposerDraft): boolean {
     const area = areaRef.current;
-    if (mode !== "create" || !area || !mountedRef.current || recallRef.current || submittingRef.current || sendQueuedRef.current) return false;
+    if (mode !== "create" || !area || !mountedRef.current || recallRef.current || submission.isLocked() || submission.isInFlight()) return false;
     if (area.value.trim() || newImages.length > 0 || compressing > 0) return false;
     freshClearRef.current = false;
     recallRef.current = { start: draft.selectionStart, end: draft.selectionEnd };
     setError(null);
+    submission.clearError();
     setContent(draft.content);
-    setNewImages(draft.newImages);
+    attachments.setNewImages(draft.newImages);
     return true;
   }
   if (controlRef) controlRef.current = { recall };
@@ -2126,20 +1511,6 @@ export function Editor({
   const veil = veilRef.current;
   const showCounter = effectiveContentLength >= COUNTER_FROM;
 
-  // One flat list of tiles, so a compressing image keeps its tile (same
-  // key, same element) when its compressed self lands in newImages.
-  const tiles: AttachmentTile[] = [
-    ...keptExisting.map((image): AttachmentTile => ({ kind: "stored", key: image.id, image })),
-    ...newImages.map((image): AttachmentTile => ({ kind: "pending", key: tileKeysRef.current.get(image.id) ?? image.id, image })),
-    ...preparing.map((item): AttachmentTile => ({ kind: "preparing", ...item }))
-  ];
-  // What stays, numbered like the card's own "View image 2 of 3".
-  const removable = tiles.flatMap((tile) => (tile.kind !== "preparing" && !removingKeys.has(tile.image.id) ? [tile.image.id] : []));
-  // The row folds shut while its last tile leaves, and unmounts after.
-  const attachmentsOpen = removable.length > 0 || preparing.length > 0;
-  // Only images not yet sent can be reordered: the server keeps a memo's own
-  // images in their order, so an edit's new ones line up after them.
-  const movableCount = newImages.filter((image) => !removingKeys.has(image.id)).length;
   // The toolbar's one Tab stop: the tool last focused, or the first that
   // can take focus when that one is disabled.
   const toolEnabled: Record<ToolKey, boolean> = {
@@ -2154,13 +1525,14 @@ export function Editor({
   const toolTab = (key: ToolKey) => (key === tabStop ? 0 : -1);
   // The note rows fold open and shut (see .editor-note); a closing one keeps
   // its last words while it folds, as an aria-hidden copy.
-  const errorText = imageLimitExceeded ? imageLimitText : (error?.text ?? null);
+  const activeError = error ?? submission.error;
+  const errorText = imageLimitExceeded ? imageLimitText : (activeError?.text ?? null);
   if (errorText) lastErrorRef.current = errorText;
   if (conflictMessage) lastConflictRef.current = conflictMessage;
   // The line arrives once. Opening, the row's fold and fade are its entrance;
   // only a new complaint replacing one already showing rises in on its own
   // (decided once per line, as its key first renders).
-  const errorKey = errorText ? (imageLimitExceeded ? "limit" : `error-${error?.seq ?? 0}`) : null;
+  const errorKey = errorText ? (imageLimitExceeded ? "limit" : `error-${activeError?.seq ?? 0}`) : null;
   if (errorKey !== errorLineRef.current.key) errorLineRef.current = { key: errorKey, replacing: errorLineRef.current.key !== null };
   const errorReplacing = errorLineRef.current.replacing;
   // The tag list: open, stepped aside for an IME, or playing its exit.
@@ -2239,14 +1611,25 @@ export function Editor({
           maxLength={HARD_INPUT_CAP}
           readOnly={locked}
           onChange={(event) => {
-            if (busy || submittingRef.current) return;
+            if (submission.isLocked()) return;
             freshClearRef.current = false;
-            setContent(event.target.value);
+            const next = event.target.value;
+            const composingNow = composingRef.current || Boolean((event.nativeEvent as InputEvent).isComposing);
+            const landingBase = submission.landingRawContent();
+            if (landingBase !== null && !composingNow) {
+              // Keystrokes during create `landing` start the next draft at
+              // once instead of mixing into the memo already on its way out.
+              const typed = extractTypedDelta(landingBase, next, (event.nativeEvent as InputEvent).data);
+              pivotLanding(typed, typed.length);
+              return;
+            }
+            setContent(next);
             // A refused file or a failed send is old news once the text moves on.
             clearError("other");
+            submission.clearError();
             // Mid-composition the text is the IME's (pinyin, kana): the list
             // waits, stepped aside, until compositionend hands over the result.
-            if (!composingRef.current && !(event.nativeEvent as InputEvent).isComposing) refreshSuggestion(event.target.value, event.target.selectionStart);
+            if (!composingNow) refreshSuggestion(next, event.target.selectionStart);
             autoGrow();
           }}
           onCompositionStart={() => {
@@ -2256,6 +1639,18 @@ export function Editor({
           onCompositionEnd={(event) => {
             composingRef.current = false;
             setComposing(false);
+            const pendingStrip = pendingLandingStripRef.current;
+            const landingBase = submission.landingRawContent();
+            const stripBase = pendingStrip ?? landingBase;
+            if (stripBase !== null) {
+              const value = event.currentTarget.value;
+              if (pendingStrip !== null || value !== stripBase) {
+                pendingLandingStripRef.current = null;
+                const typed = extractTypedDelta(stripBase, value);
+                pivotLanding(typed, typed.length);
+                return;
+              }
+            }
             refreshSuggestion(event.currentTarget.value, event.currentTarget.selectionStart);
           }}
           onScroll={() => {
@@ -2312,147 +1707,7 @@ export function Editor({
         </div>
       ) : null}
 
-      <div className={`editor-attach${attachmentsOpen ? " is-open" : ""}${reorder ? " is-reordering" : ""}`}>
-        <div className="editor-attach-clip">
-          {tiles.length > 0 ? (
-            <div ref={attachmentsRef} className="editor-attachments">
-              {tiles.map((tile) => {
-                if (tile.kind === "preparing" && tile.failed) {
-                  // A file that could not be made into an image keeps its
-                  // tile a moment, marked; the error line names it.
-                  return (
-                    <div key={tile.key} className={`attachment is-failed${tile.leaving ? " is-leaving" : ""}`} aria-hidden="true">
-                      <ImageOff size={18} aria-hidden="true" />
-                    </div>
-                  );
-                }
-                if (tile.kind === "preparing") {
-                  // The file itself stands in while it compresses; the
-                  // compressed image takes over this same tile.
-                  return (
-                    <div key={tile.key} className="attachment is-busy" role="img" aria-label={tr("Compressing image", "压缩图片中")}>
-                      {tile.url ? <img src={tile.url} alt="" decoding="async" /> : null}
-                      <span className="attachment-spinner">
-                        <Loader2 size={16} className="spin" aria-hidden="true" />
-                      </span>
-                    </div>
-                  );
-                }
-                const image = tile.image;
-                const removing = removingKeys.has(image.id);
-                const position = removable.indexOf(image.id);
-                const movable = tile.kind === "pending" && !removing && !locked && movableCount > 1;
-                return (
-                  <div
-                    key={tile.key}
-                    className={`attachment${removing ? " is-removing" : ""}${settledTiles.has(image.id) ? " is-settled" : ""}${
-                      reorder?.id === image.id ? " is-lifted" : ""
-                    }`}
-                    // A send names the tile after this id, so the picture
-                    // rides into the new card (App, landCreated).
-                    data-image-id={image.id}
-                    data-movable={movable ? "" : undefined}
-                    aria-hidden={removing || undefined}
-                    onAnimationEnd={(event) => {
-                      // The exit, or its reduced-motion dissolve (app.css).
-                      if (event.animationName !== "attach-out" && event.animationName !== "attach-dissolve") return;
-                      if (tile.kind === "stored") {
-                        settleRemove(image.id, () => {
-                          imageSlots.releaseCommitted();
-                          setRemovedIds((value) => [...value, image.id]);
-                          offerUndo(() => {
-                            if (reclaimSlot()) setRemovedIds((value) => value.filter((id) => id !== image.id));
-                          });
-                        });
-                        return;
-                      }
-                      // Undo puts a pending image back in the slot it left.
-                      const pending = tile.image;
-                      const slot = newImages.findIndex((item) => item.id === pending.id);
-                      settleRemove(pending.id, () => {
-                        imageSlots.releaseCommitted();
-                        setNewImages((value) => value.filter((item) => item.id !== pending.id));
-                        if (!onNoticeRef.current) {
-                          URL.revokeObjectURL(pending.previewUrl);
-                          return;
-                        }
-                        holdRemoval(pending);
-                        offerUndo(() => {
-                          if (!heldRemovalsRef.current.includes(pending) || !reclaimSlot()) return;
-                          heldRemovalsRef.current = heldRemovalsRef.current.filter((item) => item !== pending);
-                          setNewImages((value) =>
-                            value.some((item) => item.id === pending.id) ? value : [...value.slice(0, slot), pending, ...value.slice(slot)]
-                          );
-                        });
-                      });
-                    }}
-                  >
-                    {/* The picture is a button: a click (or Enter) opens it in
-                        the viewer; a drag — or Alt+←/→ — moves an image not
-                        yet sent to another place in the row. */}
-                    <button
-                      type="button"
-                      className="attachment-open"
-                      aria-label={
-                        removable.length > 1 && position >= 0
-                          ? onOpenImage
-                            ? tr(`View image ${position + 1} of ${removable.length}`, `查看图片 ${position + 1}/${removable.length}`)
-                            : tr(`Image ${position + 1} of ${removable.length}`, `第 ${position + 1} 张，共 ${removable.length} 张`)
-                          : onOpenImage
-                            ? tr("View image", "查看图片")
-                            : tr("Image", "图片")
-                      }
-                      aria-keyshortcuts={movable ? "Alt+ArrowLeft Alt+ArrowRight" : undefined}
-                      tabIndex={removing ? -1 : undefined}
-                      onMouseDown={keepFieldFocus}
-                      onClick={(event) => openTile(event, image.id)}
-                      onKeyDown={movable ? (event) => onTileKeyDown(event, image.id) : undefined}
-                      onPointerDown={movable ? (event) => onTilePointerDown(event, image.id) : undefined}
-                      onPointerMove={onTilePointerMove}
-                      onPointerUp={(event) => {
-                        const drag = tileDragRef.current;
-                        if (drag && drag.pointerId === event.pointerId) endTileDrag(drag, true, event.timeStamp);
-                      }}
-                      onPointerCancel={(event) => {
-                        const drag = tileDragRef.current;
-                        if (drag && drag.pointerId === event.pointerId) endTileDrag(drag, false, event.timeStamp);
-                      }}
-                      // A long press lifts the tile; no image menu over it.
-                      onContextMenu={(event) => {
-                        if (tileDragRef.current) event.preventDefault();
-                      }}
-                    >
-                      {tile.kind === "stored" ? (
-                        <StoredImg image={tile.image} />
-                      ) : (
-                        <img src={tile.image.previewUrl} alt="" decoding="async" draggable={false} />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      className="attachment-remove"
-                      aria-label={
-                        removable.length > 1 && position >= 0
-                          ? tr(`Remove image ${position + 1} of ${removable.length}`, `移除图片 ${position + 1}/${removable.length}`)
-                          : tr("Remove image", "移除图片")
-                      }
-                      tabIndex={removing ? -1 : undefined}
-                      onMouseDown={keepFieldFocus}
-                      onClick={(event) => beginRemove(image.id, event.currentTarget)}
-                      disabled={locked}
-                    >
-                      <X size={12} aria-hidden="true" />
-                    </button>
-                  </div>
-                );
-              })}
-              {reorder?.bar ? (
-                <span className="attachment-slot" style={{ left: reorder.bar.left, top: reorder.bar.top, height: reorder.bar.height }} aria-hidden="true" />
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
+      <AttachmentTiles tiles={attachments} locked={locked || submission.landingHoldingTiles} onOpenImage={onOpenImage} />
 
       {/* The note slot: the image-link row, then the error and conflict
           lines, each folding open and shut in place (see .editor-notes). */}
@@ -2517,7 +1772,27 @@ export function Editor({
               <div key="conflict" className="editor-conflict">
                 <p>{conflictMessage}</p>
                 {onAcceptRemoteBase ? (
-                  <button type="button" className="ghost-button" onClick={onAcceptRemoteBase} disabled={locked}>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onMouseDown={keepFieldFocus}
+                    onClick={() => {
+                      // Return focus synchronously inside the click/Enter
+                      // handler with the caret preserved so unmounting the
+                      // conflict note never drops focus to <body>.
+                      const area = areaRef.current;
+                      const start = area?.selectionStart ?? content.length;
+                      const end = area?.selectionEnd ?? content.length;
+                      onAcceptRemoteBase();
+                      if (area?.isConnected) {
+                        area.focus({ preventScroll: true });
+                        const limit = area.value.length;
+                        area.setSelectionRange(Math.min(start, limit), Math.min(end, limit));
+                        quietSelectRef.current = { start: area.selectionStart, end: area.selectionEnd };
+                      }
+                    }}
+                    disabled={locked}
+                  >
                     {tr("Keep my draft and continue", "保留草稿并继续")}
                   </button>
                 ) : null}
@@ -2558,10 +1833,7 @@ export function Editor({
             tabIndex={toolTab("bold")}
             onMouseDown={keepFieldFocus}
             className={`icon-button${pressed.bold ? " is-active-tool" : ""}`}
-            onClick={() => {
-              const area = areaRef.current;
-              if (area) applyPatch(toggleWrap(content, area.selectionStart, area.selectionEnd, "**"));
-            }}
+            onClick={() => applyTool((value, start, end) => toggleWrap(value, start, end, "**"))}
             aria-label={tr("Bold", "加粗")}
             aria-pressed={pressed.bold}
             disabled={!toolEnabled.bold}
@@ -2583,10 +1855,7 @@ export function Editor({
             tabIndex={toolTab("list")}
             onMouseDown={keepFieldFocus}
             className={`icon-button${pressed.list ? " is-active-tool" : ""}`}
-            onClick={() => {
-              const area = areaRef.current;
-              if (area) applyPatch(toggleBulletLine(content, area.selectionStart, area.selectionEnd));
-            }}
+            onClick={() => applyTool((value, start, end) => toggleBulletLine(value, start, end))}
             aria-label={tr("Bullet list", "列表")}
             aria-pressed={pressed.list}
             disabled={!toolEnabled.list}
@@ -2600,10 +1869,7 @@ export function Editor({
             tabIndex={toolTab("table")}
             onMouseDown={keepFieldFocus}
             className="icon-button"
-            onClick={() => {
-              const area = areaRef.current;
-              if (area) applyPatch(insertTableTemplate(content, area.selectionStart, tr("Col 1", "列 1"), tr("Col 2", "列 2")));
-            }}
+            onClick={() => applyTool((value, start) => insertTableTemplate(value, start, tr("Col 1", "列 1"), tr("Col 2", "列 2")))}
             aria-label={tr("Insert table", "插入表格")}
             disabled={!toolEnabled.table}
             {...tip.bind({ text: tr("Insert table", "插入表格") })}
@@ -2638,6 +1904,7 @@ export function Editor({
               else areaRef.current?.focus({ preventScroll: true });
               setLinkOpen((value) => !value);
               setError(null);
+              submission.clearError();
             }}
             aria-label={tr("Insert image link", "插入图片链接")}
             disabled={!toolEnabled.link}
@@ -2653,83 +1920,33 @@ export function Editor({
             hidden
             disabled={locked}
             onChange={(event) => {
-              void addFiles([...(event.target.files ?? [])]);
+              void attachments.addFiles([...(event.target.files ?? [])]);
               event.target.value = "";
             }}
           />
         </div>
-        <div className="editor-actions">
-          {sendQueued ? <span className="editor-status">{tr("Preparing image…", "正在处理图片…")}</span> : null}
-          {showCounter ? (
-            overLimit ? (
-              // Over the cap the count says so in words; the bubble names the cap.
-              <span
-                id={countId}
-                className="editor-count is-over"
-                {...tip.bind({ text: tr(`A memo holds up to ${formatNumber(MAX_CONTENT_CHARS)} characters`, `单条笔记最多 ${formatNumber(MAX_CONTENT_CHARS)} 字`) })}
-              >
-                {tr(`${formatNumber(effectiveContentLength - MAX_CONTENT_CHARS)} over`, `超出 ${formatNumber(effectiveContentLength - MAX_CONTENT_CHARS)} 字`)}
-                <span className="sr-only">
-                  {tr(` — a memo holds up to ${formatNumber(MAX_CONTENT_CHARS)} characters`, `，单条笔记最多 ${formatNumber(MAX_CONTENT_CHARS)} 字`)}
-                </span>
-              </span>
-            ) : (
-              <span className="editor-count">
-                {formatNumber(effectiveContentLength)} / {formatNumber(MAX_CONTENT_CHARS)}
-              </span>
-            )
-          ) : null}
-          {mode === "edit" && onCancel ? (
-            <button type="button" className="ghost-button" onClick={cancel} disabled={locked}>
-              {tr("Cancel", "取消")}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className={`send-button${uploadPercent !== null ? " is-uploading" : ""}${sending ? " is-sending" : ""}`}
-            onMouseDown={keepSendFocus}
-            onClick={() => void submit()}
-            disabled={!canSubmit && !canQueue}
-            aria-label={mode === "create" ? tr("Send", "发送") : tr("Save", "保存")}
-            aria-keyshortcuts="Meta+Enter Control+Enter"
-          >
-            {uploadPercent !== null ? (
-              // Images can take a while on a slow uplink: the fill and the
-              // figure track the bytes actually sent. Decoration only: a
-              // button's children are presentational, so the progressbar
-              // screen readers can reach sits beside the button.
-              <span className="send-progress" aria-hidden="true" style={{ transform: `scaleX(${uploadPercent / 100})` }} />
-            ) : null}
-            {sending && spinnerShown ? (
-              <span className="send-spinner" aria-hidden="true">
-                <Loader2 size={17} className="spin" aria-hidden="true" />
-              </span>
-            ) : (
-              // Keyed by the clears, so each emptied composer replays the flight.
-              <SendGlyph key={clears} flying={clears > flown} onFlown={() => setFlown(clears)} />
-            )}
-            {/* Label and percentage share one grid cell with hidden sizers for
-                both, so the chip is the same width idle, at 0% and at 99%
-                (tabular digits) and never jumps when an upload starts. */}
-            <span className="send-percent" aria-hidden="true">
-              <span className={uploadPercent !== null ? "send-percent-sizer" : undefined}>
-                {mode === "create" ? tr("Send", "发送") : tr("Save", "保存")}
-              </span>
-              <span className="send-percent-sizer">{formatNumber(99)}%</span>
-              {uploadPercent !== null ? <span>{formatNumber(uploadPercent)}%</span> : null}
-            </span>
-          </button>
-          {uploadPercent !== null ? (
-            <span
-              className="send-progress-sr"
-              role="progressbar"
-              aria-label={tr("Uploading images", "正在上传图片")}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={uploadPercent}
-            />
-          ) : null}
-        </div>
+        <EditorActions
+          mode={mode}
+          preparing={submission.phase === "preparing"}
+          sending={sending}
+          locked={locked}
+          showStopButton={submission.showStopButton}
+          spinnerShown={submission.spinnerShown}
+          canSubmit={canSubmit}
+          canQueue={canQueue}
+          uploadPercent={uploadPercent}
+          showCounter={showCounter}
+          overLimit={overLimit}
+          effectiveContentLength={effectiveContentLength}
+          countId={countId}
+          clears={clears}
+          hasCancel={Boolean(onCancel)}
+          onCancel={cancel}
+          onStop={() => {
+            submission.stop();
+          }}
+          onSubmit={() => void submission.submit()}
+        />
       </div>
 
       <div className={`editor-drop${veil.refused ? " is-refusing" : ""}`} aria-hidden="true">

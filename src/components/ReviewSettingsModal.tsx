@@ -230,13 +230,13 @@ export function ReviewSettingsModal({ settings, memos, knownTags, onSave, onClos
       className={`overlay review-overlay${closing ? " is-closing" : ""}`}
       role="dialog"
       aria-modal="true"
-      aria-label={tr("Daily Review Settings", "每日回顾设置")}
+      aria-label={tr("Daily review settings", "每日回顾设置")}
       tabIndex={-1}
       {...backdrop}
     >
       <div className="review-modal" onClick={(event) => event.stopPropagation()}>
         <header className="review-head">
-          <h2>{tr("Daily review", "每日回顾")}</h2>
+          <h2>{tr("Daily review settings", "每日回顾设置")}</h2>
           <button ref={closeButtonRef} type="button" className="icon-button review-close" onClick={requestClose} aria-label={tr("Close", "关闭")}>
             <X size={18} aria-hidden="true" />
           </button>

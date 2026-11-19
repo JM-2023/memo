@@ -27,6 +27,12 @@ import { SCROLL_JUMP_EVENT } from "./navHistory";
  * results — get the feed's entrance here as well (`observe`). And the chrome
  * around the feed moves in the same run as the cards (lib/chromeMotion.ts):
  * `select` is a change of the chrome alone — select mode, a pill arming.
+ *
+ * The feed's other rows — a run's heading, the list's foot, the "still
+ * loading" line, Daily review's finished word — are the chrome pass's
+ * column parts, so every row of the feed moves in the same run as the
+ * cards; a run's heading also takes the cards' own entrance when it simply
+ * mounts with them.
  */
 export type FeedIntent = "create" | "lens" | "pin" | "unpin" | "trash" | "restore" | "purge" | "edit-save" | "task" | "retag" | "remote" | "select";
 export type InPlaceIntent = Exclude<FeedIntent, "create" | "lens">;
@@ -214,6 +220,21 @@ function slotsOf(feed: HTMLElement): HTMLElement[] {
   return Array.from(feed.children).filter((child): child is HTMLElement => child instanceof HTMLElement && child.classList.contains("memo-slot"));
 }
 
+/**
+ * Rows that arrive the way cards do when they simply mount: the cards, and
+ * the heading over a run of them (pinned, related by meaning), which rises
+ * in its place in the cascade rather than standing there before its cards.
+ * Stand-ins created by the chrome pass carry data-motion-ghost and never
+ * replay an entrance.
+ */
+function arrivesAsCard(node: Node): node is HTMLElement {
+  return (
+    node instanceof HTMLElement &&
+    !node.hasAttribute("data-motion-ghost") &&
+    (node.classList.contains("memo-slot") || node.classList.contains("feed-lead"))
+  );
+}
+
 /** First slot whose bottom reaches `edge` (slots run down the page in order). */
 function firstFrom(slots: HTMLElement[], edge: number): number {
   let low = 0;
@@ -266,6 +287,8 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
       return animation;
     },
     owns(el) {
+      // A run's heading rising in as it mounted is carried here too.
+      if (glides.has(el as HTMLElement)) return true;
       for (const animation of chromeLive) if ((animation.effect as KeyframeEffect | null)?.target === el) return true;
       return false;
     },
@@ -616,11 +639,11 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
   let watched: HTMLElement | null = null;
   let observer: MutationObserver | null = null;
 
-  /** The slots among `nodes` that have not arrived yet, now marked as arrived. */
+  /** The slots (and run headings) among `nodes` that have not arrived yet, now marked as arrived. */
   function unseen(nodes: Iterable<Node>): HTMLElement[] {
     const fresh: HTMLElement[] = [];
     for (const node of nodes) {
-      if (!(node instanceof HTMLElement) || !node.classList.contains("memo-slot") || seen.has(node)) continue;
+      if (!arrivesAsCard(node) || seen.has(node)) continue;
       seen.add(node);
       fresh.push(node);
     }
@@ -650,8 +673,8 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     const easing = ease("--ease-out");
     const started: Array<[HTMLElement, Animation]> = [];
     let order = 0;
-    for (const slot of slotsOf(feed)) {
-      if (!arriving.has(slot)) continue;
+    for (const slot of Array.from(feed.children)) {
+      if (!(slot instanceof HTMLElement) || !arriving.has(slot)) continue;
       const rect = slot.getBoundingClientRect();
       if (rect.top >= reach) break;
       if (rect.bottom <= 0) continue;
@@ -689,7 +712,7 @@ export function createFeedMotion(options: FeedMotionOptions): FeedMotion {
     if (!feed || typeof MutationObserver !== "function") return;
     observer = new MutationObserver((records) => enter(added(records)));
     observer.observe(feed, { childList: true });
-    enter(unseen(slotsOf(feed)));
+    enter(unseen(Array.from(feed.children)));
   }
 
   /** What the cards do: the reader's place kept now, the motions to play once whatever is in flight has stopped. */

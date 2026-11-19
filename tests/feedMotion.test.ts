@@ -441,6 +441,34 @@ describe("card arrivals", () => {
     expect(rise.cancel).toHaveBeenCalled();
     expect(glideOf("3")!.keyframes[0]).toEqual({ translate: `0px ${STEP + 9}px`, opacity: 0.5 });
   });
+
+  it("cascades a run heading in DOM order with its cards and never animates a ghost heading", async () => {
+    build(0);
+    motion.observe(feed);
+
+    const lead = document.createElement("h2");
+    lead.className = "feed-lead is-pinned";
+    lead.textContent = "Pinned · 1";
+    lead.getBoundingClientRect = () => ({ top: 0, bottom: 20, left: 0, right: 600, width: 600, height: 20, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+
+    feed.insertBefore(lead, ghosts);
+    feed.insertBefore(slot("0"), ghosts);
+    feed.insertBefore(slot("1"), ghosts);
+    await delivered();
+
+    const started = played.filter((entry) => !("translate" in entry.keyframes[0]));
+    expect(started.map((entry) => entry.target)).toEqual([lead, slotOf("0"), slotOf("1")]);
+    expect(started.map((entry) => entry.timing.delay)).toEqual([0, 8, 16]);
+
+    // A stand-in heading left behind by chromeMotion carries data-motion-ghost
+    // and must never trigger a fresh rise entrance.
+    played = [];
+    const ghostLead = lead.cloneNode(true) as HTMLElement;
+    ghostLead.setAttribute("data-motion-ghost", "");
+    feed.append(ghostLead);
+    await delivered();
+    expect(played).toEqual([]);
+  });
 });
 
 describe("lens swaps", () => {

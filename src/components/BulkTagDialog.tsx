@@ -1,6 +1,6 @@
 import { Hash, Loader2, Tags, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useBackdropDismiss } from "../hooks/useBackdropDismiss";
+import { boopCard, useBackdropDismiss } from "../hooks/useBackdropDismiss";
 import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { nudgeRefusal, useCloseSignal, useOverlayExit } from "../hooks/useOverlayExit";
@@ -75,6 +75,10 @@ export function BulkTagDialog({
     const query = normalizeTag(value).toLocaleLowerCase();
     return knownTags.filter((item) => !owned.has(item) && (!query || item.toLocaleLowerCase().includes(query))).slice(0, 8);
   }, [knownTags, owned, value]);
+  // Typed (or picked) input isn't thrown away by a stray tap on the backdrop,
+  // a sheet pulled down or Back; Esc, Cancel and ✕ still close.
+  const dirtyRef = useRef(false);
+  dirtyRef.current = value.trim().length > 0;
   const overlayRef = useModalA11y<HTMLDivElement>({
     onEscape: requestDismiss,
     escapeDisabled: submitting,
@@ -82,8 +86,8 @@ export function BulkTagDialog({
   });
   const { closing, closingRef, leave } = useOverlayExit(overlayRef);
   useKeyboardInset(overlayRef);
-  const backdrop = useBackdropDismiss(requestDismiss);
-  useCloseSignal(closeSignal, requestDismiss);
+  const backdrop = useBackdropDismiss(requestDismiss, { resist: () => dirtyRef.current });
+  useCloseSignal(closeSignal, requestBack);
 
   const canSubmit = selectedCount > 0 && Boolean(tag) && !error && !alreadyOwned && !submitting && !closing;
   // Only a selection spanning several requests counts its progress.
@@ -99,6 +103,13 @@ export function BulkTagDialog({
   function requestDismiss() {
     if (submitting || closingRef.current) return;
     leave(() => dismissRef.current());
+  }
+
+  /** Back is a stray dismissal too: a draft (or busy work) stays, and the card says so. */
+  function requestBack() {
+    if (closingRef.current) return;
+    if (dirtyRef.current || submitting) boopCard(overlayRef.current);
+    else requestDismiss();
   }
 
   useEffect(() => {

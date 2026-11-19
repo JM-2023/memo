@@ -518,9 +518,10 @@ describe("Editor send", () => {
     fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(["a"], "a.png", { type: "image/png" })] } });
     await user.click(screen.getByRole("button", { name: "Send" }));
     await act(async () => image.reject(new Error("Decoder gave up")));
-    // The complaint names the file it is about.
+    // The complaint names the file it is about, and the status fades out cleanly.
     await waitFor(() => expect(shownError()?.textContent).toBe("a.png: Decoder gave up"));
-    expect(screen.queryByText("Preparing image…")).toBeNull();
+    expect(document.querySelector(".editor-status")?.classList.contains("is-leaving")).toBe(true);
+    await waitFor(() => expect(screen.queryByText("Preparing image…")).toBeNull());
     expect(onSubmit).not.toHaveBeenCalled();
     expect(area.value).toBe("with a photo");
   });
@@ -868,18 +869,38 @@ describe("Editor attachment tiles", () => {
     fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files } });
   }
 
-  it("keeps one tile per image from compressing to ready, and says when it lands", async () => {
+  it("keeps one tile per image from preparing to ready, and says when it lands", async () => {
     const unmountRegions = mountLiveRegions();
     const image = deferred<NewImagePayload>();
     mocks.compressImage.mockImplementation(() => image.promise);
     renderCreate();
     addFiles(1);
-    const tile = await screen.findByRole("img", { name: "Compressing image" });
+    const tile = await screen.findByRole("img", { name: "Preparing image" });
     await act(async () => image.resolve(pending("ready")));
     expect(screen.getByRole("button", { name: "Remove image" }).closest(".attachment")).toBe(tile);
     expect(tile.classList.contains("is-busy")).toBe(false);
     expect(document.querySelector(`[${LIVE_REGION_ATTR}]`)?.textContent).toContain("Added the image");
     unmountRegions();
+  });
+
+  it("uses one unified Chinese label for preparing tiles and queued send status", async () => {
+    localStorage.setItem("memo:language", "zh-CN");
+    const image = deferred<NewImagePayload>();
+    mocks.compressImage.mockImplementation(() => image.promise);
+    const user = userEvent.setup();
+    render(
+      <Providers>
+        <Editor mode="create" knownTags={[]} busy={false} onSubmit={vi.fn(async () => true)} />
+      </Providers>
+    );
+    const area = screen.getByRole("combobox", { name: "笔记内容" }) as HTMLTextAreaElement;
+    await user.type(area, "带图笔记");
+    addFiles(1);
+    expect(await screen.findByRole("img", { name: "正在处理图片" })).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(screen.getByText("正在处理图片…")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "停止" })).not.toBeNull();
+    await act(async () => image.resolve(pending("zh-1")));
   });
 
   it("numbers the × like the card's images and hands focus on when one goes", async () => {
@@ -1095,6 +1116,111 @@ describe("Editor attachment tiles", () => {
       });
       expect(document.querySelector(".attachment")).toBeNull();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports skipped extra images when more than 9 are added, in both visible note and live region", async () => {
+    const unmountRegions = mountLiveRegions();
+    let n = 0;
+    mocks.compressImage.mockImplementation(async () => pending(`img-${++n}`));
+    renderCreate();
+    addFiles(12);
+    await waitFor(() => expect(previews()).toHaveLength(9));
+    expect(shownError()?.textContent).toBe("You can add up to 9 images — 3 extra images were skipped");
+    expect(spoken("alert")).toBe("You can add up to 9 images — 3 extra images were skipped");
+    expect(spoken("status")).toBe("Added 9 images; 3 skipped (limit 9)");
+    unmountRegions();
+  });
+
+  it("reports skipped non-image files when dropped alongside images (and both together in Chinese)", async () => {
+    const unmountRegions = mountLiveRegions();
+    let n = 0;
+    mocks.compressImage.mockImplementation(async () => pending(`mix-${++n}`));
+    renderCreate();
+    const files = [
+      new File(["a"], "a.png", { type: "image/png" }),
+      new File(["b"], "b.png", { type: "image/png" }),
+      new File(["%PDF"], "spec.pdf", { type: "application/pdf" })
+    ];
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files } });
+    await waitFor(() => expect(previews()).toHaveLength(2));
+    expect(shownError()?.textContent).toBe("Only images can be added — 1 non-image file was skipped");
+    expect(spoken("status")).toBe("Added 2 images; 1 non-image file skipped");
+    cleanup();
+
+    localStorage.setItem("memo:language", "zh-CN");
+    n = 0;
+    render(
+      <Providers>
+        <Editor mode="create" knownTags={[]} busy={false} onSubmit={vi.fn(async () => true)} />
+      </Providers>
+    );
+    const mixed = [
+      ...Array.from({ length: 10 }, (_, index) => new File(["a"], `${index}.png`, { type: "image/png" })),
+      new File(["%PDF"], "a.pdf", { type: "application/pdf" }),
+      new File(["%PDF"], "b.pdf", { type: "application/pdf" })
+    ];
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: mixed } });
+    await waitFor(() => expect(previews()).toHaveLength(9));
+    expect(shownError()?.textContent).toBe("最多 9 张图片且仅支持图片，已跳过 1 张多余图片和 2 个非图片文件");
+    expect(spoken("status")).toBe("已添加 9 张图片，已跳过 1 张多余图片和 2 个非图片文件");
+    unmountRegions();
+  });
+
+  it("shows press feedback before lifting a touch-held tile and gives a light haptic on lift", async () => {
+    vi.useFakeTimers();
+    const vibrate = vi.fn(() => true);
+    Object.defineProperty(navigator, "vibrate", { configurable: true, value: vibrate });
+    let n = 0;
+    mocks.compressImage.mockImplementation(async () => pending(`h-${++n}`));
+    try {
+      renderCreate();
+      addFiles(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const handle = screen.getByRole("button", { name: "Image 1 of 2" });
+      const tile = handle.closest(".attachment")!;
+
+      // Touch press begins: tile shows press feedback immediately, before lift.
+      fireEvent.pointerDown(handle, { pointerId: 7, pointerType: "touch", isPrimary: true, button: 0, clientX: 20, clientY: 20 });
+      expect(tile.classList.contains("is-holding")).toBe(true);
+      expect(tile.classList.contains("is-lifted")).toBe(false);
+      expect(vibrate).not.toHaveBeenCalled();
+
+      // Sliding away before 300ms cancels the hold cleanly (page scroll).
+      fireEvent.pointerMove(handle, { pointerId: 7, pointerType: "touch", isPrimary: true, clientX: 40, clientY: 20 });
+      expect(tile.classList.contains("is-holding")).toBe(false);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(350);
+      });
+      expect(tile.classList.contains("is-lifted")).toBe(false);
+      expect(vibrate).not.toHaveBeenCalled();
+
+      // Holding still for TOUCH_LIFT_MS swaps holding → lifted and buzzes once.
+      fireEvent.pointerDown(handle, { pointerId: 8, pointerType: "touch", isPrimary: true, button: 0, clientX: 20, clientY: 20 });
+      expect(tile.classList.contains("is-holding")).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(tile.classList.contains("is-holding")).toBe(false);
+      expect(tile.classList.contains("is-lifted")).toBe(true);
+      expect(vibrate).toHaveBeenCalledTimes(1);
+      expect(vibrate).toHaveBeenCalledWith(8);
+      fireEvent.pointerUp(handle, { pointerId: 8, pointerType: "touch", isPrimary: true, clientX: 20, clientY: 20 });
+      expect(tile.classList.contains("is-lifted")).toBe(false);
+
+      // A mouse drag never shows touch press feedback or vibrates.
+      vibrate.mockClear();
+      fireEvent.pointerDown(handle, { pointerId: 9, pointerType: "mouse", isPrimary: true, button: 0, clientX: 20, clientY: 20 });
+      expect(tile.classList.contains("is-holding")).toBe(false);
+      fireEvent.pointerMove(handle, { pointerId: 9, pointerType: "mouse", isPrimary: true, clientX: 32, clientY: 20 });
+      expect(tile.classList.contains("is-lifted")).toBe(true);
+      expect(vibrate).not.toHaveBeenCalled();
+      fireEvent.pointerUp(handle, { pointerId: 9, pointerType: "mouse", isPrimary: true, clientX: 32, clientY: 20 });
+    } finally {
+      delete (navigator as Partial<Navigator>).vibrate;
       vi.useRealTimers();
     }
   });

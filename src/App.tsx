@@ -43,6 +43,7 @@ import { FeedFoot } from "./components/FeedFoot";
 import { ScrollTopButton } from "./components/ScrollTopButton";
 import { FACET_ROWS, SearchFilter, type FilterOpenTarget } from "./components/SearchFilter";
 import { useSearchJump, type JumpRow } from "./components/SearchJump";
+import { SendStatus, sendStatusLabel, sendStatusTone, type SendStatusKind } from "./components/SendStatus";
 import { ShortcutsSheet } from "./components/ShortcutsSheet";
 import { Sidebar } from "./components/Sidebar";
 import { SwapText } from "./components/SwapText";
@@ -53,6 +54,8 @@ import { MODAL_EXEMPT_ATTR, useModalA11y } from "./hooks/useModalA11y";
 import { useDrawerEdgeSwipe } from "./hooks/useDrawerEdgeSwipe";
 import { useDrawerSwipe } from "./hooks/useDrawerSwipe";
 import { useKeyboardInset } from "./hooks/useKeyboardInset";
+import { useBottomSheetUp, useLayer, useLayersUp } from "./hooks/useLayer";
+import { useReducedMotion } from "./hooks/useReducedMotion";
 import { useReviewSeen } from "./hooks/useReviewSeen";
 import { useSearchHighlight } from "./hooks/useSearchHighlight";
 import { useTopbarTuck } from "./hooks/useTopbarTuck";
@@ -89,9 +92,10 @@ import { BackupFormatError, inspectBackup, readBackupItems } from "./lib/backupF
 import { startBoot, type BootStart } from "./lib/boot";
 import { adoptCacheKey, forgetCacheKey, invalidateSnapshot, openSnapshot, saveSnapshot } from "./lib/cache";
 import { dateFormat, dateKey, formatDayLabel, formatTime } from "./lib/dates";
+import { layoutRect } from "./lib/feedBoxes";
 import { forgetFolds } from "./lib/foldMemory";
 import { advanceFeedWindow, feedWindowCap, filterPreservingId, type FeedWindow } from "./lib/feedSafety";
-import { EXIT_MS, T_FAST } from "./lib/motion";
+import { EASE, EASE_OUT, EXIT_MS, T_ENTER, T_FAST } from "./lib/motion";
 import { useI18n } from "./lib/i18n";
 import { peekImage, pruneImageCache } from "./lib/imageCache";
 import { announce, mountLiveRegions } from "./lib/liveAnnouncer";
@@ -101,9 +105,10 @@ import { useModelDownloadPhase } from "./lib/modelDownload";
 import { storedModelState } from "./lib/modelLoader";
 import { memoMatchesSubmittedDraft } from "./lib/memoRecovery";
 import { MAX_CONTENT_CHARS } from "./lib/memoRules";
-import { captureFeedPlace, createNavStore, isLayerState, isRootLens, lensesEqual, navIdOf, restoreFeedPlace, ROOT_LENS, type NavLens, type NavPlace, type NavStore } from "./lib/navHistory";
+import { captureFeedPlace, createNavStore, isLayerState, isRootLens, lensesEqual, navIdOf, restoreFeedPlace, ROOT_LENS, SCROLL_JUMP_EVENT, type NavLens, type NavPlace, type NavStore } from "./lib/navHistory";
+import { layerCount, standingLayers, topLayer } from "./lib/layerStack";
 import { applyOptimisticLayer, withOptimistic, withoutPatch, withPatch, type OptimisticLayer, type OptimisticPatch } from "./lib/optimisticMemos";
-import { RECENT_SEARCHES_KEY, loadRecentSearches, persistRecentSearches, rememberSearch } from "./lib/recentSearches";
+import { RECENT_SEARCHES_KEY, forgetSearch, loadRecentSearches, persistRecentSearches, rememberSearch } from "./lib/recentSearches";
 import { freshImages, optimisticMemo, sendStatesOf, unsentMemos, type OutboxEntry, type SendState } from "./lib/outbox";
 import type { OutboxDeps, OutboxVoice } from "./lib/outboxQueue";
 import {
@@ -162,7 +167,7 @@ import {
   type FeedFilters
 } from "./lib/search";
 import { searchNeedles } from "./lib/searchHighlight";
-import { selectionWithinVisibleIds } from "./lib/selection";
+import { selectionRange, selectionWithinVisibleIds, withSelectionRange } from "./lib/selection";
 import { globalShortcutOf, isTextEntry, isUndoLabel, revealComposer } from "./lib/shortcuts";
 import { countsByDay, dayKeyOf } from "./lib/stats";
 import { feedQueryForStatsDrilldown, memoMatchesStatsDrilldown, statsDrilldownLabel, type StatsDrilldown } from "./lib/statsDrilldown";
@@ -207,6 +212,8 @@ type View = "memos" | "trash" | "review";
 interface ToastAction {
   label: string;
   run: () => void;
+  /** The action moves focus itself (e.g. Show revealing a hidden card): don't hand focus back to the previous element. */
+  movesFocus?: boolean;
 }
 
 interface ToastState {
@@ -223,6 +230,12 @@ interface ToastState {
   action?: ToastAction;
   /** Plays the exit animation before the node unmounts. */
   leaving?: boolean;
+  /** Outbox memo id for a hidden-view send toast, so live outbox state drives <SendStatus>. */
+  sendId?: string;
+  /** Send lifecycle state rendered by <SendStatus> (kept once settled to "sent"). */
+  sendStatus?: SendStatusKind;
+  /** True once this toast has spoken through <SendStatus>, so revisions keep crossfading smoothly. */
+  sendToast?: boolean;
 }
 
 interface ToastOptions {
@@ -230,6 +243,8 @@ interface ToastOptions {
   detail?: string;
   /** Overrides the length-derived stay, in ms. */
   duration?: number;
+  sendId?: string;
+  sendStatus?: SendStatusKind;
 }
 
 /** Toasts up at once; past this the oldest steps off. */
@@ -252,6 +267,8 @@ function toastDuration(text: string, tone: "info" | "error", hasAction: boolean)
 
 interface ToastStackProps {
   toasts: ToastState[];
+  /** Live send states from the outbox, so hidden-view send toasts track state changes through <SendStatus>. */
+  sendStates?: ReadonlyMap<string, SendState>;
   dismissLabel: string;
   /** Names the stack's landmark ("Notifications"). */
   regionLabel: string;
@@ -277,12 +294,15 @@ interface ToastStackProps {
  * F6 or Escape inside the stack hands focus back to where it came from, as
  * does using one of its buttons.
  */
-function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onHold }: ToastStackProps) {
+function ToastStack({ toasts, sendStates, dismissLabel, regionLabel, onDismiss, onHold }: ToastStackProps) {
   const stackRef = useRef<HTMLDivElement>(null);
   // Where focus stood before it entered the stack.
   const returnFocusRef = useRef<HTMLElement | null>(null);
   // Toasts flicked away: they leave from where the finger let go, unclipped.
   const swipedRef = useRef(new Set<number>());
+  const moveAnimRef = useRef<Animation | null>(null);
+  const sheetUp = useBottomSheetUp();
+  const reducedMotion = useReducedMotion();
   useEffect(() => {
     for (const id of swipedRef.current) if (!toasts.some((toast) => toast.id === id)) swipedRef.current.delete(id);
   }, [toasts]);
@@ -313,16 +333,40 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onHold }: To
   }, [empty, onHold]);
   // A phone's bottom stack rides above the on-screen keyboard (app.css).
   useKeyboardInset(stackRef, !empty);
+  // On phones, opening or closing a bottom sheet flips the stack between the
+  // bottom and top edges (data-edge, app.css). Measuring before flipping and
+  // gliding on `translate` (or dissolving under reduced motion) moves existing
+  // toasts smoothly without changing their `animation-name` or replaying toast-in.
+  useLayoutEffect(() => {
+    const stack = stackRef.current;
+    if (!stack) return;
+    const nextEdge = sheetUp ? "top" : "bottom";
+    const prevEdge = stack.dataset.edge;
+    if (prevEdge === nextEdge) return;
+    const before = prevEdge ? stack.getBoundingClientRect() : null;
+    moveAnimRef.current?.cancel();
+    moveAnimRef.current = null;
+    stack.dataset.edge = nextEdge;
+    if (!before || before.height === 0) return;
+    const after = stack.getBoundingClientRect();
+    const dy = before.top - after.top;
+    if (Math.abs(dy) < 2 || typeof stack.animate !== "function") return;
+    moveAnimRef.current = reducedMotion
+      ? stack.animate([{ opacity: 0 }, { opacity: 1 }], { duration: T_FAST, easing: EASE })
+      : stack.animate([{ translate: `0 ${dy}px` }, { translate: "0 0px" }], { duration: T_ENTER, easing: EASE_OUT });
+  }, [sheetUp, empty, reducedMotion]);
+  useEffect(() => () => moveAnimRef.current?.cancel(), []);
   // At a phone's bottom edge the stack shares the corner with the new-memo
   // button, which rides above it: the stack's height (plus a gap) goes on
   // its parent as --toast-lift, inherited down to the button, and follows a
-  // leaving toast's slot as it closes.
+  // leaving toast's slot as it closes. While a bottom sheet sends the stack
+  // to the top edge, the bottom corner is clear again.
   useLayoutEffect(() => {
     const stack = stackRef.current;
     const host = stack?.parentElement;
     if (!stack || !host) return;
     const publish = () => {
-      const height = stack.getBoundingClientRect().height;
+      const height = sheetUp ? 0 : stack.getBoundingClientRect().height;
       if (height > 0) host.style.setProperty("--toast-lift", `${Math.ceil(height) + 8}px`);
       else host.style.removeProperty("--toast-lift");
     };
@@ -333,7 +377,7 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onHold }: To
       observer?.disconnect();
       host.style.removeProperty("--toast-lift");
     };
-  }, [empty]);
+  }, [empty, sheetUp]);
 
   useEffect(() => {
     if (!hasAction) return;
@@ -360,10 +404,12 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onHold }: To
   }, [hasAction]);
 
   if (toasts.length === 0) return null;
-  // A used button leaves with its toast; focus goes back before it does.
-  const settle = (id: number) => {
+  // A used button leaves with its toast; focus goes back before it does
+  // unless the action moves focus itself (Show revealing a hidden card).
+  const settle = (id: number, skipReturnFocus = false) => {
+    if (skipReturnFocus) returnFocusRef.current = null;
     onDismiss(id);
-    if (stackRef.current?.contains(document.activeElement)) handBackFocus();
+    if (!skipReturnFocus && stackRef.current?.contains(document.activeElement)) handBackFocus();
   };
   return (
     <div
@@ -394,62 +440,171 @@ function ToastStack({ toasts, dismissLabel, regionLabel, onDismiss, onHold }: To
         handBackFocus();
       }}
     >
-      {toasts.map((toast) => (
-        <div key={toast.id} className={`toast-slot${toast.leaving ? " is-leaving" : ""}${toast.leaving && swipedRef.current.has(toast.id) ? " is-swiped" : ""}`}>
-          <div className="toast-clip">
-            <div
-              className={`toast${toast.tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`}
-              // Any toast, Undo or not, can be flicked away on a touch screen
-              // — toward the edge the stack sits at (up on wide screens, down
-              // at a phone's bottom) — the only way to clear an action-less
-              // one early.
-              onPointerDown={(event) => {
-                if (toast.leaving) return;
-                startToastSwipe(
-                  event.nativeEvent,
-                  event.currentTarget,
-                  () => {
-                    swipedRef.current.add(toast.id);
-                    settle(toast.id);
-                  },
-                  toastSwipeDirection(stackRef.current)
-                );
-              }}
-            >
-              {toast.tone === "error" ? <CircleAlert size={15} className="toast-mark" aria-hidden="true" /> : null}
-              <span className="toast-text">
-                {toast.text}
-                {toast.detail ? (
-                  <span className="toast-detail" aria-hidden="true">
-                    {" "}
-                    {toast.detail}
-                  </span>
+      {toasts.map((toast) => {
+        const liveSendState = toast.sendId ? sendStates?.get(toast.sendId) : undefined;
+        const sendStatus = liveSendState ?? toast.sendStatus;
+        const tone = sendStatus ? sendStatusTone(sendStatus) : toast.tone;
+        return (
+          <div key={toast.id} className={`toast-slot${toast.leaving ? " is-leaving" : ""}${toast.leaving && swipedRef.current.has(toast.id) ? " is-swiped" : ""}`}>
+            <div className="toast-clip">
+              <div
+                className={`toast${tone === "error" ? " is-error" : ""}${toast.leaving ? " is-leaving" : ""}`}
+                // Any toast, Undo or not, can be flicked away on a touch screen
+                // — toward the edge the stack sits at (up on wide screens, down
+                // at a phone's bottom) — the only way to clear an action-less
+                // one early.
+                onPointerDown={(event) => {
+                  if (toast.leaving) return;
+                  startToastSwipe(
+                    event.nativeEvent,
+                    event.currentTarget,
+                    () => {
+                      swipedRef.current.add(toast.id);
+                      settle(toast.id);
+                    },
+                    toastSwipeDirection(stackRef.current)
+                  );
+                }}
+              >
+                {toast.sendToast || sendStatus ? (
+                  <SendStatus surface="toast" state={sendStatus ?? null} overrideText={toast.text} overrideTone={toast.tone} />
+                ) : (
+                  <>
+                    {tone === "error" ? <CircleAlert size={15} className="toast-mark" aria-hidden="true" /> : null}
+                    <span className="toast-text">
+                      {toast.text}
+                      {toast.detail ? (
+                        <span className="toast-detail" aria-hidden="true">
+                          {" "}
+                          {toast.detail}
+                        </span>
+                      ) : null}
+                    </span>
+                  </>
+                )}
+                {toast.action ? (
+                  <button
+                    type="button"
+                    className="toast-action"
+                    aria-keyshortcuts="F6"
+                    onClick={() => {
+                      const movesFocus = Boolean(toast.action?.movesFocus);
+                      if (movesFocus) returnFocusRef.current = null;
+                      toast.action?.run();
+                      settle(toast.id, movesFocus);
+                    }}
+                  >
+                    {toast.action.label}
+                  </button>
                 ) : null}
-              </span>
-              {toast.action ? (
-                <button
-                  type="button"
-                  className="toast-action"
-                  aria-keyshortcuts="F6"
-                  onClick={() => {
-                    toast.action?.run();
-                    settle(toast.id);
-                  }}
-                >
-                  {toast.action.label}
-                </button>
-              ) : null}
-              {toast.action || toast.tone === "error" ? (
-                <button type="button" className="toast-dismiss" aria-label={dismissLabel} onClick={() => settle(toast.id)}>
-                  <X size={13} aria-hidden="true" />
-                </button>
-              ) : null}
+                {toast.action || tone === "error" ? (
+                  <button type="button" className="toast-dismiss" aria-label={dismissLabel} onClick={() => settle(toast.id)}>
+                    <X size={13} aria-hidden="true" />
+                  </button>
+                ) : null}
+              </div>
             </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
+}
+
+/** Frames to keep re-aiming a revealed card while content-visibility cards above it settle. */
+const REVEAL_SETTLE_FRAMES = 6;
+const REVEAL_INTERRUPTS: readonly (keyof WindowEventMap)[] = ["wheel", "touchstart", "keydown", "mousedown"];
+
+/**
+ * Scroll a revealed feed slot to the centre of the viewport below the sticky
+ * topbar using a controlled per-frame glide + settling re-aim, rather than
+ * native smooth scroll (which scroll anchoring cuts short as content-visibility
+ * cards above materialize). Honours prefers-reduced-motion, dispatches
+ * SCROLL_JUMP_EVENT for topbar chrome, and yields immediately to reader input.
+ */
+function scrollRevealedSlot(slot: HTMLElement): () => void {
+  const targetY = (): number => {
+    const band = Math.max(0, document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0);
+    const rect = layoutRect(slot);
+    const available = Math.max(0, window.innerHeight - band);
+    const desiredTop = band + Math.max(16, (available - rect.height) / 2);
+    const raw = Math.max(0, window.scrollY + rect.top - desiredTop);
+    const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    return maxScroll > 0 ? Math.min(raw, maxScroll) : raw;
+  };
+
+  window.dispatchEvent(new Event(SCROLL_JUMP_EVENT));
+  const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let frame = 0;
+  let cancelled = false;
+  const stop = () => {
+    if (cancelled) return;
+    cancelled = true;
+    if (frame) {
+      window.cancelAnimationFrame(frame);
+      frame = 0;
+    }
+    for (const type of REVEAL_INTERRUPTS) window.removeEventListener(type, stop);
+  };
+  for (const type of REVEAL_INTERRUPTS) window.addEventListener(type, stop, { once: true, passive: true });
+
+  const runSettle = () => {
+    let settled = 0;
+    const step = () => {
+      frame = 0;
+      if (cancelled || !slot.isConnected) {
+        stop();
+        return;
+      }
+      const goal = targetY();
+      if (Math.abs(goal - window.scrollY) > 1) window.scrollTo(0, goal);
+      if (++settled < REVEAL_SETTLE_FRAMES) frame = window.requestAnimationFrame(step);
+      else stop();
+    };
+    frame = window.requestAnimationFrame(step);
+  };
+
+  const initialGoal = targetY();
+  if (reduced || Math.abs(initialGoal - window.scrollY) <= 1) {
+    window.scrollTo(0, initialGoal);
+    runSettle();
+    return stop;
+  }
+
+  // Far trips jump within a couple viewports first so we never materialize
+  // hundreds of off-screen content-visibility cards mid-flight.
+  const maxGlide = Math.max(1, window.innerHeight) * 2.5;
+  const initialDistance = initialGoal - window.scrollY;
+  let startY = window.scrollY;
+  if (Math.abs(initialDistance) > maxGlide) {
+    startY = initialGoal - Math.sign(initialDistance) * maxGlide;
+    window.scrollTo(0, startY);
+  }
+
+  const duration = Math.min(320, Math.max(180, 150 + 70 * Math.log10(Math.max(1, Math.abs(initialGoal - startY) / 100))));
+  const startedAt = performance.now();
+  let lastNow = startedAt;
+  const glide = (now: number) => {
+    frame = 0;
+    if (cancelled || !slot.isConnected) {
+      stop();
+      return;
+    }
+    const goal = targetY();
+    const dt = now - lastNow;
+    lastNow = now;
+    const t = dt > 250 ? 1 : Math.min(1, Math.max(0, (now - startedAt) / duration));
+    if (t >= 1) {
+      window.scrollTo(0, goal);
+      runSettle();
+      return;
+    }
+    const eased = 1 - (1 - t) ** 3;
+    window.scrollTo(0, startY + (goal - startY) * eased);
+    frame = window.requestAnimationFrame(glide);
+  };
+  frame = window.requestAnimationFrame(glide);
+  return stop;
 }
 
 /**
@@ -516,9 +671,6 @@ interface MemoSlotProps {
   vtName: string | undefined;
   /** A semantic-only row held from the previous query's ranking (data-stale). */
   stale?: boolean;
-  /** This card opens a run, under the line `leadText`. */
-  leadKind?: FeedLeadKind;
-  leadText?: string;
   /** The last pinned card: the unpinned ones start a beat further down. */
   pinEnd?: boolean;
   children: ReactNode;
@@ -533,23 +685,47 @@ interface MemoSlotProps {
  * the reading place (navHistory) and search highlights find the slot. A
  * send's morph names the landed slot inline, for that morph only
  * (landCreated).
- *
- * A run's lead line rides inside its first slot, so the motion layer moves
- * it with the card; it sits in the slot's top margin (app.css, data-lead)
- * and the slot's box stays the card's, which the selection ring traces.
  */
-function MemoSlot({ vtName, stale, leadKind, leadText, pinEnd, children }: MemoSlotProps) {
+function MemoSlot({ vtName, stale, pinEnd, children }: MemoSlotProps) {
   return (
-    <div className="memo-slot" data-vt={vtName} data-stale={stale ? "" : undefined} data-lead={leadKind} data-pin-end={pinEnd ? "" : undefined}>
-      {leadKind ? (
-        <p className={`feed-lead is-${leadKind}`}>
-          {leadKind === "pinned" ? <Pin size={12} aria-hidden="true" /> : null}
-          <span className="feed-lead-text">{leadText}</span>
-          {leadKind === "related" ? <span className="feed-lead-rule" aria-hidden="true" /> : null}
-        </p>
-      ) : null}
+    <div className="memo-slot" data-vt={vtName} data-stale={stale ? "" : undefined} data-pin-end={pinEnd ? "" : undefined}>
       {children}
     </div>
+  );
+}
+
+/**
+ * The line heading a run of cards — "Pinned · 2", or where meaning's finds
+ * begin — as a feed row of its own, before the run's first card. It is not
+ * that card's: pinning one from the middle of the list slides the card in
+ * under a heading that stays put while its figure rolls, rather than the
+ * heading vanishing with the old first card and arriving with the new one.
+ * The motion layer moves it with the cards (lib/chromeMotion.ts, the row
+ * model). A real heading: a screen reader's way between the runs. The
+ * page's own headings start at the dialogs' h2, so these are h2 as well.
+ */
+function FeedLead({ kind, pinned, query }: { kind: FeedLeadKind; pinned: number; query: string }) {
+  const { formatNumber, tr } = useI18n();
+  if (kind === "related") {
+    return (
+      <h2 className="feed-lead is-related">
+        <span className="feed-lead-text">{tr(`Related by meaning — these don’t contain “${query}”`, `下面是意思相近、但没有出现「${query}」的`)}</span>
+        <span className="feed-lead-rule" aria-hidden="true" />
+      </h2>
+    );
+  }
+  return (
+    <h2 className="feed-lead is-pinned">
+      <Pin size={12} aria-hidden="true" />
+      <span className="feed-lead-text">
+        {/* The figure rolls; the heading is read from a plain copy. */}
+        <span className="sr-only">{tr(`Pinned · ${formatNumber(pinned)}`, `已置顶 · ${formatNumber(pinned)}`)}</span>
+        <span aria-hidden="true">
+          {tr("Pinned · ", "已置顶 · ")}
+          <RollingText value={pinned} />
+        </span>
+      </span>
+    </h2>
   );
 }
 
@@ -719,9 +895,7 @@ interface FeedItemProps {
   stale: boolean;
   /** Found by meaning alone: none of the query's words are in it. */
   related: boolean;
-  /** Heads the pinned run or the related run (MemoSlot). */
-  leadKind: FeedLeadKind | undefined;
-  leadText: string | undefined;
+  /** The last pinned card (MemoSlot). */
   pinEnd: boolean;
   vtName: string | undefined;
   handlers: FeedHandlers;
@@ -742,9 +916,9 @@ interface FeedItemProps {
  * re-render.
  */
 const FeedItem = reactMemo(
-  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, editDraft, selecting, selected, canSelect, taskFlips, resumeContent, busy, stale, related, leadKind, leadText, pinEnd, vtName, handlers, reviewPick, reviewSeen, sendState, recallBlocked }: FeedItemProps) {
+  function FeedItem({ memo, variant, knownTags, editing, savingEdit, editConflict, editDraft, selecting, selected, canSelect, taskFlips, resumeContent, busy, stale, related, pinEnd, vtName, handlers, reviewPick, reviewSeen, sendState, recallBlocked }: FeedItemProps) {
     return (
-      <MemoSlot vtName={vtName} stale={stale} leadKind={leadKind} leadText={leadText} pinEnd={pinEnd}>
+      <MemoSlot vtName={vtName} stale={stale} pinEnd={pinEnd}>
         <MemoCard
           memo={memo}
           variant={variant}
@@ -824,8 +998,6 @@ const FeedItem = reactMemo(
     prev.reviewPick === next.reviewPick &&
     prev.reviewSeen === next.reviewSeen &&
     prev.related === next.related &&
-    prev.leadKind === next.leadKind &&
-    prev.leadText === next.leadText &&
     prev.pinEnd === next.pinEnd &&
     prev.vtName === next.vtName &&
     prev.handlers === next.handlers &&
@@ -1208,7 +1380,19 @@ export default function App() {
       // Past the cap the oldest steps off first.
       const live = toastsRef.current.filter((toast) => !toast.leaving);
       for (const stale of live.slice(0, Math.max(0, live.length + 1 - TOAST_LIMIT))) dismissToast(stale.id);
-      setToasts((current) => [...current, { id, text, tone, action: options.action, detail: options.detail }]);
+      setToasts((current) => [
+        ...current,
+        {
+          id,
+          text,
+          tone,
+          action: options.action,
+          detail: options.detail,
+          sendId: options.sendId,
+          sendStatus: options.sendStatus,
+          sendToast: Boolean(options.sendStatus)
+        }
+      ]);
       if (toastsPausedRef.current) toastTimersRef.current.set(id, { timer: 0, expiresAt: 0, remaining: duration });
       else armToast(id, duration);
       announceToast(text, tone, options.action?.label);
@@ -1230,7 +1414,22 @@ export default function App() {
       if (!clock) return showToast(text, tone, options);
       window.clearTimeout(clock.timer);
       const duration = options.duration ?? toastDuration(text, tone, Boolean(options.action));
-      setToasts((current) => current.map((toast) => (toast.id === id ? { ...toast, text, tone, action: options.action, detail: options.detail } : toast)));
+      setToasts((current) =>
+        current.map((toast) =>
+          toast.id === id
+            ? {
+                ...toast,
+                text,
+                tone,
+                action: options.action,
+                detail: options.detail,
+                sendId: options.sendId,
+                sendStatus: options.sendStatus,
+                sendToast: toast.sendToast || Boolean(options.sendStatus)
+              }
+            : toast
+        )
+      );
       if (toastsPausedRef.current) toastTimersRef.current.set(id, { timer: 0, expiresAt: 0, remaining: duration });
       else armToast(id, duration);
       announceToast(text, tone, options.action?.label);
@@ -2376,14 +2575,6 @@ export default function App() {
     while (run < feedMemos.length && feedMemos[run].pinnedAt) run += 1;
     return run < feedMemos.length ? run : 0;
   }, [pinsFloat, feedMemos]);
-  const leadOf = (memo: Memo, index: number): FeedLeadKind | undefined =>
-    pinnedRun > 0 && index === 0 ? "pinned" : memo.id === firstRelatedId ? "related" : undefined;
-  const leadLine = (kind: FeedLeadKind | undefined): string | undefined =>
-    kind === "pinned"
-      ? tr(`Pinned · ${formatNumber(pinnedRun)}`, `已置顶 · ${formatNumber(pinnedRun)}`)
-      : kind === "related"
-        ? tr(`Related by meaning — these don’t contain “${query.trim()}”`, `下面是意思相近、但没有出现「${query.trim()}」的`)
-        : undefined;
   const searchNeedleList = useMemo(
     () => (searching ? searchNeedles(parsedQuery) : trashSearching ? searchNeedles(trashParsedQuery) : []),
     [searching, parsedQuery, trashSearching, trashParsedQuery]
@@ -2839,6 +3030,7 @@ export default function App() {
   /** Search text set by a control: lands with the swap that animates it. */
   const swapQuery = useCallback((next: string) => {
     queryLeapRef.current = next.trim().toLowerCase();
+    searchComposingRef.current = false;
     setSearchComposition(null);
     setQuery(next);
   }, []);
@@ -2976,9 +3168,13 @@ export default function App() {
 
   /**
    * Lifts just the lenses that hide one memo (a just-created one, from its
-   * toast), then brings its card into view once the feed has re-rendered.
+   * toast), then brings its card into view and moves focus to it once the
+   * feed has re-rendered.
    */
   const revealIdRef = useRef<string | null>(null);
+  const revealScrollStopRef = useRef<(() => void) | null>(null);
+  const [revealTick, setRevealTick] = useState(0);
+  useEffect(() => () => revealScrollStopRef.current?.(), []);
   const revealMemo = useCallback(
     (id: string) => {
       // (Or a send the server does not have yet.)
@@ -2986,6 +3182,7 @@ export default function App() {
       if (!memo || memo.deletedAt) return;
       const lens = lensRef.current;
       revealIdRef.current = id;
+      setRevealTick((value) => value + 1);
       // Past the rendered window (an oldest-first feed) there is no card to
       // bring in; don't leave a jump armed for whenever paging reaches it.
       window.setTimeout(() => {
@@ -3011,21 +3208,31 @@ export default function App() {
   useEffect(() => {
     const id = revealIdRef.current;
     if (!id || !renderedFeedMemos.some((memo) => memo.id === id)) return;
-    revealIdRef.current = null;
     // A frame later: the swap's own rewind to the top lands first. The card
-    // comes to the middle of the screen — "nearest" parked it against the
-    // bottom edge in an oldest-first feed — and its ring lights once, so the
-    // eye lands on it rather than hunting for it.
+    // glides to the centre of the viewport through a controlled re-aiming
+    // scroll (surviving scroll anchoring and content-visibility layout
+    // settling), takes focus with preventScroll so focusing never fights the
+    // glide, and lights its ring once so the eye lands right on it.
     const frame = window.requestAnimationFrame(() => {
+      if (revealIdRef.current !== id) return;
+      revealIdRef.current = null;
       const slot = Array.from(document.querySelectorAll<HTMLElement>(".memo-slot[data-vt]")).find((node) => node.dataset.vt === `memo-${id}`);
       if (!slot) return;
-      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      slot.scrollIntoView?.({ block: "center", behavior: reduced ? "auto" : "smooth" });
+      revealScrollStopRef.current?.();
+      revealScrollStopRef.current = scrollRevealedSlot(slot);
+      const card = slot.querySelector<HTMLElement>(".memo-card");
+      if (card) {
+        if (!card.hasAttribute("tabindex")) {
+          card.setAttribute("tabindex", "-1");
+          card.addEventListener("blur", () => card.removeAttribute("tabindex"), { once: true });
+        }
+        card.focus({ preventScroll: true });
+      }
       slot.dataset.reveal = "";
       window.setTimeout(() => delete slot.dataset.reveal, 1200);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [renderedFeedMemos]);
+  }, [renderedFeedMemos, revealTick]);
 
   // A just-created memo the lenses keep can still land past the render
   // window (oldest first, a long feed): no card appears as the editor clears,
@@ -3040,7 +3247,7 @@ export default function App() {
     if (index < 0) return;
     createdPlacementRef.current = null;
     if (!renderedFeedMemos.some((memo) => memo.id === id)) {
-      showToast(tr("Saved the memo — it’s further down this list", "已保存这条笔记，它在列表靠后的位置"));
+      showToast(tr("Sent — it’s further down this list", "已发送，它在列表靠后的位置"));
     }
   }, [feedMemos, renderedFeedMemos, showToast, tr]);
 
@@ -3453,8 +3660,13 @@ export default function App() {
       // A pick made inside a layer (a tag in the drawer, a Stats bar) takes
       // over the layer's own entry: one Back step back to the lens the layer
       // covered, and closing the layer has no entry left to step off.
-      layerEntryRef.current = false;
       currentNavIdRef.current = store.replace(null, navLens, id);
+      // A layer that stays up through the pick (the search list while the
+      // first letters of a search go in, or the filter panel while facets
+      // toggle) keeps a Back step of its own over the new lens, so Back
+      // still closes it before it changes the feed.
+      if (standingLayers().length > 0) store.pushLayer(currentNavIdRef.current);
+      else layerEntryRef.current = false;
       return;
     }
     // Each pushed entry remembers the one it covers, so a later pick that
@@ -3489,8 +3701,14 @@ export default function App() {
     document.title = phase === "ready" && lensTitle ? `${lensTitle} · MEMO` : "MEMO";
   }, [phase, lensTitle]);
 
-  // Back over an open dialog (none of them keeps a history entry) closes the
-  // dialog through its own exit and leaves the lens alone; see popNav.
+  // App's own layers on the stack (lib/layerStack), beside the menus, the
+  // search list and the filter panel that register themselves. The dialogs
+  // share one place: Back bumps their close signal, and each leaves as its
+  // Cancel would — through its exit, and not while it is busy or holding a
+  // draft (mayRefuse: their entry stays until they really go). The drawer
+  // holds its place through its slide out, so the panel it hands over to
+  // (Statistics, a dialog) inherits the entry, while leaving:true stops Back
+  // and picks made inside it from counting it as still up.
   const [dialogCloseSignal, setDialogCloseSignal] = useState(0);
   const dialogUp =
     shareMemo !== null ||
@@ -3504,6 +3722,20 @@ export default function App() {
     changingPasscode ||
     confirmLogout ||
     shortcutsOpen;
+  const dialogMayRefuse =
+    shareMemo !== null ||
+    bulkTagOpen ||
+    tagMemo !== null ||
+    reviewSettingsOpen ||
+    importTarget !== null ||
+    renameTagTarget !== null ||
+    savingFilter ||
+    changingPasscode ||
+    confirmLogout;
+  useLayer(drawerOpen, () => closeDrawer(), { leaving: drawerClosing });
+  useLayer(statsOpen, () => setLayerCloseSignal((count) => count + 1), { coversBottom: true });
+  useLayer(lightbox !== null, () => setLayerCloseSignal((count) => count + 1));
+  useLayer(dialogUp, () => setDialogCloseSignal((count) => count + 1), { mayRefuse: dialogMayRefuse, coversBottom: true });
 
   const popNavRef = useRef<(state: unknown, browserAnimated: boolean) => void>(() => undefined);
   popNavRef.current = (state, browserAnimated) => {
@@ -3515,32 +3747,38 @@ export default function App() {
     const store = navStoreRef.current;
     if (!store) return;
     const id = navIdOf(state);
-    // Back under an open dialog closes the dialog and nothing else. The
-    // browser has already stepped off the entry on screen, so it goes back
-    // on top (with the layer's entry, when the dialog sits over a layer) and
-    // the dialog leaves as its Cancel would: through its exit, and not while
-    // it is busy. Forward onto a stale layer entry is stepped over below.
-    if (dialogUp && !(isLayerState(state) && !layerEntryRef.current)) {
-      const layered = layerEntryRef.current;
-      if (!(layered && id !== null && id === currentNavIdRef.current)) currentNavIdRef.current = store.push(navLensRef.current);
-      if (layered && currentNavIdRef.current) store.pushLayer(currentNavIdRef.current);
-      setDialogCloseSignal((count) => count + 1);
-      return;
-    }
     if (layerEntryRef.current) {
-      layerEntryRef.current = false;
-      // Back off the layer's entry onto the lens it covered: the layer
-      // closes, and that is all — the feed behind it stays where it is.
+      // Back off the layer's entry onto the lens it covered: the topmost
+      // layer closes through its own exit, and that is all — the feed behind
+      // it stays where it is. While more layers stay up (a menu over the
+      // drawer), or the one on top may decline (a dialog busy or holding a
+      // draft), the layer's entry goes straight back on top: the next Back
+      // still has a layer to close, and one that did close steps off it
+      // itself (the effect below).
       if (id !== null && id === currentNavIdRef.current) {
-        if (drawerOpen) closeDrawer();
-        if (statsOpen || lightbox) setLayerCloseSignal((count) => count + 1);
+        const top = topLayer();
+        if (top && (standingLayers().length > 1 || top.mayRefuse())) store.pushLayer(id);
+        else layerEntryRef.current = false;
+        top?.close();
         return;
       }
+      layerEntryRef.current = false;
     } else if (isLayerState(state)) {
       // Forward onto the entry of a layer that has since closed: there is
       // nothing to reopen, so step back over it.
       layerSkipPopsRef.current += 1;
       window.history.back();
+      return;
+    }
+    // Multi-step history jump (or a rate-limited push that lacked a layer
+    // entry) while a busy/dirty dialog is still up: keep the current lens and
+    // let the dialog answer Back itself.
+    const strayTop = topLayer();
+    if (strayTop?.mayRefuse()) {
+      currentNavIdRef.current = store.push(navLensRef.current);
+      layerEntryRef.current = true;
+      store.pushLayer(currentNavIdRef.current);
+      strayTop.close();
       return;
     }
     const entry = id ? store.get(id) : null;
@@ -3560,6 +3798,7 @@ export default function App() {
     // trimmed past the cap) is stamped again with the lens it now shows, so
     // the next pick still adds a Back step on top of it.
     currentNavIdRef.current = id && entry ? id : store.replace(id, lens);
+    for (const layer of standingLayers().reverse()) layer.close();
     if (drawerOpen) closeDrawer();
     setStatsOpen(false);
     setLightbox(null);
@@ -3589,15 +3828,16 @@ export default function App() {
     };
   }, [phase]);
 
-  // Back closes the topmost layer and nothing else. Opening the drawer,
-  // Stats or the lightbox pushes a transient entry over the lens entry (same
+  // Back closes the topmost layer and nothing else. The first layer up (a
+  // menu, the search list, the filter panel, the drawer, Stats, the
+  // lightbox, a dialog) pushes a transient entry over the lens entry (same
   // lens id); Back steps off it and the popstate above only closes the layer
   // — on Android that keeps Back inside #work, and at the root it no longer
-  // leaves the app. Closed from the UI instead, the layer steps off its entry
-  // itself, a beat later so a layer handing over to the next (the drawer's
-  // Statistics item) keeps it rather than stepping off and on again. A pick
-  // made inside a layer takes the entry over (the recorder above).
-  const layerOpen = drawerOpen || statsOpen || lightbox !== null;
+  // leaves the app. Closed from the UI instead, the last layer steps off its
+  // entry itself, a beat later so a layer handing over to the next (the
+  // drawer's Statistics item) keeps it rather than stepping off and on
+  // again. A pick made inside a layer takes the entry over (the recorder).
+  const layerOpen = useLayersUp();
   useEffect(() => {
     if (phase !== "ready") {
       layerEntryRef.current = false;
@@ -3625,7 +3865,7 @@ export default function App() {
 
   function handleSaveReviewSettings(next: ReviewSettings) {
     setReviewSettingsOpen(false);
-    showToast(tr("Saved review settings", "已保存回顾设置"));
+    showToast(tr("Saved daily review settings", "已保存每日回顾设置"));
     adoptReviewSettings(next);
   }
 
@@ -3664,6 +3904,9 @@ export default function App() {
 
   // Where a shift-click's range starts: the last card picked or unpicked.
   const selectAnchorRef = useRef<string | null>(null);
+  // The picks as last rendered, for saying what a range pick changed.
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   const visibleFeedIdsRef = useRef(visibleFeedIds);
   visibleFeedIdsRef.current = visibleFeedIds;
 
@@ -3782,24 +4025,21 @@ export default function App() {
       const anchor = selectAnchorRef.current;
       selectAnchorRef.current = memo.id;
       const ids = visibleFeedIdsRef.current;
-      const from = extend && anchor !== null && anchor !== memo.id ? ids.indexOf(anchor) : -1;
-      const to = from === -1 ? -1 : ids.indexOf(memo.id);
-      if (from !== -1 && to !== -1) {
-        // Shift-click: every card from the anchor to this one takes the state
-        // this one is toggled to, rippling out from the anchor.
-        const range = from < to ? ids.slice(from, to + 1) : ids.slice(to, from + 1).reverse();
+      const range = extend ? selectionRange(ids, anchor, memo.id) : null;
+      if (range) {
+        // Shift-click, or a long press on touch: every card from the anchor
+        // to this one takes the state this one is toggled to, rippling out
+        // from the anchor. Cards far off screen change too, so the outcome
+        // is said aloud.
         rippleSelectRange(feedRef.current, range);
-        mutateSelection(() =>
-          setSelected((current) => {
-            const on = !current.has(memo.id);
-            const next = new Set(current);
-            for (const id of range) {
-              if (on) next.add(id);
-              else next.delete(id);
-            }
-            return next;
-          })
+        const said = withSelectionRange(selectionWithinVisibleIds(selectedRef.current, ids), range, memo.id);
+        const total = formatNumber(said.next.size);
+        announce(
+          said.on
+            ? tr(`Selected ${count(range.length, "memo")}, ${total} in all`, `已选中 ${count(range.length, "memo")}，共 ${total} 条`)
+            : tr(`Deselected ${count(range.length, "memo")}, ${total} still selected`, `已取消选择 ${count(range.length, "memo")}，还剩 ${total} 条`)
         );
+        mutateSelection(() => setSelected((current) => withSelectionRange(current, range, memo.id).next));
         return;
       }
       mutateSelection(() =>
@@ -3811,7 +4051,7 @@ export default function App() {
         })
       );
     },
-    [mutateSelection]
+    [mutateSelection, count, formatNumber, tr]
   );
 
   /** The gate's "enter your passcode again" toast has done its job once the passcode is in. */
@@ -3919,11 +4159,11 @@ export default function App() {
    * photo's name over), so a tile grows into its cell instead of riding up
    * with the composer's frame.
    */
-  function landCreated(saved: Memo, data: EditorSubmission, apply: () => void): Promise<void> {
-    // The card draws its pictures from memory (compressImage primed the
-    // cache), but decoding is still async, and one not yet decoded when the
-    // card is captured would grow into a blank cell. So they are decoded
-    // first, for a beat at most; one that misses it stays with the composer.
+  /**
+   * Decodes primed images for up to a beat before the composer→card morph so
+   * they don't grow into a blank cell; yields at once if Esc aborts first.
+   */
+  function warmCreatedImages(saved: Memo, signal?: AbortSignal): Promise<{ warm: Set<string>; decoders: HTMLImageElement[] }> {
     const decodeWait = 120;
     const morphs = typeof document.startViewTransition === "function" && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const decoders: HTMLImageElement[] = [];
@@ -3942,8 +4182,20 @@ export default function App() {
     });
     const warm = new Set<string>();
     for (const task of decoding) void task.then((id) => id && warm.add(id));
-    const ready = decoders.length > 0 ? Promise.race([Promise.allSettled(decoding), new Promise((done) => window.setTimeout(done, decodeWait))]) : Promise.resolve();
-    return ready.then(() => landCreatedNow(saved, data, apply, new Set(warm), decoders));
+    if (decoders.length === 0 || signal?.aborted) return Promise.resolve({ warm, decoders });
+    return new Promise((done) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        signal?.removeEventListener("abort", finish);
+        done({ warm: new Set(warm), decoders });
+      };
+      const timer = window.setTimeout(finish, decodeWait);
+      signal?.addEventListener("abort", finish, { once: true });
+      void Promise.allSettled(decoding).then(finish);
+    });
   }
 
   /** landCreated once its pictures are decoded (`warm`: the ones that are). */
@@ -3953,8 +4205,13 @@ export default function App() {
       const name = `memo-${saved.id}`;
       const field = document.querySelector<HTMLElement>(".composer .editor-field");
       const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      // The composer stays editable during landing: if the reader has already
+      // started typing the next memo, skip the composer→card morph so the new
+      // draft never flies into the old card.
+      const intact = (field?.querySelector<HTMLTextAreaElement>("textarea")?.value.trim() ?? "") === data.content;
       const shared =
         field !== null &&
+        intact &&
         typeof document.startViewTransition === "function" &&
         !reduced &&
         !Array.from(document.querySelectorAll<HTMLElement>(".memo-slot[data-vt]")).some((slot) => slot.dataset.vt === name);
@@ -4084,6 +4341,7 @@ export default function App() {
    * while, and says so, with what can be done, if it fails.
    */
   async function handleCreate(data: EditorSubmission): Promise<boolean> {
+    if (data.signal?.aborted) return false;
     const tag = activeTag;
     const content = tag ? inheritTagContext(data.content, tag) : data.content;
     const entry: OutboxEntry = {
@@ -4097,6 +4355,11 @@ export default function App() {
       status: "sending",
       failure: null
     };
+    const warmed = entry.memo.images.length > 0 ? await warmCreatedImages(entry.memo, data.signal) : { warm: new Set<string>(), decoders: [] as HTMLImageElement[] };
+    if (data.signal?.aborted) {
+      warmed.decoders.length = 0;
+      return false;
+    }
     // The composer stays up under a search, a day or a filter, and a memo
     // those lenses exclude would just vanish as the editor clears — read
     // as a failed send. Say where it went and offer the way to it.
@@ -4114,7 +4377,7 @@ export default function App() {
     await sendQueue.send(entry, {
       hidden,
       land: async (admit) => {
-        await landCreated(entry.memo, data, admit);
+        await landCreatedNow(entry.memo, data, admit, warmed.warm, warmed.decoders);
         // A small knock as the card lands under a finger.
         if (window.matchMedia?.("(pointer: coarse)").matches) navigator.vibrate?.(8);
       }
@@ -4134,16 +4397,16 @@ export default function App() {
    * screen reader — or, when the view hides the memo, by a toast with the
    * way to it (the one that spoke for the hidden card, where there was one).
    */
-  function saySent(saved: Memo, said: { toast: number } | undefined, leaves: boolean) {
+  function saySent(saved: Memo, said: { toast: number } | undefined, leaves: boolean): number | void {
     if (!lensShows(saved) && (leaves || said)) {
-      reviseToast(said?.toast ?? 0, tr("Saved the memo — this view hides it", "已保存这条笔记，当前视图下看不到它"), "info", {
-        action: { label: tr("Show", "显示"), run: () => revealMemo(saved.id) }
+      return reviseToast(said?.toast ?? 0, sendStatusLabel("sent", tr, "toast"), "info", {
+        ...showSendAction(saved.id),
+        sendStatus: "sent"
       });
-      return;
     }
     // In view after all (the reader went to it): the card says the rest.
     if (said?.toast) dismissToast(said.toast);
-    announce(tr("Sent", "已发送"));
+    announce(sendStatusLabel("sent", tr, "card"));
   }
 
   /**
@@ -4164,14 +4427,23 @@ export default function App() {
     });
   }
 
-  /** ⌘Z on a send the server confirmed a moment ago: the memo goes to Trash (OutboxQueue.undoLast). */
-  function trashUndoneSend(memo: Memo) {
+  /**
+   * ⌘Z on a send the server confirmed a moment ago: its text and pictures are
+   * back in the composer while the stored copy goes to Trash (OutboxQueue.undoLast),
+   * and the toast says so clearly so the reader knows a copy moved to Trash.
+   */
+  function trashUndoneSend(memo: Memo, said?: { toast: number }) {
+    const toastId = reviseToast(
+      said?.toast ?? 0,
+      tr("Back in the composer — the sent copy moved to Trash", "已撤回到输入框，发出的副本已移入回收站"),
+      "info"
+    );
     void (async () => {
       try {
         await runOptimisticMemoAction(memo, { deletedAt: new Date().toISOString() }, async () => (await guard(() => trashMemo(memo.id, memo.seq)))?.memo ?? null);
       } catch (cause) {
         if (reconcileVersionConflict(cause)) return;
-        showToast(errorMessage(cause, "Couldn’t delete the memo.", "删除笔记失败"), "error");
+        reviseToast(toastId, errorMessage(cause, "Couldn’t delete the memo.", "删除笔记失败"), "error");
       }
     })();
   }
@@ -4199,19 +4471,38 @@ export default function App() {
   }
 
   // What the queue says, in App's words and places: the toast that speaks
-  // for a card the view hides, the live region for one in view.
-  const showSendAction = (id: string): ToastOptions => ({ action: { label: tr("Show", "显示"), run: () => revealMemo(id) } });
+  // for a card the view hides (through the shared <SendStatus>), the live
+  // region for one in view.
+  const showSendAction = (id: string): ToastOptions => ({
+    action: { label: tr("Show", "显示"), run: () => revealMemo(id), movesFocus: true }
+  });
   const sendVoice: OutboxVoice = {
-    sending: (id) => showToast(tr("Sending — this view hides it", "正在发送，当前视图下看不到它"), "info", showSendAction(id)),
-    failedHidden: (id, toast) => reviseToast(toast, tr("A memo didn’t send — this view hides it", "有一条笔记没发出去，当前视图下看不到它"), "error", showSendAction(id)),
+    sending: (id) =>
+      showToast(sendStatusLabel("sending", tr, "toast"), "info", {
+        ...showSendAction(id),
+        sendId: id,
+        sendStatus: "sending"
+      }),
+    failedHidden: (id, toast, state) =>
+      reviseToast(toast, sendStatusLabel(state, tr, "toast"), sendStatusTone(state), {
+        ...showSendAction(id),
+        sendId: id,
+        sendStatus: state
+      }),
     sent: saySent,
-    retrying: () => announce(tr("Not sent · retrying", "未发送 · 正在重试"), "assertive"),
-    offline: () => announce(tr("Not sent · will retry when you’re online", "未发送 · 联网后会自动补发"), "assertive"),
+    retrying: () => announce(sendStatusLabel("retrying", tr, "card"), "assertive"),
+    offline: () => announce(sendStatusLabel("failed", tr, "card"), "assertive"),
     refused: (cause) => void showToast(errorMessage(cause, "Couldn’t send the memo.", "笔记发送失败"), "error"),
     purged: () => void showToast(tr("That memo was sent earlier and has since been deleted for good", "这条笔记之前已经发出，后来被彻底删除了")),
     composerBusy: () => void showToast(tr("Send or clear what’s in the composer first", "先发出或清空输入框里的内容")),
-    tookBack: () => announce(tr("Took the memo back into the composer", "已撤回到输入框")),
-    discarded: (undo) => void showToast(tr("Discarded the unsent memo", "已舍弃这条未发送的笔记"), "info", { action: { label: tr("Undo", "撤销"), run: undo } })
+    tookBack: (said) => {
+      if (said?.toast) dismissToast(said.toast);
+      announce(tr("Took the memo back into the composer", "已撤回到输入框"));
+    },
+    discarded: (undo, said) =>
+      void reviseToast(said?.toast ?? 0, tr("Discarded the unsent memo", "已舍弃这条未发送的笔记"), "info", {
+        action: { label: tr("Undo", "撤销"), run: undo }
+      })
   };
   // The queue reads these as it works, so they are this render's.
   const sendDeps: OutboxDeps = {
@@ -4658,9 +4949,11 @@ export default function App() {
   async function handleCopy(memo: Memo) {
     try {
       await navigator.clipboard.writeText(memo.content);
-      showToast(tr("Copied to clipboard", "已复制到剪贴板"));
+      // Named like the menu item that did it ("Copy content"), so the toast
+      // says what is on the clipboard now.
+      showToast(tr("Copied the memo’s content", "已复制这条笔记的内容"));
     } catch {
-      showToast(tr("Couldn’t copy to clipboard.", "复制到剪贴板失败"), "error");
+      showToast(tr("Couldn’t copy the memo’s content.", "复制笔记内容失败"), "error");
     }
   }
 
@@ -4692,7 +4985,9 @@ export default function App() {
       if (!trashed) return;
       // Reversible, so the toast carries the reverse — the trashed memo's
       // own seq, since the trip to Trash bumped it.
-      showToast(tr("Moved to Trash", "已移入回收站"), "info", { action: { label: tr("Undo", "撤销"), run: () => void handleRestore(trashed) } });
+      // Named like the batch toast ("Moved 3 memos to Trash") and the
+      // restore below ("Restored the memo").
+      showToast(tr("Moved the memo to Trash", "已将这条笔记移入回收站"), "info", { action: { label: tr("Undo", "撤销"), run: () => void handleRestore(trashed) } });
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
       showToast(errorMessage(cause, "Couldn’t delete the memo.", "删除笔记失败"), "error");
@@ -4723,7 +5018,7 @@ export default function App() {
       const result = await guard(() => purgeMemo(memo.id, memo.seq));
       if (!result) return;
       applyRemoval([], result.purged);
-      showToast(tr("Permanently deleted", "已彻底删除"));
+      showToast(tr("Permanently deleted the memo", "已彻底删除这条笔记"));
     } catch (cause) {
       if (reconcileVersionConflict(cause)) return;
       showToast(errorMessage(cause, "Couldn’t delete the memo.", "删除笔记失败"), "error");
@@ -5153,25 +5448,28 @@ export default function App() {
     onPinTag: (path: string, pinned: boolean) => void handlePinTag(path, pinned),
     onRenameTag: (path: string) => closeDrawer(() => setRenameTagTarget(path)),
     onRemoveTag: (path: string) => void handleRemoveTag(path),
+    // Close the drawer before changeFeed flushes so its layer is already
+    // marked leaving: the pick takes over the drawer's history entry instead
+    // of pushing a fresh layer entry on top of it.
     onPickTag: (path: string | null) => {
-      pickTag(path);
       closeDrawer();
+      pickTag(path);
     },
     onPickDay: (key: string | null) => {
-      pickDay(key);
       closeDrawer();
+      pickDay(key);
     },
     onShowAll: () => {
-      showAll();
       closeDrawer();
+      showAll();
     },
     onOpenTrash: () => {
-      openTrash();
       closeDrawer();
+      openTrash();
     },
     onOpenReview: () => {
-      openReview();
       closeDrawer();
+      openReview();
     },
     onOpenReviewSettings: () => closeDrawer(() => setReviewSettingsOpen(true)),
     onOpenModelSettings: () =>
@@ -5258,7 +5556,7 @@ export default function App() {
     if (event.defaultPrevented || event.isComposing || event.altKey || (view !== "memos" && view !== "trash")) return;
     const target = event.target;
     if (target instanceof HTMLElement && (target.isContentEditable || target.matches("input, textarea, select"))) return;
-    if (document.querySelector("[aria-modal='true']")) return;
+    if (layerCount() > 0 || document.querySelector("[aria-modal='true']")) return;
     const command = event.metaKey || event.ctrlKey;
     if (command && !event.shiftKey && event.key.toLowerCase() === "a") {
       event.preventDefault();
@@ -5816,6 +6114,7 @@ export default function App() {
 
   const searchJump = useSearchJump({
     query: searchText,
+    composing: searchComposition !== null,
     open: jumpOpen && view === "memos",
     tags: tagEntries,
     pinned: pinnedEntries,
@@ -5826,6 +6125,8 @@ export default function App() {
     // keystroke is still on its way to the feed.
     searchCount: statsDrilldown === null && feedQuery === trimmedQuery ? visibleMemos.length : null,
     onAct: actOnJump,
+    onForgetRecent: (text) => setRecentSearches((current) => forgetSearch(current, text)),
+    onClearRecents: () => setRecentSearches([]),
     onComplete: (text) => {
       setJumpOpen(true);
       typeQuery(text);
@@ -5843,15 +6144,15 @@ export default function App() {
   }, []);
 
   // ---- The app's own keys (lib/shortcuts) ----
-  // Only outside text fields and dialogs: the editor keeps ⌘K and friends,
-  // the feed its select-mode keys, a dialog everything.
-  const shortcutsBlockedRef = useRef(false);
-  shortcutsBlockedRef.current = dialogUp || drawerOpen || statsOpen || lightbox !== null;
+  // Only outside text fields and layers: the editor keeps ⌘K and friends,
+  // the feed its select-mode keys, a menu, a panel or a dialog everything.
+  // The layer stack is asked at the press, so a layer that registered in
+  // this very commit already counts.
   useEffect(() => {
     if (phase !== "ready") return;
     function onKeyDown(event: KeyboardEvent) {
       const shortcut = globalShortcutOf(event);
-      if (!shortcut || shortcutsBlockedRef.current) return;
+      if (!shortcut || layerCount() > 0) return;
       if (isTextEntry(document.activeElement) || (event.target instanceof Element && isTextEntry(event.target))) return;
       // An open menu or panel answers its own keys.
       if (document.querySelector("[aria-modal='true'], .action-menu")) return;
@@ -5894,7 +6195,7 @@ export default function App() {
   const withToasts = (page: ReactNode) => (
     <>
       {page}
-      <ToastStack toasts={toasts} dismissLabel={tr("Dismiss", "关闭")} regionLabel={tr("Notifications", "通知")} onDismiss={dismissToast} onHold={holdToasts} />
+      <ToastStack toasts={toasts} sendStates={sendStates} dismissLabel={tr("Dismiss", "关闭")} regionLabel={tr("Notifications", "通知")} onDismiss={dismissToast} onHold={holdToasts} />
     </>
   );
 
@@ -6411,10 +6712,13 @@ export default function App() {
                 type="button"
                 className="review-config-button"
                 aria-haspopup="dialog"
+                // Named outright, like Empty Trash: on phones the text goes
+                // and only the icon is left.
+                aria-label={tr("Daily review settings", "每日回顾设置")}
                 onClick={() => setReviewSettingsOpen(true)}
               >
                 <SlidersHorizontal size={14} aria-hidden="true" />
-                <span>{tr("Review settings", "回顾设置")}</span>
+                <span>{tr("Daily review settings", "每日回顾设置")}</span>
               </button>
             ) : null}
             {view === "memos" && !selectMode ? (
@@ -6941,13 +7245,22 @@ export default function App() {
                   <p className="feed-empty-title">{tr("Nothing to review yet", "还没有可回顾的笔记")}</p>
                   <p>{tr("Write a few memos and some will come back here each day.", "写下几条笔记后，每天都会有几条回到这里")}</p>
                 </>
+              ) : view === "review" && reviewDealtToday && reviewDay.ids.length > 0 ? (
+                // Today was dealt, and every card has since left the list —
+                // set aside with "Not again", or deleted. The settings are not
+                // at fault, so there is no range to widen: today is simply
+                // done, and tomorrow deals again.
+                <>
+                  <p className="feed-empty-title">{tr("Nothing left from today’s set", "今天的这一组已经清空")}</p>
+                  <p>{tr("A new set tomorrow", "明天再抽新的一组")}</p>
+                </>
               ) : view === "review" ? (
                 <>
                   <p className="feed-empty-title">{tr("Nothing to review today", "今天没有可回顾的笔记")}</p>
                   <p>{tr("Widen the scope or time range to draw more memos.", "试试放宽回顾范围或时间范围")}</p>
                   <button type="button" className="ghost-button feed-empty-action" onClick={() => setReviewSettingsOpen(true)}>
                     <SlidersHorizontal size={15} aria-hidden="true" />
-                    {tr("Review settings", "回顾设置")}
+                    {tr("Daily review settings", "每日回顾设置")}
                   </button>
                 </>
               ) : semanticPending ? (
@@ -7023,45 +7336,56 @@ export default function App() {
               )}
             </div>
           ) : (
-            renderedFeedMemos.map((memo, index) => (
-              <FeedItem
-                key={memo.id}
-                memo={memo}
-                variant={view === "trash" ? "trash" : "normal"}
-                knownTags={editingId === memo.id ? suggestTags : EMPTY_TAGS}
-                editing={editingId === memo.id}
-                savingEdit={editingId === memo.id && savingEdit}
-                editConflict={editingId === memo.id && editConflictId === memo.id}
-                editDraft={editingId === memo.id && reopenedDraft?.memoId === memo.id ? reopenedDraft.draft : null}
-                // An unsent card keeps its own actions through select mode.
-                selecting={selectingFeed && !sendStates.has(memo.id)}
-                selected={selectingFeed && selected.has(memo.id)}
-                canSelect={view === "memos" || view === "trash"}
-                taskFlips={pendingTaskFlips.get(memo.id)}
-                resumeContent={editSeed?.memoId === memo.id ? editSeed.content : undefined}
-                busy={optimisticMemos.has(memo.id)}
-                stale={semanticStale && keywordHitIds !== null && !keywordHitIds.has(memo.id) && memo.id !== editingId}
-                related={semanticOnlyIds?.has(memo.id) ?? false}
-                leadKind={leadOf(memo, index)}
-                leadText={leadLine(leadOf(memo, index))}
-                pinEnd={pinnedRun > 0 && index === pinnedRun - 1}
-                vtName={`memo-${memo.id}`}
-                handlers={feedHandlers}
-                reviewPick={view === "review" && reviewDay ? reviewPickOf(reviewDay, memo.id) : undefined}
-                reviewSeen={view === "review" && reviewSeenIds.has(memo.id)}
-                sendState={sendStates.get(memo.id)}
-                recallBlocked={composerOccupied && sendStates.has(memo.id)}
-              />
-            ))
+            <>
+              {pinnedRun > 0 ? <FeedLead kind="pinned" pinned={pinnedRun} query="" /> : null}
+              {renderedFeedMemos.flatMap((memo, index) => {
+                const item = (
+                  <FeedItem
+                    key={memo.id}
+                    memo={memo}
+                    variant={view === "trash" ? "trash" : "normal"}
+                    knownTags={editingId === memo.id ? suggestTags : EMPTY_TAGS}
+                    editing={editingId === memo.id}
+                    savingEdit={editingId === memo.id && savingEdit}
+                    editConflict={editingId === memo.id && editConflictId === memo.id}
+                    editDraft={editingId === memo.id && reopenedDraft?.memoId === memo.id ? reopenedDraft.draft : null}
+                    // An unsent card keeps its own actions through select mode.
+                    selecting={selectingFeed && !sendStates.has(memo.id)}
+                    selected={selectingFeed && selected.has(memo.id)}
+                    canSelect={view === "memos" || view === "trash"}
+                    taskFlips={pendingTaskFlips.get(memo.id)}
+                    resumeContent={editSeed?.memoId === memo.id ? editSeed.content : undefined}
+                    busy={optimisticMemos.has(memo.id)}
+                    stale={semanticStale && keywordHitIds !== null && !keywordHitIds.has(memo.id) && memo.id !== editingId}
+                    related={semanticOnlyIds?.has(memo.id) ?? false}
+                    pinEnd={pinnedRun > 0 && index === pinnedRun - 1}
+                    vtName={`memo-${memo.id}`}
+                    handlers={feedHandlers}
+                    reviewPick={view === "review" && reviewDay ? reviewPickOf(reviewDay, memo.id) : undefined}
+                    reviewSeen={view === "review" && reviewSeenIds.has(memo.id)}
+                    sendState={sendStates.get(memo.id)}
+                    recallBlocked={composerOccupied && sendStates.has(memo.id)}
+                  />
+                );
+                return memo.id === firstRelatedId
+                  ? [<FeedLead key="lead-related" kind="related" pinned={0} query={query.trim()} />, item]
+                  : [item];
+              })}
+            </>
           )}
           {hasMoreFeed ? <div ref={feedSentinelRef} className="feed-sentinel" aria-hidden="true" /> : null}
           {/* Today's set, all seen: a quiet word after the last card. */}
           {view === "review" && feedMemos.length > 0 && !hasMoreFeed && reviewSeenCount >= feedMemos.length ? <ReviewFinish count={feedMemos.length} /> : null}
           {/* The list ran out, but a cold start is still loading older
-              pages: its last card is not the notebook's oldest. */}
-          {bootstrapLoad && !hasMoreFeed && feedMemos.length > 0 && view !== "review" ? (
-            <FeedEnd loaded={loadedMemoCount} total={bootstrapLoad.total} failed={bootstrapLoad.failed} />
-          ) : null}
+              pages: its last card is not the notebook's oldest. Kept mounted
+              with null once done so its fold exit plays out. */}
+          <FeedEnd
+            state={
+              bootstrapLoad && !hasMoreFeed && feedMemos.length > 0 && view !== "review"
+                ? { loaded: loadedMemoCount, total: bootstrapLoad.total, failed: bootstrapLoad.failed }
+                : null
+            }
+          />
           <SelectRingStagger active={selectingFeed} feedRef={feedRef} />
           {/* Exit ghosts (lib/feedMotion.ts): cards that just left the list
               play their exit here, outside React's tree. Always empty to React. */}

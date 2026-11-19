@@ -19,6 +19,12 @@ import { T_BASE, T_ENTER, T_EXIT, T_FAST, T_SLOW } from "./motion";
  * the cards, and like a card one that comes from or goes to far off leaves
  * and enters rather than streak across the page. Under reduced motion
  * nothing travels: the same decisions play as opacity alone.
+ *
+ * The feed's own rows besides its cards are column parts too — the heading
+ * over a run of cards (pinned, related by meaning), the list's foot, the
+ * cold start's "still loading" line, Daily review's finished word — so a
+ * change moves every row of the feed at once: none of them jumps a frame
+ * ahead while the cards glide past it (the row model).
  */
 
 type ChromeExit = "crumb" | "fade" | "sink";
@@ -38,6 +44,13 @@ interface ChromeKey {
   container?: boolean;
   /** How it comes in when it brings no entrance of its own (a fade, by default). */
   enter?: ChromeEnter;
+  /**
+   * "own": it always brings its own entrance (CSS, on mount or when first
+   * scrolled to — possibly a beat after the change), so the engine never
+   * lays one over it, and a fresh element under the key is a new row: the
+   * old one leaves rather than hands over.
+   */
+  entrance?: "own";
   /** The stand-in's stacking level: the composer's own, over the cards closing under it. */
   layer?: number;
 }
@@ -65,8 +78,17 @@ const KEYS: ChromeKey[] = [
   // with the cards; shown again, it replays its own rise.
   { selector: ".composer", name: "composer", exit: "sink", container: true, enter: "rise", layer: 30 },
   { selector: ".composer .editor-context-tag", name: "composer-context-tag", exit: "crumb", enter: "crumb" },
-  { selector: ".review-banner", name: "review-banner", exit: "fade" },
-  { selector: ".feed-empty", name: "feed-empty", exit: "fade" }
+  { selector: ".review-banner", name: "review-banner", exit: "fade", layer: 0 },
+  { selector: ".feed-empty", name: "feed-empty", exit: "fade", layer: 0 },
+  // The feed's rows that are not cards. Pinned rolls its own count and glides
+  // whole; related cross-fades if the query wording changes. Run headings rise
+  // in like the cards they head; the foot, cold-load end and review finish
+  // bring their own entrances (and FeedEnd brings its own fold exit).
+  { selector: ".feed-lead.is-pinned", name: "row-pinned", exit: "fade", container: true, enter: "rise", layer: 0 },
+  { selector: ".feed-lead.is-related", name: "row-related", exit: "fade", enter: "rise", layer: 0 },
+  { selector: ".feed-foot", name: "row-foot", exit: "fade", container: true, enter: "rise", entrance: "own", layer: 0 },
+  { selector: ".feed-end-slot", name: "row-end", exit: "fade", container: true, entrance: "own", layer: 0 },
+  { selector: ".review-finish", name: "row-finish", exit: "fade", container: true, entrance: "own", layer: 0 }
 ];
 const ANY_KEY = KEYS.map((key) => key.selector).join(", ");
 /** Stand-ins carry this; they are never parts themselves. */
@@ -189,13 +211,16 @@ function bandOf(el: Element): Element | null {
 }
 
 /** Layout box and painted spot, against the band. */
-function measure(el: Part, band: Element | null): { box: Box; at: { left: number; top: number } } {
+function measure(el: Part, band: Element | null, ours = false): { box: Box; at: { left: number; top: number } } {
   const rect = el.getBoundingClientRect();
   const { glide, own } = motionOffset(el);
   const origin = band ? band.getBoundingClientRect() : { left: 0, top: 0 };
   const left = rect.left - origin.left - glide.x - own.x;
   const top = rect.top - origin.top - glide.y - own.y;
-  return { box: { left, top, width: rect.width, height: rect.height }, at: { left: left + glide.x, top: top + glide.y } };
+  return {
+    box: { left, top, width: rect.width, height: rect.height },
+    at: ours ? { left: rect.left - origin.left, top: rect.top - origin.top } : { left: left + glide.x, top: top + glide.y }
+  };
 }
 
 /**
@@ -231,8 +256,11 @@ export function captureChrome(root: HTMLElement, stage: Pick<ChromeStage, "owns"
   const shots = new Map<string, Shot>();
   for (const { spec, key, el, parent } of find(root).values()) {
     const band = bandOf(el);
-    const { box, at } = measure(el, band);
-    const opacity = stage.owns(el) ? Number.parseFloat(getComputedStyle(el).opacity) : 1;
+    const ours = stage.owns(el);
+    const { box, at } = measure(el, band, ours);
+    // A row that brings its own entrance may still be waiting for it
+    // (unseen until scrolled to): read how much of it shows.
+    const opacity = ours || spec.entrance === "own" ? Number.parseFloat(getComputedStyle(el).opacity) : 1;
     shots.set(key, {
       key,
       spec,
@@ -376,6 +404,37 @@ export function chromeMotions(capture: ChromeCapture, stage: ChromeStage, reduce
       motions.push(() => leave(shot));
       continue;
     }
+    const own = shot.spec.entrance === "own";
+    if (own) {
+      // A fresh row under the key (a new list's foot) is a row of its own:
+      // the old one leaves where it was seen, the new one comes in its own
+      // way.
+      if (next.el !== shot.el) {
+        if (seen(shot.at, shot.box, shot.opacity)) motions.push(() => leave(shot));
+        continue;
+      }
+      // A row already playing its own fold exit (FeedEnd): let it finish in
+      // place, unless the change moved it — then a stand-in leaves where the
+      // reader saw it while the live node stays out of sight until unmount.
+      if (next.el.classList.contains("is-leaving")) {
+        if (!shot.className.split(/\s+/).includes("is-leaving")) {
+          const now = measure(next.el, bandOf(next.el));
+          const moved = Math.abs(shot.at.left - now.box.left) >= 0.5 || Math.abs(shot.at.top - now.box.top) >= 0.5;
+          if (moved) {
+            if (seen(shot.at, shot.box, shot.opacity)) motions.push(() => leave(shot));
+            motions.push(() => {
+              stage.animate(next.el, [{ opacity: 0 }, { opacity: 0 }], { duration: T_EXIT, fill: "forwards" });
+            });
+          }
+        }
+        continue;
+      }
+      // Still waiting for its entrance: nothing of it shows to move.
+      if (shot.opacity < 0.05) continue;
+    }
+    // How much of it the reader saw, as far as this layer's motion goes (a
+    // row's own entrance is its CSS's to finish).
+    const opacity = own ? 1 : shot.opacity;
     const band = bandOf(next.el);
     const now = measure(next.el, band);
     if (!band && !(near(shot.at.top, shot.box) && near(now.box.top, now.box))) {
@@ -407,10 +466,10 @@ export function chromeMotions(capture: ChromeCapture, stage: ChromeStage, reduce
         if (grow >= 0.5) stage.animate(next.el, trim(next.el, grow, 0), { duration: T_ENTER, easing: easeOut });
         fadeIn(next.el);
       });
-    } else if (moved || shot.opacity < 0.99) {
+    } else if (moved || opacity < 0.99) {
       motions.push(() => {
         if (!reduced) {
-          glide(next.el, dx, dy, shot.opacity);
+          glide(next.el, dx, dy, opacity);
           return;
         }
         // Nothing travels: the old spot fades out, the new one in.
@@ -422,6 +481,8 @@ export function chromeMotions(capture: ChromeCapture, stage: ChromeStage, reduce
 
   for (const [key, next] of after) {
     if (before.has(key)) continue;
+    // A row that comes in its own way, possibly only once scrolled to.
+    if (next.spec.entrance === "own") continue;
     // Inside a container that arrives too: its entrance carries this one.
     if (next.parent && after.has(next.parent) && !before.has(next.parent)) continue;
     // Its own entrance (crumbs, pills, chips cascade in by CSS — faded under

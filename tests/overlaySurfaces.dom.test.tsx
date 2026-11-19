@@ -254,11 +254,13 @@ describe("Back over a dialog (closeSignal)", () => {
     act(() => window.history.back());
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await sleep(150);
-    // Still inside #alpha: Back did one thing, and the entry it stepped off
-    // is back on top.
+    // Still inside #alpha: Back closed only the dialog, and the next Back
+    // returns to All memos from #alpha cleanly.
     expect(screen.queryByText(/beta note/)).toBeNull();
     expect(screen.getByText(/alpha note/)).toBeTruthy();
-    expect(window.history.length).toBe(depth);
+    expect(window.history.length).toBe(depth + 1);
+    act(() => window.history.back());
+    await screen.findByText(/beta note/);
   });
 });
 

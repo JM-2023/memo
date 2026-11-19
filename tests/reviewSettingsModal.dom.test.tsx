@@ -135,7 +135,7 @@ describe("review settings with unsaved changes", () => {
           <ReviewSettingsModal {...props} closeSignal={signal} />
         </LanguageProvider>
       );
-    return { onClose, rerenderWith, overlay: screen.getByRole("dialog", { name: "Daily Review Settings" }) };
+    return { onClose, rerenderWith, overlay: screen.getByRole("dialog", { name: "Daily review settings" }) };
   }
 
   it("boops instead of closing on a backdrop click or Back", () => {
@@ -148,7 +148,7 @@ describe("review settings with unsaved changes", () => {
     expect(card.classList.contains("is-flash")).toBe(true);
     rerenderWith(1);
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "Daily Review Settings" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Daily review settings" })).toBeTruthy();
   });
 
   it("still closes from Cancel, ✕ and Escape", () => {
@@ -174,7 +174,7 @@ describe("review settings with unsaved changes", () => {
         <ReviewSettingsModal settings={{ scope: "all", tags: [], range: "all", count: 10 }} memos={memos} knownTags={knownTags} onSave={vi.fn()} onClose={onClose} />
       </LanguageProvider>
     );
-    const overlay = screen.getByRole("dialog", { name: "Daily Review Settings" });
+    const overlay = screen.getByRole("dialog", { name: "Daily review settings" });
     fireEvent.pointerDown(overlay);
     fireEvent.click(overlay);
     expect(onClose).toHaveBeenCalledTimes(1);

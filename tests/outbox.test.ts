@@ -109,6 +109,21 @@ describe("the outbox", () => {
     ]);
   });
 
+  it("keeps an automatic retry in its retrying/waiting state instead of flashing Sending…", () => {
+    const outbox: Outbox = new Map([
+      ["manual", entry("manual", "2026-10-19T08:00:00.000Z", { status: "sending", auto: false })],
+      ["auto", entry("auto", "2026-10-19T08:00:01.000Z", { status: "sending", failure: "network", auto: true })]
+    ]);
+    expect([...sendStatesOf(outbox, new Map(), true)]).toEqual([
+      ["manual", "sending"],
+      ["auto", "retrying"]
+    ]);
+    expect([...sendStatesOf(outbox, new Map(), false)]).toEqual([
+      ["manual", "sending"],
+      ["auto", "failed"]
+    ]);
+  });
+
   it("keeps retrying a failed send once the quick retries are spent, once a minute", () => {
     expect([0, 1, 2, 3, 4, 10].map(outboxRetryDelay)).toEqual([2_000, 6_000, 20_000, 60_000, 60_000, 60_000]);
   });

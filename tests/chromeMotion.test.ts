@@ -271,3 +271,120 @@ describe("chrome motion", () => {
     expect(ghostsOf()).toEqual([]);
   });
 });
+
+describe("feed row model", () => {
+  const feedEl = () => main.querySelector<HTMLElement>(".memo-feed")!;
+
+  it("glides FeedFoot with the cards, ignores an unshown foot, and fades out a replaced lens foot", () => {
+    const foot = at(html(`<p class="feed-foot is-shown">All 3 in #tag</p>`), 0, 420, 600, 40) as HTMLElement;
+    main.append(foot);
+
+    motion.run("trash", ["1"], () => {
+      foot.textContent = "All 2 in #tag";
+      at(foot, 0, 306, 600, 40);
+    });
+    expect(playedOn(foot).map((entry) => entry.keyframes)).toEqual([[{ translate: "0px 114px" }, { translate: "0px 0px" }]]);
+    expect(ghostsOf()).toEqual([]);
+
+    // Replacing with a new lens's foot (new element) fades out the old one and
+    // leaves the new one to its own CSS entrance.
+    played = [];
+    const nextFoot = at(html(`<p class="feed-foot">All 5 in #other</p>`), 0, 500, 600, 40) as HTMLElement;
+    motion.run("lens", [], () => {
+      foot.replaceWith(nextFoot);
+    });
+    const ghost = ghostsOf().find((el) => el.classList.contains("feed-foot"))!;
+    expect(ghost.textContent).toBe("All 2 in #tag");
+    expect(ghost.style.top).toBe("306px");
+    expect(ghost.style.zIndex).toBe("0");
+    expect(playedOn(ghost).map(keys)).toEqual([["opacity"]]);
+    expect(playedOn(nextFoot)).toEqual([]);
+
+    // A foot still waiting for IntersectionObserver (opacity 0) does not glide.
+    motion.settle();
+    played = [];
+    nextFoot.style.opacity = "0";
+    motion.run("trash", ["2"], () => {
+      at(nextFoot, 0, 386, 600, 40);
+    });
+    expect(playedOn(nextFoot)).toEqual([]);
+  });
+
+  it("rises the pinned heading on 0→1, holds it still while its count rolls 1→2, and fades it out on 1→0", () => {
+    const lead = at(html(`<h2 class="feed-lead is-pinned"><span class="feed-lead-text">Pinned · <span class="roll">1</span></span></h2>`), 0, 80, 600, 20) as HTMLElement;
+    motion.run("pin", ["1"], () => {
+      feedEl().prepend(lead);
+    });
+    expect(playedOn(lead).map((entry) => entry.keyframes[0])).toEqual([{ opacity: 0, transform: "translateY(18px) scale(0.995)" }]);
+
+    // Pinning a second card updates the rolling figure without gliding or cross-fading the heading.
+    played = [];
+    motion.run("pin", ["2"], () => {
+      lead.querySelector(".roll")!.textContent = "2";
+    });
+    expect(playedOn(lead)).toEqual([]);
+    expect(ghostsOf()).toEqual([]);
+
+    // Unpinning the last card fades the heading out at z-index 0.
+    motion.run("unpin", ["1"], () => {
+      lead.remove();
+    });
+    const ghost = ghostsOf().find((el) => el.classList.contains("feed-lead"))!;
+    expect(ghost.style.top).toBe("80px");
+    expect(ghost.style.zIndex).toBe("0");
+    expect(playedOn(ghost).map(keys)).toEqual([["opacity"]]);
+  });
+
+  it("glides FeedEnd while active, respects its own in-place exit, and ghosts it if a run moves it while leaving", () => {
+    const end = at(html(`<div class="feed-end-slot"><div class="feed-end-clip"><div class="feed-end">Loading older memos</div></div></div>`), 0, 500, 600, 44) as HTMLElement;
+    feedEl().prepend(end);
+
+    motion.run("trash", ["1"], () => {
+      at(end, 0, 386, 600, 44);
+    });
+    expect(playedOn(end).map((entry) => entry.keyframes)).toEqual([[{ translate: "0px 114px" }, { translate: "0px 0px" }]]);
+
+    // Turning is-leaving in place lets CSS play the fold exit without duplicating a ghost.
+    played = [];
+    motion.run("lens", [], () => {
+      end.classList.add("is-leaving");
+    });
+    expect(ghostsOf()).toEqual([]);
+    expect(playedOn(end)).toEqual([]);
+
+    // If a run both marks it leaving and moves it elsewhere, a ghost leaves at the old spot.
+    end.classList.remove("is-leaving");
+    played = [];
+    motion.run("lens", [], () => {
+      end.classList.add("is-leaving");
+      at(end, 0, 120, 600, 44);
+    });
+    const ghost = ghostsOf().find((el) => el.classList.contains("feed-end-slot"))!;
+    expect(ghost.style.top).toBe("386px");
+    expect(playedOn(ghost).map(keys)).toEqual([["opacity"]]);
+    expect(playedOn(end).map((entry) => entry.keyframes)).toEqual([[{ opacity: 0 }, { opacity: 0 }]]);
+  });
+
+  it("glides ReviewFinish with review cards and dissolves feed rows under reduced motion", () => {
+    const finish = at(html(`<div class="review-finish"><p class="review-finish-title">All revisited</p></div>`), 0, 460, 600, 72) as HTMLElement;
+    feedEl().prepend(finish);
+
+    motion.run("trash", ["1"], () => {
+      at(finish, 0, 346, 600, 72);
+    });
+    expect(playedOn(finish).map((entry) => entry.keyframes)).toEqual([[{ translate: "0px 114px" }, { translate: "0px 0px" }]]);
+
+    // Under reduced motion, moving a feed row dissolves in place (opacity only, ≤150ms).
+    window.matchMedia = vi.fn(() => ({ matches: true }) as MediaQueryList);
+    played = [];
+    motion.run("trash", ["2"], () => {
+      at(finish, 0, 232, 600, 72);
+    });
+    expect(played.length).toBeGreaterThan(0);
+    for (const entry of played) {
+      expect(keys(entry)).toEqual(["opacity"]);
+      expect(entry.timing.duration).toBeLessThanOrEqual(150);
+    }
+    expect(ghostsOf().some((el) => el.classList.contains("review-finish") && el.style.top === "346px")).toBe(true);
+  });
+});

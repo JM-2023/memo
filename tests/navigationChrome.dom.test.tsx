@@ -481,7 +481,7 @@ describe("select mode focus", () => {
     await screen.findByText(/beta note/);
     await user.click(screen.getByRole("button", { name: /All memos/, expanded: false }));
     await user.click(await screen.findByRole("menuitem", { name: "Select memos" }));
-    const overlay = (await screen.findAllByRole("button", { name: "Select this memo" }))[0];
+    const overlay = (await screen.findAllByRole("button", { name: /^Select memo/ }))[0];
     overlay.focus();
     await user.keyboard("{Escape}");
     await waitFor(() => expect(document.activeElement?.classList.contains("memo-menu-trigger")).toBe(true));

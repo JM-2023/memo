@@ -287,14 +287,14 @@ describe("while older pages are still loading", () => {
   it("never saves a Daily review batch drawn from the partial pool", async () => {
     const rest = startLoading([memo(3)]);
     await screen.findByText("memo-3 original");
-    fireEvent.click(screen.getByRole("button", { name: /^Daily review/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^Daily review/ }).getAttribute("aria-current")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /^Daily review(?! settings)/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Daily review(?! settings)/ }).getAttribute("aria-current")).toBeTruthy());
     expect(localStorage.getItem("memo-review-day")).toBeNull();
 
     await act(async () => rest.resolve(page([memo(2), memo(1)])));
     await waitFor(() => expect(screen.queryByText(/Loading memos/)).toBeNull());
     // The next visit draws from the whole notebook and freezes that batch.
-    fireEvent.click(screen.getByRole("button", { name: /^Daily review/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Daily review(?! settings)/ }));
     await waitFor(() => expect(localStorage.getItem("memo-review-day")).not.toBeNull());
   });
 
@@ -418,7 +418,7 @@ describe("Daily review over an empty notebook", () => {
     mocks.bootstrap.mockResolvedValue(page([]));
     renderApp();
     await screen.findByText("👋 Capture your first thought");
-    fireEvent.click(screen.getByRole("button", { name: /^Daily review/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Daily review(?! settings)/ }));
     expect(await screen.findByText("Nothing to review yet")).toBeTruthy();
     expect(screen.queryByText(/Widen the scope/)).toBeNull();
     expect(storedIds()).toEqual([]);
@@ -434,7 +434,7 @@ describe("Daily review over an empty notebook", () => {
     mocks.bootstrap.mockResolvedValue(page([]));
     renderApp();
     await screen.findByText("👋 Capture your first thought");
-    fireEvent.click(screen.getByRole("button", { name: /^Daily review/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Daily review(?! settings)/ }));
     await screen.findByText("Nothing to review yet");
     fireEvent.click(screen.getAllByRole("button", { name: /^All memos/ })[0]);
     await waitFor(() => expect(screen.queryByText("Nothing to review yet")).toBeNull());
@@ -443,7 +443,7 @@ describe("Daily review over an empty notebook", () => {
       mocks.syncOptions.current?.applyChanges([memo(1)], [], [], 11);
     });
     await screen.findByText("memo-1 original");
-    fireEvent.click(screen.getByRole("button", { name: /^Daily review/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Daily review(?! settings)/ }));
     // Dealt in the same swap as the view change, not a beat later.
     expect(screen.getByText("memo-1 original")).toBeTruthy();
     expect(screen.queryByText("Nothing to review yet")).toBeNull();

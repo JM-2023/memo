@@ -269,7 +269,7 @@ describe("selection and scroll affordances", () => {
     // jsdom's tab order ignores `inert` (browsers skip the whole subtree), so
     // emulate it here: everything inside the surface is out of the order.
     for (const control of surface.querySelectorAll<HTMLElement>("button, a")) control.tabIndex = -1;
-    const overlay = screen.getByRole("button", { name: "Select this memo" });
+    const overlay = screen.getByRole("button", { name: /^Select memo/ });
     await user.tab();
     expect(document.activeElement).toBe(overlay);
   });

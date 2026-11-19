@@ -39,6 +39,15 @@ export interface OutboxEntry {
   selection: { start: number; end: number };
   status: OutboxStatus;
   failure: OutboxFailure | null;
+  /**
+   * The try out now is the queue's own — a retry clock running out, the
+   * link coming back, the page back in view, or another send carrying a
+   * failed one along — not a Retry press on this card. The card keeps its
+   * failed/retrying face (sendStateOf) and its buttons stay still: only the
+   * reader's Retry on this card turns it back to Sending…. `failure` keeps
+   * the reason meanwhile.
+   */
+  auto?: boolean;
 }
 
 export type Outbox = ReadonlyMap<string, OutboxEntry>;
@@ -67,7 +76,13 @@ export function failureOf(cause: unknown, online = typeof navigator === "undefin
 
 /** `online`: a failure the connection explains is being retried, not waiting for it. */
 export function sendStateOf(entry: OutboxEntry, online: boolean): SendState {
-  if (entry.status === "sending") return "sending";
+  // A try the queue made on its own is the retry the card already promised:
+  // it keeps its retrying/waiting face rather than flashing Sending… on
+  // every attempt.
+  if (entry.status === "sending") {
+    if (!entry.auto) return "sending";
+    return online ? "retrying" : "failed";
+  }
   if (entry.failure === "refused") return "refused";
   return online && entry.failure === "network" ? "retrying" : "failed";
 }

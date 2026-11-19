@@ -334,6 +334,7 @@ function SidebarView(props: SidebarProps) {
               >
                 <Sparkles size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
+                  {/* The same name as everywhere else, in this menu's Title Case. */}
                   {tr("Daily Review Settings", "每日回顾设置")}
                 </SwapText>
               </button>

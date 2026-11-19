@@ -453,9 +453,9 @@ describe("removing a memo from the keyboard", () => {
     await waitFor(() => expect(screen.queryByText("memo-1 body")).toBeNull());
     expect(mocks.trashMemo).toHaveBeenCalledWith("memo-1", 2);
     expect(document.activeElement).toBe(nextTrigger);
-    expect(liveText("status")).toBe("Moved to Trash. Press F6 to undo.");
+    expect(liveText("status")).toBe("Moved the memo to Trash. Press F6 to undo.");
     const region = screen.getByRole("region", { name: "Notifications" });
-    expect(within(region).getByText("Moved to Trash")).toBeTruthy();
+    expect(within(region).getByText("Moved the memo to Trash")).toBeTruthy();
 
     await user.keyboard("{F6}");
     const undo = within(region).getByRole("button", { name: "Undo" });

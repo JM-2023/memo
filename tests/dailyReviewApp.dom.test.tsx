@@ -90,7 +90,7 @@ function renderApp() {
 }
 
 function reviewNav(): HTMLElement {
-  return screen.getByRole("button", { name: /^Daily review/ });
+  return screen.getByRole("button", { name: /^Daily review(?! settings)/ });
 }
 
 function banner(): string {
@@ -201,7 +201,7 @@ describe("Daily review", () => {
     expect(cards.map((slot) => slot.querySelector(".review-context-text")?.textContent)).toEqual([
       "1 year ago today",
       "A week ago",
-      "Random · 3 months ago"
+      "3 months ago"
     ]);
     // The stamp itself is untouched, year and all.
     expect(cards[0].querySelector(".memo-time")?.textContent).toContain(String(new Date(MEMOS[0].createdAt).getFullYear()));
@@ -263,6 +263,45 @@ describe("Daily review", () => {
     expect(localStorage.getItem("memo-review-hidden")).toBeNull();
   });
 
+  it("once every card of today's set is set aside, says today is done instead of blaming the settings", async () => {
+    renderApp();
+    await screen.findByText("Written a year ago today");
+    fireEvent.click(reviewNav());
+    await waitFor(() => expect(banner()).toMatch(/0 of 3 revisited$/));
+
+    for (const id of ["otd", "week", "chance"]) {
+      const card = document.querySelector<HTMLElement>(`.memo-feed > [data-vt="memo-${id}"]`)!;
+      fireEvent.click(within(card).getByRole("button", { name: /^Not again: memo from / }));
+      await waitFor(() => expect(document.querySelector(`.memo-feed > [data-vt="memo-${id}"]`)).toBeNull());
+    }
+    const empty = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>(".feed-empty");
+      expect(node).not.toBeNull();
+      return node!;
+    });
+    expect(within(empty).getByText("Nothing left from today’s set")).toBeTruthy();
+    expect(within(empty).getByText("A new set tomorrow")).toBeTruthy();
+    // Nothing to widen: the settings were never the reason.
+    expect(within(empty).queryByText(/Widen the scope/)).toBeNull();
+    expect(within(empty).queryByRole("button")).toBeNull();
+    // Today stays dealt; nothing is redrawn behind the reader's back.
+    expect(JSON.parse(localStorage.getItem("memo-review-day") ?? "{}").ids).toEqual(["otd", "week", "chance"]);
+  });
+
+  it("offers the settings when nothing qualifies for a draw", async () => {
+    localStorage.setItem("memo-review-settings", JSON.stringify({ scope: "include", tags: ["nowhere"], range: "all", count: 10 }));
+    renderApp();
+    await screen.findByText("Written a year ago today");
+    fireEvent.click(reviewNav());
+    const empty = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>(".feed-empty");
+      expect(node?.textContent).toMatch(/Nothing to review today/);
+      return node!;
+    });
+    expect(within(empty).getByText("Widen the scope or time range to draw more memos.")).toBeTruthy();
+    expect(within(empty).getByRole("button", { name: "Daily review settings" })).toBeTruthy();
+  });
+
   it("keeps a set-aside memo out of a fresh draw, and the settings dialog can let it back", async () => {
     localStorage.setItem("memo-review-hidden", JSON.stringify(["otd"]));
     renderApp();
@@ -271,7 +310,7 @@ describe("Daily review", () => {
     await waitFor(() => expect(banner()).toMatch(/0 of 2 revisited$/));
     expect(JSON.parse(localStorage.getItem("memo-review-day") ?? "{}").ids).toEqual(["week", "chance"]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Review settings" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Daily review settings" })[0]);
     const restore = await screen.findByRole("button", { name: "Restore" });
     expect(screen.getByText("Set aside with “Not again” · 1")).toBeTruthy();
     fireEvent.click(restore);

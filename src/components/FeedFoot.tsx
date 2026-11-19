@@ -11,8 +11,10 @@ interface FeedFootProps {
  * still loading. It rises in (rise-in, --t-enter) the first time it is
  * scrolled into view; a new list keys a fresh one, which rises again.
  *
- * It stands after the feed, not in it: only slots move with the feed's
- * motion layer, and anything else inside the list would jump.
+ * It stands after the feed section in the column, and rides the feed's
+ * motion layer with the cards (lib/chromeMotion.ts, the row model): it
+ * glides when cards move above it and fades out where it stood when the
+ * lens changes.
  *
  * App sets the line for the memo lists; a view that owns its own foot
  * (Daily review) renders this with its line.

@@ -43,6 +43,12 @@ export function rememberSearch(items: readonly string[], query: string): string[
   return [text, ...items.filter((item) => item.toLowerCase() !== key)].slice(0, RECENT_SEARCHES_LIMIT);
 }
 
+/** `items` without `query`, matched the way rememberSearch files it (case and spacing aside). */
+export function forgetSearch(items: readonly string[], query: string): string[] {
+  const key = normalized(query)?.toLowerCase();
+  return key ? items.filter((item) => (normalized(item)?.toLowerCase() ?? item.toLowerCase()) !== key) : [...items];
+}
+
 export function loadRecentSearches(): string[] {
   try {
     return parseRecentSearches(localStorage.getItem(RECENT_SEARCHES_KEY));

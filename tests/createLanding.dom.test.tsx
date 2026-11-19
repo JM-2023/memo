@@ -280,10 +280,11 @@ describe("sending a memo", () => {
     const card = screen.getByText("Quick thought").closest("article")!;
     const slot = card.closest(".memo-slot");
     expect(card.classList.contains("is-unsent")).toBe(true);
-    // Where the time will stand: the send's state (CSS holds it back for
-    // the busy beat), with the way to take it back; no progress bar.
+    // Inside the 150ms busy hold: Take back is inert/disabled so an invisible
+    // button can never intercept a click; after the hold it reveals cleanly.
+    expect(within(card).queryByRole("button", { name: "Take back" })).toBeNull();
     expect(within(card).getByText("Sending…").closest(".memo-send-state")?.classList.contains("is-sending")).toBe(true);
-    expect(within(card).getByRole("button", { name: "Take back" })).toBeTruthy();
+    expect(await within(card).findByRole("button", { name: "Take back" })).toBeTruthy();
     expect(card.querySelector("time")).toBeNull();
     expect(card.querySelector(".send-progress")).toBeNull();
     expect(screen.queryByRole("progressbar")).toBeNull();
@@ -318,7 +319,7 @@ describe("sending a memo", () => {
     await waitFor(() => expect(mocks.createMemo).toHaveBeenCalledTimes(1));
     expect(field().value).toBe("");
 
-    await user.click(screen.getByRole("button", { name: "Take back" }));
+    await user.click(await screen.findByRole("button", { name: "Take back" }));
     expect(signal?.aborted).toBe(true);
     expect(field().value).toBe("Second thoughts");
     expect([field().selectionStart, field().selectionEnd]).toEqual([3, 9]);
@@ -340,7 +341,7 @@ describe("sending a memo", () => {
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(3));
     await user.type(field(), "Draft in progress");
 
-    const takeBack = screen.getByRole("button", { name: "Take back" });
+    const takeBack = await screen.findByRole("button", { name: "Take back" });
     await waitFor(() => expect(takeBack.getAttribute("aria-disabled")).toBe("true"));
     await user.click(takeBack);
     expect(await screen.findByText("Send or clear what’s in the composer first", { selector: ".toast-text" })).toBeTruthy();
@@ -348,7 +349,7 @@ describe("sending a memo", () => {
     expect(screen.getAllByRole("article")).toHaveLength(3);
   });
 
-  it("keeps a card that couldn't be sent, says so, and sends it under the same id when the connection returns", async () => {
+  it("keeps a card that couldn't be sent, says so calmly without red offline styling, and sends it under the same id when the connection returns", async () => {
     mocks.createMemo
       .mockImplementationOnce(async () => {
         throw new ApiError("NETWORK_ERROR", 0, "The server could not be reached. Check your connection and try again.");
@@ -364,7 +365,10 @@ describe("sending a memo", () => {
     await waitFor(() => expect(screen.getByText("Offline thought").closest("article")?.classList.contains("is-send-failed")).toBe(true));
     const card = screen.getByText("Offline thought").closest("article")!;
     expect(within(card).getByText("Not sent · will retry when you’re online")).toBeTruthy();
-    expect(card.querySelector(".memo-send-dot")).not.toBeNull();
+    // Offline stays calm neutral gray: no red border class and no red dot.
+    expect(card.classList.contains("is-send-refused")).toBe(false);
+    expect(card.querySelector(".memo-send-dot")).toBeNull();
+    expect(card.querySelector(".memo-send-state.is-failed")).not.toBeNull();
     expect(within(card).getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(within(card).getByRole("button", { name: "Edit" })).toBeTruthy();
     expect(within(card).getByRole("button", { name: "Discard" })).toBeTruthy();
@@ -385,7 +389,79 @@ describe("sending a memo", () => {
     await waitFor(() => expect(spoken()).toBe("Sent"));
   });
 
-  it("takes a just-confirmed send back on ⌘Z in the untouched composer: the memo to Trash, its text back", async () => {
+  it("uses red styling only when the server refuses a send, and transitions back to Sending… only on manual Retry", async () => {
+    let answerManualRetry: () => void = () => undefined;
+    mocks.createMemo
+      .mockImplementationOnce(async () => {
+        throw new ApiError("STORAGE_FULL", 507, "The database is full.");
+      })
+      .mockImplementationOnce(
+        (id: string, content: string) =>
+          new Promise((resolve) => {
+            answerManualRetry = () => resolve({ memo: { ...memo(9, content), id } });
+          })
+      );
+    const user = userEvent.setup();
+    renderApp();
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
+    await user.type(field(), "Refused thought");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(screen.getByText("Refused thought").closest("article")?.classList.contains("is-send-refused")).toBe(true));
+    const card = screen.getByText("Refused thought").closest("article")!;
+    expect(card.querySelector(".memo-send-dot")).not.toBeNull();
+    expect(card.querySelector(".memo-send-state.is-refused")).not.toBeNull();
+    expect(within(card).getByText("Not sent · the server refused it")).toBeTruthy();
+
+    // Pressing Retry explicitly transitions back to Sending… (with Take back revealed after the 150ms hold).
+    await user.click(within(card).getByRole("button", { name: "Retry" }));
+    expect(card.classList.contains("is-send-refused")).toBe(false);
+    expect(await within(card).findByRole("button", { name: "Take back" })).toBeTruthy();
+    expect(within(card).getByText("Sending…")).toBeTruthy();
+
+    await act(async () => answerManualRetry());
+    await waitFor(() => expect(card.querySelector("time")).not.toBeNull());
+  });
+
+  it("keeps a failed card's buttons still during automatic retries so Discard is never hijacked by Take back", async () => {
+    let holdAutoRetry = false;
+    mocks.createMemo
+      .mockImplementationOnce(async () => {
+        throw new ApiError("INTERNAL_ERROR", 503, "The server is having trouble.");
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise(() => {
+            holdAutoRetry = true;
+          })
+      );
+    const user = userEvent.setup();
+    renderApp();
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
+    await user.type(field(), "Retry thought");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(screen.getByText("Retry thought").closest("article")?.classList.contains("is-send-failed")).toBe(true));
+    const card = screen.getByText("Retry thought").closest("article")!;
+    const discardBefore = within(card).getByRole("button", { name: "Discard" });
+    expect(card.classList.contains("is-send-refused")).toBe(false);
+    expect(card.querySelector(".memo-send-dot")).toBeNull();
+
+    // Wait for the 2s automatic retry to fire and stay in flight.
+    await waitFor(() => expect(holdAutoRetry).toBe(true), { timeout: 3000 });
+    // Still shows "Not sent · retrying" with the exact same Discard button — never flashed Sending… or Take back.
+    expect(within(card).getByText("Not sent · retrying")).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: "Take back" })).toBeNull();
+    expect(within(card).getByRole("button", { name: "Discard" })).toBe(discardBefore);
+
+    // Clicking Discard during the auto-retry discards the memo instead of pulling it back to the composer.
+    await user.click(discardBefore);
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
+    expect(field().value).toBe("");
+    expect(await screen.findByText("Discarded the unsent memo", { selector: ".toast *" })).toBeTruthy();
+  });
+
+  it("takes a just-confirmed send back on ⌘Z in the untouched composer and tells the reader the sent copy moved to Trash", async () => {
     mocks.createMemo.mockImplementation(stores);
     mocks.trashMemo.mockImplementation(async (id: string) => ({
       ok: true,
@@ -402,9 +478,40 @@ describe("sending a memo", () => {
     // Prevented: the field's own undo history is not what this ⌘Z means.
     expect(fireEvent.keyDown(field(), { key: "z", ctrlKey: true })).toBe(false);
     expect(field().value).toBe("Oops");
-    expect(spoken()).toBe("Took the memo back into the composer");
+    expect(await screen.findByText("Back in the composer — the sent copy moved to Trash", { selector: ".toast *" })).toBeTruthy();
+    expect(spoken()).toBe("Back in the composer — the sent copy moved to Trash");
     await waitFor(() => expect(mocks.trashMemo).toHaveBeenCalledWith(id, memo(9, "").seq));
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
+  });
+
+  it("keeps typing alive during landing and lands the previous memo without wiping the new draft", async () => {
+    let releaseTransition: () => void = () => undefined;
+    document.startViewTransition = ((update: () => void) => {
+      const ready = new Promise<void>((done) => {
+        releaseTransition = () => {
+          update();
+          done();
+        };
+      });
+      return { ready, finished: ready, updateCallbackDone: ready, skipTransition: () => undefined };
+    }) as unknown as typeof document.startViewTransition;
+    mocks.createMemo.mockImplementation(stores);
+
+    const user = userEvent.setup();
+    renderApp();
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
+    await user.type(field(), "First note out");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    // While the view transition snapshot is still pending, the composer is editable.
+    expect(field().readOnly).toBe(false);
+    await user.type(field(), "Second note started");
+    expect(field().value).toBe("Second note started");
+
+    act(() => releaseTransition());
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(3));
+    expect(screen.getByText("First note out")).toBeTruthy();
+    expect(field().value).toBe("Second note started");
   });
 });
 
@@ -464,7 +571,7 @@ describe("a send still on its way", () => {
     await user.click(screen.getByRole("button", { name: "All memos" }));
     await user.click(await screen.findByRole("menuitem", { name: "Select memos" }));
     const first = screen.getByText("First note").closest("article") as HTMLElement;
-    await user.click(within(first).getByRole("button", { name: "Select this memo" }));
+    await user.click(within(first).getByRole("button", { name: /^Select memo/ }));
     expect(first.classList.contains("is-selected")).toBe(true);
 
     const line = pending.querySelector(".memo-content p") as HTMLElement;

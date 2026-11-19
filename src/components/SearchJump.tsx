@@ -1,7 +1,10 @@
-import { Bookmark, Brain, Hash, History, Search } from "lucide-react";
+import { Bookmark, Brain, Hash, History, ListX, Search, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { formatDayLabel } from "../lib/dates";
+import { useLayer } from "../hooks/useLayer";
 import { useI18n } from "../lib/i18n";
+import { announce } from "../lib/liveAnnouncer";
 import { T_FAST } from "../lib/motion";
 import type { SavedFilter } from "../lib/savedFilters";
 import { completeTag, matchTags, type TagEntry, type TagHit } from "../lib/tagJump";
@@ -16,15 +19,21 @@ export type JumpRow =
   | { kind: "search"; id: string; text: string }
   | { kind: "meaning"; id: string; text: string };
 
+/** A row the list answers itself, never handed to onAct: the recent searches' Clear. */
+type ListRow = JumpRow | { kind: "clear-recent"; id: string };
+
 interface Section {
   key: string;
   title: string | null;
-  rows: JumpRow[];
+  rows: ListRow[];
 }
 
 interface SearchJumpOptions {
   /** The text in the field (an IME's composition included). */
   query: string;
+  /** An IME is composing in the field: the list holds the rows it showed
+      before and re-ranks once, on the composed text. */
+  composing?: boolean;
   /** Focused and not dismissed: the list shows whenever it has rows. */
   open: boolean;
   tags: readonly TagEntry[];
@@ -38,6 +47,10 @@ interface SearchJumpOptions {
       the feed beneath it never disagree. */
   searchCount?: number | null;
   onAct: (row: JumpRow) => void;
+  /** A recent search's ✕, or Delete on it: forget that one. */
+  onForgetRecent?: (text: string) => void;
+  /** The recent searches' Clear: forget them all. */
+  onClearRecents?: () => void;
   /** Tab: the field takes this text. */
   onComplete: (text: string) => void;
   /** ↑ / ↓ on a closed list. */
@@ -93,13 +106,23 @@ function markedPath(path: string, marks: readonly number[]): ReactNode[] {
  * tag into the field, ⇧Enter searches by meaning.
  */
 export function useSearchJump(options: SearchJumpOptions): SearchJump {
-  const { query, open, tags, pinned, saved, recent, meaningAvailable, searchCount = null } = options;
+  const { open, tags, pinned, saved, recent, meaningAvailable, searchCount = null, composing = false } = options;
   const { count, formatNumber, locale, tr } = useI18n();
   const listId = useId();
   const popRef = useRef<HTMLDivElement>(null);
   const callbacksRef = useRef(options);
   callbacksRef.current = options;
   const [activeId, setActiveId] = useState<string | null>(null);
+  const canForget = Boolean(options.onForgetRecent);
+  const canClear = Boolean(options.onClearRecents);
+
+  // Mid-composition the field shows the IME's pinyin ("z", "zh", "zho"…),
+  // which is not what the reader is looking for: matched as it was, it
+  // reshuffled the tag rows on every letter. The list holds the rows of the
+  // text from before the composition and moves once, on the composed text.
+  const heldQueryRef = useRef(options.query);
+  if (!composing) heldQueryRef.current = options.query;
+  const query = heldQueryRef.current;
 
   const typed = query.trim();
   const sections = useMemo<Section[]>(() => {
@@ -114,8 +137,12 @@ export function useSearchJump(options: SearchJumpOptions): SearchJump {
         ]
           .filter(Boolean)
           .join(" · ");
+      const recentRows = recent.map((text, index): ListRow => ({ kind: "recent", id: `recent:${index}`, text }));
+      // Clear rides at the foot of the recent searches, a row like the
+      // others, so the arrows and Enter reach it as they reach them.
+      if (canClear && recentRows.length > 0) recentRows.push({ kind: "clear-recent", id: "recent:clear" });
       return [
-        { key: "recent", title: tr("Recent searches", "最近搜索"), rows: recent.map((text, index): JumpRow => ({ kind: "recent", id: `recent:${index}`, text })) },
+        { key: "recent", title: tr("Recent searches", "最近搜索"), rows: recentRows },
         { key: "saved", title: tr("Saved filters", "保存的筛选"), rows: saved.map((item): JumpRow => ({ kind: "saved", id: `saved:${item.id}`, item, summary: summaryOf(item) })) },
         { key: "pinned", title: tr("Pinned tags", "置顶标签"), rows: pinned.map((tag): JumpRow => ({ kind: "pinned", id: `pin:${tag.path}`, path: tag.path, count: tag.count })) }
       ].filter((section) => section.rows.length > 0);
@@ -127,7 +154,7 @@ export function useSearchJump(options: SearchJumpOptions): SearchJump {
       ...(hits.length > 0 ? [{ key: "tags", title: tr("Jump to tag", "跳到标签"), rows: hits.map((hit): JumpRow => ({ kind: "tag", id: `tag:${hit.path}`, hit })) }] : []),
       { key: "actions", title: null, rows: actions }
     ];
-  }, [typed, query, tags, pinned, saved, recent, meaningAvailable, locale, tr]);
+  }, [typed, query, tags, pinned, saved, recent, meaningAvailable, canClear, locale, tr]);
 
   const flat = useMemo(() => sections.flatMap((section) => section.rows), [sections]);
   const expanded = open && flat.length > 0;
@@ -183,6 +210,49 @@ export function useSearchJump(options: SearchJumpOptions): SearchJump {
     };
   }, [expanded]);
 
+  // A phone's keyboard opens over the page without shrinking it, so the
+  // list's foot would sit under the keys. The pop learns how much they
+  // cover (--kb-inset) and the list's height gives that up (app.css), so
+  // every row can still be scrolled into view above them.
+  useKeyboardInset(popRef, expanded);
+
+  // On the layer stack while it shows: Back folds the list away, as Esc
+  // does (the field keeps focus and the typed text), instead of stepping
+  // the feed behind it.
+  useLayer(expanded, () => callbacksRef.current.onCollapse());
+
+  /** A row picked by Enter or a click: Clear is the list's own, the rest the owner's. */
+  function act(row: ListRow) {
+    if (row.kind === "clear-recent") clearRecents();
+    else callbacksRef.current.onAct(row);
+  }
+
+  function forgetRecent(row: Extract<JumpRow, { kind: "recent" }>) {
+    const forget = callbacksRef.current.onForgetRecent;
+    if (!forget) return;
+    // Rows are known by position, so the one after takes the highlight
+    // over where it stands; the last hands it back to the one before, and
+    // with none left there is nothing to rest on.
+    const at = Number(row.id.slice("recent:".length));
+    const left = recent.length - 1;
+    if (activeId?.startsWith("recent:")) {
+      const activeAt = Number(activeId.slice("recent:".length));
+      if (left === 0) setActiveId(null);
+      else if (activeAt === at) setActiveId(`recent:${Math.min(at, left - 1)}`);
+      else if (activeAt > at) setActiveId(`recent:${activeAt - 1}`);
+    }
+    forget(row.text);
+    announce(tr(`Removed “${row.text}” from recent searches`, `已从最近搜索中删除「${row.text}」`));
+  }
+
+  function clearRecents() {
+    const clear = callbacksRef.current.onClearRecents;
+    if (!clear) return;
+    setActiveId(null);
+    clear();
+    announce(tr("Recent searches cleared", "已清空最近搜索"));
+  }
+
   function onKeyDown(event: ReactKeyboardEvent<HTMLInputElement>): boolean {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return false;
     const plain = !event.altKey && !event.metaKey && !event.ctrlKey;
@@ -214,7 +284,15 @@ export function useSearchJump(options: SearchJumpOptions): SearchJump {
       const row = event.shiftKey ? flat.find((item) => item.kind === "meaning") : active;
       if (!row) return false;
       event.preventDefault();
-      callbacksRef.current.onAct(row);
+      act(row);
+      return true;
+    }
+    // Delete (or ⇧Backspace on laptops without a forward-delete key) forgets
+    // the recent search it rests on; the box is empty while they show, so the
+    // key has nothing else to do there.
+    if ((event.key === "Delete" || (event.key === "Backspace" && event.shiftKey)) && plain && active?.kind === "recent" && canForget) {
+      event.preventDefault();
+      forgetRecent(active);
       return true;
     }
     if (event.key === "Tab" && plain && !event.shiftKey && completion) {
@@ -232,10 +310,33 @@ export function useSearchJump(options: SearchJumpOptions): SearchJump {
     </kbd>
   );
 
-  function rowBody(row: JumpRow): { icon: ReactNode; body: ReactNode; aside?: ReactNode; label?: string } {
+  function rowBody(row: ListRow): { icon: ReactNode; body: ReactNode; aside?: ReactNode; label?: string } {
     switch (row.kind) {
       case "recent":
-        return { icon: <History size={15} aria-hidden="true" />, body: <span className="jump-text">{row.text}</span> };
+        return {
+          icon: <History size={15} aria-hidden="true" />,
+          body: <span className="jump-text">{row.text}</span>,
+          // A pointer's way to forget it; the keyboard's is Delete on the row
+          // (the field keeps focus, so the ✕ stays out of the Tab order).
+          aside: canForget ? (
+            <button
+              type="button"
+              className="jump-forget"
+              tabIndex={-1}
+              aria-label={tr(`Remove “${row.text}” from recent searches`, `从最近搜索中删除「${row.text}」`)}
+              onClick={(event) => {
+                event.stopPropagation();
+                forgetRecent(row);
+              }}
+            >
+              <X size={14} aria-hidden="true" />
+            </button>
+          ) : undefined,
+          // Named by its words alone, not the ✕ inside it.
+          label: row.text
+        };
+      case "clear-recent":
+        return { icon: <ListX size={15} aria-hidden="true" />, body: <span className="jump-text">{tr("Clear recent searches", "清空最近搜索")}</span> };
       case "saved":
         return {
           icon: <Bookmark size={15} aria-hidden="true" />,
@@ -332,11 +433,12 @@ export function useSearchJump(options: SearchJumpOptions): SearchJump {
                   role="option"
                   aria-selected={isActive}
                   aria-label={label}
-                  className={`search-jump-row${isActive ? " is-active" : ""}`}
+                  aria-keyshortcuts={row.kind === "recent" && canForget ? "Delete Shift+Backspace" : undefined}
+                  className={`search-jump-row${isActive ? " is-active" : ""}${row.kind === "clear-recent" ? " is-quiet" : ""}`}
                   onMouseMove={() => {
                     if (!isActive) setActiveId(row.id);
                   }}
-                  onClick={() => callbacksRef.current.onAct(row)}
+                  onClick={() => act(row)}
                 >
                   {icon}
                   {body}
@@ -358,6 +460,11 @@ export function useSearchJump(options: SearchJumpOptions): SearchJump {
         <span>
           {keycap("esc")} {tr("close", "关闭")}
         </span>
+        {expanded && active?.kind === "recent" && canForget ? (
+          <span>
+            {keycap("del")} {tr("remove", "删除")}
+          </span>
+        ) : null}
       </div>
     </div>
   );

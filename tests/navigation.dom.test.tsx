@@ -154,7 +154,7 @@ describe("lens history", () => {
     expect(screen.getByText(/alpha note/)).toBeTruthy();
   });
 
-  it("adds one Back step per search, and Back clears it", async () => {
+  it("adds one Back step per search, and Back closes the open list before clearing it", async () => {
     const user = userEvent.setup();
     renderApp();
     await screen.findByText(/beta note/);
@@ -163,10 +163,17 @@ describe("lens history", () => {
     const search = screen.getByPlaceholderText("Search memos") as HTMLInputElement;
     await user.type(search, "beta");
     await waitFor(() => expect(screen.queryByText(/alpha note/)).toBeNull());
-    // The first keystroke left All memos; the rest edited that entry.
-    expect(window.history.length).toBe(before + 1);
+    // The first keystroke left All memos (the rest edited that entry) and the
+    // open search list holds one layer step on top of it.
+    expect(window.history.length).toBe(before + 2);
     expect(JSON.stringify(window.history.state)).not.toContain("beta");
 
+    // First Back folds the search list away without disturbing the search.
+    act(() => window.history.back());
+    await waitFor(() => expect(screen.queryByRole("listbox", { name: "Search suggestions" })).toBeNull());
+    expect(search.value).toBe("beta");
+
+    // Second Back clears the search and returns to All memos.
     act(() => window.history.back());
     await screen.findByText(/alpha note/);
     expect(search.value).toBe("");
@@ -183,7 +190,13 @@ describe("lens history", () => {
     // Inside a tag the search box names its scope (search cluster).
     const search = screen.getByPlaceholderText("Search in #alpha") as HTMLInputElement;
     await user.type(search, "note");
-    expect(window.history.length).toBe(inTag + 1);
+    // One step for the search lens, one layer step for the open search list.
+    expect(window.history.length).toBe(inTag + 2);
+
+    // First Back closes the search list; second clears the search inside #alpha.
+    act(() => window.history.back());
+    await waitFor(() => expect(screen.queryByRole("listbox", { name: "Search suggestions" })).toBeNull());
+    expect(search.value).toBe("note");
 
     act(() => window.history.back());
     await waitFor(() => expect(search.value).toBe(""));

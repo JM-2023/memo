@@ -939,18 +939,80 @@ describe("card gestures", () => {
       expect(container.querySelector(".memo-card.is-holding")).toBeNull();
       const onSelect = vi.fn();
       rerenderCard({ onSelect, selecting: true });
-      fireEvent.pointerDown(container.querySelector(".memo-select-overlay")!, finger);
+      const overlay = container.querySelector(".memo-select-overlay")!;
+      fireEvent.pointerDown(overlay, finger);
       act(() => vi.advanceTimersByTime(600));
       expect(onSelect).not.toHaveBeenCalled();
+      // (The hold took a range instead; let its lift go.)
+      fireEvent.pointerUp(overlay, finger);
+      act(() => vi.advanceTimersByTime(400));
     } finally {
       vi.useRealTimers();
     }
   });
 
+  it("takes a range on a still touch hold in select mode, buzzing once and swallowing the lift's tap", () => {
+    vi.useFakeTimers();
+    const vibrate = vi.fn();
+    Object.defineProperty(navigator, "vibrate", { configurable: true, value: vibrate });
+    try {
+      const onToggleSelect = vi.fn();
+      const { container } = renderCard({ selecting: true, onToggleSelect });
+      const overlay = container.querySelector(".memo-select-overlay")!;
+      const finger = { pointerId: 7, pointerType: "touch", isPrimary: true, clientX: 50, clientY: 50 };
+      fireEvent.pointerDown(overlay, finger);
+      act(() => vi.advanceTimersByTime(449));
+      expect(onToggleSelect).not.toHaveBeenCalled();
+      // The platform's long-press menu stands down while the press is held.
+      expect(fireEvent.contextMenu(overlay)).toBe(false);
+      act(() => vi.advanceTimersByTime(1));
+      expect(onToggleSelect).toHaveBeenCalledTimes(1);
+      expect(onToggleSelect).toHaveBeenLastCalledWith(true);
+      expect(vibrate).toHaveBeenCalledTimes(1);
+      fireEvent.pointerUp(overlay, finger);
+      // The lift's tap must not toggle the card straight back.
+      expect(fireEvent.click(overlay)).toBe(false);
+      expect(onToggleSelect).toHaveBeenCalledTimes(1);
+      act(() => vi.advanceTimersByTime(400));
+
+      // A finger that travels is a scroll; a lift before the hold is a tap;
+      // a mouse press is no hold at all.
+      fireEvent.pointerDown(overlay, { ...finger, pointerId: 8 });
+      fireEvent.pointerMove(overlay, { ...finger, pointerId: 8, clientY: 62 });
+      act(() => vi.advanceTimersByTime(600));
+      fireEvent.pointerDown(overlay, { ...finger, pointerId: 9 });
+      act(() => vi.advanceTimersByTime(200));
+      fireEvent.pointerUp(overlay, { ...finger, pointerId: 9 });
+      act(() => vi.advanceTimersByTime(600));
+      fireEvent.pointerDown(overlay, { ...finger, pointerId: 10, pointerType: "mouse" });
+      act(() => vi.advanceTimersByTime(600));
+      expect(onToggleSelect).toHaveBeenCalledTimes(1);
+      expect(vibrate).toHaveBeenCalledTimes(1);
+      fireEvent.click(overlay);
+      expect(onToggleSelect).toHaveBeenLastCalledWith(false);
+    } finally {
+      vi.useRealTimers();
+      delete (navigator as Navigator & { vibrate?: unknown }).vibrate;
+    }
+  });
+
+  it("names each select control by its memo, never by its state", () => {
+    const { rerenderCard } = renderCard({ memo: { ...baseMemo, content: "## Groceries for **Sunday**\n- milk" }, selecting: true, selected: false });
+    const overlay = screen.getByRole("button", { name: /^Select memo: Groceries for Sunday, / });
+    expect(overlay.getAttribute("aria-pressed")).toBe("false");
+    const name = overlay.getAttribute("aria-label");
+    rerenderCard({ memo: { ...baseMemo, content: "## Groceries for **Sunday**\n- milk" }, selecting: true, selected: true });
+    expect(overlay.getAttribute("aria-pressed")).toBe("true");
+    expect(overlay.getAttribute("aria-label")).toBe(name);
+    // A memo with no words is told apart by its time.
+    rerenderCard({ memo: { ...baseMemo, content: "" }, selecting: true, selected: true });
+    expect(screen.getByRole("button", { name: /^Select memo from / })).toBe(overlay);
+  });
+
   it("tells a shift-click on the select overlay apart", () => {
     const onToggleSelect = vi.fn();
     renderCard({ selecting: true, onToggleSelect });
-    const overlay = screen.getByRole("button", { name: "Select this memo" });
+    const overlay = screen.getByRole("button", { name: /^Select memo/ });
     fireEvent.click(overlay, { shiftKey: true });
     expect(onToggleSelect).toHaveBeenLastCalledWith(true);
     fireEvent.click(overlay);

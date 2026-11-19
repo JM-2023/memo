@@ -494,6 +494,42 @@ describe("App edit save", () => {
     expect(spoken()).toBe(message);
     expect(document.querySelector(".toast-text")).toBeNull();
     expect(draft.value).toBe("memo-81 original revised");
+
+    // Clicking "Keep my draft and continue" keeps focus in the editor textarea
+    // with the caret preserved instead of dropping it to <body>.
+    draft.setSelectionRange(5, 11);
+    const keepButton = within(card).getByRole("button", { name: "Keep my draft and continue" });
+    keepButton.focus();
+    await user.click(keepButton);
+    await waitFor(() => expect(card.querySelector(".editor-note.is-open .editor-conflict")).toBeNull());
+    expect(document.activeElement).toBe(draft);
+    expect([draft.selectionStart, draft.selectionEnd]).toEqual([5, 11]);
+  });
+
+  it("stops an edit save via the enabled Stop button (replacing Cancel) and keeps focus on the draft", async () => {
+    let signal: AbortSignal | undefined;
+    mocks.updateMemo.mockImplementationOnce(
+      (_id: string, _payload: unknown, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          signal = options?.signal;
+          signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        })
+    );
+    const user = userEvent.setup();
+    const { card, draft } = await openEdit(user);
+    await user.type(draft, " revised");
+    draft.setSelectionRange(3, 8);
+    await user.click(within(card).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.updateMemo).toHaveBeenCalledTimes(1));
+
+    const stop = within(card).getByRole("button", { name: "Stop" }) as HTMLButtonElement;
+    expect(stop.disabled).toBe(false);
+    await user.click(stop);
+    expect(await screen.findByText("Stopped saving your edits", { selector: ".toast-text" })).not.toBeNull();
+    expect(signal?.aborted).toBe(true);
+    expect(document.activeElement).toBe(draft);
+    expect([draft.selectionStart, draft.selectionEnd]).toEqual([3, 8]);
+    expect(within(card).getByRole("button", { name: "Cancel" })).not.toBeNull();
   });
 });
 
@@ -805,9 +841,21 @@ describe("Optimistic memo actions", () => {
     expect(mocks.trashMemo).toHaveBeenCalledWith(target.id, target.seq);
 
     await act(async () => request.resolve({ memo: { ...target, deletedAt: "2026-01-01T02:00:00.000Z", seq: 11 } }));
-    expect(await screen.findByText("Moved to Trash")).not.toBeNull();
+    expect(await screen.findByText("Moved the memo to Trash")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Undo" })).not.toBeNull();
     expect(screen.queryByText("trash me")).toBeNull();
+  });
+
+  it("says what a single-memo copy put on the clipboard", async () => {
+    const user = userEvent.setup();
+    const target = { ...memo(0), content: "copy me" };
+    bootWith([target]);
+    const card = (await screen.findByText("copy me")).closest("article");
+    if (!card) throw new Error("Memo card was not rendered");
+    await user.click(within(card).getByRole("button", { name: /^Memo actions/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Copy content" }));
+    expect(await screen.findByText("Copied the memo’s content", { selector: ".toast-text" })).not.toBeNull();
+    expect(await navigator.clipboard.readText()).toBe("copy me");
   });
 
   it("keeps the tag view when trashing its last memo fails", async () => {

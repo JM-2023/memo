@@ -38,21 +38,30 @@ export function ShortcutsSheet({ onClose, closeSignal }: ShortcutsSheetProps) {
     leave(() => closeRef.current());
   }
 
-  const mod = isApplePlatform() ? "⌘" : "Ctrl";
+  const apple = isApplePlatform();
+  const mod = apple ? "⌘" : "Ctrl";
+  const shift = apple ? "⇧" : "Shift";
+  const del = apple ? "⌫" : "Delete";
   const general: Shortcut[] = [
     { keys: [["/"], [mod, "K"]], label: tr("Search", "搜索") },
     { keys: [["N"]], label: tr("New memo", "新建") },
     { keys: [[mod, "↩"]], label: tr("Send or save", "发送/保存") },
     { keys: [["Esc"]], label: tr("Close, clear or cancel", "关闭、清空或取消") },
     { keys: [[mod, "Z"]], label: tr("Undo", "撤销") },
+    { keys: [["F6"]], label: tr("Jump to notification action", "跳到通知操作") },
+    { keys: [[shift, "F10"]], label: tr("Open menu", "打开菜单") },
     { keys: [["?"]], label: tr("This list", "显示本列表") }
+  ];
+  const selectMode: Shortcut[] = [
+    { keys: [[mod, "A"]], label: tr("Select all", "全选") },
+    { keys: [[del]], label: tr("Delete selected", "删除所选") }
   ];
   const editor: Shortcut[] = [
     { keys: [[mod, "B"]], label: tr("Bold", "粗体") },
     { keys: [[mod, "I"]], label: tr("Italic", "斜体") },
     { keys: [[mod, "E"]], label: tr("Code", "代码") },
-    { keys: [[mod, "⇧", "S"]], label: tr("Strikethrough", "删除线") },
-    { keys: [[mod, "⇧", "H"]], label: tr("Highlight", "高亮") },
+    { keys: [[mod, shift, "S"]], label: tr("Strikethrough", "删除线") },
+    { keys: [[mod, shift, "H"]], label: tr("Highlight", "高亮") },
     { keys: [[mod, "K"]], label: tr("Link", "链接") }
   ];
 
@@ -98,6 +107,8 @@ export function ShortcutsSheet({ onClose, closeSignal }: ShortcutsSheetProps) {
           <X size={16} aria-hidden="true" />
         </button>
         {list(general)}
+        <h3 className="shortcuts-subhead">{tr("In select mode", "选择模式中")}</h3>
+        {list(selectMode)}
         <h3 className="shortcuts-subhead">{tr("In the editor", "编辑器中")}</h3>
         {list(editor)}
       </div>
