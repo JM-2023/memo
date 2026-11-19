@@ -211,7 +211,12 @@ type View = "memos" | "trash" | "review";
 
 interface ToastAction {
   label: string;
-  run: () => void;
+  /**
+   * `missed`, for an action that moves focus: call it if focus went nowhere
+   * after all (Show found no card to reveal), and the stack hands focus back
+   * as it does for any other action.
+   */
+  run: (missed?: () => void) => void;
   /** The action moves focus itself (e.g. Show revealing a hidden card): don't hand focus back to the previous element. */
   movesFocus?: boolean;
 }
@@ -489,8 +494,23 @@ function ToastStack({ toasts, sendStates, dismissLabel, regionLabel, onDismiss, 
                     aria-keyshortcuts="F6"
                     onClick={() => {
                       const movesFocus = Boolean(toast.action?.movesFocus);
-                      if (movesFocus) returnFocusRef.current = null;
-                      toast.action?.run();
+                      let missed: (() => void) | undefined;
+                      if (movesFocus) {
+                        // The action takes focus on (a revealed card), so the
+                        // stack doesn't hand it back now — but keeps where it
+                        // came from, for when the action finds nothing to take
+                        // it to and focus would sit on <body>.
+                        const back = returnFocusRef.current;
+                        returnFocusRef.current = null;
+                        missed = () => {
+                          const active = document.activeElement;
+                          const stranded = !active || active === document.body || !active.isConnected || stackRef.current?.contains(active);
+                          if (!stranded) return;
+                          if (back?.isConnected && !back.inert && !back.closest("[inert]")) back.focus({ preventScroll: true });
+                          else if (active instanceof HTMLElement && stackRef.current?.contains(active)) active.blur();
+                        };
+                      }
+                      toast.action?.run(missed);
                       settle(toast.id, movesFocus);
                     }}
                   >
@@ -3169,24 +3189,35 @@ export default function App() {
   /**
    * Lifts just the lenses that hide one memo (a just-created one, from its
    * toast), then brings its card into view and moves focus to it once the
-   * feed has re-rendered.
+   * feed has re-rendered. `missed` runs when no card ends up with focus (the
+   * memo is gone, or lands past the rendered window), so the caller can put
+   * focus back rather than leave it on <body>.
    */
   const revealIdRef = useRef<string | null>(null);
+  const revealMissRef = useRef<(() => void) | null>(null);
   const revealScrollStopRef = useRef<(() => void) | null>(null);
   const [revealTick, setRevealTick] = useState(0);
   useEffect(() => () => revealScrollStopRef.current?.(), []);
   const revealMemo = useCallback(
-    (id: string) => {
+    (id: string, missed?: () => void) => {
       // (Or a send the server does not have yet.)
       const memo = syncStateRef.current.memos.get(id) ?? sendQueue.get(id)?.memo;
-      if (!memo || memo.deletedAt) return;
+      if (!memo || memo.deletedAt) {
+        missed?.();
+        return;
+      }
       const lens = lensRef.current;
       revealIdRef.current = id;
+      revealMissRef.current = missed ?? null;
       setRevealTick((value) => value + 1);
       // Past the rendered window (an oldest-first feed) there is no card to
       // bring in; don't leave a jump armed for whenever paging reaches it.
       window.setTimeout(() => {
-        if (revealIdRef.current === id) revealIdRef.current = null;
+        if (revealIdRef.current !== id) return;
+        revealIdRef.current = null;
+        const miss = revealMissRef.current;
+        revealMissRef.current = null;
+        miss?.();
       }, 1000);
       changeFeed(() => {
         if (!memoMatchesQuery(memo, lens.parsedQuery)) swapQuery("");
@@ -3216,8 +3247,13 @@ export default function App() {
     const frame = window.requestAnimationFrame(() => {
       if (revealIdRef.current !== id) return;
       revealIdRef.current = null;
+      const miss = revealMissRef.current;
+      revealMissRef.current = null;
       const slot = Array.from(document.querySelectorAll<HTMLElement>(".memo-slot[data-vt]")).find((node) => node.dataset.vt === `memo-${id}`);
-      if (!slot) return;
+      if (!slot) {
+        miss?.();
+        return;
+      }
       revealScrollStopRef.current?.();
       revealScrollStopRef.current = scrollRevealedSlot(slot);
       const card = slot.querySelector<HTMLElement>(".memo-card");
@@ -3228,6 +3264,7 @@ export default function App() {
         }
         card.focus({ preventScroll: true });
       }
+      if (!card || document.activeElement !== card) miss?.();
       slot.dataset.reveal = "";
       window.setTimeout(() => delete slot.dataset.reveal, 1200);
     });
@@ -4474,7 +4511,7 @@ export default function App() {
   // for a card the view hides (through the shared <SendStatus>), the live
   // region for one in view.
   const showSendAction = (id: string): ToastOptions => ({
-    action: { label: tr("Show", "显示"), run: () => revealMemo(id), movesFocus: true }
+    action: { label: tr("Show", "显示"), run: (missed) => revealMemo(id, missed), movesFocus: true }
   });
   const sendVoice: OutboxVoice = {
     sending: (id) =>

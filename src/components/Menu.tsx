@@ -133,12 +133,42 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   const panelRef = useRef<HTMLDivElement>(null);
   const focusEdgeRef = useRef<"first" | "last">("first");
   const restoreTriggerRef = useRef(false);
+  // A menu opened at a point (right-click, Shift+F10) remembers what held
+  // focus as it opened: its trigger may be scrolled out of sight by then.
+  const openerRef = useRef<HTMLElement | null>(null);
   const typeaheadRef = useRef({ text: "", timer: 0 });
   const framePendingRef = useRef<PaintedFrame | null>(null);
   const open = phase === "open";
 
   function triggerElement() {
     return rootRef.current?.querySelector<HTMLElement>(".menu-trigger-slot > button, .menu-trigger-slot [tabindex]:not([tabindex='-1'])") ?? null;
+  }
+
+  /** Whether the reader can see `el`: laid out, inside the viewport and clear of the sticky topbar. */
+  function inSight(el: HTMLElement): boolean {
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const ceiling = Math.max(0, document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0);
+    return rect.top >= ceiling && rect.bottom <= window.innerHeight;
+  }
+
+  /**
+   * Where focus goes home to as the menu closes: its trigger — unless the
+   * menu opened at a point and the trigger is out of sight (a long card's ⋯
+   * scrolled off above), where focus returns to what held it at the open,
+   * as a platform context menu leaves focus where it was. Focus restored to
+   * an unseen ⋯ would send the next Tab off from there.
+   */
+  function homeElement(): HTMLElement | null {
+    const trigger = triggerElement();
+    const opener = openerRef.current;
+    if (!opener || (trigger && inSight(trigger))) return trigger;
+    const usable =
+      opener.isConnected &&
+      !opener.closest("[inert]") &&
+      !panelRef.current?.contains(opener) &&
+      !(opener instanceof HTMLButtonElement && opener.disabled);
+    return usable ? opener : trigger;
   }
 
   function menuItems() {
@@ -148,7 +178,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   }
 
   function focusAfterTrigger(backward: boolean) {
-    const triggerNode = triggerElement();
+    const triggerNode = homeElement();
     if (!triggerNode) return;
     const candidates = [...document.querySelectorAll<HTMLElement>(PAGE_FOCUSABLE)].filter(
       (element) =>
@@ -183,7 +213,7 @@ export function Menu({ trigger, children, align = "right", className, panelClass
   function closeFromItem() {
     const active = document.activeElement;
     if (active === document.body || (active instanceof Node && panelRef.current?.contains(active))) {
-      triggerElement()?.focus({ preventScroll: true });
+      homeElement()?.focus({ preventScroll: true });
     }
     requestClose(false);
   }
@@ -213,6 +243,12 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     seenOpenSignalRef.current = openSignal;
     if (openSignal) {
       setPointAnchor(openSignalAnchor ?? null);
+      // Opened fresh at a point: note what holds focus before the panel
+      // takes it (a second right-click on an open menu keeps the first).
+      if (phase !== "open") {
+        const active = document.activeElement;
+        openerRef.current = openSignalAnchor && active instanceof HTMLElement && active !== document.body ? active : null;
+      }
       // Already open (a second chip's edit half, or a second right-click):
       // move to its control or new anchor instead of re-entering.
       if (phase === "open") {
@@ -483,8 +519,9 @@ export function Menu({ trigger, children, align = "right", className, panelClass
     setPos(null);
     setPointAnchor(null);
     setFlipUp(false);
-    if (restoreTriggerRef.current) triggerElement()?.focus({ preventScroll: true });
+    if (restoreTriggerRef.current) homeElement()?.focus({ preventScroll: true });
     restoreTriggerRef.current = false;
+    openerRef.current = null;
   }, [phase]);
 
   // right: "auto" neutralises the class-based `.align-right { right: 0 }` —
@@ -529,12 +566,14 @@ export function Menu({ trigger, children, align = "right", className, panelClass
             return;
           }
           setPointAnchor(null);
+          openerRef.current = null;
           requestOpen("first", null, event.detail === 0);
         }}
         onKeyDown={(event) => {
           if (kind === "panel" || open || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
           event.preventDefault();
           setPointAnchor(null);
+          openerRef.current = null;
           requestOpen(event.key === "ArrowUp" ? "last" : "first", null, true);
         }}
       >

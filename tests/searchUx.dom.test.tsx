@@ -545,6 +545,35 @@ describe("creating under a lens", () => {
     expect(scrollTo.mock.calls.length).toBeGreaterThan(callsBeforeDrift);
   });
 
+  it("hands focus back to where it was when Show finds no card to take it, instead of dropping it to <body>", async () => {
+    const user = userEvent.setup();
+    const created = memo(9, "Unreachable plumber note");
+    mocks.createMemo.mockImplementation(async (id: string) => ({ memo: { ...created, id } }));
+    // The revealed card can't take focus (as when it lands past the rendered
+    // window and no card ever shows): the reveal has missed.
+    const realFocus = HTMLElement.prototype.focus;
+    vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+      if (this.classList.contains("memo-card")) return;
+      realFocus.call(this, options);
+    });
+
+    renderApp();
+    const search = await screen.findByRole("combobox", { name: "Search memos" });
+    await user.type(search, "fruit");
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
+    const composer = screen.getByRole("combobox", { name: "Memo content" });
+    await user.type(composer, "Unreachable plumber note");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Sent — this view hides it")).toBeTruthy();
+    composer.focus();
+    expect(document.activeElement).toBe(composer);
+
+    await user.click(screen.getByRole("button", { name: "Show" }));
+    await screen.findByText("Unreachable plumber note");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Show" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(composer));
+  });
+
   it("glides to a revealed card under full motion using controlled per-frame scrollTo and yields on reader input", async () => {
     vi.mocked(window.matchMedia).mockImplementation(
       (query: string) =>

@@ -423,6 +423,73 @@ describe("right-click context menu on long cards", () => {
     const inFlow = await screen.findByRole("menu");
     expect(inFlow.classList.contains("is-portal")).toBe(false);
   });
+
+  it("hands focus back to what held it at the open when ⋯ is out of sight, and to ⋯ when it can be seen", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+    let triggerTop = -300;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.classList.contains("topbar")) return new DOMRect(0, 0, 1024, 72);
+      if (this.classList.contains("memo-menu-trigger")) return new DOMRect(700, triggerTop, 26, 26);
+      if (this.classList.contains("memo-card")) return new DOMRect(100, -320, 640, 920);
+      return new DOMRect(120, 340, 500, 24);
+    });
+    const { container } = render(
+      <Providers>
+        <div className="main-column">
+          <header className="topbar" />
+          <button type="button">Elsewhere</button>
+          <MemoCard
+            memo={memo("long-2", "First line\nSecond line")}
+            variant="normal"
+            knownTags={[]}
+            editing={false}
+            savingEdit={false}
+            editConflict={false}
+            selecting={false}
+            selected={false}
+            onToggleSelect={vi.fn()}
+            onStartEdit={vi.fn()}
+            onCancelEdit={vi.fn()}
+            onSaveEdit={vi.fn(async () => true)}
+            onAcceptEditConflict={vi.fn()}
+            onTogglePin={vi.fn()}
+            onAddTag={vi.fn()}
+            onCopy={vi.fn()}
+            onShare={vi.fn()}
+            onDelete={vi.fn()}
+            onRestore={vi.fn()}
+            onPurge={vi.fn()}
+            onPickTag={vi.fn()}
+            onOpenImage={vi.fn()}
+            onToggleTask={vi.fn()}
+          />
+        </div>
+      </Providers>
+    );
+    const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+    const trigger = screen.getByRole("button", { name: /^Memo actions/ });
+    const line = container.querySelector(".memo-content p")!;
+
+    // ⋯ scrolled off above: Esc leaves focus where it was before the right-click.
+    elsewhere.focus();
+    fireEvent.contextMenu(line, { clientX: 320, clientY: 350 });
+    const menu = await screen.findByRole("menu");
+    await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
+    fireEvent.keyDown(menu, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(document.activeElement).toBe(elsewhere);
+
+    // ⋯ in sight: it takes focus back as before.
+    triggerTop = 300;
+    elsewhere.focus();
+    fireEvent.contextMenu(line, { clientX: 320, clientY: 350 });
+    const again = await screen.findByRole("menu");
+    await waitFor(() => expect(again.contains(document.activeElement)).toBe(true));
+    fireEvent.keyDown(again, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+  });
 });
 
 describe("toast clearance above/below Back to top and phone bottom-sheet motion", () => {
