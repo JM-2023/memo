@@ -24,6 +24,7 @@ and small enough to live comfortably inside Cloudflare's Free plan.
   - [Capture](#capture)
   - [Markdown that stays plain text](#markdown-that-stays-plain-text)
   - [Tags that behave like folders — without being folders](#tags-that-behave-like-folders--without-being-folders)
+  - [Select, batch, and undo](#select-batch-and-undo)
   - [Search: keyword first, meaning second](#search-keyword-first-meaning-second)
   - [The model lives on your device](#the-model-lives-on-your-device)
   - [Daily review](#daily-review)
@@ -36,6 +37,7 @@ and small enough to live comfortably inside Cloudflare's Free plan.
 - [Configuration](#configuration)
 - [Security](#security)
 - [Storage and Free-plan limits](#storage-and-free-plan-limits)
+- [Scripts](#scripts)
 - [Tests and project layout](#tests-and-project-layout)
 
 ---
@@ -76,6 +78,12 @@ screenshots keep their width so the text stays legible. The feed draws a small
 preview and keeps the full image for the lightbox. External image URLs are rendered
 remotely and cost no storage at all.
 
+A memo lands in the feed the moment you press Send, before the server has answered.
+While it is on its way its card says so; if the connection drops it waits and retries
+on its own, and if the server refuses it the card offers Retry or takes the text back
+into the composer. Like the composer's draft, an unsent memo is held in memory only —
+never in Web Storage or IndexedDB — so a refresh drops it the way it drops unsent text.
+
 ### Markdown that stays plain text
 
 Memos render Markdown: `#`–`###` headings, bullet and numbered lists with
@@ -106,6 +114,23 @@ write: a change that would leave a memo empty or past the length limit is refuse
 naming those memos, and nothing is half-renamed.
 
 ![The sidebar tag tree expanded, with #life/cooking selected and its memos in the feed](docs/screenshots/tags.png)
+
+### Select, batch, and undo
+
+Select mode picks any number of memos at once to tag, move to Trash, or restore; a
+large selection is applied in bounded batches with visible progress. Most actions end
+in a toast with **Undo**, and <kbd>⌘Z</kbd> (<kbd>Ctrl</kbd>+<kbd>Z</kbd> elsewhere)
+undoes the newest one from anywhere outside a text field.
+
+| Key | Action |
+| --- | --- |
+| <kbd>/</kbd> or <kbd>⌘K</kbd> | Search |
+| <kbd>N</kbd> | Write a new memo |
+| <kbd>⌘Z</kbd> | Undo the newest toast |
+| <kbd>?</kbd> | List every shortcut, including the editor's |
+
+App shortcuts never fire while you are typing, during IME composition, or on key
+combinations the app does not own.
 
 ### Search: keyword first, meaning second
 
@@ -178,7 +203,10 @@ or save the PNG.
 ### Dark, small, and bilingual
 
 Light, dark, or follow the system. English or Simplified Chinese, remembered per
-browser. The layout collapses to a single column with a drawer on phones.
+browser. The layout collapses to a single column with a drawer on phones (swipe from
+the edge to open it). With *Reduce motion* turned on in the system, slides and morphs
+become short dissolves rather than disappearing outright, so nothing changes without
+a cue. Dialogs trap focus and return it, and results are announced to screen readers.
 
 <p align="center">
   <img src="docs/screenshots/feed-dark.png" width="74%" alt="The same feed in dark mode">
@@ -391,6 +419,19 @@ current values. Base64 inflates binary size by about a third, so a 900 KB image 
 roughly 1.2 MB before database overhead; watch D1 storage if the notebook is
 image-heavy.
 
+## Scripts
+
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Vite dev server for the front end only (no Functions or D1). |
+| `npm run pages:dev` | Production build served by `wrangler pages dev` with Functions and local D1, at <http://localhost:8788>. |
+| `npm test` | Unit/DOM suite, then the Workers runtime suite. |
+| `npm run test:unit` / `npm run test:workers` | Either suite on its own. |
+| `npm run build` | Type-check, build to `dist/`, verify the Pages output. |
+| `npm run db:migrate:local` / `npm run db:migrate:remote` | Apply D1 migrations locally or to the bound remote database. |
+| `npm run hash-password -- "<passcode>"` | Produce an `APP_PASSWORD_HASH` value. |
+| `npm run deploy` | Build and deploy `dist/` to Cloudflare Pages. |
+
 ## Tests and project layout
 
 ```bash
@@ -403,13 +444,17 @@ migration to an isolated D1 binding, so migrations are exercised on every run.
 
 ```
 functions/api/   Pages Functions: auth, memos, images, tags, sync, export/import
-migrations/      D1 schema history (0001 … 0008)
+migrations/      D1 schema history (0001 … 0007)
 src/components/  Feed, composer, sidebar, dialogs, share card, semantic panel
-src/lib/         Sync, cache, search, tags, Markdown, stats, model loader/runtime
+src/hooks/       Outbox, semantic search, sheets, drawers, modal a11y, reduced motion
+src/lib/         Sync, cache, outbox, search, tags, Markdown, stats, motion, model loader/runtime
+scripts/         Passcode hashing and the Pages build-output verifier
 tests/           Unit and DOM tests   ·   tests-workers/  runtime + migration tests
-docs/            Embedding-model hosting design, screenshots
+docs/            Model hosting design, feed motion engine plan, demo notebook, screenshots
 ```
 
 Hosting design for the embedding model — mirrors, CORS, and the immutable release
 that backs manual import — lives in
-[`docs/embedding-model-hosting.md`](docs/embedding-model-hosting.md).
+[`docs/embedding-model-hosting.md`](docs/embedding-model-hosting.md). How the feed
+moves cards, chrome and view transitions is planned and recorded in
+[`docs/feed-motion-engine-plan.md`](docs/feed-motion-engine-plan.md).
