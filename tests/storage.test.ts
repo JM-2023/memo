@@ -4,6 +4,7 @@ import {
   daysInTrash,
   estimateStoredBytes,
   formatBytes,
+  meterParts,
   sortImageEntries,
   staleTrash,
   storedBytesOf,
@@ -82,6 +83,40 @@ describe("summarizeStorage", () => {
 
   it("never lets the file read smaller than what it holds", () => {
     expect(summarizeStorage(report({ database: { bytes: 10, limitBytes: 500_000_000 } })).used).toBe(1_601_000);
+  });
+});
+
+describe("meterParts", () => {
+  const MB = 1_000_000;
+  const sized = (images: number, text: number, trash: number, file: number) =>
+    summarizeStorage(
+      report({
+        database: { bytes: file, limitBytes: 500 * MB },
+        notes: { memos: 1, textBytes: text, images: 1, imageBytes: images },
+        trash: { memos: 0, textBytes: trash, images: 0, imageBytes: 0 }
+      })
+    );
+
+  it("draws the nub, not parts, under 1% of the limit", () => {
+    expect(meterParts(summarizeStorage(report()))).toBeNull();
+  });
+
+  it("folds parts too thin to read into one other run", () => {
+    expect(meterParts(sized(80 * MB, 2 * MB, 1 * MB, 100 * MB))).toEqual([
+      { key: "images", bytes: 80 * MB },
+      { key: "other", bytes: 20 * MB }
+    ]);
+  });
+
+  it("gives a run still too thin to the largest part", () => {
+    expect(meterParts(sized(60 * MB, 10 * MB, 0, 70.5 * MB))).toEqual([
+      { key: "images", bytes: 60.5 * MB },
+      { key: "text", bytes: 10 * MB }
+    ]);
+  });
+
+  it("draws one run in the largest part's colour when every part is thin", () => {
+    expect(meterParts(sized(3 * MB, 1 * MB, 0, 6 * MB))).toEqual([{ key: "images", bytes: 6 * MB }]);
   });
 });
 

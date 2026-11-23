@@ -907,13 +907,13 @@ export function ModelSettingsModal({
       className={`overlay review-overlay${closing ? " is-closing" : ""}`}
       role="dialog"
       aria-modal="true"
-      aria-label={tr("Semantic Search", "语义搜索")}
+      aria-label={tr("Semantic search", "语义搜索")}
       tabIndex={-1}
       {...backdrop}
     >
       <div className="model-panel" onClick={(event) => event.stopPropagation()}>
         <header className="model-panel-head">
-          <h2 className="model-panel-title">{tr("Semantic Search", "语义搜索")}</h2>
+          <h2 className="model-panel-title">{tr("Semantic search", "语义搜索")}</h2>
           <button
             ref={closeButtonRef}
             type="button"
@@ -1294,10 +1294,6 @@ export function ModelSettingsModal({
           >
             <ChevronDown size={14} className="model-caret" aria-hidden="true" />
             {tr("Advanced", "高级")}
-          </button>
-          <span className="model-foot-spacer" />
-          <button type="button" className="model-foot-close" onClick={requestClose}>
-            {tr("Close", "关闭")}
           </button>
         </footer>
 

@@ -269,13 +269,13 @@ describe("logging out", () => {
     await renderReadyApp();
 
     await user.click(screen.getByRole("button", { name: /My MEMO/ }));
-    await user.click(screen.getByRole("menuitem", { name: "Log Out" }));
+    await user.click(screen.getByRole("menuitem", { name: "Log out" }));
     const dialog = await screen.findByRole("dialog", { name: "Log out of this device?" });
     expect(dialog.textContent).toContain("saved filters");
     expect(dialog.textContent).toContain("semantic search model stay");
     expect(mocks.logout).not.toHaveBeenCalled();
 
-    await user.click(within(dialog).getByRole("button", { name: "Log Out" }));
+    await user.click(within(dialog).getByRole("button", { name: "Log out" }));
     await waitFor(() => expect(mocks.logout).toHaveBeenCalledTimes(1));
     expect(mocks.clearLocalDeviceData).toHaveBeenCalledTimes(1);
     await screen.findByRole("button", { name: "Confirm" });
@@ -303,9 +303,9 @@ describe("logging out", () => {
     await waitFor(() => expect(mocks.createMemo).toHaveBeenCalledTimes(1));
 
     await user.click(screen.getByRole("button", { name: /My MEMO/ }));
-    await user.click(screen.getByRole("menuitem", { name: "Log Out" }));
+    await user.click(screen.getByRole("menuitem", { name: "Log out" }));
     const dialog = await screen.findByRole("dialog", { name: "Log out of this device?" });
-    await user.click(within(dialog).getByRole("button", { name: "Log Out" }));
+    await user.click(within(dialog).getByRole("button", { name: "Log out" }));
     await waitFor(() => expect(mocks.logout).toHaveBeenCalledTimes(1));
     await act(async () => turnAway());
     await act(async () => confirmLogout());

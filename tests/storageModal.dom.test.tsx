@@ -110,7 +110,7 @@ describe("storage overview", () => {
     renderStorage();
     expect(await screen.findByText("2.0")).toBeTruthy();
     expect(screen.getByText("of 500 MB")).toBeTruthy();
-    expect(screen.getByText("0.4% of the 500 MB limit · 498 MB free")).toBeTruthy();
+    expect(screen.getByText("Under 1% of the 500 MB limit · 498 MB free")).toBeTruthy();
     expect(screen.getByRole("img", { name: "2.0 MB of 500 MB used: Images 1.3 MB, Text 30 B, Trash 270 KB, Other 430 KB" })).toBeTruthy();
     const figures = screen.getByRole("dialog", { name: "Storage" }).querySelectorAll(".stats-kpi");
     expect([...figures].map((figure) => figure.textContent)).toEqual([

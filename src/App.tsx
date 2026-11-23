@@ -684,8 +684,8 @@ function loadSortKey(): SortKey {
   return SORT_KEYS.includes(stored as SortKey) ? (stored as SortKey) : "created-desc";
 }
 
-/** A line heading a run of cards: the pinned ones, or what meaning alone found. */
-type FeedLeadKind = "pinned" | "related";
+/** A line heading a run of cards: the pinned ones, the rest after them, or what meaning alone found. */
+type FeedLeadKind = "pinned" | "rest" | "related";
 
 interface MemoSlotProps {
   /** The card's key, `memo-<id>`, written to data-vt. */
@@ -716,8 +716,10 @@ function MemoSlot({ vtName, stale, pinEnd, children }: MemoSlotProps) {
 }
 
 /**
- * The line heading a run of cards — "Pinned · 2", or where meaning's finds
- * begin — as a feed row of its own, before the run's first card. It is not
+ * The line heading a run of cards — "Pinned · 2" and, after the pins,
+ * "Others · 40"; or where meaning's finds begin — as a feed row of its own,
+ * before the run's first card. Both pin runs are named, so the beat between
+ * them reads as two groups, not as a card gone missing. It is not
  * that card's: pinning one from the middle of the list slides the card in
  * under a heading that stays put while its figure rolls, rather than the
  * heading vanishing with the old first card and arriving with the new one.
@@ -725,7 +727,7 @@ function MemoSlot({ vtName, stale, pinEnd, children }: MemoSlotProps) {
  * model). A real heading: a screen reader's way between the runs. The
  * page's own headings start at the dialogs' h2, so these are h2 as well.
  */
-function FeedLead({ kind, pinned, query }: { kind: FeedLeadKind; pinned: number; query: string }) {
+function FeedLead({ kind, count, query }: { kind: FeedLeadKind; count: number; query: string }) {
   const { formatNumber, tr } = useI18n();
   if (kind === "related") {
     return (
@@ -735,15 +737,28 @@ function FeedLead({ kind, pinned, query }: { kind: FeedLeadKind; pinned: number;
       </h2>
     );
   }
+  if (kind === "rest") {
+    return (
+      <h2 className="feed-lead is-rest">
+        <span className="feed-lead-text">
+          <span className="sr-only">{tr(`Others · ${formatNumber(count)}`, `其余 · ${formatNumber(count)}`)}</span>
+          <span aria-hidden="true">
+            {tr("Others · ", "其余 · ")}
+            <RollingText value={count} />
+          </span>
+        </span>
+      </h2>
+    );
+  }
   return (
     <h2 className="feed-lead is-pinned">
       <Pin size={12} aria-hidden="true" />
       <span className="feed-lead-text">
         {/* The figure rolls; the heading is read from a plain copy. */}
-        <span className="sr-only">{tr(`Pinned · ${formatNumber(pinned)}`, `已置顶 · ${formatNumber(pinned)}`)}</span>
+        <span className="sr-only">{tr(`Pinned · ${formatNumber(count)}`, `已置顶 · ${formatNumber(count)}`)}</span>
         <span aria-hidden="true">
           {tr("Pinned · ", "已置顶 · ")}
-          <RollingText value={pinned} />
+          <RollingText value={count} />
         </span>
       </span>
     </h2>
@@ -7043,7 +7058,7 @@ export default function App() {
                 // bubble shows (the bubble itself is aria-hidden).
                 aria-pressed={semanticMonitor ? undefined : semanticOn}
                 aria-haspopup={semanticMonitor ? "dialog" : undefined}
-                aria-label={semanticState ? tr(`Semantic Search: ${semanticState}`, `语义搜索：${semanticState}`) : tr("Semantic Search", "语义搜索")}
+                aria-label={semanticState ? tr(`Semantic search: ${semanticState}`, `语义搜索：${semanticState}`) : tr("Semantic search", "语义搜索")}
                 // The in-app bubble rather than a native title: it shows at
                 // once, matches the funnel beside it, and names the state
                 // (on / off / working) before the explanation.
@@ -7441,7 +7456,7 @@ export default function App() {
             </div>
           ) : (
             <>
-              {pinnedRun > 0 ? <FeedLead kind="pinned" pinned={pinnedRun} query="" /> : null}
+              {pinnedRun > 0 ? <FeedLead kind="pinned" count={pinnedRun} query="" /> : null}
               {renderedFeedMemos.flatMap((memo, index) => {
                 const item = (
                   <FeedItem
@@ -7471,8 +7486,11 @@ export default function App() {
                     recallBlocked={composerOccupied && sendStates.has(memo.id)}
                   />
                 );
+                if (pinnedRun > 0 && index === pinnedRun) {
+                  return [<FeedLead key="lead-rest" kind="rest" count={feedMemos.length - pinnedRun} query="" />, item];
+                }
                 return memo.id === firstRelatedId
-                  ? [<FeedLead key="lead-related" kind="related" pinned={0} query={query.trim()} />, item]
+                  ? [<FeedLead key="lead-related" kind="related" count={0} query={query.trim()} />, item]
                   : [item];
               })}
             </>
@@ -7756,7 +7774,7 @@ export default function App() {
         <ConfirmDialog
           title={tr("Log out of this device?", "退出这台设备的登录？")}
           body={tr(
-            "Your memos stay on the server. This device forgets its offline copy, search index, recent searches, saved filters, sidebar layout and what Daily Review remembers. Theme, language and the downloaded semantic search model stay.",
+            "Your memos stay on the server. This device forgets its offline copy, search index, recent searches, saved filters, sidebar layout and what Daily review remembers. Theme, language and the downloaded semantic search model stay.",
             "笔记仍保存在服务器上。这台设备会清除离线副本、搜索索引、最近搜索、已保存的筛选、侧栏布局和每日回顾的设置与记录；主题、语言和已下载的语义搜索模型会保留。"
           )}
           // Unsent memos live only in this tab's memory (lib/outbox), and the
@@ -7766,7 +7784,7 @@ export default function App() {
               ? tr(`${count(unsent.length, "memo")} not sent yet will be discarded.`, `还有 ${count(unsent.length, "memo")}没发出去，退出后会丢掉。`)
               : undefined
           }
-          confirmLabel={tr("Log Out", "退出登录")}
+          confirmLabel={tr("Log out", "退出登录")}
           busyLabel={tr("Logging out…", "正在退出…")}
           busy={loggingOut}
           onCancel={() => {

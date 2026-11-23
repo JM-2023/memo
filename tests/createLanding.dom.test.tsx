@@ -612,7 +612,7 @@ describe("a send still on its way", () => {
     const card = await sendOne(user, "Mid-change thought");
     await waitFor(() => expect(mocks.createMemo).toHaveBeenCalledTimes(1));
     await user.click(screen.getByRole("button", { name: /My MEMO/ }));
-    await user.click(await screen.findByRole("menuitem", { name: /Change Passcode/ }));
+    await user.click(await screen.findByRole("menuitem", { name: /Change passcode/ }));
     await screen.findByRole("dialog", { name: "Change passcode" });
 
     await act(async () => held.answer());
@@ -628,7 +628,7 @@ describe("a send still on its way", () => {
     await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
     await sendOne(user, "Unsent thought");
     await user.click(screen.getByRole("button", { name: /My MEMO/ }));
-    await user.click(await screen.findByRole("menuitem", { name: "Log Out" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Log out" }));
     const dialog = await screen.findByRole("dialog", { name: "Log out of this device?" });
     expect(within(dialog).getByText("1 memo not sent yet will be discarded.")).toBeTruthy();
     expect(dialog.textContent).toContain("sidebar layout");

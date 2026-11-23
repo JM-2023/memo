@@ -12,7 +12,9 @@ import {
   formatBytes,
   NEARLY_FULL_RATIO,
   sortImageEntries,
+  METER_NUB_RATIO,
   STALE_TRASH_DAYS,
+  meterParts,
   staleTrash,
   storedBytesOf,
   storedImageEntries,
@@ -121,6 +123,7 @@ export function StorageModal({ memos, loadReport, onClose, onOpenMemo, onOpenTra
   const bytes = (value: number) => formatBytes(value, locale);
 
   const summary = useMemo(() => (report ? summarizeStorage(report) : null), [report]);
+  const drawnParts = useMemo(() => (summary ? meterParts(summary) : null), [summary]);
   const trashed = useMemo(() => memos.filter((memo) => memo.deletedAt), [memos]);
   const stale = useMemo(() => staleTrash(memos, now), [memos, now]);
   const staleBytes = useMemo(() => storedBytesOf(stale, report), [stale, report]);
@@ -203,6 +206,11 @@ export function StorageModal({ memos, loadReport, onClose, onOpenMemo, onOpenTra
           {tr(` ${free} left — at ${limit}, new memos and images stop saving.`, `还剩 ${free}，到 ${limit} 时将无法再保存新的笔记和图片。`)}
         </>
       );
+    }
+    // Under 1% a decimal reads as precision nobody needs ("0.1%"): say it
+    // the way the nub shows it.
+    if (summary.ratio < METER_NUB_RATIO) {
+      return tr(`Under ${percent(METER_NUB_RATIO)} of the ${limit} limit · ${free} free`, `不到 ${limit} 上限的 ${percent(METER_NUB_RATIO)} · 剩余 ${free}`);
     }
     return tr(`${percent(summary.ratio)} of the ${limit} limit · ${free} free`, `已用 ${limit} 上限的 ${percent(summary.ratio)} · 剩余 ${free}`);
   }
@@ -311,18 +319,20 @@ export function StorageModal({ memos, loadReport, onClose, onOpenMemo, onOpenTra
               </p>
             </div>
             <div className="storage-meter" role="img" aria-label={meterLabel}>
-              {summary ? (
+              {drawnParts ? (
                 <span className="storage-meter-fill">
-                  {summary.parts
+                  {drawnParts
                     .filter((part) => part.bytes > 0)
                     .map((part) => (
                       <span
                         key={part.key}
                         className={`storage-meter-part is-${part.key}`}
-                        style={{ "--share": `${(part.bytes / summary.limit) * 100}%` } as CSSProperties}
+                        style={{ "--share": `${(part.bytes / summary!.limit) * 100}%` } as CSSProperties}
                       />
                     ))}
                 </span>
+              ) : summary ? (
+                <span className="storage-meter-nub" />
               ) : null}
             </div>
             <dl className="stats-kpis storage-kpis">

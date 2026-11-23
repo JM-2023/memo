@@ -100,6 +100,33 @@ export function summarizeStorage(report: StorageReport): StorageSummary {
   };
 }
 
+/** Below this share of the limit the meter draws one round nub, not parts. */
+export const METER_NUB_RATIO = 0.01;
+/** A part narrower than this share of the limit would be a hairline once its
+ * 2px divider is cut from it (about 9px of a 600px meter). */
+export const METER_MIN_SHARE = 0.015;
+
+/**
+ * What the meter draws: null for the nub (the notebook uses under 1% of
+ * the limit), else its parts in order. A part too thin to read joins the
+ * others like it as one "other" run; a run still too thin goes to the
+ * largest part. The readings under the meter keep every part.
+ */
+export function meterParts(summary: StorageSummary): StoragePart[] | null {
+  if (summary.ratio < METER_NUB_RATIO) return null;
+  const min = summary.limit * METER_MIN_SHARE;
+  const kept = summary.parts.filter((part) => part.key !== "other" && part.bytes >= min);
+  const rest = summary.parts.reduce((sum, part) => (kept.includes(part) ? sum : sum + part.bytes), 0);
+  if (kept.length === 0) {
+    const largest = summary.parts.reduce((a, b) => (b.bytes > a.bytes ? b : a));
+    return [{ key: largest.key, bytes: rest }];
+  }
+  if (rest >= min) return [...kept, { key: "other", bytes: rest }];
+  if (rest === 0) return kept;
+  const largest = kept.reduce((a, b) => (b.bytes > a.bytes ? b : a));
+  return kept.map((part) => (part === largest ? { ...part, bytes: part.bytes + rest } : part));
+}
+
 export interface StoredImageEntry {
   image: MemoImage;
   memo: Memo;

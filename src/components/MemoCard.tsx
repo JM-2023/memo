@@ -896,6 +896,15 @@ export function MemoCard(props: MemoCardProps) {
   function caretFromDoubleClick(target: EventTarget, clientY: number): { offset: number; viewportY: number } | null {
     const container = target instanceof Element ? target.closest(".memo-content") : null;
     let row = target instanceof Element ? target : null;
+    // Past a prose row's end (rows stop at the 640px measure while the body
+    // runs the card's width), the press lands on the body itself: the row
+    // level with it is the one meant.
+    if (container && row === container) {
+      row = Array.from(container.children).find((child) => {
+        const box = child.getBoundingClientRect();
+        return clientY >= box.top && clientY < box.bottom;
+      }) ?? null;
+    }
     while (row && row.parentElement !== container) row = row.parentElement;
     if (!container || !row) return null;
     const line = visualLinesOf(memo.content)[Array.prototype.indexOf.call(container.children, row)];

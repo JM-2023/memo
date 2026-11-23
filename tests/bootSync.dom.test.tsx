@@ -314,7 +314,7 @@ describe("while older pages are still loading", () => {
     const rest = startLoading([memo(3)]);
     await screen.findByText("memo-3 original");
     fireEvent.click(screen.getByRole("button", { name: /My MEMO/ }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: /Change Passcode/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Change passcode/ }));
     await screen.findByRole("dialog", { name: "Change passcode" });
 
     // The page in flight went out with the old cookie and lands after the rotation.
@@ -339,7 +339,7 @@ describe("while older pages are still loading", () => {
     await screen.findByText("memo-3 original");
     await waitFor(() => expect(mocks.bootstrap).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole("button", { name: /My MEMO/ }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: /Change Passcode/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Change passcode/ }));
     await screen.findByRole("dialog", { name: "Change passcode" });
 
     // The one-second backoff runs out while the dialog is open: nothing goes out.

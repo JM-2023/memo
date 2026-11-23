@@ -1,4 +1,5 @@
 import { Bookmark, BookmarkPlus, Check, Image, Link2, ListFilter, ListTodo, Tags, X, type LucideIcon } from "lucide-react";
+import { useState } from "react";
 import { addDays, dateKey } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import type { SavedFilter } from "../lib/savedFilters";
@@ -81,6 +82,9 @@ export function SearchFilter(props: SearchFilterProps) {
   const showSaved = props.saved.length > 0 || props.canSave;
   const activeTag = props.activeTag ?? null;
   const presets = rangePresets();
+  // A chip's edit half lands on what made the range: its quick range when
+  // one did, else the calendar (open for any custom range).
+  const pickedPreset = presets.some((preset) => filters.dateFrom === preset.from && filters.dateTo === preset.to);
 
   return (
     <Menu
@@ -96,7 +100,9 @@ export function SearchFilter(props: SearchFilterProps) {
         props.openTarget === undefined
           ? undefined
           : props.openTarget === "range"
-            ? ".range-cal-day[tabindex='0']"
+            ? pickedPreset && props.onPresetRange
+              ? ".filter-preset[aria-pressed='true']"
+              : ".range-cal-day[tabindex='0']"
             : `[data-facet='${props.openTarget}']`
       }
       trigger={(open) => (
@@ -166,30 +172,13 @@ export function SearchFilter(props: SearchFilterProps) {
               </button>
             ) : null}
           </span>
-          {props.onPresetRange ? (
-            <div className="filter-presets" role="group" aria-label={tr("Quick ranges", "快捷范围")}>
-              {presets.map((preset) => {
-                const picked = filters.dateFrom === preset.from && filters.dateTo === preset.to;
-                return (
-                  <button
-                    key={preset.key}
-                    type="button"
-                    className={`filter-preset${picked ? " is-active" : ""}`}
-                    aria-pressed={picked}
-                    onClick={() => (picked ? props.onClearDates() : props.onPresetRange?.(preset.from, preset.to))}
-                  >
-                    {tr(preset.en, preset.zh)}
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-          <RangeCalendar
-            from={filters.dateFrom}
-            to={filters.dateTo}
+          <DateRange
+            filters={filters}
+            presets={presets}
             minDay={props.minDay ?? null}
-            onStart={(day) => props.onDateChange({ dateFrom: day, dateTo: null })}
-            onRange={(from, to) => (props.onPresetRange ? props.onPresetRange(from, to) : props.onDateChange({ dateFrom: from, dateTo: to }))}
+            onDateChange={props.onDateChange}
+            onPresetRange={props.onPresetRange}
+            onClearDates={props.onClearDates}
           />
           {showSaved ? (
             <>
@@ -253,12 +242,82 @@ export function SearchFilter(props: SearchFilterProps) {
               ) : null}
             </>
           ) : null}
-          <span className="action-menu__sep" />
-          <span className="filter-hint" role="presentation">
-            {tr("Space separates keywords (all must match); “quotes” match an exact phrase.", "空格分隔多个关键词（须全部命中）；“引号”匹配完整短语。")}
-          </span>
         </>
       )}
     </Menu>
+  );
+}
+
+interface DateRangeProps {
+  filters: FeedFilters;
+  presets: RangePreset[];
+  minDay: string | null;
+  onDateChange: SearchFilterProps["onDateChange"];
+  onPresetRange?: SearchFilterProps["onPresetRange"];
+  onClearDates: () => void;
+}
+
+/**
+ * The panel's date half: the quick ranges, then "Custom…", which opens the
+ * two-tap month calendar beneath them. The calendar stays folded until it is
+ * asked for — most ranges are one of the four — and stays open while the
+ * range is one only it can make. Without quick ranges it is always there.
+ */
+function DateRange({ filters, presets, minDay, onDateChange, onPresetRange, onClearDates }: DateRangeProps) {
+  const { tr } = useI18n();
+  const [customOpen, setCustomOpen] = useState(false);
+  const rangeOn = filters.dateFrom !== null || filters.dateTo !== null;
+  const picked = presets.find((preset) => filters.dateFrom === preset.from && filters.dateTo === preset.to);
+  const customOn = rangeOn && !picked;
+  const calendarShown = !onPresetRange || customOpen || customOn;
+  return (
+    <>
+      {onPresetRange ? (
+        <div className="filter-presets" role="group" aria-label={tr("Quick ranges", "快捷范围")}>
+          {presets.map((preset) => {
+            const isPicked = preset === picked;
+            return (
+              <button
+                key={preset.key}
+                type="button"
+                className={`filter-preset${isPicked ? " is-active" : ""}`}
+                aria-pressed={isPicked}
+                onClick={() => {
+                  setCustomOpen(false);
+                  if (isPicked) onClearDates();
+                  else onPresetRange(preset.from, preset.to);
+                }}
+              >
+                {tr(preset.en, preset.zh)}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            className={`filter-preset filter-custom${customOn ? " is-active" : ""}`}
+            aria-expanded={calendarShown}
+            onClick={() => {
+              // A custom range is lifted like a picked quick range; else
+              // the calendar folds and unfolds.
+              if (customOn) {
+                setCustomOpen(false);
+                onClearDates();
+              } else setCustomOpen((open) => !open);
+            }}
+          >
+            {tr("Custom…", "自定义…")}
+          </button>
+        </div>
+      ) : null}
+      {calendarShown ? (
+        <RangeCalendar
+          from={filters.dateFrom}
+          to={filters.dateTo}
+          minDay={minDay}
+          onStart={(day) => onDateChange({ dateFrom: day, dateTo: null })}
+          onRange={(from, to) => (onPresetRange ? onPresetRange(from, to) : onDateChange({ dateFrom: from, dateTo: to }))}
+        />
+      ) : null}
+    </>
   );
 }

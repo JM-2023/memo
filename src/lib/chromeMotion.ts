@@ -80,11 +80,12 @@ const KEYS: ChromeKey[] = [
   { selector: ".composer .editor-context-tag", name: "composer-context-tag", exit: "crumb", enter: "crumb" },
   { selector: ".review-banner", name: "review-banner", exit: "fade", layer: 0 },
   { selector: ".feed-empty", name: "feed-empty", exit: "fade", layer: 0 },
-  // The feed's rows that are not cards. Pinned rolls its own count and glides
-  // whole; related cross-fades if the query wording changes. Run headings rise
+  // The feed's rows that are not cards. Pinned and the rest after it roll
+  // their own counts and glide whole; related cross-fades if the query wording changes. Run headings rise
   // in like the cards they head; the foot, cold-load end and review finish
   // bring their own entrances (and FeedEnd brings its own fold exit).
   { selector: ".feed-lead.is-pinned", name: "row-pinned", exit: "fade", container: true, enter: "rise", layer: 0 },
+  { selector: ".feed-lead.is-rest", name: "row-rest", exit: "fade", container: true, enter: "rise", layer: 0 },
   { selector: ".feed-lead.is-related", name: "row-related", exit: "fade", enter: "rise", layer: 0 },
   { selector: ".feed-foot", name: "row-foot", exit: "fade", container: true, enter: "rise", entrance: "own", layer: 0 },
   { selector: ".feed-end-slot", name: "row-end", exit: "fade", container: true, entrance: "own", layer: 0 },

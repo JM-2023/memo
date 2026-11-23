@@ -79,6 +79,12 @@
   --primary-ink: #ffffff;
   --primary-tint: #ecf4ee;
   --primary-tint-strong: #d9eadf;
+  /* Three meanings, three shapes: a tag is a sage pill (it can be clicked),
+     ==mark== is a highlighter stroke across the lower half of the line (the
+     writer's own emphasis), and a search hit is a neutral ink wash that
+     shows on white and on a tag alike. */
+  --mark-stroke: #d3e7d9;
+  --hit-wash: color-mix(in srgb, var(--ink) 12%, transparent);
   /* A nested tag's parent path ("#life/"), a step under the leaf's
      --primary-dark: 5.2:1 on --primary-tint, 4.7:1 on the hover tint. */
   --tag-parent: #456d59;
@@ -293,6 +299,7 @@
   --primary-ink: #0e2118;
   --primary-tint: #1a2a21;
   --primary-tint-strong: #27412f;
+  --mark-stroke: #2f4c39;
   /* 6.8:1 on --primary-tint, 5.1:1 on the hover tint. */
   --tag-parent: #8fb8a2;
 
@@ -303,6 +310,7 @@
   --field-bg: #11141a;
 
   --ink: #e9ebf1;
+  --hit-wash: color-mix(in srgb, var(--ink) 18%, transparent);
   --ink-soft: #b3bacb;
   --muted: #848da3;
   --line: #272c38;
@@ -421,10 +429,14 @@
    here, the per-frame recalc stays inside the pad's ~40-element subtree.
    Inherited custom properties substitute where they're declared, so the
    gradient chain re-anchors onto the pad for its --lx/--ly to take effect. */
+/* On light paper the iris's sage wash landed beside the wordmark as a grey
+   smudge: the light pad keeps only its top-edge sheen. In dark the iris
+   reads as light, and stays. */
 .pin-pad {
   --lg-specular: radial-gradient(var(--sheen-shape) at var(--lx) var(--ly), var(--sheen-stops));
-  --glass-fill: var(--lg-specular), var(--glass-sheet), var(--lg-iris);
+  --glass-fill: var(--lg-specular), var(--glass-sheet);
 }
+:root[data-theme="dark"] .pin-pad { --glass-fill: var(--lg-specular), var(--glass-sheet), var(--lg-iris); }
 /* Sheen joins (never replaces) the pad's own entrance/shake: a name kept
    across a list swap keeps running, so shake↔calm swaps leave it seamless. */
 :root[data-theme="dark"] .pin-pad { animation: scale-in var(--t-enter) var(--ease-out) both, glass-sheen-drift 22s ease-in-out infinite; }
@@ -1238,6 +1250,7 @@ a:hover { text-decoration: underline; }
 .stat-cell:active { transform: scale(0.94); }
 .stat-number { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -0.02em; animation: fade-up var(--t-slow) var(--ease-out) both; }
 .stat-label { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; white-space: nowrap; }
+.stat-label-short { display: none; }
 @container (max-width: 260px) {
   .stat-label { font-size: var(--fs-2xs); }
 }
@@ -1300,6 +1313,89 @@ a:hover { text-decoration: underline; }
 }
 .period-figures strong { color: var(--ink); font-size: var(--fs-md); font-weight: 600; }
 .period-sep { width: 1px; height: 12px; background: var(--line-strong); }
+/* A page with no memos: one quiet sentence over the figures, which keep the
+   box (and the panel its height) while they cross-fade out. */
+.period-figures { position: relative; }
+.period-figures > span { transition: opacity var(--t) var(--ease); }
+.period-figures.is-empty > span:not(.period-empty),
+.period-figures:not(.is-empty) > .period-empty { opacity: 0; }
+.period-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+/* The phone drawer's one-line period summary (Sidebar): hidden beside a
+   desktop, where the panel always shows and its wrappers lay out as if
+   absent. */
+.period-summary { display: none; }
+.period-body,
+.period-body-inner { display: contents; }
+/* Phone drawer: the drawer opens to change views, so the panel gives the
+   navigation the first screen. The three totals take one line (figure and
+   label side by side), and the period panel folds into a one-line summary
+   that opens to it. The fold animates its row (0fr → 1fr); folded, its
+   controls are out of the tab order (visibility). The inner box reaches 4px
+   past the panel so the clip spares the cells' rings. */
+@media (max-width: 700px) {
+  .stat-panel { gap: 6px; padding-block: 8px 6px; }
+  .stat-cell { display: flex; justify-content: center; align-items: baseline; gap: 4px; padding: 5px 4px; }
+  .stat-number { font-size: var(--fs-md); }
+  .stat-label { font-size: var(--fs-xs); }
+  /* The long label stays the cell's name for a screen reader. */
+  .stat-label-long { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .stat-label-short { display: inline; }
+  .period-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    min-height: 32px;
+    padding: 4px 8px;
+    color: var(--ink-soft);
+    font-size: var(--fs-sm);
+    font-weight: 500;
+    border-radius: var(--r-sm);
+    transition: background var(--t) var(--ease);
+  }
+  .period-summary:active { background: var(--wash); }
+  .period-summary-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .period-summary-chevron { flex: none; color: var(--muted); transition: transform var(--t) var(--ease); }
+  .period-summary[aria-expanded="true"] .period-summary-chevron { transform: rotate(180deg); }
+  /* minmax(0, …): a bare 0fr keeps an auto minimum, which would hold the
+     inner box's padding open under the folded summary. */
+  .period-body {
+    display: grid;
+    grid-template-rows: minmax(0, 0fr);
+    margin-top: -6px;
+    visibility: hidden;
+    transition: grid-template-rows var(--t) var(--ease), visibility 0s var(--t);
+  }
+  .period-body.is-open {
+    grid-template-rows: minmax(0, 1fr);
+    visibility: visible;
+    transition: grid-template-rows var(--t-slow) var(--ease-out), visibility 0s;
+  }
+  .period-body-inner {
+    display: grid;
+    gap: 12px;
+    min-height: 0;
+    overflow: hidden;
+    margin: 0 -4px -4px;
+    padding: 12px 4px 4px;
+  }
+}
+/* Reduced motion: the panel dissolves in place instead of unfolding. */
+@media (max-width: 700px) and (prefers-reduced-motion: reduce) {
+  .period-body { transition: visibility 0s var(--t-fast); }
+  .period-body.is-open { transition: visibility 0s; }
+  .period-body-inner { opacity: 0; transition: opacity var(--t-fast) var(--ease); }
+  .period-body.is-open .period-body-inner { opacity: 1; transition-duration: var(--t); }
+}
 
 /* ---- Rolling digits (split-flap) ----
    Each character sits on its own drum column; only columns whose character
@@ -1491,7 +1587,7 @@ a:hover { text-decoration: underline; }
     0 0 0 1.5px color-mix(in srgb, var(--heat-3) 55%, transparent),
     inset 0 0 0 1px color-mix(in srgb, var(--heat-4) 85%, var(--ink));
 }
-.heatmap-grid.is-year .heat-cell.placeholder.future { border-width: 1px; }
+.heatmap-grid.is-year .heat-cell.placeholder.future { background: radial-gradient(circle, var(--line-strong) 0 1.5px, transparent 2px); }
 .heat-cell {
   width: 100%;
   height: auto;
@@ -1506,7 +1602,14 @@ a:hover { text-decoration: underline; }
   transition: outline-color var(--t) var(--ease), box-shadow var(--t) var(--ease), background var(--t) var(--ease), filter var(--t) var(--ease);
 }
 .heat-cell.placeholder { visibility: hidden; }
-.heat-cell.placeholder.future { visibility: visible; background: transparent; border: 1.5px dashed var(--line); }
+/* A day still to come: a quiet dot where its cell will be, not a dashed box
+   that reads as a missing entry. The month calendar's carries its date
+   instead (below). */
+.heat-cell.placeholder.future {
+  visibility: visible;
+  background: radial-gradient(circle, var(--line-strong) 0 3px, transparent 3.5px);
+}
+.heatmap-grid.is-month .heat-cell.placeholder.future { background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
 .heat-cell.level-1 { background: var(--heat-1); }
 .heat-cell.level-2 { background: var(--heat-2); }
 .heat-cell.level-3 { background: var(--heat-3); }
@@ -1526,8 +1629,8 @@ button.heat-cell[aria-disabled="true"] { cursor: default; }
 button.heat-cell[aria-disabled="true"]:active { filter: none; }
 /* Month: the cells are a wall calendar's, each carrying its date in the
    ink its green needs (--heat-day-*); today's in the accent where its cell
-   is pale enough to hold it, heavier everywhere. Future days keep their
-   dashed outline with a muted date. Year cells are too small for one. */
+   is pale enough to hold it, heavier everywhere. Future days keep a
+   hairline outline with a muted date. Year cells are too small for one. */
 .heatmap-grid.is-month .heat-cell { position: relative; }
 .heat-day {
   position: absolute;
@@ -1831,10 +1934,12 @@ button.heat-cell[aria-disabled="true"]:active { filter: none; }
    below it, so the phone tuck's clip (which follows it up, see the 440px
    section) can't cut it off. Scroll-driven where supported; elsewhere
    useTopbarTuck flips data-scrolled from a sentinel. */
+/* The scrolled rule spans the content column, not the band: it starts and
+   stops where the cards do. */
 .topbar::after {
   content: "";
   position: absolute;
-  inset: auto 0 0;
+  inset: auto var(--content-inset) 0;
   height: 1px;
   background: var(--line);
   opacity: 0;
@@ -2381,9 +2486,11 @@ button.crumb:active { background: var(--wash-strong); }
 @media (hover: hover) { .jump-forget:hover { color: var(--ink); background: var(--wash-strong); } }
 @media (hover: none) { .jump-forget { width: 32px; height: 32px; opacity: 1; } }
 .search-jump-row.is-quiet { min-height: 32px; color: var(--muted); font-size: var(--fs-sm); }
+/* The list's foot: how a query reads (where it is being typed, rather than
+   down in the filter panel), then the keys that drive the list. */
 .search-jump-foot {
-  display: flex;
-  gap: 12px;
+  display: grid;
+  gap: 5px;
   margin-top: 5px;
   padding: 7px 10px 2px;
   color: var(--muted);
@@ -2391,9 +2498,11 @@ button.crumb:active { background: var(--wash-strong); }
   border-top: 1px solid var(--line);
   user-select: none;
 }
-.search-jump-foot > span { display: inline-flex; align-items: center; gap: 3px; }
-/* A finger has no arrow keys to be told about. */
-@media (pointer: coarse) { .search-jump-foot { display: none; } }
+.search-jump-hint { line-height: 1.45; text-wrap: pretty; }
+.search-jump-keys { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.search-jump-keys > span { display: inline-flex; align-items: center; gap: 3px; }
+/* A finger has no arrow keys to be told about; the syntax line stays. */
+@media (pointer: coarse) { .search-jump-keys { display: none; } }
 
 /* ---- Search filter popover (structured filters + saved presets) ---- */
 .search-tools { display: flex; flex: none; align-items: center; gap: 6px; }
@@ -2560,18 +2669,6 @@ button.crumb:active { background: var(--wash-strong); }
 @media (hover: none) { .saved-delete { opacity: 1; } }
 @media (hover: hover) { .saved-delete:hover { background: var(--danger-tint); color: var(--danger); } }
 .saved-delete:active { transform: scale(0.85); }
-
-/* Search-syntax footnote. */
-.filter-hint {
-  display: block;
-  padding: 4px 11px 3px;
-  color: var(--muted);
-  font-size: var(--fs-xs);
-  font-weight: 400;
-  line-height: 1.55;
-  white-space: normal;
-  user-select: none;
-}
 
 /* Empty Trash — the trash view's counterpart of the location pill: identical
    ghost geometry, danger-tinted. It answers to the shared topbar-action key
@@ -3489,11 +3586,12 @@ button.crumb:active { background: var(--wash-strong); }
    quieter than the count it qualifies. */
 .search-summary-pending { font-weight: 400; }
 /* Keyword hits inside the cards (CSS Custom Highlight API: no DOM change).
-   A wash only: a highlight's text-decoration would also recolour the card's
-   own decorations (link underlines). Semantic-only results stay unmarked:
+   A neutral ink wash only, never the accent: sage already means a tag, and a
+   highlight's text-decoration would also recolour the card's own
+   decorations (link underlines). Semantic-only results stay unmarked:
    their card wears a "Related" badge instead (.memo-related). */
 ::highlight(search-hit) {
-  background-color: color-mix(in srgb, var(--primary) 24%, transparent);
+  background-color: var(--hit-wash);
 }
 @media (forced-colors: active) {
   ::highlight(search-hit) { background-color: Mark; color: MarkText; }
@@ -3546,8 +3644,10 @@ button.crumb:active { background: var(--wash-strong); }
    drum and must stay unclipped vertically. */
 .feed-lead.is-related .feed-lead-text { overflow: hidden; text-overflow: ellipsis; }
 .feed-lead-rule { flex: 1 1 24px; height: 1px; background: var(--line); }
-/* The pinned run ends a beat before the rest of the list. */
-.memo-slot[data-pin-end] { margin-bottom: 24px; }
+/* The pinned run ends a beat before the rest of the list, whose own lead
+   ("Others · N") follows: 10px + the 14px feed gap = 24px of air, enough to
+   part two named groups. */
+.memo-slot[data-pin-end] { margin-bottom: 10px; }
 /* While a card menu or tag suggestion list is mounted, lift the slot's
    containment so the popover can spill past the card and above its siblings. Keyed
    to .action-menu rather than .is-open: the panel outlives the open state
@@ -3862,6 +3962,9 @@ button.crumb:active { background: var(--wash-strong); }
 .memo-menu-trigger.is-open { opacity: 1; background: var(--wash); color: var(--ink); }
 .memo-card:hover .memo-menu-trigger, .memo-menu-trigger:focus-visible { opacity: 1; }
 @media (hover: none) { .memo-menu-trigger { opacity: 1; } }
+/* In Trash the ⋯ (Delete forever) always shows: it holds the corner, so
+   Restore sits at the card's edge rather than 26px short of it. */
+.memo-card.is-trash .memo-menu-trigger { opacity: 1; }
 /* Where a hover brings the ⋯ out, the pin holds its cell at rest and the
    two cross-fade (--t) as it comes and goes — the select ring's swap. The
    mark's margin gives its room back (a pinned head is as wide as any) and
@@ -4070,6 +4173,11 @@ button.crumb:active { background: var(--wash-strong); }
    lines. The share card's text is matched pixel for pixel by its canvas ink
    and keeps its own breaks — it is outside .memo-card and never matches. */
 .memo-card .memo-content { text-autospace: normal; text-wrap: pretty; }
+/* The measure: prose stops at 640px (about 75 Latin or 42 CJK characters at
+   15px), however wide the card grows. Tables, fenced code, math and rules
+   keep the card's full width — they are read across, not along. Descendant,
+   so a replay clone (.memo-content.stage-line) wraps exactly like its row. */
+.memo-card .memo-content p:not(.md-tr, .md-codeblock, .md-math-block, .md-hr, .md-trule) { max-width: 640px; }
 .memo-content p { margin: 0; }
 .memo-blank { min-height: 0.6em; }
 .memo-content a { text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--primary) 40%, transparent); text-underline-offset: 2px; }
@@ -4198,18 +4306,19 @@ button.md-task-box:active { transform: scale(0.88); }
 .memo-content strong { font-weight: 700; }
 .memo-content del { color: var(--muted); text-decoration-color: color-mix(in srgb, currentColor 55%, transparent); }
 .memo-content mark {
-  background: var(--primary-tint-strong);
+  background: linear-gradient(transparent 58%, var(--mark-stroke) 58%);
   color: inherit;
-  border-radius: var(--r-xs);
-  padding: 0.5px 3px;
-  margin-inline: 0.5px;
+  padding: 0 1px;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
-/* The page's selection is the same tint as a highlight, so selecting inside
-   ==marked== text showed nothing; a deeper wash of the accent reads on it in
-   both themes. */
+/* Selecting inside ==marked== text would otherwise show only the selection
+   tint over half a line; a deeper wash of the accent reads on it in both
+   themes. */
 .memo-content mark::selection { background: color-mix(in srgb, var(--primary) 32%, transparent); }
+@media (forced-colors: active) {
+  .memo-content mark { background: Mark; color: MarkText; forced-color-adjust: none; }
+}
 .memo-content code {
   font-family: var(--font-mono);
   font-size: 0.855em;
@@ -5181,9 +5290,13 @@ button.is-busy:disabled { opacity: 1; }
 .stats-hero-main:active:not(:disabled) { transform: scale(0.985); }
 .stats-hero-value { font-size: var(--fs-display); font-weight: 800; letter-spacing: -0.03em; line-height: 1.15; }
 .stats-hero-unit { color: var(--ink-soft); font-size: var(--fs-md); font-weight: 600; }
+/* The cue reads with the unit, not the display figure: it sits on the
+   row's baseline (an icon's bottom edge) and drops 4px, which puts the
+   19px chevron's middle on the middle of "memos" / "条笔记". */
 .stats-drill-cue {
   flex: none;
-  align-self: center;
+  align-self: baseline;
+  translate: 0 4px;
   color: var(--primary-dark);
   opacity: 0.48;
   transform: translateX(-3px);
@@ -5625,9 +5738,21 @@ button.stats-tag-row:active { scale: 0.992; }
 .storage-meter { position: relative; height: 12px; overflow: hidden; background: var(--surface-3); border-radius: 6px; }
 .storage-meter-fill { display: flex; height: 100%; animation: storage-sweep var(--t-morph) var(--ease-out) both; }
 @keyframes storage-sweep { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+/* Under 1% of the limit: one round nub the meter's height, in the accent —
+   a start, not a scatter of hairlines. */
+.storage-meter-nub {
+  display: block;
+  width: 12px;
+  height: 100%;
+  background: var(--heat-3);
+  border-radius: 6px;
+  animation: storage-sweep var(--t-morph) var(--ease-out) both;
+}
+/* Parts too thin to read were folded together (lib/storage meterParts), so
+   each drawn part is its true share: no floor to inflate a sliver. */
 .storage-meter-part {
   flex: 0 1 auto;
-  width: max(3px, var(--share));
+  width: var(--share);
   height: 100%;
   border-right: 2px solid var(--menu-fill);
   transition: width var(--t-morph) var(--ease-out);
@@ -6233,8 +6358,10 @@ button.stats-tag-row:active { scale: 0.992; }
    away pushes it up against that line at every scroll position instead.
    ========================================================================= */
 .scroll-top-slot {
-  /* 88px = the 72px topbar band + the same 16px breath the topbar keeps
-     above the cards. */
+  /* Docked, ScrollTopButton sets the anchor (and --scroll-top-shift) to a
+     free spot in the topbar's first row. These are the fallback, for a row
+     with no room: 88px = the 72px topbar band + the same 16px breath the
+     topbar keeps above the cards. */
   --scroll-top-anchor: 88px;
   position: sticky;
   bottom: calc(100vh - var(--scroll-top-anchor));
@@ -6288,6 +6415,7 @@ button.stats-tag-row:active { scale: 0.992; }
    recipe honest in dark; only the hairline needs a flip there. */
 .scroll-top-btn {
   position: relative;
+  left: var(--scroll-top-shift, 0px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6306,6 +6434,10 @@ button.stats-tag-row:active { scale: 0.992; }
     0 4px 4px 0 rgba(0, 0, 0, 0.04),
     0 0 1px 0 rgba(0, 0, 0, 0.62);
   transition: background var(--t) var(--ease), scale var(--t-fast) var(--ease);
+}
+/* A docked disc steps aside (a search box widening on focus) by gliding. */
+@media (prefers-reduced-motion: no-preference) {
+  .scroll-top-slot.is-shown .scroll-top-btn { transition: background var(--t) var(--ease), scale var(--t-fast) var(--ease), left var(--t) var(--ease); }
 }
 .scroll-top-btn:active { scale: 0.92; }
 @media (min-width: 640px) {
@@ -6482,9 +6614,10 @@ button.stats-tag-row:active { scale: 0.992; }
     max-width: min(640px, calc(min(100%, var(--shell-max)) - var(--sidebar-w) - 32px));
   }
 }
-/* Wide screens: the Back-to-top disc hangs from 88px (34px tall), right under
-   the stack's resting 80px line. Clear it while the disc is shown so an Undo
-   toast after a scrolled delete never sits on top of the button. */
+/* Wide screens: a Back-to-top disc that found no room in the topbar's row
+   hangs from 88px (34px tall), right under the stack's resting 80px line.
+   Clear it while that disc is shown (ScrollTopButton sets the flag only
+   then) so an Undo toast after a scrolled delete never sits on top of it. */
 @media (min-width: 561px) {
   .toast-stack {
     --toast-top-clearance: 0px;
@@ -6864,10 +6997,9 @@ button.stats-tag-row:active { scale: 0.992; }
   .breadcrumb { flex: 0 0 calc(100% - 40px); }
   .breadcrumb:has(.filter-chip) .crumbs { flex: 1; }
   .filter-chip { flex: none; max-width: min(132px, 48%); }
-  .search-tools {
-    flex: 0 0 calc(100% - 40px);
-    margin-left: 40px;
-  }
+  /* The search row hangs from the content edge, not from the title beside
+     the drawer button: searchbox, composer and cards share one left line. */
+  .search-tools { flex: 0 0 100%; }
   .searchbox,
   .searchbox.is-open {
     flex: 1 1 auto;
@@ -7670,22 +7802,9 @@ button.stats-tag-row:active { scale: 0.992; }
   padding: 10px 16px 12px;
   border-top: 1px solid var(--hairline);
 }
+/* Only the Advanced fold: the header's × is the dialog's one way out, as in
+   Statistics, Storage and Share. */
 .model-panel-foot > .model-fold-toggle { padding: 7px 10px; }
-.model-foot-spacer { flex: 1; }
-.model-foot-close {
-  padding: 8px 14px;
-  color: var(--ink-soft);
-  background: none;
-  border: 0;
-  border-radius: var(--r-md);
-  font: inherit;
-  font-size: var(--fs-sm);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background var(--t) var(--ease), color var(--t) var(--ease), transform var(--t-fast) var(--ease);
-}
-@media (hover: hover) { .model-foot-close:hover { background: var(--wash); color: var(--ink); } }
-.model-foot-close:active { transform: scale(0.96); }
 
 /* The dotted thought-orb (src/lib/thinkingOrb.ts). Depth is painted from a
    two-stop ramp rather than the library's grayscale, so the mark swaps with

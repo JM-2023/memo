@@ -144,8 +144,8 @@ describe("semantic search settings", () => {
   it("names the panel, states the device facts, and lands on Ready", async () => {
     render(panel());
 
-    expect(screen.getByRole("dialog", { name: "Semantic Search" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Semantic Search" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Semantic search" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Semantic search" })).toBeTruthy();
     // The header is the title alone, like the other dialogs: no icon tile.
     expect(document.querySelector(".model-panel-head")?.children).toHaveLength(2);
     expect(document.querySelector(".model-panel-logo")).toBeNull();

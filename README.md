@@ -137,7 +137,7 @@ combinations the app does not own.
 
 Space separates keywords (all must match); `"quotes"` match an exact phrase.
 Structured filters narrow further — no tags, with images, with links, with open
-tasks, plus a date range — and any combination can be saved as a named filter.
+tasks, plus a date range (four quick ranges, or Custom… for any span) — and any combination can be saved as a named filter.
 
 ![The filter panel: filter by no tags, with images, with links, with open tasks, plus a date range](docs/screenshots/filters.png)
 
@@ -163,7 +163,7 @@ dimensions), quantized to about 123 MB across four files. It is downloaded once 
 a pinned Hugging Face revision, each file checked against a SHA-256 hash baked into
 the app, and executed through same-origin WebAssembly.
 
-![The Semantic Search panel before download, with model details and download and local-import controls](docs/screenshots/semantic-model.png)
+![The Semantic search panel before download, with model details and download and local-import controls](docs/screenshots/semantic-model.png)
 
 No memo text ever leaves the device. The vector index is derived from your memos, so
 it is sealed with the same server-held key as the local snapshot; logging out deletes

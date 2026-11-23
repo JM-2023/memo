@@ -160,6 +160,12 @@ describe("the pinned run", () => {
     expect(lead.nextElementSibling).toBe(first);
     expect(first.hasAttribute("data-pin-end")).toBe(true);
     expect(second.hasAttribute("data-pin-end")).toBe(false);
+    // The rest of the list is a named group too, its own row before its
+    // first card, so the beat between them reads as two groups.
+    const rest = screen.getByRole("heading", { level: 2, name: `Others · ${slots().length - 1}` });
+    expect(rest.classList.contains("is-rest")).toBe(true);
+    expect(rest.previousElementSibling).toBe(first);
+    expect(rest.nextElementSibling).toBe(second);
   });
 
   it("keeps the same heading row and rolls its count when another card is pinned from mid-feed", async () => {

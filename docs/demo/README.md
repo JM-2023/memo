@@ -3,7 +3,7 @@
 [`notebook.json`](notebook.json) contains 96 fictional memos and two fictional
 Trash entries. All prose was written for the screenshots; it contains no personal
 notebook data. It uses the app's `memo-backup` version 1 format and can be imported
-through **My MEMO → Import Data** in a separate local instance.
+through **My MEMO → Import data** in a separate local instance.
 
 The notes follow a small reading-corner project, cooking, gardening, reading and
 everyday observations. They include a pinned checklist, nested and pinned tags,

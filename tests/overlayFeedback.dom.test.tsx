@@ -302,7 +302,7 @@ describe("dialogs leave on success too", () => {
         <ConfirmDialog
           title="Log out?"
           body="Forget this device"
-          confirmLabel="Log Out"
+          confirmLabel="Log out"
           busyLabel="Logging out…"
           doneLabel="Done"
           busy={busy}
@@ -326,7 +326,7 @@ describe("dialogs leave on success too", () => {
       </LanguageProvider>
     );
     const overlay = screen.getByRole("dialog", { name: "Log out?" });
-    fireEvent.click(screen.getByRole("button", { name: "Log Out" }));
+    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
     expect(screen.getByRole("button", { name: "Logging out…" })).toBeTruthy();
 
     await act(async () => finish(true));
@@ -389,12 +389,12 @@ describe("dialogs leave on success too", () => {
   it("keeps idle, busy and done labels in one cell so the button never changes width", () => {
     render(
       <LanguageProvider>
-        <ConfirmDialog title="Log out?" body="b" confirmLabel="Log Out" busyLabel="Logging out…" onCancel={vi.fn()} onConfirm={vi.fn()} />
+        <ConfirmDialog title="Log out?" body="b" confirmLabel="Log out" busyLabel="Logging out…" onCancel={vi.fn()} onConfirm={vi.fn()} />
       </LanguageProvider>
     );
-    const button = screen.getByRole("button", { name: "Log Out" });
+    const button = screen.getByRole("button", { name: "Log out" });
     const labels = button.querySelectorAll(".busy-swap > span");
-    expect([...labels].map((label) => label.textContent)).toEqual(["Log Out", "Logging out…", "Done"]);
+    expect([...labels].map((label) => label.textContent)).toEqual(["Log out", "Logging out…", "Done"]);
     expect(labels[1].getAttribute("aria-hidden")).toBe("true");
     expect(labels[2].getAttribute("aria-hidden")).toBe("true");
   });

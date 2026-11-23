@@ -284,6 +284,18 @@ describe("period figures", () => {
     expect(figures()).toEqual(["2", "5"]);
     await user.click(screen.getByRole("button", { name: "Next month" }));
     expect(figures()).toEqual(["1", "5"]);
+
+    // A page with nothing on it says so in one line over the figures, which
+    // keep their box; the phone summary says the same.
+    await user.click(screen.getByRole("button", { name: "Week" }));
+    const box = () => document.querySelector(".period-figures")!;
+    expect(box().classList.contains("is-empty")).toBe(false);
+    expect(document.querySelector(".period-summary-text")?.textContent).toBe("This week · 1 memo");
+    await user.click(screen.getByRole("button", { name: "Previous week" }));
+    expect(box().classList.contains("is-empty")).toBe(true);
+    expect(box().querySelector(".period-empty")?.textContent).toBe("No memos that week");
+    expect(box().querySelectorAll('[aria-hidden="true"] .compact-number')).toHaveLength(2);
+    expect(document.querySelector(".period-summary-text")?.textContent).toMatch(/ · no memos$/);
   });
 });
 
@@ -322,6 +334,45 @@ describe("filter panel", () => {
     expect(to).toBe(dateKey(new Date()));
     expect(from < to).toBe(true);
     expect(from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe("filter panel dates", () => {
+  it("folds the calendar behind Custom… until a range only it can make", async () => {
+    const user = userEvent.setup();
+    const panel = (filters: typeof EMPTY_FILTERS) => (
+      <Providers>
+        <SearchFilter
+          filters={filters}
+          saved={[]}
+          activeSavedId={null}
+          canSave={false}
+          disabled={false}
+          onToggleFacet={vi.fn()}
+          onDateChange={vi.fn()}
+          onPresetRange={vi.fn()}
+          onClearDates={vi.fn()}
+          onApplySaved={vi.fn()}
+          onDeleteSaved={vi.fn()}
+          onSaveCurrent={vi.fn()}
+        />
+      </Providers>
+    );
+    const { rerender } = render(panel(EMPTY_FILTERS));
+    await user.click(screen.getByRole("button", { name: "Filter memos" }));
+    expect(document.querySelector(".range-cal")).toBeNull();
+    const custom = screen.getByRole("button", { name: "Custom…" });
+    expect(custom.getAttribute("aria-expanded")).toBe("false");
+    await user.click(custom);
+    expect(document.querySelector(".range-cal")).not.toBeNull();
+    expect(custom.getAttribute("aria-expanded")).toBe("true");
+    await user.click(custom);
+    expect(document.querySelector(".range-cal")).toBeNull();
+
+    // A range none of the quick ones makes keeps it open, Custom… picked.
+    rerender(panel({ ...EMPTY_FILTERS, dateFrom: "2026-01-03", dateTo: "2026-01-09" }));
+    expect(document.querySelector(".range-cal")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Custom…" }).classList.contains("is-active")).toBe(true);
   });
 });
 

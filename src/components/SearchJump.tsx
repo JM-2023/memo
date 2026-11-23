@@ -449,22 +449,27 @@ export function useSearchJump(options: SearchJumpOptions): SearchJump {
           </div>
         ))}
       </div>
+      {/* Hidden from assistive tech: the field's own description
+          (aria-describedby) carries the syntax in full. */}
       <div className="search-jump-foot" aria-hidden="true">
-        <span>
-          {keycap("↑")}
-          {keycap("↓")} {tr("select", "选择")}
-        </span>
-        <span>
-          {keycap("↩")} {tr("open", "打开")}
-        </span>
-        <span>
-          {keycap("esc")} {tr("close", "关闭")}
-        </span>
-        {expanded && active?.kind === "recent" && canForget ? (
+        <span className="search-jump-hint">{tr("Spaces: all words match · “Quotes”: exact phrase", "空格：所有词都要命中 · “引号”：完整短语")}</span>
+        <span className="search-jump-keys">
           <span>
-            {keycap("del")} {tr("remove", "删除")}
+            {keycap("↑")}
+            {keycap("↓")} {tr("select", "选择")}
           </span>
-        ) : null}
+          <span>
+            {keycap("↩")} {tr("open", "打开")}
+          </span>
+          <span>
+            {keycap("esc")} {tr("close", "关闭")}
+          </span>
+          {expanded && active?.kind === "recent" && canForget ? (
+            <span>
+              {keycap("del")} {tr("remove", "删除")}
+            </span>
+          ) : null}
+        </span>
       </div>
     </div>
   );

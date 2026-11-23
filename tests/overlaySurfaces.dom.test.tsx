@@ -212,18 +212,18 @@ describe("Back over a dialog (closeSignal)", () => {
     const onCancel = vi.fn();
     const view = render(
       <LanguageProvider>
-        <ConfirmDialog title="Log out?" body="b" confirmLabel="Log Out" busy onCancel={onCancel} onConfirm={vi.fn()} closeSignal={0} />
+        <ConfirmDialog title="Log out?" body="b" confirmLabel="Log out" busy onCancel={onCancel} onConfirm={vi.fn()} closeSignal={0} />
       </LanguageProvider>
     );
     view.rerender(
       <LanguageProvider>
-        <ConfirmDialog title="Log out?" body="b" confirmLabel="Log Out" busy onCancel={onCancel} onConfirm={vi.fn()} closeSignal={1} />
+        <ConfirmDialog title="Log out?" body="b" confirmLabel="Log out" busy onCancel={onCancel} onConfirm={vi.fn()} closeSignal={1} />
       </LanguageProvider>
     );
     expect(onCancel).not.toHaveBeenCalled();
     view.rerender(
       <LanguageProvider>
-        <ConfirmDialog title="Log out?" body="b" confirmLabel="Log Out" onCancel={onCancel} onConfirm={vi.fn()} closeSignal={2} />
+        <ConfirmDialog title="Log out?" body="b" confirmLabel="Log out" onCancel={onCancel} onConfirm={vi.fn()} closeSignal={2} />
       </LanguageProvider>
     );
     await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1));

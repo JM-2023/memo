@@ -145,7 +145,7 @@ describe("backup export toast", () => {
     await renderApp();
 
     await user.click(document.querySelector<HTMLButtonElement>(".user-button")!);
-    await user.click(await screen.findByRole("menuitem", { name: "Export Data" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Export data" }));
 
     const status = await waitFor(() => {
       const node = document.querySelector<HTMLElement>(".toast");
@@ -179,7 +179,7 @@ describe("backup export across a change", () => {
     await renderApp();
 
     await user.click(document.querySelector<HTMLButtonElement>(".user-button")!);
-    await user.click(await screen.findByRole("menuitem", { name: "Export Data" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Export data" }));
 
     expect(
       await screen.findByText("Your notebook changed while the backup was exporting. Export again for a copy that matches one moment.", {
@@ -206,7 +206,7 @@ describe("backup export with memos the import would refuse", () => {
     await renderApp();
 
     await user.click(document.querySelector<HTMLButtonElement>(".user-button")!);
-    await user.click(await screen.findByRole("menuitem", { name: "Export Data" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Export data" }));
 
     expect(
       await screen.findByText(/^Exported your backup, but 2 memos in it won’t import back: empty, or over 40,000 characters \(.+ and 1 more\)\. Edit them, then export again\.$/, {

@@ -1,5 +1,6 @@
 import { ChevronDown, Cpu, Download, HardDrive, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sparkles, Sun, SunMoon, Trash2, Upload, type LucideIcon } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
+import { dateKey } from "../lib/dates";
 import { useI18n } from "../lib/i18n";
 import { loadPeriod, persistPeriod } from "../lib/sidebarMemory";
 import { dayKeyOf, rangeStats, totalStats, type PeriodKind } from "../lib/stats";
@@ -56,6 +57,13 @@ const PERIODS: { kind: PeriodKind; en: string; zh: string }[] = [
   { kind: "month", en: "Month", zh: "月" },
   { kind: "year", en: "Year", zh: "年" }
 ];
+
+/** How a period page is named when it holds today ("this week") or not. */
+const PERIOD_NAMES: Record<PeriodKind, { en: string; zhThis: string; zhThat: string }> = {
+  week: { en: "week", zhThis: "本周", zhThat: "这一周" },
+  month: { en: "month", zhThis: "本月", zhThat: "这个月" },
+  year: { en: "year", zhThis: "今年", zhThat: "这一年" }
+};
 
 /* One cell per choice, in the order the eye reads them: follow the system,
    then the two fixed looks. */
@@ -223,6 +231,24 @@ function SidebarView(props: SidebarProps) {
   // The bubble names the page the figures count ("Oct 12 – 18", "2025").
   const periodTip =
     page && stats ? { strong: `${count(stats.memoCount, "memo")} · ${count(stats.wordSum, "character")}`, text: page.label } : null;
+  // A page with nothing on it says so in one line instead of two zeros.
+  // "This week" while the page holds today; a page paged back to is "that".
+  const todayKey = dateKey(new Date());
+  const onToday = page !== null && page.start <= todayKey && todayKey <= page.end;
+  const names = PERIOD_NAMES[period];
+  const periodEmpty = stats !== null && stats.memoCount === 0;
+  const emptyNote = onToday
+    ? tr(`No memos yet this ${names.en}`, `${names.zhThis}还没有笔记`)
+    : tr(`No memos that ${names.en}`, `${names.zhThat}没有笔记`);
+  // The phone drawer folds the period panel into one line (app.css, 700px):
+  // which page and how much, opening to the panel itself.
+  const [periodOpen, setPeriodOpen] = useState(false);
+  const periodBodyId = useId();
+  const periodSummary = page && stats
+    ? `${onToday ? tr(`This ${names.en}`, names.zhThis) : page.label} · ${
+        stats.memoCount > 0 ? count(stats.memoCount, "memo") : onToday ? tr("no memos yet", "还没有笔记") : tr("no memos", "没有笔记")
+      }`
+    : null;
 
   function onPeriodKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
     let next = index;
@@ -336,7 +362,7 @@ function SidebarView(props: SidebarProps) {
                 <Sparkles size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
                   {/* The same name as everywhere else, in this menu's Title Case. */}
-                  {tr("Daily Review Settings", "每日回顾设置")}
+                  {tr("Daily review settings", "每日回顾设置")}
                 </SwapText>
               </button>
               <button
@@ -349,7 +375,7 @@ function SidebarView(props: SidebarProps) {
               >
                 <Cpu size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
-                  {tr("Semantic Search", "语义搜索")}
+                  {tr("Semantic search", "语义搜索")}
                 </SwapText>
               </button>
               <button
@@ -362,7 +388,7 @@ function SidebarView(props: SidebarProps) {
               >
                 <KeyRound size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
-                  {tr("Change Passcode", "修改密码")}
+                  {tr("Change passcode", "修改密码")}
                 </SwapText>
               </button>
               <span className="action-menu__sep" />
@@ -389,7 +415,7 @@ function SidebarView(props: SidebarProps) {
               >
                 <Download size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
-                  {tr("Export Data", "导出数据")}
+                  {tr("Export data", "导出数据")}
                 </SwapText>
               </button>
               <button
@@ -402,7 +428,7 @@ function SidebarView(props: SidebarProps) {
               >
                 <Upload size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
-                  {tr("Import Data", "导入数据")}
+                  {tr("Import data", "导入数据")}
                 </SwapText>
               </button>
               <span className="action-menu__sep" />
@@ -417,7 +443,7 @@ function SidebarView(props: SidebarProps) {
               >
                 <LogOut size={16} aria-hidden="true" />
                 <SwapText id={language} className="locale-swap">
-                  {tr("Log Out", "退出登录")}
+                  {tr("Log out", "退出登录")}
                 </SwapText>
               </button>
             </>
@@ -464,10 +490,30 @@ function SidebarView(props: SidebarProps) {
             <span className="stat-number">
               <CompactNumber value={totals.activeDays} />
             </span>
-            <span className="stat-label">{tr("Active days", "活跃天数")}</span>
+            <span className="stat-label">
+              {/* The phone drawer's one-line totals have room for one word. */}
+              <span className="stat-label-long">{tr("Active days", "活跃天数")}</span>
+              <span className="stat-label-short" aria-hidden="true">
+                {tr("Days", "天")}
+              </span>
+            </span>
           </button>
         </div>
 
+        {periodSummary ? (
+          <button
+            type="button"
+            className="period-summary"
+            aria-expanded={periodOpen}
+            aria-controls={periodBodyId}
+            onClick={() => setPeriodOpen((open) => !open)}
+          >
+            <span className="period-summary-text">{periodSummary}</span>
+            <ChevronDown size={14} className="period-summary-chevron" aria-hidden="true" />
+          </button>
+        ) : null}
+        <div id={periodBodyId} className={`period-body${periodOpen ? " is-open" : ""}`}>
+        <div className="period-body-inner">
         <div className="period-panel">
           <div className="period-seg" role="group" aria-label={tr("Statistics period", "统计范围")}>
             <span className="period-seg-thumb" style={{ transform: `translateX(${periodIndex * 100}%)` }} aria-hidden="true" />
@@ -489,12 +535,12 @@ function SidebarView(props: SidebarProps) {
           {stats && periodTip ? (
             <button
               type="button"
-              className="period-figures"
+              className={`period-figures${periodEmpty ? " is-empty" : ""}`}
               // A tap shows the figures' bubble on purpose (touch has no hover).
               onClick={(event) => tip.show(event.currentTarget, periodTip, { delay: 0 })}
               {...tip.bind(periodTip)}
             >
-              <span>
+              <span aria-hidden={periodEmpty || undefined}>
                 <strong>
                   <CompactNumber value={stats.memoCount} />
                 </strong>{" "}
@@ -508,7 +554,7 @@ function SidebarView(props: SidebarProps) {
                 />
               </span>
               <span className="period-sep" aria-hidden="true" />
-              <span>
+              <span aria-hidden={periodEmpty || undefined}>
                 <strong>
                   <CompactNumber value={stats.wordSum} />
                 </strong>{" "}
@@ -518,6 +564,11 @@ function SidebarView(props: SidebarProps) {
                   text={tr(stats.wordSum === 1 ? "character" : "characters", "字")}
                   align="left"
                 />
+              </span>
+              {/* Laid over the figures, which keep the box's height: the
+                  panel never jumps as a page fills or empties. */}
+              <span className="period-empty" aria-hidden={!periodEmpty || undefined}>
+                {emptyNote}
               </span>
             </button>
           ) : null}
@@ -531,6 +582,8 @@ function SidebarView(props: SidebarProps) {
           onPickDay={props.onPickDay}
           onPageChange={setPage}
         />
+        </div>
+        </div>
       </section>
 
       <nav className="sidebar-nav">

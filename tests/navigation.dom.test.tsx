@@ -447,7 +447,7 @@ describe("trash search", () => {
 
     await user.click(screen.getByRole("button", { name: /^Trash/ }));
     await screen.findByText(/old receipt/);
-    expect(screen.queryByRole("button", { name: "Semantic Search" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Semantic search" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Filter memos" })).toBeNull();
 
     const search = screen.getByRole("searchbox", { name: "Search Trash" });
