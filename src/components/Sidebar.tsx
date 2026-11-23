@@ -1,4 +1,4 @@
-import { ChevronDown, Cpu, Download, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sparkles, Sun, SunMoon, Trash2, Upload, type LucideIcon } from "lucide-react";
+import { ChevronDown, Cpu, Download, HardDrive, Inbox, KeyRound, Languages, LogOut, Moon, Monitor, NotebookPen, Sparkles, Sun, SunMoon, Trash2, Upload, type LucideIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useI18n } from "../lib/i18n";
 import { loadPeriod, persistPeriod } from "../lib/sidebarMemory";
@@ -38,6 +38,7 @@ interface SidebarProps {
   onOpenReviewSettings: () => void;
   onOpenModelSettings: () => void;
   onOpenStats: () => void;
+  onOpenStorage: () => void;
   onSetTheme: (choice: ThemeChoice) => void;
   onChangePasscode: () => void;
   onExportData: () => void;
@@ -365,6 +366,19 @@ function SidebarView(props: SidebarProps) {
                 </SwapText>
               </button>
               <span className="action-menu__sep" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  close();
+                  props.onOpenStorage();
+                }}
+              >
+                <HardDrive size={16} aria-hidden="true" />
+                <SwapText id={language} className="locale-swap">
+                  {tr("Storage", "存储空间")}
+                </SwapText>
+              </button>
               <button
                 type="button"
                 role="menuitem"

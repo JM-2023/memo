@@ -29,6 +29,7 @@ and small enough to live comfortably inside Cloudflare's Free plan.
   - [The model lives on your device](#the-model-lives-on-your-device)
   - [Daily review](#daily-review)
   - [Statistics](#statistics)
+  - [Storage](#storage)
   - [Share a memo as a card](#share-a-memo-as-a-card)
   - [Dark, small, and bilingual](#dark-small-and-bilingual)
 - [How it works](#how-it-works)
@@ -191,6 +192,24 @@ memos behind it.
 ![The statistics view: the year's figures, a strip of days, memos by month against last year, and the writing rhythm](docs/screenshots/statistics.png)
 
 All timestamps are stored in UTC and rendered in the reader's local time zone.
+
+### Storage
+
+A D1 database on the Free plan stops accepting writes at 500 MB, so the notebook menu
+has a **Storage** view that shows how close it is. The figure is the size D1 itself
+reports for the database file, set against the ceiling and split by what fills it:
+images, memo text, Trash, and everything else (indexes and sync history). Text and
+images are measured as stored — sealed memos count their ciphertext, attachments their
+base64 original plus feed preview — with `octet_length`, which reads sizes from the
+record header, so opening the view costs one row read per memo and per image and
+loads no image data.
+
+Trash is the one share a single action gives back. The view names the memos that
+have sat there for more than 30 days and how much they hold, and deletes exactly those
+after a second click. Below it, every stored image is laid out as a wall, newest or
+largest first, optionally only those in Trash; each tile shows what it costs and opens
+the memo it belongs to, in Trash if that is where it is. When a send is refused because
+the database is full, its message leads straight here.
 
 ### Share a memo as a card
 
@@ -376,6 +395,7 @@ encrypted rows.
 | `APP_PASSWORD_HASH` | Pages secret | Public deployments | Initial passcode hash from `npm run hash-password`. Once a passcode is set or changed in the app, the D1 value wins. |
 | `MEMO_ENC_KEY` | Pages secret / `.dev.vars` | No | 64 hex characters. Enables AES-256-GCM encryption of memo content at rest. Cannot be rotated after data exists. |
 | `CANONICAL_HOST`, `PRODUCTION_PAGES_HOST` | `wrangler.toml` | Deployment | The deployment's real hostnames, used for origin checks. |
+| `D1_DATABASE_LIMIT_MB` | `wrangler.toml` `[vars]` | No | The database ceiling the Storage view measures against, in MB. Defaults to `500`, the Free plan's; set it on a paid plan. |
 | `DB` | `wrangler.toml` binding | Yes | The D1 database binding. |
 
 ## Security
@@ -417,7 +437,9 @@ see the official [D1 pricing](https://developers.cloudflare.com/d1/platform/pric
 and [D1 limits](https://developers.cloudflare.com/d1/platform/limits/) pages for
 current values. Base64 inflates binary size by about a third, so a 900 KB image costs
 roughly 1.2 MB before database overhead; watch D1 storage if the notebook is
-image-heavy.
+image-heavy. The [Storage](#storage) view in the notebook menu shows the database's
+size against that ceiling and every stored image by size, so the largest ones and old
+Trash are easy to find and clear.
 
 ## Scripts
 
@@ -443,7 +465,7 @@ The Workers suite starts a temporary local `workerd` process and applies every
 migration to an isolated D1 binding, so migrations are exercised on every run.
 
 ```
-functions/api/   Pages Functions: auth, memos, images, tags, sync, export/import
+functions/api/   Pages Functions: auth, memos, images, tags, sync, storage, export/import
 migrations/      D1 schema history (0001 … 0007)
 src/components/  Feed, composer, sidebar, dialogs, share card, semantic panel
 src/hooks/       Outbox, semantic search, sheets, drawers, modal a11y, reduced motion

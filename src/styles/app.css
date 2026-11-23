@@ -5594,6 +5594,98 @@ button.stats-tag-row:active { scale: 0.992; }
 }
 
 /* =========================================================================
+   Storage — the D1 database against its ceiling, and every stored image
+   --------------------------------------------------------------------------
+   The Statistics surface, narrower, read top-down: the file's size with how
+   close it is said in words, a meter split by what fills it, Trash (the one
+   share a single action gives back), then the image wall. The meter's
+   shares come off the heat ramp — one accent family — with "other" in a
+   neutral; state is in the words, never a traffic light.
+   ========================================================================= */
+.storage-modal { width: min(860px, 100%); }
+/* Title and ✕ only: no middle column to centre. */
+.storage-modal .stats-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: none; }
+.storage-modal .stats-head h2,
+.storage-modal .stats-close { grid-area: auto; }
+
+.storage-overview { gap: 14px; }
+.storage-hero { display: grid; gap: 4px; min-width: 0; }
+.storage-hero-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 10px; margin: 0; }
+.storage-hero-line .stats-hero-unit { font-size: var(--fs-lg); }
+.storage-hero-limit { color: var(--muted); font-size: var(--fs-md); font-weight: 500; }
+.storage-overview .is-pending { color: var(--line-strong); }
+.storage-hero-note { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.storage-hero-note strong { color: var(--ink); font-weight: 600; }
+.storage-failure { color: var(--ink-soft); }
+.storage-retry { display: inline-flex; align-items: center; gap: 6px; margin: -6px 0; padding: 6px 10px; }
+
+/* The meter: a recessed track the shares fill from the left in one sweep.
+   Each share ends in a hairline of the panel's own ground, so neighbours
+   and the free run after them read apart without a second colour. */
+.storage-meter { position: relative; height: 12px; overflow: hidden; background: var(--surface-3); border-radius: 6px; }
+.storage-meter-fill { display: flex; height: 100%; animation: storage-sweep var(--t-morph) var(--ease-out) both; }
+@keyframes storage-sweep { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+.storage-meter-part {
+  flex: 0 1 auto;
+  width: max(3px, var(--share));
+  height: 100%;
+  border-right: 2px solid var(--menu-fill);
+  transition: width var(--t-morph) var(--ease-out);
+}
+:is(.storage-meter-part, .storage-swatch).is-images { background: var(--heat-3); }
+:is(.storage-meter-part, .storage-swatch).is-text { background: var(--heat-4); }
+:is(.storage-meter-part, .storage-swatch).is-trash { background: var(--heat-2); }
+:is(.storage-meter-part, .storage-swatch).is-other { background: color-mix(in srgb, var(--muted) 52%, var(--surface-3)); }
+.storage-kpis .stats-kpi-label { display: flex; align-items: center; gap: 6px; }
+.storage-swatch { flex: none; width: 8px; height: 8px; border-radius: 2px; }
+.storage-kpis .stats-kpi-value.is-pending { color: var(--line-strong); }
+
+/* Trash: the sentence, then its two ways out on one row. */
+.storage-trash { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 20px; }
+.storage-trash-line { flex: 1 1 280px; margin: 0; color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 400; }
+.storage-trash-line strong { color: var(--ink); font-weight: 600; }
+.storage-trash-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-right: -6px; }
+.storage-trash-actions .trash-empty-button[aria-disabled="true"] { cursor: default; opacity: 0.6; }
+
+/* The wall: its title and count left, the scope and sort tracks right. */
+.storage-wall-head { flex-wrap: wrap; align-items: center; row-gap: 10px; }
+.storage-wall-title { display: grid; gap: 2px; min-width: 0; }
+.storage-wall-note { margin: 0; color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
+.storage-wall-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.storage-seg { margin-left: 0; }
+.storage-seg[data-on="second"] .lang-seg-thumb { transform: translateX(100%); }
+.storage-wall {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 16px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  animation: fade-in var(--t) var(--ease) both;
+}
+.storage-tile { display: grid; gap: 2px; min-width: 0; }
+.storage-tile .memo-image { aspect-ratio: 1; margin-bottom: 4px; }
+/* A tile opens its memo, not the viewer. */
+.storage-tile .memo-image:not(.is-failed) { cursor: pointer; }
+.storage-tile-size { min-width: 0; overflow: hidden; color: var(--ink-soft); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+/* "Trashed 12 days ago" is the line that says why a tile is here; it may
+   take a second line on a narrow column rather than lose its end. */
+.storage-tile-when { min-width: 0; color: var(--muted); font-size: var(--fs-2xs); font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
+.storage-more { justify-self: center; }
+
+@media (max-width: 560px) {
+  .storage-wall { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 14px 10px; }
+  .storage-wall-controls { margin-left: 0; }
+  /* The actions take their own line under the sentence: the first one's
+     label, not its padded box, lines up with the text's edge. */
+  .storage-trash { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .storage-trash-line { flex: none; }
+  .storage-trash-actions { margin-right: 0; }
+  .storage-trash-actions > .trash-empty-button:first-child { margin-left: -11px; }
+  .storage-trash-actions > .ghost-button:first-child { margin-left: -14px; }
+}
+
+/* =========================================================================
    Daily review settings dialog — Tier B floating surface. Sections rise in
    with the stats modal's stagger; the tag picker unfolds on an animated
    0fr→1fr track; the count wheel reuses the split-flap digits.

@@ -70,6 +70,7 @@ import {
   emptyTrash,
   exportData,
   getAuthStatus,
+  getStorageReport,
   importDataInChunks,
   isSessionRevoked,
   isTransientImportFailure,
@@ -813,11 +814,13 @@ const SMALL_FEED = 24;
 const lazyLoaders = {
   share: () => import("./components/ShareDialog"),
   stats: () => import("./components/StatsModal"),
+  storage: () => import("./components/StorageModal"),
   review: () => import("./components/ReviewSettingsModal"),
   model: () => import("./components/ModelSettingsModal")
 };
 const ShareDialog = lazy(() => lazyLoaders.share().then((module) => ({ default: module.ShareDialog })));
 const StatsModal = lazy(() => lazyLoaders.stats().then((module) => ({ default: module.StatsModal })));
+const StorageModal = lazy(() => lazyLoaders.storage().then((module) => ({ default: module.StorageModal })));
 const ReviewSettingsModal = lazy(() => lazyLoaders.review().then((module) => ({ default: module.ReviewSettingsModal })));
 const ModelSettingsModal = lazy(() => lazyLoaders.model().then((module) => ({ default: module.ModelSettingsModal })));
 
@@ -1300,6 +1303,7 @@ export default function App() {
   // Memo being shared as an image card; holds a snapshot until dismissed.
   const [shareMemo, setShareMemo] = useState<Memo | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [storageOpen, setStorageOpen] = useState(false);
   // Back over an open Stats panel or lightbox asks it to leave with its own
   // exit (bumped here, watched by both) rather than unmounting it mid-frame.
   const [layerCloseSignal, setLayerCloseSignal] = useState(0);
@@ -1579,6 +1583,7 @@ export default function App() {
     setLightbox(null);
     setShareMemo(null);
     setStatsOpen(false);
+    setStorageOpen(false);
     setReviewSettingsOpen(false);
     setModelSettingsOpen(false);
     setModelSettingsAttend(0);
@@ -3192,34 +3197,64 @@ export default function App() {
    * feed has re-rendered. `missed` runs when no card ends up with focus (the
    * memo is gone, or lands past the rendered window), so the caller can put
    * focus back rather than leave it on <body>.
+   *
+   * `deep` is for a memo picked from anywhere in the notebook (the Storage
+   * view's images): one in Trash is shown there, and one past the rendered
+   * window widens it to reach the card, as a restored place deep in the
+   * feed does, with the longer wait that rendering takes.
    */
   const revealIdRef = useRef<string | null>(null);
+  const revealDeepRef = useRef(false);
   const revealMissRef = useRef<(() => void) | null>(null);
   const revealScrollStopRef = useRef<(() => void) | null>(null);
   const [revealTick, setRevealTick] = useState(0);
   useEffect(() => () => revealScrollStopRef.current?.(), []);
   const revealMemo = useCallback(
-    (id: string, missed?: () => void) => {
+    (id: string, missed?: () => void, deep = false) => {
       // (Or a send the server does not have yet.)
       const memo = syncStateRef.current.memos.get(id) ?? sendQueue.get(id)?.memo;
-      if (!memo || memo.deletedAt) {
+      const trashed = Boolean(memo?.deletedAt);
+      if (!memo || (trashed && !deep)) {
         missed?.();
         return;
       }
       const lens = lensRef.current;
+      // Trash unmounts an open editor, so it waits for it as its nav item does.
+      if (trashed && lens.view !== "trash" && holdForOpenEdit("open Trash", "打开回收站")) {
+        missed?.();
+        return;
+      }
       revealIdRef.current = id;
+      revealDeepRef.current = deep;
       revealMissRef.current = missed ?? null;
       setRevealTick((value) => value + 1);
       // Past the rendered window (an oldest-first feed) there is no card to
       // bring in; don't leave a jump armed for whenever paging reaches it.
-      window.setTimeout(() => {
-        if (revealIdRef.current !== id) return;
-        revealIdRef.current = null;
-        const miss = revealMissRef.current;
-        revealMissRef.current = null;
-        miss?.();
-      }, 1000);
+      window.setTimeout(
+        () => {
+          if (revealIdRef.current !== id) return;
+          revealIdRef.current = null;
+          const miss = revealMissRef.current;
+          revealMissRef.current = null;
+          miss?.();
+        },
+        deep ? 3000 : 1000
+      );
       changeFeed(() => {
+        if (trashed) {
+          // Trash's own search could hide it; the feed's lenses don't apply there.
+          setTrashQuery("");
+          setTrashComposition(null);
+          trashComposingRef.current = false;
+          if (lens.view !== "trash") {
+            setStatsDrilldown(null);
+            setSelectMode(false);
+            setSelected(new Set());
+            setConfirmBatchDelete(false);
+            setView("trash");
+          }
+          return;
+        }
         if (!memoMatchesQuery(memo, lens.parsedQuery)) swapQuery("");
         const tag = lens.activeTag;
         if (tag && !tagsOf(memo).some((path) => tagMatches(path, tag))) setActiveTag(null);
@@ -3234,11 +3269,21 @@ export default function App() {
         }
       });
     },
-    [changeFeed, sendQueue, swapQuery]
+    [changeFeed, sendQueue, swapQuery, holdForOpenEdit]
   );
+  const revealWindowRef = useRef({ feedMemos, renderCap, feedWindowKey });
+  revealWindowRef.current = { feedMemos, renderCap, feedWindowKey };
   useEffect(() => {
     const id = revealIdRef.current;
-    if (!id || !renderedFeedMemos.some((memo) => memo.id === id)) return;
+    if (!id) return;
+    if (!renderedFeedMemos.some((memo) => memo.id === id)) {
+      if (!revealDeepRef.current) return;
+      // A deep pick past the window: render up to its page, then come back here.
+      const { feedMemos: list, renderCap: cap, feedWindowKey: key } = revealWindowRef.current;
+      const index = list.findIndex((memo) => memo.id === id);
+      if (index >= cap) setRenderWindow({ key, cap: (Math.floor(index / FEED_PAGE) + 1) * FEED_PAGE });
+      return;
+    }
     // A frame later: the swap's own rewind to the top lands first. The card
     // glides to the centre of the viewport through a controlled re-aiming
     // scroll (surviving scroll anchoring and content-visibility layout
@@ -3771,6 +3816,7 @@ export default function App() {
     confirmLogout;
   useLayer(drawerOpen, () => closeDrawer(), { leaving: drawerClosing });
   useLayer(statsOpen, () => setLayerCloseSignal((count) => count + 1), { coversBottom: true });
+  useLayer(storageOpen, () => setLayerCloseSignal((count) => count + 1), { coversBottom: true });
   useLayer(lightbox !== null, () => setLayerCloseSignal((count) => count + 1));
   useLayer(dialogUp, () => setDialogCloseSignal((count) => count + 1), { mayRefuse: dialogMayRefuse, coversBottom: true });
 
@@ -3838,6 +3884,7 @@ export default function App() {
     for (const layer of standingLayers().reverse()) layer.close();
     if (drawerOpen) closeDrawer();
     setStatsOpen(false);
+    setStorageOpen(false);
     setLightbox(null);
     if (lensesEqual(lens, current)) {
       if (entry?.place) restoreFeedPlace(entry.place);
@@ -4529,7 +4576,7 @@ export default function App() {
     sent: saySent,
     retrying: () => announce(sendStatusLabel("retrying", tr, "card"), "assertive"),
     offline: () => announce(sendStatusLabel("failed", tr, "card"), "assertive"),
-    refused: (cause) => void showToast(errorMessage(cause, "Couldn’t send the memo.", "笔记发送失败"), "error"),
+    refused: (cause) => void showToast(errorMessage(cause, "Couldn’t send the memo.", "笔记发送失败"), "error", storageFullHelp(cause)),
     purged: () => void showToast(tr("That memo was sent earlier and has since been deleted for good", "这条笔记之前已经发出，后来被彻底删除了")),
     composerBusy: () => void showToast(tr("Send or clear what’s in the composer first", "先发出或清空输入框里的内容")),
     tookBack: (said) => {
@@ -5207,6 +5254,24 @@ export default function App() {
     });
   }
 
+  /**
+   * A full database is the one refusal the owner can do something about:
+   * its toast leads to the Storage view, where the space can be found.
+   */
+  function storageFullHelp(cause: unknown): ToastOptions {
+    if (!(cause instanceof ApiError) || cause.code !== "STORAGE_FULL") return {};
+    return { action: { label: tr("Free up space", "释放空间"), run: () => setStorageOpen(true), movesFocus: true } };
+  }
+
+  /** The Storage view's report, through the session guard like every other call. */
+  const loadStorageReport = useCallback(() => guard(() => getStorageReport()), [guard]);
+
+  /** The Storage view's "delete forever" for old Trash: the select-mode purge, on the memos it named. */
+  async function purgeFromStorage(ids: string[]) {
+    const wanted = new Set(ids);
+    await purgeMany(memos.filter((memo) => memo.deletedAt && wanted.has(memo.id)));
+  }
+
   /** Permanent, so no Undo — the armed pill asked twice. */
   async function purgeMany(targets: Memo[]) {
     if (targets.length === 0 || batchBusy) return;
@@ -5515,6 +5580,7 @@ export default function App() {
         setModelSettingsOpen(true);
       }),
     onOpenStats: () => closeDrawer(() => setStatsOpen(true)),
+    onOpenStorage: () => closeDrawer(() => setStorageOpen(true)),
     onChangePasscode: () =>
       closeDrawer(() => {
         sessionEpochRef.current += 1;
@@ -5533,6 +5599,7 @@ export default function App() {
   const lazyDialogFailed = useCallback(() => {
     setShareMemo(null);
     setStatsOpen(false);
+    setStorageOpen(false);
     setReviewSettingsOpen(false);
     setModelSettingsOpen(false);
     showToast(tr("Couldn’t open this panel. Reload the page and try again.", "无法打开此面板，请刷新页面后重试"), "error");
@@ -7456,6 +7523,25 @@ export default function App() {
             uniqueTagCount={uniqueTagCount}
             onClose={() => setStatsOpen(false)}
             onDrilldown={openStatsDrilldown}
+            closeSignal={layerCloseSignal}
+          />
+        </LazyDialog>
+      ) : null}
+      {storageOpen ? (
+        <LazyDialog onFail={lazyDialogFailed}>
+          <StorageModal
+            memos={memos}
+            loadReport={loadStorageReport}
+            onClose={() => setStorageOpen(false)}
+            onOpenMemo={(id) => {
+              setStorageOpen(false);
+              revealMemo(id, undefined, true);
+            }}
+            onOpenTrash={() => {
+              setStorageOpen(false);
+              openTrash();
+            }}
+            onPurge={purgeFromStorage}
             closeSignal={layerCloseSignal}
           />
         </LazyDialog>

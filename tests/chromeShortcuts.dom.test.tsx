@@ -241,6 +241,7 @@ describe("sidebar memory", () => {
     onOpenReviewSettings: vi.fn(),
     onOpenModelSettings: vi.fn(),
     onOpenStats: vi.fn(),
+    onOpenStorage: vi.fn(),
     onSetTheme: vi.fn(),
     onChangePasscode: vi.fn(),
     onExportData: vi.fn(),

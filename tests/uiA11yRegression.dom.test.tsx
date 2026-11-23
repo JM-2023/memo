@@ -380,6 +380,7 @@ describe("selected and expanded semantics", () => {
       onShowAll: vi.fn(),
       onOpenTrash: vi.fn(),
       onOpenStats: vi.fn(),
+      onOpenStorage: vi.fn(),
       onSetTheme: vi.fn(),
       onChangePasscode: vi.fn(),
       onExportData: vi.fn(),

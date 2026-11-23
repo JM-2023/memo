@@ -439,6 +439,34 @@ export function emptyTrash(): Promise<{ ok: boolean; purged: PurgedMemo[] }> {
   return request("/api/trash", { method: "DELETE" });
 }
 
+/** One side of the notebook — outside Trash, or in it — as D1 stores it. */
+export interface StorageShare {
+  memos: number;
+  /** Memo text as stored: UTF-8 bytes, ciphertext for sealed rows. */
+  textBytes: number;
+  images: number;
+  /** Attachments as stored: base64 original plus base64 preview. */
+  imageBytes: number;
+}
+
+export interface StorageReport {
+  measuredAt: string;
+  database: {
+    /** The whole D1 file as the runtime reports it; null when it does not. */
+    bytes: number | null;
+    limitBytes: number;
+  };
+  notes: StorageShare;
+  trash: StorageShare;
+  images: { id: string; memoId: string; bytes: number }[];
+  trashMemos: { id: string; bytes: number }[];
+}
+
+/** What the notebook costs in D1, for the Storage view. */
+export function getStorageReport(): Promise<StorageReport> {
+  return request("/api/storage");
+}
+
 /** Rewrites #from (and descendants) in every memo; pin state moves along. */
 export interface TagMutationResponse {
   memos: Memo[];
